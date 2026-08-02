@@ -2,9 +2,9 @@
 
 SQLite Backed Document and Event Store within the Critter Stack
 
-> **Status: early development.** The event store append path works end to end; document storage,
-> projections, and the async daemon are not implemented yet. See [CLAUDE.md](CLAUDE.md) for the
-> current state.
+> **Status: early development.** The event store round-trips — append, fetch, stream state — but
+> document storage, projections, and the async daemon are not implemented yet. See
+> [CLAUDE.md](CLAUDE.md) for the current state and [ROADMAP.md](ROADMAP.md) for what comes next.
 
 ## Working with the code
 
