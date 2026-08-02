@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <IsPackable>false</IsPackable>
+        <!-- An xunit v3 test project is its own MTP executable and will not build without this.
+             Microsoft.NET.Test.Sdk used to set it and is no longer referenced. -->
+        <OutputType>Exe</OutputType>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Shouldly" />
+        <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
+        <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" />
+        <PackageReference Include="xunit.v3" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+        <PackageReference Include="Microsoft.Extensions.Hosting" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="Xunit" />
+        <Using Include="Shouldly" />
+        <Using Include="Fisher.TestUtils" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Fisher.TestUtils\Fisher.TestUtils.csproj" />
+        <ProjectReference Include="..\Fisher\Fisher.csproj" />
+        <PackageReference Include="JasperFx.Events.SourceGenerator" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+        <!-- Source-only: the compliance suites compile into this assembly so the aggregate source
+             generator above binds Fisher's session types. See Compliance/ for the enrollments.
+
+             Gated on $(EnableComplianceTests) while Fisher is being stood up. The suites are
+             compiled source, not a referenced assembly, so they hard-fail the build until Fisher
+             supplies all three global aliases the shared sources bind against:
+               ComplianceQuerySession  -> Fisher.IQuerySession
+               ComplianceOperations    -> Fisher.IDocumentSession
+               ComplianceEventProjection -> Fisher's EventProjection base type
+             See Compliance/ComplianceAliases.cs. Flip the default to true once those exist. -->
+        <PackageReference Include="JasperFx.Events.ComplianceTests" Condition="'$(EnableComplianceTests)' == 'true'" />
+    </ItemGroup>
+
+</Project>

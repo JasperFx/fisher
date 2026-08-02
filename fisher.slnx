@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/SolutionItems/">
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="CLAUDE.md" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Fisher/Fisher.csproj" />
+    <Project Path="src/Fisher.TestUtils/Fisher.TestUtils.csproj" />
+    <Project Path="src/Fisher.Tests/Fisher.Tests.csproj" />
+  </Folder>
+</Solution>

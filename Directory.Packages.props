@@ -1,0 +1,60 @@
+<Project>
+    <PropertyGroup>
+        <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
+             carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
+             transitively. -->
+        <PackageVersion Include="JasperFx" Version="2.37.2" />
+        <PackageVersion Include="JasperFx.Events" Version="2.37.2" />
+        <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
+             suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
+             Fisher's own session types. See src/Fisher.Tests/Compliance. -->
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.37.2" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.37.2" />
+
+        <!-- Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
+             source. Weasel.Storage: the dialect-neutral closed-shape document + event storage
+             runtime extracted from Marten, which Fisher plugs a SQLite dialect into rather than
+             hand-writing storage. -->
+        <PackageVersion Include="Weasel.Sqlite" Version="9.23.1" />
+        <PackageVersion Include="Weasel.Storage" Version="9.23.1" />
+
+        <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+        <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
+             GHSA-2m69-gcr7-jv3q) with 3.0.3, which ships the patched SQLite 3.50.x build. That
+             build is also what puts JSONB and the json1 functions Fisher's storage relies on
+             unconditionally in the box. -->
+        <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+
+        <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+        <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+        <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
+        <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
+        <PackageVersion Include="Polly.Core" Version="8.6.5" />
+
+        <!-- Testing -->
+        <PackageVersion Include="NSubstitute" Version="5.3.0" />
+        <PackageVersion Include="Shouldly" Version="4.3.0" />
+        <!--
+          Microsoft Testing Platform extensions, replacing coverlet.collector and the TRX logger,
+          both of which are VSTest-only.
+
+          BOTH ARE PINNED TO THE MTP 1.x LINE, NOT THE LATEST. xunit.v3 3.2.2 is built against
+          Microsoft.Testing.Platform 1.x — its packages are literally named xunit.v3.core.mtp-v1.
+          The 2.x releases of these extensions drag the platform assembly up to 2.x while
+          Microsoft.Testing.Platform.MSBuild stays behind, and every test run then dies at startup
+          with a TypeLoadException on IDataConsumer. 1.9.1 and 18.0.6 are the last MTP 1.x
+          releases; move them forward only when xunit.v3 ships an mtp-v2 build.
+        -->
+        <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.0.6" />
+        <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="1.9.1" />
+        <!-- Test projects reference xunit.v3; Fisher.TestUtils, a plain library that only authors
+             custom attributes, references xunit.v3.extensibility.core instead — xunit.v3 forces
+             OutputType=Exe onto whatever references it, which is wrong for a library. -->
+        <PackageVersion Include="xunit.v3" Version="3.2.2" />
+        <PackageVersion Include="xunit.v3.extensibility.core" Version="3.2.2" />
+    </ItemGroup>
+</Project>

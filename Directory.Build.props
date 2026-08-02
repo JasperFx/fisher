@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+    <PropertyGroup>
+        <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <Version>0.1.0-alpha</Version>
+        <LangVersion>latest</LangVersion>
+        <Authors>Jeremy D. Miller</Authors>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <!-- 8981: the test suites use snake_case type names by house convention, which the compiler
+             otherwise warns may become language-reserved. -->
+        <NoWarn>1570;1571;1572;1573;1574;1587;1591;1701;1702;1711;1735;0618;8981</NoWarn>
+        <RepositoryUrl>https://github.com/JasperFX/fisher</RepositoryUrl>
+    </PropertyGroup>
+
+    <!--
+      Microsoft Testing Platform, matching Polecat's repo-wide setup. These are deliberately
+      repo-wide rather than per-test-project: TestingPlatformDotnetTestSupport changes how
+      `dotnet test` invokes a project, so a solution where only some projects answered to MTP would
+      leave `dotnet test fisher.slnx` in a mixed mode. They are inert in projects that don't
+      reference xunit.v3.
+    -->
+    <PropertyGroup>
+        <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+        <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+        <!-- Without this a failing test prints only the path to a log file CI never publishes,
+             and the assertion and stack trace go nowhere visible. -->
+        <TestingPlatformShowTestsFailure>true</TestingPlatformShowTestsFailure>
+        <!-- Fisher's suites share database files between target frameworks; running the net9.0 and
+             net10.0 suites concurrently makes them delete each other's files mid-test. -->
+        <TestTfmsInParallel>false</TestTfmsInParallel>
+    </PropertyGroup>
+</Project>

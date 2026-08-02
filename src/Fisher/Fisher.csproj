@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <Description>SQLite backed Document Database and Event Store for the Critter Stack</Description>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <RootNamespace>Fisher</RootNamespace>
+        <!-- AOT pillar (Critter Stack 2026 — JasperFx#213). Surfaces IL2026 / IL2070 / IL2075 /
+             IL3050 warnings against Fisher itself so the AOT punch list shows up in our own build
+             rather than downstream consumers'. -->
+        <IsAotCompatible>true</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="Fisher.Tests" />
+        <InternalsVisibleTo Include="Fisher.TestUtils" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="JasperFx" />
+        <PackageReference Include="JasperFx.Events" />
+        <PackageReference Include="Microsoft.Data.Sqlite" />
+        <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+        <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+        <PackageReference Include="Polly.Core" />
+        <PackageReference Include="Weasel.Sqlite" />
+        <PackageReference Include="Weasel.Storage" />
+    </ItemGroup>
+
+</Project>
