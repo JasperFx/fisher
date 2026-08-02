@@ -76,11 +76,17 @@ Traps that have already bitten and are easy to reintroduce:
 uses schema `main`, so nothing ever renders as qualified SQL. This is what gives logical-store and
 test isolation inside one database file without ATTACH lifecycle on every pooled connection.
 
-### Known upstream gap
+### Known upstream gap — weasel#423
 
 `FisherCommandBuilder` exists only because Weasel.Sqlite 9.23.1's `CommandBuilder` does not declare
-`Weasel.Core.ICommandBuilder` (Weasel.SqlServer's does). It is a faithful port of the SQL Server
-implementation and **should be deleted once Weasel.Sqlite carries it.**
+`Weasel.Core.ICommandBuilder` (Weasel.Postgresql, Weasel.SqlServer, and Weasel.Oracle all do;
+Weasel.MySql is the other outlier). It is missing `TenantId`, `AppendParameters`,
+`CreateGroupedParameterBuilder`, and a `DbParameter`-returning `AppendParameter`. Without the shim,
+no Weasel.Storage operation can be configured against a SQLite command builder at all.
+
+Filed as [JasperFx/weasel#423](https://github.com/JasperFx/weasel/issues/423). It is a faithful port
+of the SQL Server implementation — **delete it and switch back to `Weasel.Sqlite.CommandBuilder`
+once a release carries the fix.**
 
 ## Current state
 

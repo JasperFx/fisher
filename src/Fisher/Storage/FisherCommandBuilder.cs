@@ -11,18 +11,20 @@ namespace Fisher.Storage;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         This exists to paper over a gap in Weasel.Sqlite 9.23.1: <c>Weasel.SqlServer.CommandBuilder</c>
-///         declares <c>Weasel.Core.ICommandBuilder</c> and supplies the three members
-///         <c>CommandBuilderBase</c> cannot — <see cref="AppendParameter(object)" /> (the base returns
-///         void where the interface returns the created <see cref="DbParameter" />),
-///         <see cref="AppendParameters" />, and <see cref="CreateGroupedParameterBuilder" /> — but
+///         This exists to paper over a gap in Weasel.Sqlite 9.23.1, filed upstream as
+///         <see href="https://github.com/JasperFx/weasel/issues/423">weasel#423</see>.
+///         <c>Weasel.SqlServer.CommandBuilder</c> declares <c>Weasel.Core.ICommandBuilder</c> and
+///         supplies the members <c>CommandBuilderBase</c> cannot — <see cref="TenantId" />,
+///         <see cref="AppendParameters" />, <see cref="CreateGroupedParameterBuilder" />, and
+///         <see cref="AppendParameter(object)" /> (the inherited overloads all return void where the
+///         interface returns the created <see cref="DbParameter" />) — but
 ///         <c>Weasel.Sqlite.CommandBuilder</c> declares neither the interface nor those members.
 ///         Without this shim no Weasel.Storage operation can be configured against a SQLite command
 ///         builder at all.
 ///     </para>
 ///     <para>
-///         This belongs upstream in Weasel.Sqlite rather than here; it is a faithful port of the
-///         SQL Server implementation and should be deleted once Weasel.Sqlite carries it.
+///         A faithful port of the SQL Server implementation. DELETE THIS once a Weasel.Sqlite release
+///         carries weasel#423, and drop the local type in favour of <c>Weasel.Sqlite.CommandBuilder</c>.
 ///     </para>
 /// </remarks>
 internal sealed class FisherCommandBuilder : Weasel.Sqlite.CommandBuilder, ICommandBuilder
