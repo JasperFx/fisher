@@ -128,6 +128,9 @@ Enabling them also requires document load-back, projections, and the daemon — 
   must not have top-level statements. Pass `TestContext.Current.CancellationToken` to async calls.
 - MTP extension packages stay on the **1.x** line — xunit.v3 3.2.2 is built against
   Microsoft.Testing.Platform 1.x and 2.x dies at startup with a `TypeLoadException`.
+- **CI runs the test executable directly**, not `dotnet test` — `dotnet test` cannot emit TRX under
+  MTP. `--logger "trx;..."` and `-- --report-trx` both run, exit 0, and silently write nothing;
+  `--report-trx` is rejected outright by MSBuild. See `.github/workflows/fisher.yml`.
 - Mirror Marten's public API surface where it costs nothing; mirror Polecat's internals where the
   concern is not dialect-specific.
 - Database execution should go through `StoreOptions.ResiliencePipeline`.

@@ -1,0 +1,73 @@
+name: fisher
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Fisher multi-targets, and the two frameworks are exercised as separate jobs rather than
+        # via a single `dotnet test`. Directory.Build.props sets TestTfmsInParallel=false because the
+        # suites share database files; naming one framework per job sidesteps that entirely.
+        tfm: [ net9.0, net10.0 ]
+
+    env:
+      TEST_PROJECT_PATH: src/Fisher.Tests/Fisher.Tests.csproj
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Both runtimes: the 10.0 SDK builds either target framework, but running the net9.0 test
+      # executable needs the .NET 9 runtime present as well.
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore ${{ env.TEST_PROJECT_PATH }}
+
+      - name: Build
+        run: dotnet build ${{ env.TEST_PROJECT_PATH }} -c Release -f ${{ matrix.tfm }} --no-restore
+
+      # No database service. Fisher is SQLite-backed and the suites create throwaway database files
+      # under the runner's temp directory, so there is nothing to spin up or wait for.
+
+      # Runs the Microsoft Testing Platform executable directly rather than through `dotnet test`.
+      # An xUnit v3 project builds as its own MTP executable, and invoking it is the only way to get
+      # a TRX report out. `dotnet test` does not work here, and two of the three failure modes are
+      # silent:
+      #   dotnet test ... --logger "trx;..."   VSTest-only. MTP warns MTP0001, runs the tests, exits
+      #                                        0, and writes no TRX — so the reporter finds nothing
+      #                                        and the build goes red for the wrong reason.
+      #   dotnet test ... -- --report-trx      arguments are swallowed. Tests run, exit 0, no TRX.
+      #   dotnet test ... --report-trx         MSBuild rejects it: MSB1001 Unknown switch.
+      #
+      # The TRX lands in <project>/bin/Release/<tfm>/TestResults/, which the reporter glob matches.
+      - name: Test
+        run: |
+          PROJECT_DIR=$(dirname "${{ env.TEST_PROJECT_PATH }}")
+          ASSEMBLY=$(basename "${{ env.TEST_PROJECT_PATH }}" .csproj)
+          "$PROJECT_DIR/bin/Release/${{ matrix.tfm }}/$ASSEMBLY" \
+            --report-trx --report-trx-filename test-results-${{ matrix.tfm }}.trx
+
+      - name: Report results
+        uses: dorny/test-reporter@v3
+        if: ${{ !cancelled() }}
+        with:
+          # Distinct per matrix leg — a shared name makes the second job overwrite the first's check.
+          name: xUnit Tests (${{ matrix.tfm }})
+          path: "**/TestResults/*.trx"
+          reporter: dotnet-trx
+          list-suites: "failed"
+          list-tests: "failed"
