@@ -12,7 +12,7 @@ namespace Fisher.Events;
 ///     <see cref="AppendPlanner" /> during <c>SaveChangesAsync</c>, at which point the current server
 ///     version of each existing stream is known and event versions can be assigned.
 /// </remarks>
-public class EventOperations : IEventOperations
+public partial class EventOperations : IEventOperations
 {
     private readonly Dictionary<object, StreamAction> _streams = new();
     private readonly FisherSession _session;
@@ -30,6 +30,46 @@ public class EventOperations : IEventOperations
     internal IReadOnlyCollection<StreamAction> PendingStreams => _streams.Values;
 
     internal void ClearPendingStreams() => _streams.Clear();
+
+    /// <summary>
+    ///     Wrap raw event data in an <see cref="IEvent" /> envelope carrying its type metadata,
+    ///     without appending it. Use this when the envelope's metadata — correlation id, headers, tags
+    ///     — has to be set before the event is appended.
+    /// </summary>
+    public IEvent BuildEvent(object eventData) => Graph.BuildEvent(eventData);
+
+    /// <summary>
+    ///     Mark a stream and all of its events archived, so the async daemon skips them. Queued until
+    ///     <c>SaveChangesAsync</c>.
+    /// </summary>
+    public void ArchiveStream(Guid streamId)
+    {
+        AssertGuidIdentity();
+        _session.QueueOperation(Graph.ArchiveStreamOperation(streamId, _session.TenantId, true));
+    }
+
+    /// <inheritdoc cref="ArchiveStream(Guid)" />
+    public void ArchiveStream(string streamKey)
+    {
+        AssertStringIdentity();
+        _session.QueueOperation(Graph.ArchiveStreamOperation(streamKey, _session.TenantId, true));
+    }
+
+    /// <summary>
+    ///     Reverse <see cref="ArchiveStream(Guid)" />.
+    /// </summary>
+    public void UnArchiveStream(Guid streamId)
+    {
+        AssertGuidIdentity();
+        _session.QueueOperation(Graph.ArchiveStreamOperation(streamId, _session.TenantId, false));
+    }
+
+    /// <inheritdoc cref="UnArchiveStream(Guid)" />
+    public void UnArchiveStream(string streamKey)
+    {
+        AssertStringIdentity();
+        _session.QueueOperation(Graph.ArchiveStreamOperation(streamKey, _session.TenantId, false));
+    }
 
     // ---- StartStream ----
 

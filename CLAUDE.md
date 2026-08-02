@@ -70,6 +70,17 @@ Traps that have already bitten and are easy to reintroduce:
 - Binding a `Guid` without conversion writes a 16-byte BLOB that never matches the TEXT the schema
   holds.
 
+### Row readers
+
+`FisherEventsRowReader` and `FisherStreamsRowReader` own the canonical SELECT projection and lock
+the column order — adding or renaming a column means changing those files and only those files.
+
+Every conversion in them is **explicit** (`Guid.Parse`, `SqliteTimestamp.FromDatabaseValue`,
+`GetInt64(..) != 0`) rather than `GetGuid` / `GetFieldValue<DateTimeOffset>` / `GetBoolean`. The
+write path converts explicitly on the way in, so reading through a provider convenience method
+would leave the round trip depending on Microsoft.Data.Sqlite's coercion rules instead of Fisher's
+own storage decisions — asymmetry that breaks quietly under a provider upgrade.
+
 ### Table naming
 
 `main` → `fi_events`; any other `DatabaseSchemaName` → `compliance_fi_events`. Every `DbObjectName`
@@ -96,6 +107,9 @@ Working, with tests:
 - `SqliteStorageDialect<TId>` and `SqliteEventStoreDialect` (Quick append + auxiliary operations)
 - `DocumentStore`, `FisherSession` unit of work, `EventOperations` (`IEventOperations`)
 - `StartStream` / `Append`, version assignment, optimistic concurrency, sequence read-back
+- Reads: `FetchStreamAsync` (version / from-version / timestamp bounded), `FetchStreamStateAsync`,
+  `LoadAsync`, both stream identity styles
+- `ArchiveStream` / `UnArchiveStream`
 
 Not implemented yet — do not assume these work:
 
@@ -103,7 +117,7 @@ Not implemented yet — do not assume these work:
   `SequenceFor` throw `NotImplementedException`. No `Store`/`Load`/`Delete`, no LINQ.
 - **Projections.** No `StoreOptions.Projections`, no live aggregation, no `FetchForWriting`.
 - **Async daemon.** `FisherDatabase` does not implement `IEventDatabase`.
-- **Reads.** No `FetchStream`, no `StreamState`, no event querying.
+- **Live aggregation.** `AggregateStreamAsync` needs the projection layer.
 - **DCB tags**, multi-tenancy beyond a tenant id column, subscriptions, DI registration.
 
 ### Compliance suites
