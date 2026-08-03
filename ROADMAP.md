@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of `42834ba`. 34 tests green on net9.0 and net10.0.
+Status as of `eea6eae` + live aggregation. 46 tests green on net9.0 and net10.0.
 
 ## The destination
 
@@ -21,22 +21,20 @@ needs.
 | SQLite dialects over Weasel.Storage | `SqliteStorageDialect<TId>`, `SqliteEventStoreDialect` |
 | Sessions + append | `DocumentStore`, `FisherSession` UoW, `EventOperations`, `AppendPlanner` |
 | Event store reads | `FetchStreamAsync`, `FetchStreamStateAsync`, `LoadAsync`, archive/un-archive |
+| Live aggregation | `AggregateStreamAsync` over auto-discovered self-aggregating types |
+
+The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
+`DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
+the shared `JasperFx.DocumentIdentity` helper — the same one Polecat's `DocumentMapping` delegates
+to. When `DocumentMapping` lands it should resolve identity *through* `AggregateIdentity` rather than
+beside it. `StoreOptions.Projections` was deliberately *not* stood up for this; `EventGraph`
+implements `IAggregationSourceFactory<IQuerySession>` and caches aggregators itself, which is the
+same seam a `ProjectionGraph` falls back to. See CLAUDE.md for the source-generator constraint that
+shapes all of it.
 
 ## Next, in order
 
-### 1. Live aggregation — `AggregateStreamAsync`
-
-**Start here.** It is the only projection-shaped feature that does *not* need document storage,
-because it folds events in memory and returns the aggregate rather than persisting it. That makes
-it the cheapest way to get the JasperFx aggregation machinery wired up and proven.
-
-Needs `EventGraph` to implement `IAggregationSourceFactory<IQuerySession>` (Polecat's is the
-template — see its `EventGraph.Build<TDoc>()`), which in turn wants `SingleStreamProjection<TDoc,
-TId>` and therefore an id-type resolution story. Polecat resolves it through `DocumentMapping`;
-Fisher has no `DocumentMapping` yet, so either a minimal id-resolver lands here or this waits on
-step 2. **Resolving that is the first decision to make.**
-
-### 2. Document storage
+### 1. Document storage
 
 `IStorageSession.StorageFor`, `IStorageDatabase.Providers` and `FisherDatabase.SequenceFor` all
 throw `NotImplementedException` today. Needs `DocumentMapping`, a `DocumentProviderRegistry` behind
@@ -48,16 +46,19 @@ dialect layer is that this should mostly be configuration. Polecat's
 `SqlServerDocumentStorageDescriptorBuilder` is the shape to mirror, minus the SQL Server type
 mapping.
 
-### 3. Projections
+### 2. Projections
 
 `ProjectionGraph<IProjection, IDocumentSession, IQuerySession>` — needs `IProjection`,
 `StoreOptions.Projections`, the projection storage seam, and inline snapshot application during
-`SaveChangesAsync`.
+`SaveChangesAsync`. Live aggregation already put the two hard prerequisites in place:
+`IDocumentSession` implements `IStorageOperations`, and `Fisher.Projections.SingleStreamProjection<
+TDoc, TId>` exists. `FisherSession.FetchProjectionStorageAsync` and `GetOrStartMessageSink` are the
+`NotImplementedException`s to fill in.
 
-**Steps 2 and 3 are entangled, not sequential.** `Projections.Snapshot<T>` needs somewhere to write
+**Steps 1 and 2 are entangled, not sequential.** `Projections.Snapshot<T>` needs somewhere to write
 the snapshot, which is document storage. Expect to interleave them rather than finishing one first.
 
-### 4. Async daemon
+### 3. Async daemon
 
 `FisherDatabase` must implement `IEventDatabase`. Needs high-water detection over `fi_events`,
 event loading/paging, and `BuildProjectionDaemonAsync`.
@@ -69,7 +70,7 @@ Two SQLite-specific things to think about up front:
   `SqlitePragmaSettings.Default`, but a consumer overriding `StoreOptions.PragmaSettings` could turn
   it off and quietly serialize the daemon behind every write.
 
-### 5. Enroll in the compliance suites
+### 4. Enroll in the compliance suites
 
 Flip `$(EnableComplianceTests)` in `Fisher.Tests.csproj` and add `Compliance/`.
 
@@ -78,7 +79,7 @@ Three global aliases the source-only suites bind against:
 ```
 ComplianceQuerySession    -> Fisher.IQuerySession                (exists)
 ComplianceOperations      -> Fisher.IDocumentSession             (exists)
-ComplianceEventProjection -> Fisher's EventProjection base type  (step 3)
+ComplianceEventProjection -> Fisher's EventProjection base type  (step 2)
 ```
 
 `EventStoreComplianceFixture<TOperations, TQuerySession>` members, against current state:
@@ -87,10 +88,10 @@ ComplianceEventProjection -> Fisher's EventProjection base type  (step 3)
 |---|---|
 | `OpenSession`, `SaveChangesAsync`, `EventsFor`, `Registry` | — ready |
 | `BuildStoreAsync` | — ready (apply schema explicitly, as Polecat does) |
-| `LoadDocumentAsync`, `StoreDocument` | document storage (2) |
-| `EventStore`, `AllAggregateTypes` | projections (3) |
+| `LoadDocumentAsync`, `StoreDocument` | document storage (1) |
+| `EventStore`, `AllAggregateTypes` | projections (2) |
 | `CleanEventDataAsync` | needs `Advanced.Clean` |
-| `StartDaemonAsync`, `WaitForNonStaleProjectionDataAsync` | daemon (4) |
+| `StartDaemonAsync`, `WaitForNonStaleProjectionDataAsync` | daemon (3) |
 | `CreateBatch` | batched queries + DCB tags |
 
 Suites are independently enrollable, so they can go green one at a time rather than all at once.
@@ -120,3 +121,5 @@ All in CLAUDE.md, repeated here because each one cost real time:
 - Constraint-violation mapping needs the *extended* SQLite result code.
 - Guids and timestamps convert explicitly in **both** directions — never rely on provider coercion.
 - `dotnet test` cannot emit TRX under MTP; CI runs the test executable directly.
+- Conventional `Apply`/`Create` dispatch is emitted by JasperFx's source generator, keyed on
+  `(aggregate, id type)`, with **no runtime fallback**. An aggregate with no `Id` gets no dispatcher.

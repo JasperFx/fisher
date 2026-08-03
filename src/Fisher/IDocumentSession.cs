@@ -17,7 +17,13 @@ public interface IQuerySession : IAsyncDisposable
 ///     A writable Fisher session: a unit of work over the event store, flushed by
 ///     <see cref="SaveChangesAsync" />.
 /// </summary>
-public interface IDocumentSession : IQuerySession
+/// <remarks>
+///     The <see cref="JasperFx.Events.IStorageOperations" /> half is what lets Fisher's session types
+///     close JasperFx's aggregation and projection generics, which constrain the write session to be
+///     both the read session and a storage-operations surface. Its members are the projection write
+///     path — see <c>Fisher.Internal.FisherSession</c> for which of them are live today.
+/// </remarks>
+public interface IDocumentSession : IQuerySession, JasperFx.Events.IStorageOperations
 {
     /// <summary>
     ///     The event store write surface for this session.

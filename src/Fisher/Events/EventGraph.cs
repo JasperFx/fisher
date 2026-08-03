@@ -5,6 +5,8 @@ using Fisher.Events.Schema;
 using Fisher.Serialization;
 using Fisher.Storage;
 using JasperFx.Events;
+using JasperFx.Events.Aggregation;
+using JasperFx.Events.Projections;
 using JasperFx.MultiTenancy;
 using JasperFx.Events.Tags;
 
@@ -24,10 +26,11 @@ namespace Fisher.Events;
 [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
     Justification =
         "Class-level: event-type registration uses Type.MakeGenericType. AOT consumers register concrete event types ahead of time.")]
-public class EventGraph : EventRegistry
+public class EventGraph : EventRegistry, IAggregationSourceFactory<IQuerySession>
 {
     private readonly ConcurrentDictionary<string, Type> _aggregateTypes = new();
     private readonly ConcurrentDictionary<Type, FisherEventType> _eventTypes = new();
+    private readonly ConcurrentDictionary<Type, object> _liveAggregators = new();
     private readonly StoreOptions _options;
     private readonly List<ITagTypeRegistration> _tagTypes = new();
 
@@ -138,6 +141,68 @@ public class EventGraph : EventRegistry
         => StreamIdentity == StreamIdentity.AsGuid
             ? GuidEventStorage.UpdateProgress(shardIdentity, sequence, upsert)
             : StringEventStorage.UpdateProgress(shardIdentity, sequence, upsert);
+
+    /// <summary>
+    ///     Build an aggregator source on the fly for an aggregate type that was never registered as a
+    ///     projection — the auto-discovery half of live aggregation.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <see cref="Projections.SingleStreamProjection{TDoc,TId}" /> is closed over the aggregate's
+    ///         own identity type rather than the stream identity primitive. For a plain
+    ///         <c>Guid Id</c> the two are the same, but a strong-typed id is a wrapper struct, and the
+    ///         evolver JasperFx's source generator emits is keyed on that wrapper. Closing over
+    ///         <c>Guid</c> there would leave the generated dispatcher unmatched and trip JasperFx's
+    ///         fail-fast.
+    ///     </para>
+    ///     <para>
+    ///         Every event type the projection handles is registered as a side effect, so a process that
+    ///         only ever reads a stream still knows how to resolve its event type names.
+    ///     </para>
+    /// </remarks>
+    IAggregatorSource<IQuerySession>? IAggregationSourceFactory<IQuerySession>.Build<TDoc>()
+    {
+        var idType = AggregateIdentity.ResolveIdType(typeof(TDoc), StreamIdentity);
+        var projectionType = typeof(Projections.SingleStreamProjection<,>)
+            .MakeGenericType(typeof(TDoc), idType);
+
+#pragma warning disable CS8714 // TDoc is unconstrained here but SingleStreamProjection requires notnull
+        var projection = (ProjectionBase)Activator.CreateInstance(projectionType)!;
+#pragma warning restore CS8714
+
+        projection.Lifecycle = ProjectionLifecycle.Live;
+        projection.AssembleAndAssertValidity();
+
+        foreach (var eventType in projection.IncludedEventTypes)
+        {
+            AddEventType(eventType);
+        }
+
+        return projection as IAggregatorSource<IQuerySession>;
+    }
+
+    /// <summary>
+    ///     The cached live aggregator for an aggregate type.
+    /// </summary>
+    /// <remarks>
+    ///     The single seam every live aggregation goes through. Once <c>StoreOptions.Projections</c>
+    ///     exists this should defer to <c>ProjectionGraph.AggregatorFor&lt;T&gt;</c>, which checks
+    ///     registered projections first and only then falls back to
+    ///     <see cref="IAggregationSourceFactory{TQuerySession}" /> — that is, to the method above. Until
+    ///     then there are no registered projections to check, so auto-discovery is the whole story.
+    /// </remarks>
+    internal IAggregator<T, IQuerySession> AggregatorFor<T>() where T : class
+        => (IAggregator<T, IQuerySession>)_liveAggregators.GetOrAdd(typeof(T), _ => BuildAggregator<T>());
+
+    private IAggregator<T, IQuerySession> BuildAggregator<T>() where T : class
+    {
+        var source = ((IAggregationSourceFactory<IQuerySession>)this).Build<T>()
+            ?? throw new InvalidOperationException(
+                $"Unable to build a live aggregator for '{typeof(T).FullName}'. Aggregate types must be " +
+                "self-aggregating — carrying their own Create / Apply methods for the events they fold.");
+
+        return source.Build<T>();
+    }
 
     /// <summary>
     ///     Wrap raw event data into an <see cref="IEvent" /> carrying type metadata.

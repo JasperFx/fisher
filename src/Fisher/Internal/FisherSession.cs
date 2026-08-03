@@ -4,6 +4,7 @@ using Fisher.Serialization;
 using Fisher.Storage;
 using JasperFx;
 using JasperFx.Events;
+using JasperFx.Events.Daemon;
 using Microsoft.Data.Sqlite;
 using Weasel.Sqlite;
 using Weasel.Storage;
@@ -225,6 +226,25 @@ internal class FisherSession : IDocumentSession, IStorageSession, IAsyncDisposab
     IDocumentStorage<T> IStorageSession.StorageFor<T>()
         => throw new NotImplementedException(
             "Fisher document storage is not implemented yet; this session supports event store operations only.");
+
+    // ---- JasperFx.Events.IStorageOperations ----
+    //
+    // The projection write path. Fisher implements it only as far as live aggregation needs, which is
+    // to say the type constraint and nothing else: JasperFx's aggregation generics require the write
+    // session to be an IStorageOperations, but folding a stream in memory never calls through any of
+    // these. They come alive with document storage and the projection graph.
+
+    public bool EnableSideEffectsOnInlineProjections => EventGraph.EnableSideEffectsOnInlineProjections;
+
+    Task<IProjectionStorage<TDoc, TId>> JasperFx.Events.IStorageOperations.FetchProjectionStorageAsync<TDoc, TId>(
+        string tenantId, CancellationToken cancellationToken)
+        => throw new NotImplementedException(
+            "Fisher cannot persist projections yet; there is no document storage to write a snapshot to. " +
+            "Live aggregation through Events.AggregateStreamAsync is supported.");
+
+    public ValueTask<IMessageSink> GetOrStartMessageSink()
+        => throw new NotImplementedException(
+            "Fisher has no message outbox yet, so projection side effects cannot be published.");
 
     public virtual void MarkAsAddedForStorage(object id, object document)
     {

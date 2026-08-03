@@ -111,15 +111,43 @@ Working, with tests:
 - Reads: `FetchStreamAsync` (version / from-version / timestamp bounded), `FetchStreamStateAsync`,
   `LoadAsync`, both stream identity styles
 - `ArchiveStream` / `UnArchiveStream`
+- Live aggregation: `AggregateStreamAsync` over auto-discovered self-aggregating types
 
 Not implemented yet — do not assume these work:
 
 - **Document storage.** `IStorageSession.StorageFor`, `IStorageDatabase.Providers` and
   `SequenceFor` throw `NotImplementedException`. No `Store`/`Load`/`Delete`, no LINQ.
-- **Projections.** No `StoreOptions.Projections`, no live aggregation, no `FetchForWriting`.
+- **Projections.** Live aggregation works, but nothing is persisted: no `StoreOptions.Projections`,
+  no Inline/Async lifecycles, no `Snapshot<T>`, no `FetchForWriting`.
+  `IStorageOperations.FetchProjectionStorageAsync` and `GetOrStartMessageSink` throw.
 - **Async daemon.** `FisherDatabase` does not implement `IEventDatabase`.
-- **Live aggregation.** `AggregateStreamAsync` needs the projection layer.
 - **DCB tags**, multi-tenancy beyond a tenant id column, subscriptions, DI registration.
+
+### Live aggregation
+
+`EventGraph` implements `IAggregationSourceFactory<IQuerySession>`: given an aggregate type it closes
+`Fisher.Projections.SingleStreamProjection<TDoc, TId>` (which only closes the JasperFx base over
+Fisher's session types), asserts validity, and caches the resulting aggregator. `AggregatorFor<T>` is
+the single seam — when `StoreOptions.Projections` lands it should defer to
+`ProjectionGraph.AggregatorFor<T>`, which checks registered projections first and *then* falls back to
+this same factory.
+
+Two things that are not obvious:
+
+- **Conventional `Apply`/`Create`/`ShouldDelete` dispatch is compile-time only.** JasperFx's source
+  generator emits the dispatcher; there is no runtime fallback. The generator keys it on
+  `(TDoc, TId)`, resolving `TId` from the aggregate's identity member — so an aggregate with no `Id`
+  gets no dispatcher at all. `AggregateIdentity.ResolveIdType` therefore *requires* an identity member
+  and says so, rather than defaulting to the stream identity primitive and failing later with a
+  message about a missing generated dispatcher. The generator runs in the assembly that defines the
+  aggregate, which is why `Fisher.Tests` references `JasperFx.Events.SourceGenerator`.
+- **`TId` is the aggregate's own id type, not the stream identity primitive.** They coincide for a
+  plain `Guid Id`, but a strong-typed id is a wrapper struct and the generated dispatcher is keyed on
+  the wrapper.
+
+`AggregateIdentity` resolves identity through the shared `JasperFx.DocumentIdentity` helper. When
+`DocumentMapping` arrives it should resolve identity *through* `AggregateIdentity` rather than beside
+it, so the live-aggregation and snapshot paths cannot disagree about what `TId` is.
 
 ### Compliance suites
 
