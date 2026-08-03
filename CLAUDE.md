@@ -53,10 +53,21 @@ These are the decisions that don't transfer from the sibling stores, and the rea
 | Guids | native | TEXT — bind via `SqliteStorageDialect<T>.ToDatabaseValue` |
 | Event sequence | sequence / IDENTITY | `INTEGER PRIMARY KEY AUTOINCREMENT` |
 | Append concurrency | advisory lock / UPDLOCK,HOLDLOCK | `BEGIN IMMEDIATE` (`IsolationLevel.Serializable`) |
+| Exclusive append | row lock — the loser **waits** | no row lock — the loser **fails** (see below) |
 | Sequence read-back | bulk function / `OUTPUT ... INTO` | trailing SELECT by stream + version range |
 | Load-many ids | `= ANY($1)` / `OPENJSON` | `json_each(@ids)` |
 | Unit of work | parallel, aggregates failures | strictly sequential (one writer per file) |
 | Transient retry | none needed | real Polly retry on `SQLITE_BUSY` / `SQLITE_LOCKED` |
+
+**`AppendExclusive` / `FetchForExclusiveWriting` / `WriteExclusivelyToAggregate` are the optimistic
+methods.** Marten and Polecat take a row lock so a competing session waits its turn. SQLite has no
+row locks and one writer per database file, so the equivalent would be holding a `BEGIN IMMEDIATE`
+open from the fetch until `SaveChangesAsync` — blocking every other writer in the process for as long
+as the caller holds the session. The safety property is unchanged (the version guard still runs inside
+the write transaction, so no lost update); what differs is that a loser gets
+`EventStreamUnexpectedMaxEventIdException` instead of waiting. Revisiting this means giving
+`FisherSession` a session-scoped transaction, which `SaveChangesAsync` would then have to join rather
+than open.
 
 Traps that have already bitten and are easy to reintroduce:
 
@@ -111,7 +122,10 @@ Working, with tests:
 - Reads: `FetchStreamAsync` (version / from-version / timestamp bounded), `FetchStreamStateAsync`,
   `LoadAsync`, both stream identity styles
 - `ArchiveStream` / `UnArchiveStream`
-- Live aggregation: `AggregateStreamAsync` over auto-discovered self-aggregating types
+- Live aggregation: `AggregateStreamAsync`, `AggregateStreamToLastKnownAsync`, over auto-discovered
+  self-aggregating types
+- `FetchForWriting` / `WriteToAggregate` / `AppendOptimistic` / `FetchLatest` / `ProjectLatest`
+- `EventOperations` implements the full `IEventStoreOperations` — see below for which members throw
 
 Not implemented yet — do not assume these work:
 
@@ -122,6 +136,28 @@ Not implemented yet — do not assume these work:
   `IStorageOperations.FetchProjectionStorageAsync` and `GetOrStartMessageSink` throw.
 - **Async daemon.** `FisherDatabase` does not implement `IEventDatabase`.
 - **DCB tags**, multi-tenancy beyond a tenant id column, subscriptions, DI registration.
+
+### The `IEventStoreOperations` surface
+
+`EventOperations` implements JasperFx's `IEventStoreOperations` in full — the interface the
+cross-store compliance suites route everything through, so declaring it is what makes
+`EventStoreComplianceFixture.EventsFor(session)` possible at all.
+
+Everything reachable without document storage is real: `FetchForWriting` rebuilds the aggregate by
+live aggregation (there is no snapshot to read instead), `WriteToAggregate` is fetch + callback +
+`SaveChangesAsync`, and `ProjectLatest` folds the session's pending events on top of the committed
+state.
+
+What throws lives in **`EventOperations.Unsupported.cs`**, one file on purpose — the DCB tag members
+and the two event-rewrite members. That file shrinking is the progress measure. `FetchForWriting<T,
+TId>` and `FetchLatest<T, TId>` are partial: they accept an id that is already the stream identity
+type and throw for anything else, because in the siblings that overload is the natural-key and
+strong-typed-id entry point.
+
+One Fisher-specific hazard in this area: pending streams are tracked in a **dictionary keyed by
+identity**, where Polecat uses a list. `FetchForWriting` must therefore reuse an already-tracked
+`StreamAction` rather than construct a fresh one — replacing the dictionary entry would silently drop
+events an earlier `Append` had queued for the same stream in the same session.
 
 ### Live aggregation
 

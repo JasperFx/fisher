@@ -4,15 +4,16 @@ using JasperFx.Events;
 namespace Fisher.Events;
 
 /// <summary>
-///     The event store write surface on a Fisher session, implementing JasperFx's shared
-///     <see cref="IEventOperations" />.
+///     The event store surface on a Fisher session, implementing JasperFx's shared
+///     <see cref="IEventStoreOperations" /> — the interface the cross-store compliance suites run
+///     everything through.
 /// </summary>
 /// <remarks>
 ///     Stream actions are accumulated here and turned into storage operations by
 ///     <see cref="AppendPlanner" /> during <c>SaveChangesAsync</c>, at which point the current server
 ///     version of each existing stream is known and event versions can be assigned.
 /// </remarks>
-public partial class EventOperations : IEventOperations
+public partial class EventOperations : IEventStoreOperations
 {
     private readonly Dictionary<object, StreamAction> _streams = new();
     private readonly FisherSession _session;
@@ -75,6 +76,9 @@ public partial class EventOperations : IEventOperations
 
     public StreamAction StartStream<TAggregate>(Guid id, params object[] events) where TAggregate : class
         => StartStream(typeof(TAggregate), id, events);
+
+    public StreamAction StartStream<TAggregate>(Guid id, IEnumerable<object> events) where TAggregate : class
+        => StartStream(typeof(TAggregate), id, events.ToArray());
 
     public StreamAction StartStream(Type aggregateType, Guid id, IEnumerable<object> events)
         => StartStream(aggregateType, id, events.ToArray());
@@ -168,6 +172,9 @@ public partial class EventOperations : IEventOperations
         return AppendTo(stream, () => StreamAction.Append(Graph, stream, events), events);
     }
 
+    public StreamAction Append(Guid stream, long expectedVersion, IEnumerable<object> events)
+        => Append(stream, expectedVersion, events.ToArray());
+
     public StreamAction Append(Guid stream, long expectedVersion, params object[] events)
     {
         var action = Append(stream, events);
@@ -212,6 +219,21 @@ public partial class EventOperations : IEventOperations
         _streams[key] = stream;
         return stream;
     }
+
+    /// <summary>
+    ///     Whether this stream action is the one currently tracked for its stream.
+    /// </summary>
+    internal bool IsTracking(StreamAction stream)
+        => _streams.TryGetValue(KeyFor(stream), out var tracked) && ReferenceEquals(tracked, stream);
+
+    /// <summary>
+    ///     Re-track a stream action that replaced the one previously held for its stream — how
+    ///     <c>IEventStream.TryFastForwardVersion</c> re-arms a stream after its events were committed.
+    /// </summary>
+    internal void TrackFetched(StreamAction stream) => Track(KeyFor(stream), stream);
+
+    private object KeyFor(StreamAction stream)
+        => IsGuidIdentity ? stream.Id : stream.Key!;
 
     private void AssertGuidIdentity()
     {

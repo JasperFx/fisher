@@ -45,6 +45,57 @@ public partial class EventOperations
         return AggregateStreamAsync((object)streamKey, version, timestamp, state, fromVersion, token);
     }
 
+    /// <summary>
+    ///     Fold a stream into an aggregate, backing off one event at a time until the fold produces
+    ///     something.
+    /// </summary>
+    /// <remarks>
+    ///     For an aggregate that deletes itself on some event — a <c>ShouldDelete</c> that fired, or a
+    ///     fold that returned null — this answers "what did it look like before that happened?". Every
+    ///     attempt re-folds from the beginning, so this is deliberately the expensive call.
+    /// </remarks>
+    public Task<T?> AggregateStreamToLastKnownAsync<T>(Guid streamId, long version = 0,
+        DateTimeOffset? timestamp = null, CancellationToken token = default) where T : class
+    {
+        AssertGuidIdentity();
+        return AggregateStreamToLastKnownAsync<T>((object)streamId, version, timestamp, token);
+    }
+
+    /// <inheritdoc cref="AggregateStreamToLastKnownAsync{T}(Guid,long,System.Nullable{DateTimeOffset},CancellationToken)" />
+    public Task<T?> AggregateStreamToLastKnownAsync<T>(string streamKey, long version = 0,
+        DateTimeOffset? timestamp = null, CancellationToken token = default) where T : class
+    {
+        AssertStringIdentity();
+        return AggregateStreamToLastKnownAsync<T>((object)streamKey, version, timestamp, token);
+    }
+
+    private async Task<T?> AggregateStreamToLastKnownAsync<T>(object streamId, long version,
+        DateTimeOffset? timestamp, CancellationToken token) where T : class
+    {
+        var events = await FetchStreamAsync(streamId, version, timestamp, 0, token).ConfigureAwait(false);
+
+        if (events.Count == 0)
+        {
+            return null;
+        }
+
+        var aggregator = Graph.AggregatorFor<T>();
+
+        for (var count = events.Count; count > 0; count--)
+        {
+            var slice = events.Take(count).ToList();
+            var aggregate = await aggregator.BuildAsync(slice, _session, null, token).ConfigureAwait(false);
+
+            if (aggregate is not null)
+            {
+                AggregateIdentity.TrySetIdentity(aggregate, streamId);
+                return aggregate;
+            }
+        }
+
+        return null;
+    }
+
     private async Task<T?> AggregateStreamAsync<T>(object streamId, long version, DateTimeOffset? timestamp,
         T? state, long fromVersion, CancellationToken token) where T : class
     {

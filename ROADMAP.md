@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of `eea6eae` + live aggregation. 46 tests green on net9.0 and net10.0.
+Status as of `d25041c` + the event store write surface. 65 tests green on net9.0 and net10.0.
 
 ## The destination
 
@@ -22,6 +22,7 @@ needs.
 | Sessions + append | `DocumentStore`, `FisherSession` UoW, `EventOperations`, `AppendPlanner` |
 | Event store reads | `FetchStreamAsync`, `FetchStreamStateAsync`, `LoadAsync`, archive/un-archive |
 | Live aggregation | `AggregateStreamAsync` over auto-discovered self-aggregating types |
+| Event store write surface | `IEventStoreOperations` in full — `FetchForWriting`, `WriteToAggregate`, `AppendOptimistic`, `FetchLatest`/`ProjectLatest` |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -31,6 +32,20 @@ beside it. `StoreOptions.Projections` was deliberately *not* stood up for this; 
 implements `IAggregationSourceFactory<IQuerySession>` and caches aggregators itself, which is the
 same seam a `ProjectionGraph` falls back to. See CLAUDE.md for the source-generator constraint that
 shapes all of it.
+
+`EventOperations` now declares the whole of `IEventStoreOperations`, which is what
+`EventStoreComplianceFixture.EventsFor(session)` must return — the single interface everything
+portable in the compliance suites runs through. What is not implemented is collected in
+`EventOperations.Unsupported.cs` (DCB tags, event rewriting) rather than scattered. Two open
+decisions came out of it:
+
+- **Exclusive appends are the optimistic ones.** SQLite has no row lock; documented in CLAUDE.md's
+  divergence table with what revisiting it would cost.
+- **`AllAggregateTypes()` still has no assembly scan.** `AutoDiscoveredAggregateCompliance` wants
+  aggregate types discovered from `[GeneratedEvolver]` at construction. That is
+  `ProjectionGraph.DiscoverGeneratedEvolvers`, which Fisher gets for free the moment
+  `StoreOptions.Projections` exists — reimplementing it on `EventGraph` now would duplicate framework
+  logic with a one-milestone shelf life.
 
 ## Next, in order
 
@@ -94,9 +109,14 @@ ComplianceEventProjection -> Fisher's EventProjection base type  (step 2)
 | `StartDaemonAsync`, `WaitForNonStaleProjectionDataAsync` | daemon (3) |
 | `CreateBatch` | batched queries + DCB tags |
 
-Suites are independently enrollable, so they can go green one at a time rather than all at once.
-`AutoDiscoveredAggregateCompliance` and `SelfAggregatingEvolveCompliance` are the likely first two;
-`DcbTagQueryAndConsistencyCompliance` (727 lines, needs tag tables) is the last.
+Suites go green one at a time, but they do **not** compile one at a time: it is a source-only
+package, so flipping `$(EnableComplianceTests)` compiles every suite at once, including ones binding
+`ComplianceEventProjection`. Enrolling the first suite therefore needs either that base type to exist
+or a `<Compile Remove>` on the suites not yet in play. The fixture itself is friendlier — its members
+are abstract, so the ones a given suite never calls can throw.
+
+`AutoDiscoveredAggregateCompliance` (2 tests) and `SelfAggregatingEvolveCompliance` are the likely
+first two; `DcbTagQueryAndConsistencyCompliance` (727 lines, needs tag tables) is the last.
 
 ## Open items not on the critical path
 
@@ -105,12 +125,14 @@ Suites are independently enrollable, so they can go green one at a time rather t
   `Weasel.Sqlite.CommandBuilder`. Check the PR's status before assuming the shim is still needed.
 - **Concurrency regression test.** The append path's safety rests on `BEGIN IMMEDIATE` being what
   `IsolationLevel.Serializable` produces — verified empirically against Microsoft.Data.Sqlite 10.0.9,
-  but it is library behaviour Fisher does not own. A test appending from two concurrent sessions and
-  asserting one fails cleanly would catch a regression under a provider bump.
+  but it is library behaviour Fisher does not own. `append_optimistic_loses_to_a_concurrent_commit`
+  now covers the version-guard half (two sessions, one fails cleanly); what is still uncovered is a
+  test that would fail if `Serializable` stopped producing `BEGIN IMMEDIATE` — that needs two
+  genuinely interleaved writers, not two sequential `SaveChangesAsync` calls.
 - **`TombstoneStreamOperation` is unreachable.** Written into the dialect, no caller. Archive/
   un-archive got wired up and tested; tombstone still needs a session-facing API.
 - **Not started at all:** DCB tags, multi-tenancy beyond a tenant id column, subscriptions, DI
-  registration (`AddFisher`), LINQ, bulk insert, `FetchForWriting`.
+  registration (`AddFisher`), LINQ, bulk insert, natural keys, strongly typed ids.
 
 ## Things not to rediscover the hard way
 
