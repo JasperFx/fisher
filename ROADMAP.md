@@ -3,14 +3,14 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of `8a75fbc` + document storage. 123 tests green on net9.0 and net10.0, 33 of them shared
-cross-store suites.
+Status as of `69bf873` + inline projections. 156 tests green on net9.0 and net10.0, **66 of them
+shared cross-store compliance tests across 10 suites**.
 
 ## The destination
 
 **First round of JasperFx compliance tests passing — reached.** `JasperFx.Events.ComplianceTests` is
 the shared cross-store suite Marten and Polecat both enroll in; passing it is what makes Fisher a
-real Critter Stack event store rather than a lookalike. Five suites are green:
+real Critter Stack event store rather than a lookalike. Ten suites are green:
 
 | Suite | Tests |
 |---|---|
@@ -19,11 +19,16 @@ real Critter Stack event store rather than a lookalike. Five suites are green:
 | `LiveAggregationCompliance` | 7 |
 | `ActivityCorrelationCompliance` | 4 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
+| `FetchForWritingCompliance` | 13 |
+| `SelfAggregatingEvolveCompliance` | 8 |
+| `StringIdentitySingleStreamCompliance` | 6 |
+| `EventProjectionRegistrationCompliance` | 3 |
+| `EventProjectionEnrichmentCompliance` | 3 |
 
-The destination is now **the rest of them**, and the ordering below is unchanged, because what the
-remaining suites need is exactly what the remaining milestones build. Every unenrolled suite is now
-blocked on a numbered milestone — there are no loose ends left between here and document storage.
-Suite-by-suite blocking is tabulated under "Enrollment status".
+**Only four suites remain**, and between them they need exactly two things: the async daemon
+(`AsyncDaemonCompliance`, `RebuildConcurrencyCapCompliance` — 7 tests) and DCB tags
+(`AssignTagWhereCompliance`, `DcbTagQueryAndConsistencyCompliance` — 32 tests). Nothing else in the
+suite catalogue is blocked on document or projection work any more.
 
 ## Done
 
@@ -40,6 +45,7 @@ Suite-by-suite blocking is tabulated under "Enrollment status".
 | Session metadata | correlation/causation seeded from `Activity.Current`, applied to appended events |
 | `StoreOptions.Projections` | thin `ProjectionGraph` — aggregator cache + evolver discovery |
 | Document storage | `Store`/`Insert`/`Update`/`Delete`/`LoadAsync`/`LoadManyAsync`, Guid + string ids |
+| Inline projections | `Snapshot<T>`, `Add(projection, lifecycle)`, applied in the events' own transaction |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -82,25 +88,15 @@ The write and load-by-id paths are done. What is left, roughly in value order:
 - Soft delete, duplicated fields and user indexes, hierarchies, numeric revisions — each additive
   against the existing column shape rather than a rewrite of it.
 
-### 2. Projections
+### 2. Async daemon
 
-The scaffolding is up: `IProjection`, `Fisher.Projections.SingleStreamProjection<TDoc, TId>`,
-`EventProjection`, and a thin `FisherProjectionOptions : ProjectionGraph<...>` behind
-`StoreOptions.Projections` that carries the live aggregator cache and evolver discovery.
-
-What is missing is everything that writes. There is no way to register a projection at all —
-`Snapshot<T>` and `AddProjection` are the gap — no Inline/Async lifecycle, and no inline snapshot
-application during `SaveChangesAsync`. `FisherSession.FetchProjectionStorageAsync`,
-`GetOrStartMessageSink` and `EventProjection.storeEntity` are the `NotImplementedException`s to fill
-in.
-
-**Steps 1 and 2 are entangled, not sequential.** `Projections.Snapshot<T>` needs somewhere to write
-the snapshot, which is document storage. Expect to interleave them rather than finishing one first.
-
-### 3. Async daemon
+**Now the highest-value milestone**: it is the only thing standing between Fisher and
+`AsyncDaemonCompliance` + `RebuildConcurrencyCapCompliance`, and it is what makes
+`SnapshotLifecycle.Async` — currently rejected outright — mean anything.
 
 `FisherDatabase` must implement `IEventDatabase`. Needs high-water detection over `fi_events`,
-event loading/paging, and `BuildProjectionDaemonAsync`.
+event loading/paging, and `BuildProjectionDaemonAsync`. `DocumentStore` also needs to implement
+JasperFx's `IEventStore` for the rebuild suite.
 
 Two SQLite-specific things to think about up front:
 - The high-water mark assumes `seq_id` only moves forward. `AUTOINCREMENT` is what guarantees that
@@ -108,6 +104,19 @@ Two SQLite-specific things to think about up front:
 - WAL journaling is what lets the daemon read while a session writes. It is on by default via
   `SqlitePragmaSettings.Default`, but a consumer overriding `StoreOptions.PragmaSettings` could turn
   it off and quietly serialize the daemon behind every write.
+
+### 3. DCB tags
+
+The largest remaining block of compliance tests (32) and the only area Fisher has not started at
+all. Needs the `fi_event_tag_*` tables, the tag write path, and the batched-query seam
+(`IComplianceBatch`, `CreateBatch`). `EventGraph.RegisterTagType` already accepts registrations that
+nothing reads.
+
+### 4. Projections, the rest
+
+Inline works. Still missing: the Async lifecycle (daemon), projection side effects
+(`GetOrStartMessageSink` throws), `EventProjection.storeEntity` for projections that store arbitrary
+documents, and composite projections.
 
 ## Enrollment status
 
@@ -122,21 +131,19 @@ all and are `<Compile Remove>`d.
 | `LiveAggregationCompliance` | 7 | **green** |
 | `ActivityCorrelationCompliance` | 4 | **green** |
 | `AutoDiscoveredAggregateCompliance` | 2 | **green** |
-| `FetchForWritingCompliance` | 13 | `Snapshot<T>` registration (2) — document load-back is ready |
-| `SelfAggregatingEvolveCompliance` | 8 | `Snapshot<T>` registration (2) — document load-back is ready |
-| `StringIdentitySingleStreamCompliance` | 6 | projection registration (2) |
-| `EventProjectionRegistrationCompliance` | 3 | projections (2) — file still excluded, needs `IDocumentSession.Store` on the alias |
-| `EventProjectionEnrichmentCompliance` | 3 | projections (2) — as above |
+| `FetchForWritingCompliance` | 13 | **green** |
+| `SelfAggregatingEvolveCompliance` | 8 | **green** |
+| `StringIdentitySingleStreamCompliance` | 6 | **green** |
+| `EventProjectionRegistrationCompliance` | 3 | **green** |
+| `EventProjectionEnrichmentCompliance` | 3 | **green** |
 | `AsyncDaemonCompliance` | 2 | daemon (3) |
 | `RebuildConcurrencyCapCompliance` | 5 | `IEventStore` on `DocumentStore` + rebuilds (3) |
 | `AssignTagWhereCompliance` | 6 | DCB tags |
 | `DcbTagQueryAndConsistencyCompliance` | 26 | DCB tags — the last one, 727 lines |
 
-The fixture's `LoadDocumentAsync` and `StoreDocument` are live now, so the document half of those
-suites is satisfied. What still blocks the three biggest — 27 tests between them — is a single
-missing capability: **there is no way to register a projection**. `Snapshot<T>` and `AddProjection`
-throw on the compliance registrar, and until they do not, nothing writes a snapshot for the suites to
-read back. That makes projections (2) the highest-value next milestone by some distance.
+Every suite that document storage or projections could unblock is enrolled. The async daemon is the
+next unlock at 7 tests; DCB tags are the larger prize at 32, and the only remaining area Fisher has
+not started at all.
 
 ## Open items not on the critical path
 

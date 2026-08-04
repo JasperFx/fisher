@@ -90,9 +90,23 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
             return;
         }
 
+        // Inline projections run before the batch is taken, because applying one queues further
+        // operations — the snapshot writes — that have to commit alongside the events that caused
+        // them. Assigning event versions first is what lets a projection see them.
+        if (streams.Length > 0)
+        {
+            await ApplyInlineProjectionsAsync(streams, token).ConfigureAwait(false);
+        }
+
         var queued = _operations.ToArray();
         _operations.Clear();
         Events.ClearPendingStreams();
+
+        // A document type can be stored without ever having been registered, and a snapshot type is
+        // registered by projection configuration — so the first write of either may be the first time
+        // its table is needed. Done before the transaction opens, because creating it is its own
+        // migration on its own connection.
+        await EnsureDocumentTablesAsync(queued, token).ConfigureAwait(false);
 
         var connection = await ConnectionAsync(token).ConfigureAwait(false);
 
@@ -122,6 +136,68 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
 
             NotifyAppendObserver(streams);
         }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Create the table for every document type written in this unit of work that does not have
+    ///     one yet.
+    /// </summary>
+    /// <remarks>
+    ///     Only types the schema has already mapped are considered. Every document operation's type
+    ///     was mapped when its storage was resolved, so asking the schema is how a document write is
+    ///     told apart from an event one — and asking rather than mapping is why this cannot create a
+    ///     mapping as a side effect of the question.
+    /// </remarks>
+    private async Task EnsureDocumentTablesAsync(IReadOnlyList<Weasel.Storage.IStorageOperation> operations,
+        CancellationToken token)
+    {
+        if (operations.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var documentType in operations.Select(x => x.DocumentType).Distinct())
+        {
+            if (documentType is not null && Options.Schema.HasMappingFor(documentType))
+            {
+                await FisherDatabase.EnsureDocumentTableAsync(documentType, token).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Fold this unit of work's events through every inline projection, queueing the resulting
+    ///     snapshot writes.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Event versions have to be assigned before a projection sees them — an aggregate whose
+    ///         <c>Apply</c> reads <c>IEvent.Version</c>, and the version stamped onto the snapshot,
+    ///         both depend on it. Fisher normally assigns versions inside the write transaction, where
+    ///         the current stream version has just been read under the write lock. Doing it here means
+    ///         reading that version slightly earlier, outside the lock.
+    ///     </para>
+    ///     <para>
+    ///         That is safe because it is not the guard: the same versions are re-derived inside the
+    ///         transaction by <see cref="AppendPlanner" />, and the optimistic concurrency check still
+    ///         happens there. A racing writer makes the commit fail, exactly as it would have.
+    ///     </para>
+    /// </remarks>
+    private async Task ApplyInlineProjectionsAsync(IReadOnlyList<StreamAction> streams, CancellationToken token)
+    {
+        var projections = Options.Projections.BuildInlineProjections();
+
+        if (projections.Length == 0)
+        {
+            return;
+        }
+
+        await new AppendPlanner(this).AssignVersionsAheadOfProjectionsAsync(streams, token).ConfigureAwait(false);
+
+        foreach (var projection in projections)
+        {
+            await projection.ApplyAsync(this, streams, token).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -257,11 +333,24 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
 
     public bool EnableSideEffectsOnInlineProjections => EventGraph.EnableSideEffectsOnInlineProjections;
 
-    Task<IProjectionStorage<TDoc, TId>> JasperFx.Events.IStorageOperations.FetchProjectionStorageAsync<TDoc, TId>(
-        string tenantId, CancellationToken cancellationToken)
-        => throw new NotImplementedException(
-            "Fisher cannot persist projections yet; there is no document storage to write a snapshot to. " +
-            "Live aggregation through Events.AggregateStreamAsync is supported.");
+    /// <summary>
+    ///     Where an inline projection writes its snapshot for this tenant.
+    /// </summary>
+    /// <remarks>
+    ///     The document table is created on demand here rather than at configuration time: a snapshot
+    ///     type is registered through <c>Projections.Snapshot&lt;T&gt;</c>, which may run after the
+    ///     schema was last applied.
+    /// </remarks>
+    async Task<IProjectionStorage<TDoc, TId>>
+        JasperFx.Events.IStorageOperations.FetchProjectionStorageAsync<TDoc, TId>(
+            string tenantId, CancellationToken cancellationToken)
+    {
+        await FisherDatabase.EnsureDocumentTableAsync(typeof(TDoc), cancellationToken).ConfigureAwait(false);
+
+        var storage = (Weasel.Storage.IDocumentStorage<TDoc, TId>)StorageFor<TDoc>();
+
+        return new Projections.FisherProjectionStorage<TDoc, TId>(this, storage, tenantId);
+    }
 
     public ValueTask<IMessageSink> GetOrStartMessageSink()
         => throw new NotImplementedException(

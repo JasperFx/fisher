@@ -28,6 +28,9 @@ public class DocumentStore : IAsyncDisposable
 
         // Builds the async shard registry and fails fast on duplicate projection names.
         options.Projections.AssertValidity(options);
+
+        // Built once here rather than per session: BuildForInline compiles each projection.
+        options.Projections.BuildInlineProjections();
     }
 
     /// <summary>

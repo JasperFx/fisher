@@ -64,6 +64,38 @@ internal sealed class AppendPlanner
         return operations;
     }
 
+    /// <summary>
+    ///     Number each stream's events from its current server version, before the write transaction
+    ///     opens, so inline projections fold events that already know their versions.
+    /// </summary>
+    /// <remarks>
+    ///     Deliberately does not guard anything. The authoritative version read, the optimistic
+    ///     concurrency check and the final numbering all still happen inside the write transaction in
+    ///     <see cref="PlanAsync" />; this only makes a best-effort assignment early so a projection has
+    ///     something to read. If a racing writer moves the stream on in between, the numbers assigned
+    ///     here are simply overwritten and the commit fails on the real guard.
+    /// </remarks>
+    public async Task AssignVersionsAheadOfProjectionsAsync(IReadOnlyList<StreamAction> streams,
+        CancellationToken token)
+    {
+        var connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
+
+        foreach (var stream in streams)
+        {
+            if (stream.Events.Count == 0)
+            {
+                continue;
+            }
+
+            ApplySessionMetadata(stream);
+
+            var current = await ReadCurrentVersionAsync(stream, connection, transaction: null, token)
+                .ConfigureAwait(false);
+
+            AssignVersions(stream, current ?? 0);
+        }
+    }
+
     private async Task<Storage.StreamWriteMode> PlanStreamAsync(StreamAction stream, SqliteConnection connection,
         SqliteTransaction transaction, CancellationToken token)
     {
@@ -179,7 +211,7 @@ internal sealed class AppendPlanner
     ///     The stream's current version, or null when the stream row does not exist.
     /// </summary>
     private async Task<long?> ReadCurrentVersionAsync(StreamAction stream, SqliteConnection connection,
-        SqliteTransaction transaction, CancellationToken token)
+        SqliteTransaction? transaction, CancellationToken token)
     {
         var conjoined = _graph.TenancyStyle == TenancyStyle.Conjoined;
 

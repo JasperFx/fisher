@@ -37,3 +37,18 @@ public class activity_correlation_compliance
 
 public class auto_discovered_aggregate_compliance
     : AutoDiscoveredAggregateCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class self_aggregating_evolve_compliance
+    : SelfAggregatingEvolveCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class fetch_for_writing_compliance
+    : FetchForWritingCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class string_identity_single_stream_compliance
+    : StringIdentitySingleStreamCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class event_projection_registration_compliance
+    : EventProjectionRegistrationCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class event_projection_enrichment_compliance
+    : EventProjectionEnrichmentCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

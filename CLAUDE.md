@@ -132,6 +132,8 @@ Working, with tests:
 - `ArchiveStream` / `UnArchiveStream`
 - Live aggregation: `AggregateStreamAsync`, `AggregateStreamToLastKnownAsync`, over auto-discovered
   self-aggregating types
+- Inline projections: `Projections.Snapshot<T>` and `Projections.Add`, applied during
+  `SaveChangesAsync` in the same transaction as the events
 - `FetchForWriting` / `WriteToAggregate` / `AppendOptimistic` / `FetchLatest` / `ProjectLatest`
 - `EventOperations` implements the full `IEventStoreOperations` — see below for which members throw
 
@@ -142,6 +144,29 @@ Not implemented yet — do not assume these work:
   Numeric ids need Hi-Lo sequences, which do not exist — `FisherDatabase.SequenceFor` throws, and the
   provider registry rejects an int/long id up front naming Hi-Lo. No LINQ, no querying beyond load by
   id, no soft delete, no hierarchies, no duplicated fields, no numeric revisions.
+
+### Inline projections
+
+`Snapshot<T>` closes `SingleStreamProjection<TDoc, TId>` over the aggregate's own identity type — the
+same rule live aggregation follows, for the same source-generator reason — and registers the document
+mapping so the snapshot's table is created with the schema.
+
+Applying them happens in `FisherSession.SaveChangesAsync` **before the batch is taken**, because
+applying a projection queues further operations (the snapshot writes) that have to commit alongside
+the events that caused them.
+
+The subtle part is versioning. A projection needs its events to already know their versions, but
+Fisher normally assigns those inside the write transaction, where the current stream version has just
+been read under the write lock. `AppendPlanner.AssignVersionsAheadOfProjectionsAsync` therefore reads
+the version early, *outside* the lock. **That is not a weakened guard**: the same versions are
+re-derived inside the transaction and the optimistic concurrency check still runs there, so a racing
+writer still fails the commit. The early pass exists only to give projections something to read.
+
+Document tables are created on demand at commit (`EnsureDocumentTablesAsync`), because a document
+type can be stored without ever being registered and a snapshot type is registered by projection
+configuration — either way the first write may be the first time the table is needed. Only types the
+schema has already mapped are considered, which is how a document operation is told apart from an
+event one.
 
 ### Document storage layout
 
@@ -179,10 +204,10 @@ RETURNING id` parses, and when the guard does not match it returns **no row** an
 untouched — which is exactly what the Optimistic operation's postprocessing reads as a concurrency
 failure. The `DO UPDATE SET` clause assigns from `excluded.*` for every column rather than repeating
 each binder's `ValueSql`, so the update branch cannot drift from the insert branch.
-- **Projections.** `StoreOptions.Projections` exists but is thin — it carries the live aggregator
-  cache and the source-generated-evolver discovery, nothing more. Nothing is persisted: no
-  Inline/Async lifecycles, no `Snapshot<T>`, no way to register a projection at all.
-  `IStorageOperations.FetchProjectionStorageAsync` and `GetOrStartMessageSink` throw.
+- **Projections — inline only.** `Snapshot<T>` and `Add(projection, lifecycle)` work for the Inline
+  and Live lifecycles, and inline snapshots are written in the same transaction as the events that
+  produced them. **Async is rejected outright** — it needs the daemon. `GetOrStartMessageSink` still
+  throws, so projection side effects cannot be published.
 - **Async daemon.** `FisherDatabase` does not implement `IEventDatabase`.
 - **DCB tags**, multi-tenancy beyond a tenant id column, subscriptions, DI registration.
 
@@ -238,10 +263,9 @@ it, so the live-aggregation and snapshot paths cannot disagree about what `TId` 
 ### Compliance suites
 
 **Fisher is enrolled.** `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old
-`$(EnableComplianceTests)` gate is gone. Five suites are live in `Compliance/`:
-`StreamReadCompliance`, `EventMetadataCompliance`, `LiveAggregationCompliance`,
-`ActivityCorrelationCompliance`, `AutoDiscoveredAggregateCompliance` — 33 shared tests. Every suite
-still unenrolled is blocked on document storage, projections, the daemon, or DCB tags.
+`$(EnableComplianceTests)` gate is gone. **Ten suites are live, 66 shared tests.** The four still
+unenrolled need the async daemon (`AsyncDaemon`, `RebuildConcurrencyCap`) or DCB tags
+(`AssignTagWhere`, `DcbTagQueryAndConsistency`).
 
 The mechanics, because they are not what the package's name suggests:
 
@@ -249,11 +273,9 @@ The mechanics, because they are not what the package's name suggests:
   `fisher_event_store_compliance.cs`. Not enrolling costs nothing at runtime — but the shared source
   still has to compile, which is why all four global aliases in `ComplianceAliases.cs` must resolve
   even for suites Fisher cannot pass.
-- **Two files cannot compile at all** and are `<Compile Remove>`d in the csproj:
-  `EventProjectionRegistrationCompliance` and `EventProjectionEnrichmentCompliance` call
-  `IDocumentSession.Store` and `IQuerySession.LoadAsync`, which Fisher does not have. Every other
-  un-enrolled suite merely *uses* the session types and compiles fine. Delete those two lines when
-  document storage lands.
+- Every suite now compiles. The two `EventProjection*` suites were once `<Compile Remove>`d because
+  they call `IDocumentSession.Store` and `IQuerySession.LoadAsync`; document storage made them
+  compile and they are enrolled.
 - **`FisherComplianceFixture` throws `NotSupportedException` naming the milestone** for each member
   Fisher cannot honour (`LoadDocumentAsync`, `EventStore`, `AllAggregateTypes`, `CreateBatch`, the
   daemon pair). Enrolling a suite prematurely therefore fails loudly rather than passing on a stub.

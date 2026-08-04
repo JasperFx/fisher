@@ -69,7 +69,35 @@ public class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDatabase, I
     internal async ValueTask<SqliteConnection> OpenConnectionAsync(CancellationToken token = default)
         => (SqliteConnection)await _dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
 
+    private readonly HashSet<Type> _ensuredDocumentTables = new();
     private ClosedShape.DocumentProviderRegistry? _providers;
+
+    /// <summary>
+    ///     Create this document type's table if it is not known to exist yet.
+    /// </summary>
+    /// <remarks>
+    ///     Snapshot types are registered by projection configuration, which can run after the schema
+    ///     was last applied, so the inline projection path cannot assume its table is already there.
+    ///     The set of types already handled is cached because the check would otherwise run on every
+    ///     commit.
+    /// </remarks>
+    internal async Task EnsureDocumentTableAsync(Type documentType, CancellationToken token)
+    {
+        lock (_ensuredDocumentTables)
+        {
+            if (!_ensuredDocumentTables.Add(documentType))
+            {
+                return;
+            }
+        }
+
+        // Registering the mapping is what puts the table into BuildFeatureSchemas; applying the whole
+        // configuration then creates it. Heavier than emitting one CREATE TABLE, but it goes through
+        // the same migration path as every other Fisher table instead of beside it.
+        _options.Schema.MappingFor(documentType);
+
+        await ApplyAllConfiguredChangesToDatabaseAsync(ct: token).ConfigureAwait(false);
+    }
 
     internal Weasel.Storage.IProviderGraph Providers
         => _providers ??= new ClosedShape.DocumentProviderRegistry(_options);

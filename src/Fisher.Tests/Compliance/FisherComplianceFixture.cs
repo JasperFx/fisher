@@ -199,12 +199,9 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         }
 
         public void Snapshot<TDoc>(SnapshotLifecycle lifecycle) where TDoc : notnull
-            => throw new NotSupportedException(
-                "Fisher cannot register a snapshot projection yet — that needs StoreOptions.Projections " +
-                "and document storage to write the snapshot to.");
+            => _options.Projections.Snapshot<TDoc>(lifecycle);
 
         public void AddProjection(ProjectionBase projection, ProjectionLifecycle lifecycle)
-            => throw new NotSupportedException(
-                "Fisher cannot register a projection yet — there is no StoreOptions.Projections.");
+            => _options.Projections.Add(projection, lifecycle);
     }
 }

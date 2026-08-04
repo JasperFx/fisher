@@ -233,5 +233,12 @@ public class DocumentSchema
     /// </summary>
     public IReadOnlyList<DocumentMapping> AllMappings() => _mappings.Values.ToList();
 
+    /// <summary>
+    ///     Whether this type has been mapped — asked before creating a table for it, so that the
+    ///     commit path can tell a document operation from an event one without a mapping appearing as
+    ///     a side effect of the question.
+    /// </summary>
+    public bool HasMappingFor(Type documentType) => _mappings.ContainsKey(documentType);
+
     internal bool HasAny => !_mappings.IsEmpty;
 }
