@@ -141,6 +141,8 @@ Working, with tests:
 - Document storage over Guid, string, int and long ids; numeric ids via Hi-Lo sequences (`fi_hilo`)
 - `EventProjection.storeEntity` — an `EventProjection`'s `Create`/`Project` results are stored inline
 - `DocumentStore.Advanced` — `Clean`, `ResetAllDataAsync`, `ResetHiloSequenceFloorAsync<T>`
+- `DocumentStore : IEventStore` — the explorer reads (`GetRecentStreamsAsync`,
+  `GetStreamMetadataAsync`) and `TryCreateUsage`; see below
 
 Not implemented yet — do not assume these work:
 
@@ -312,11 +314,45 @@ Two things that are not obvious:
 `DocumentMapping` arrives it should resolve identity *through* `AggregateIdentity` rather than beside
 it, so the live-aggregation and snapshot paths cannot disagree about what `TId` is.
 
+### The `IEventStore` surface
+
+`DocumentStore` is `partial`; its `IEventStore` implementation lives in
+`DocumentStore.EventStore.cs` and is written **explicitly** (`Uri IEventStore.Subject => ...`), as
+Polecat does, so none of a tooling-only surface lands on the store's own public API.
+
+Most of `IEventStore` is default-implemented by JasperFx and deliberately left alone. Fisher supplies
+the required members plus the three things `EventStoreExplorerCompliance` exercises:
+`GetRecentStreamsAsync`, `GetStreamMetadataAsync` and `TryCreateUsage`. The required members it
+cannot honour — `BuildProjectionDaemonAsync`, `OpenReadOnlyEventStore`, `CompactStreamAsync` — throw
+naming their milestone rather than returning an empty result a monitoring tool would render as
+"no data". Same discipline as `EventOperations.Unsupported.cs`.
+
+Three SQLite-specific points:
+
+- **`GetStreamMetadataAsync` parses the incoming Guid string and re-renders it.** That is not
+  redundant. `fi_streams.id` holds the lowercase canonical form and SQLite's default collation is
+  case-sensitive, so an uppercase Guid string matches nothing — the same trap
+  `SqliteGuidIdentification` exists for. The shared compliance suite cannot catch a regression here
+  because it only ever passes `Guid.ToString()`, which is already lowercase;
+  `event_store_explorer.stream_metadata_is_found_regardless_of_guid_casing` is what pins it.
+- **Recent-stream ordering is `order by timestamp desc` over TEXT** — a string sort, correct only
+  while `SqliteTimestamp.Format` stays fixed-width, UTC and millisecond-precision. A format with a
+  variable-width offset or no sub-second component would silently mis-order streams written in the
+  same second.
+- **Rows are materialised inside the resilience pipeline, not streamed out of it.** A retried
+  `SQLITE_BUSY` re-executes the whole delegate, so yielding a live reader to the caller would let a
+  retry resume against a connection the previous attempt had already disposed.
+
+`fi_streams`' column projection stays in `FisherStreamsRowReader` — `ReadStreamSummary` and
+`ReadStreamMetadata` sit beside `Read`, so all three move together when the table's shape does.
+`ReadStreamMetadata` returns an **empty tag dictionary, not null**: the record declares `Tags`
+non-nullable, and returning null there is what polecat#412 was.
+
 ### Compliance suites
 
 **Fisher is enrolled.** `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old
-`$(EnableComplianceTests)` gate is gone. **Ten suites are live, 66 shared tests.** The four still
-unenrolled need the async daemon (`AsyncDaemon`, `RebuildConcurrencyCap`) or DCB tags
+`$(EnableComplianceTests)` gate is gone. **Thirteen suites are live, 85 shared tests.** The four
+still unenrolled need the async daemon (`AsyncDaemon`, `RebuildConcurrencyCap`) or DCB tags
 (`AssignTagWhere`, `DcbTagQueryAndConsistency`).
 
 The mechanics, because they are not what the package's name suggests:
@@ -329,8 +365,9 @@ The mechanics, because they are not what the package's name suggests:
   they call `IDocumentSession.Store` and `IQuerySession.LoadAsync`; document storage made them
   compile and they are enrolled.
 - **`FisherComplianceFixture` throws `NotSupportedException` naming the milestone** for each member
-  Fisher cannot honour (`LoadDocumentAsync`, `EventStore`, `AllAggregateTypes`, `CreateBatch`, the
-  daemon pair). Enrolling a suite prematurely therefore fails loudly rather than passing on a stub.
+  Fisher cannot honour (`CreateBatch` and the daemon pair; `LoadDocumentAsync` still throws for a
+  strongly typed id). Enrolling a suite prematurely therefore fails loudly rather than passing on a
+  stub.
 - `CleanEventDataAsync` now delegates to `Advanced.Clean.DeleteAllEventDataAsync`. It is called
   before every test, so it cannot throw the way the unsupported members do — hence the null guard
   rather than the `Store` accessor.

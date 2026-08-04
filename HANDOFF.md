@@ -1,20 +1,25 @@
 # Handoff
 
-State of Fisher after Hi-Lo sequences, the `Advanced` facade and `TombstoneStream`, written for
+State of Fisher after the JasperFx 2.39.4 upgrade and `DocumentStore : IEventStore`, written for
 whoever picks this up next.
 
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps; [ROADMAP.md](ROADMAP.md) has the
 ordered plan. This document is the compliance scoreboard and the things that are true right now but
 not obvious from either.
 
-**178 tests green on net9.0 and net10.0.** 66 of them are shared cross-store compliance tests.
+**204 tests green on net9.0 and net10.0.** 85 of them are shared cross-store compliance tests.
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.39.3 ships **14 suites, 105 tests**. Fisher passes **66 of 105
-(63%), 10 suites of 14**. Every suite compiles; only the subclassed ones run.
+`JasperFx.Events.ComplianceTests` 2.39.4 ships **17 suites, 124 tests**. Fisher passes **85 of 124
+(69%), 13 suites of 17**. Every suite compiles; only the subclassed ones run.
 
-### Green — 10 suites, 66 tests
+2.39.4 added three suites. Two of them — `FetchLatestCompliance` and `StreamArchivingCompliance` —
+went green on the version bump alone, with no production change: `FetchLatest`/`ProjectLatest` and
+`ArchiveStream` were already built to the shape the shared suite expects. The third,
+`EventStoreExplorerCompliance`, is what motivated `DocumentStore : IEventStore`.
+
+### Green — 13 suites, 85 tests
 
 | Suite | Tests |
 |---|---|
@@ -22,8 +27,11 @@ not obvious from either.
 | `StreamReadCompliance` | 11 |
 | `EventMetadataCompliance` | 9 |
 | `SelfAggregatingEvolveCompliance` | 8 |
+| `FetchLatestCompliance` | 7 |
 | `LiveAggregationCompliance` | 7 |
 | `StringIdentitySingleStreamCompliance` | 6 |
+| `StreamArchivingCompliance` | 6 |
+| `EventStoreExplorerCompliance` | 6 |
 | `ActivityCorrelationCompliance` | 4 |
 | `EventProjectionRegistrationCompliance` | 3 |
 | `EventProjectionEnrichmentCompliance` | 3 |
@@ -35,25 +43,43 @@ not obvious from either.
 |---|---|---|
 | `DcbTagQueryAndConsistencyCompliance` | 26 | DCB tags + batched queries |
 | `AssignTagWhereCompliance` | 6 | DCB tags |
-| `RebuildConcurrencyCapCompliance` | 5 | `IEventStore` on `DocumentStore` + projection rebuilds |
+| `RebuildConcurrencyCapCompliance` | 5 | projection rebuilds — `IEventStore` is no longer the blocker |
 | `AsyncDaemonCompliance` | 2 | the async daemon |
 
-**Two capabilities account for all 39.** Nothing is blocked on document storage or projections any
-more — that was true up to `69bf873` and is no longer. Hi-Lo sequences and
-`EventProjection.storeEntity` closed the last two document-storage holes without moving the
-compliance number, because no enrolled suite exercised either.
+**Two capabilities still account for all 39.** Nothing is blocked on document storage, projections
+or `IEventStore` any more.
 
 ### What the fixture still throws
 
-`FisherComplianceFixture` implements every member; four throw `NotSupportedException` naming the
+`FisherComplianceFixture` implements every member; three throw `NotSupportedException` naming the
 milestone. Enrolling a suite prematurely therefore fails loudly rather than passing on a stub.
 
-- `EventStore` — `DocumentStore` does not implement JasperFx's `IEventStore`
 - `CreateBatch` — no batched queries
 - `StartDaemonAsync`, `WaitForNonStaleProjectionDataAsync` — no daemon
 
-`LoadDocumentAsync` is fully live now: Guid, string, int and long all load. It still throws for a
-strongly typed id, which Fisher does not support anywhere.
+`EventStore` is live as of the `IEventStore` milestone — the fixture hands back the `DocumentStore`
+itself. `LoadDocumentAsync` is fully live too: Guid, string, int and long all load. It still throws
+for a strongly typed id, which Fisher does not support anywhere.
+
+### The `IEventStore` surface
+
+`DocumentStore` implements JasperFx's `IEventStore` explicitly, in `DocumentStore.EventStore.cs`, so
+none of it lands on the store's own public API. Most of the interface is default-implemented by
+JasperFx and left alone. Fisher overrides the two explorer reads it can answer out of `fi_streams`
+(`GetRecentStreamsAsync`, `GetStreamMetadataAsync`) and supplies `TryCreateUsage`; the required
+members it cannot honour — `BuildProjectionDaemonAsync`, `OpenReadOnlyEventStore`,
+`CompactStreamAsync` — throw naming their milestone, the same discipline as
+`EventOperations.Unsupported.cs`.
+
+Two SQLite-specific things the shared suite does **not** cover, pinned by
+`src/Fisher.Tests/Events/event_store_explorer.cs` instead:
+
+- **`GetStreamMetadataAsync` normalises Guid casing.** `fi_streams.id` holds the lowercase canonical
+  form and SQLite's default collation is case-sensitive, so an uppercase Guid string matches nothing.
+  The compliance suite only ever passes `Guid.ToString()`, which is already lowercase, so it would
+  pass either way. `stream_metadata_is_found_regardless_of_guid_casing` fails without the parse.
+- **Recent-stream ordering is a string sort** over ISO-8601 TEXT, correct only while
+  `SqliteTimestamp.Format` stays fixed-width, UTC and millisecond-precision.
 
 ## Recommended next move
 

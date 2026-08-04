@@ -9,7 +9,12 @@ namespace Fisher;
 ///     The root of a Fisher store: owns configuration and the database, and creates sessions.
 ///     Singleton, thread-safe, and expensive to build — one per application, as in Marten and Polecat.
 /// </summary>
-public class DocumentStore : IAsyncDisposable
+/// <remarks>
+///     Partial: the <see cref="JasperFx.Events.IEventStore" /> surface — the explorer and diagnostic
+///     methods monitoring tools read — lives in <c>DocumentStore.EventStore.cs</c>, implemented
+///     explicitly so it does not crowd the store's own API.
+/// </remarks>
+public partial class DocumentStore : IAsyncDisposable
 {
     public DocumentStore(StoreOptions options)
     {

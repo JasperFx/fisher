@@ -77,6 +77,8 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
 
     public override IEventRegistry Registry => Store.Options.EventGraph;
 
+    public override IEventStore EventStore => Store;
+
     public override IEnumerable<Type> AllAggregateTypes() => Store.Options.Projections.AllAggregateTypes();
 
     public override Task<T?> LoadDocumentAsync<T>(IQuerySession session, object id, CancellationToken token)
@@ -130,10 +132,6 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     //
     // Each of these names the milestone it waits on. A suite that touches one is a suite Fisher is
     // not ready to enroll; see Compliance/fisher_event_store_compliance.cs for what is enrolled.
-
-    public override IEventStore EventStore
-        => throw new NotSupportedException(
-            "Fisher's DocumentStore does not implement JasperFx's IEventStore yet.");
 
     public override IComplianceBatch CreateBatch(IQuerySession session)
         => throw new NotSupportedException("Fisher has no batched query support yet.");
