@@ -187,18 +187,29 @@ it, so the live-aggregation and snapshot paths cannot disagree about what `TId` 
 
 ### Compliance suites
 
-`JasperFx.Events.ComplianceTests` is referenced but **gated behind `$(EnableComplianceTests)`** in
-`Fisher.Tests.csproj`. It is a source-only package, so its suites hard-fail the build until Fisher
-supplies three global aliases they bind against:
+**Fisher is enrolled.** `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old
+`$(EnableComplianceTests)` gate is gone. Three suites are live in `Compliance/`:
+`StreamReadCompliance`, `EventMetadataCompliance`, `LiveAggregationCompliance`, 27 shared tests.
 
-```
-ComplianceQuerySession    -> Fisher.IQuerySession
-ComplianceOperations      -> Fisher.IDocumentSession
-ComplianceEventProjection -> Fisher's EventProjection base type   (does not exist yet)
-```
+The mechanics, because they are not what the package's name suggests:
 
-Enabling them also requires document load-back, projections, and the daemon — see
-`EventStoreComplianceFixture`. Flip the default to true once those exist.
+- **Every suite compiles; only the subclassed ones run.** Enrolling is one empty class in
+  `fisher_event_store_compliance.cs`. Not enrolling costs nothing at runtime — but the shared source
+  still has to compile, which is why all four global aliases in `ComplianceAliases.cs` must resolve
+  even for suites Fisher cannot pass.
+- **Two files cannot compile at all** and are `<Compile Remove>`d in the csproj:
+  `EventProjectionRegistrationCompliance` and `EventProjectionEnrichmentCompliance` call
+  `IDocumentSession.Store` and `IQuerySession.LoadAsync`, which Fisher does not have. Every other
+  un-enrolled suite merely *uses* the session types and compiles fine. Delete those two lines when
+  document storage lands.
+- **`FisherComplianceFixture` throws `NotSupportedException` naming the milestone** for each member
+  Fisher cannot honour (`LoadDocumentAsync`, `EventStore`, `AllAggregateTypes`, `CreateBatch`, the
+  daemon pair). Enrolling a suite prematurely therefore fails loudly rather than passing on a stub.
+- `CleanEventDataAsync` deletes straight from the tables. It is called before every test, so it
+  cannot throw — it is a stand-in for `Advanced.Clean`, and should move there rather than grow here.
+
+`ComplianceEventProjection` binds to `Fisher.Projections.EventProjection`, which exists but is not
+exercised by anything yet: its one required member, `storeEntity`, is document storage and throws.
 
 ## Conventions
 
@@ -213,6 +224,10 @@ Enabling them also requires document load-back, projections, and the daemon — 
 - Mirror Marten's public API surface where it costs nothing; mirror Polecat's internals where the
   concern is not dialect-specific.
 - Database execution should go through `StoreOptions.ResiliencePipeline`.
+- **Never call `SqliteConnection.ClearAllPools()`.** It disposes every pooled connection in the
+  process, and xUnit runs test collections in parallel — one test's cleanup will take out another
+  with `ObjectDisposedException: SQLitePCL.sqlite3`, intermittently enough to look like a flake.
+  `TemporaryDatabase.Dispose` clears only its own connection string's pool.
 
 ## Related codebases
 

@@ -50,7 +50,16 @@ public sealed class TemporaryDatabase : IAsyncDisposable, IDisposable
         // Microsoft.Data.Sqlite pools connections by connection string, and a pooled connection keeps
         // the file handle (and the -wal / -shm sidecars) alive. Without clearing the pool first the
         // delete below silently fails on Windows and leaves WAL sidecars behind everywhere else.
-        SqliteConnection.ClearAllPools();
+        //
+        // Clear only THIS database's pool. ClearAllPools() disposes every pooled connection in the
+        // process, including ones another test class is actively using — xUnit runs collections in
+        // parallel, so a database disposing at the wrong moment took out an unrelated test with
+        // `ObjectDisposedException: SQLitePCL.sqlite3`. Rare enough to look like a flake, and it only
+        // started showing up once the compliance fixtures made create/dispose cycles overlap.
+        using (var pooled = new SqliteConnection(ConnectionString))
+        {
+            SqliteConnection.ClearPool(pooled);
+        }
 
         foreach (var suffix in new[] { "", "-wal", "-shm" })
         {

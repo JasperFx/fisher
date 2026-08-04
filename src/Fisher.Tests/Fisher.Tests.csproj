@@ -26,17 +26,23 @@
         <ProjectReference Include="..\Fisher.TestUtils\Fisher.TestUtils.csproj" />
         <ProjectReference Include="..\Fisher\Fisher.csproj" />
         <PackageReference Include="JasperFx.Events.SourceGenerator" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-        <!-- Source-only: the compliance suites compile into this assembly so the aggregate source
-             generator above binds Fisher's session types. See Compliance/ for the enrollments.
+        <!-- Source-only: every suite compiles into this assembly, so the aggregate source generator
+             above binds Fisher's session types. See Compliance/ for the enrollments.
 
-             Gated on $(EnableComplianceTests) while Fisher is being stood up. The suites are
-             compiled source, not a referenced assembly, so they hard-fail the build until Fisher
-             supplies all three global aliases the shared sources bind against:
-               ComplianceQuerySession  -> Fisher.IQuerySession
-               ComplianceOperations    -> Fisher.IDocumentSession
-               ComplianceEventProjection -> Fisher's EventProjection base type
-             See Compliance/ComplianceAliases.cs. Flip the default to true once those exist. -->
-        <PackageReference Include="JasperFx.Events.ComplianceTests" Condition="'$(EnableComplianceTests)' == 'true'" />
+             All suites COMPILE; only the ones subclassed in fisher_event_store_compliance.cs RUN.
+             That is why the global aliases in Compliance/ComplianceAliases.cs must all resolve even
+             for suites Fisher cannot pass yet — a shared source file referencing
+             ComplianceEventProjection is compiled whether or not it is enrolled. -->
+        <PackageReference Include="JasperFx.Events.ComplianceTests" />
+
+        <!-- The two EventProjection suites are the only shared sources that do not merely *use* the
+             store's session types but call document APIs on them — IDocumentSession.Store and
+             IQuerySession.LoadAsync. Fisher has neither, so these two files cannot compile at all
+             and have to be removed rather than just left un-enrolled like every other suite Fisher
+             is not ready for. Delete these two lines once document storage lands; the
+             ComplianceEventProjection alias they bind to already exists. -->
+        <Compile Remove="$(NuGetPackageRoot)jasperfx.events.compliancetests\**\EventProjectionRegistrationCompliance.cs" />
+        <Compile Remove="$(NuGetPackageRoot)jasperfx.events.compliancetests\**\EventProjectionEnrichmentCompliance.cs" />
     </ItemGroup>
 
 </Project>
