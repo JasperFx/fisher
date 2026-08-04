@@ -110,6 +110,22 @@ public class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDatabase, I
         await ApplyAllConfiguredChangesToDatabaseAsync(ct: token).ConfigureAwait(false);
     }
 
+    /// <summary>
+    ///     Forget which document tables are known to exist, so the next write re-checks.
+    /// </summary>
+    /// <remarks>
+    ///     Only <c>Advanced.Clean.CompletelyRemoveAllAsync</c> needs this: dropping the tables makes
+    ///     the cache above wrong in the one direction that matters — it would let a write skip the
+    ///     migration and target a table that is no longer there.
+    /// </remarks>
+    internal void ForgetEnsuredTables()
+    {
+        lock (_ensuredDocumentTables)
+        {
+            _ensuredDocumentTables.Clear();
+        }
+    }
+
     internal Weasel.Storage.IProviderGraph Providers
         => _providers ??= new ClosedShape.DocumentProviderRegistry(_options);
 

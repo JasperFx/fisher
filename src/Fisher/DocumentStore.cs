@@ -57,6 +57,13 @@ public class DocumentStore : IAsyncDisposable
     /// </summary>
     public FisherDatabase Database { get; }
 
+    /// <summary>
+    ///     Cleaning, resetting, and the Hi-Lo knobs — everything outside the session API.
+    /// </summary>
+    public AdvancedOperations Advanced => _advanced ??= new AdvancedOperations(this);
+
+    private AdvancedOperations? _advanced;
+
     internal EventGraph EventGraph => Options.EventGraph;
 
     /// <summary>

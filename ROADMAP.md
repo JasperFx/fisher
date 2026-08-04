@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of `cc929b6` + Hi-Lo sequences. 170 tests green on net9.0 and net10.0, **66 of them
+Status as of `eeac0e5` + the Advanced facade. 175 tests green on net9.0 and net10.0, **66 of them
 shared cross-store compliance tests across 10 suites**.
 
 ## The destination
@@ -48,6 +48,7 @@ suite catalogue is blocked on document or projection work any more.
 | Inline projections | `Snapshot<T>`, `Add(projection, lifecycle)`, applied in the events' own transaction |
 | Hi-Lo sequences | `fi_hilo`, `HiloSequence`, `SequenceFactory` — int/long document identities |
 | `EventProjection.storeEntity` | a `Create`/`Project` result is stored in the events' own transaction |
+| `Advanced` | `Clean` (`IDocumentCleaner`), `ResetAllDataAsync`, `ResetHiloSequenceFloorAsync<T>` |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -114,15 +115,16 @@ nothing reads.
 
 ### 4. Projections, the rest
 
-Inline works. Still missing: the Async lifecycle (daemon), projection side effects
-(`GetOrStartMessageSink` throws), `EventProjection.storeEntity` for projections that store arbitrary
-documents, and composite projections.
+Inline works, including `EventProjection`s that store arbitrary documents. Still missing: the Async
+lifecycle (daemon), projection side effects (`GetOrStartMessageSink` throws), and composite
+projections.
 
 ## Enrollment status
 
 Enrolling is one empty subclass per suite in `Compliance/fisher_event_store_compliance.cs`. Every
-suite compiles whether or not it is enrolled — see CLAUDE.md for the two files that cannot compile at
-all and are `<Compile Remove>`d.
+suite compiles whether or not it is enrolled, which is why all four global aliases in
+`ComplianceAliases.cs` must resolve even for suites Fisher cannot pass. Nothing is `<Compile Remove>`d
+any more.
 
 | Suite | Tests | Status |
 |---|---|---|
@@ -155,9 +157,8 @@ not started at all.
   genuinely interleaved writers, not two sequential `SaveChangesAsync` calls.
 - **`TombstoneStreamOperation` is unreachable.** Written into the dialect, no caller. Archive/
   un-archive got wired up and tested; tombstone still needs a session-facing API.
-- **Hi-Lo has no `Advanced.ResetHiloSequenceFloor`.** `ISequence.SetFloor` works and is tested, but
-  the only way to reach it is `store.Database.SequenceFor(type)`; Marten and Polecat both surface it
-  on an `Advanced` facade Fisher does not have.
+- **`Advanced` is a thin subset.** `Clean`, `ResetAllDataAsync` and `ResetHiloSequenceFloorAsync<T>`
+  only. Marten and Polecat also carry bulk insert, `InitialData` and metadata helpers there.
 - **Not started at all:** DCB tags, multi-tenancy beyond a tenant id column, subscriptions, DI
   registration (`AddFisher`), LINQ, bulk insert, natural keys, strongly typed ids.
 

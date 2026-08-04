@@ -5,7 +5,6 @@ using JasperFx.Events.ComplianceTests;
 using JasperFx.Events.Daemon;
 using JasperFx.Events.Projections;
 using JasperFx.Events.Tags;
-using Microsoft.Data.Sqlite;
 
 namespace Fisher.Tests.Compliance;
 
@@ -107,8 +106,7 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     /// </summary>
     /// <remarks>
     ///     Called before every test by the suite base, so it cannot throw the way the unsupported
-    ///     members below do. Deleting straight from the tables is a stand-in for <c>Advanced.Clean</c>,
-    ///     which Fisher does not have yet — move this there when it lands rather than growing it here.
+    ///     members below do — hence the null guard rather than the <see cref="Store" /> accessor.
     /// </remarks>
     public override async Task CleanEventDataAsync()
     {
@@ -117,19 +115,7 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
             return;
         }
 
-        var events = Store.Options.EventGraph;
-
-        await using var connection = new SqliteConnection(_database!.ConnectionString);
-        await connection.OpenAsync(Cancellation).ConfigureAwait(false);
-
-        await using var command = connection.CreateCommand();
-        command.CommandText = $"""
-            delete from {events.EventsTableName};
-            delete from {events.StreamsTableName};
-            delete from {events.ProgressionTableName};
-            """;
-
-        await command.ExecuteNonQueryAsync(Cancellation).ConfigureAwait(false);
+        await Store.Advanced.Clean.DeleteAllEventDataAsync(Cancellation).ConfigureAwait(false);
     }
 
     /// <summary>

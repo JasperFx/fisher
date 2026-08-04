@@ -443,11 +443,9 @@ public class storing_documents_with_a_numeric_identity : IAsyncLifetime
     }
 
     [Fact]
-    public async Task set_floor_pushes_subsequent_ids_past_it()
+    public async Task resetting_the_sequence_floor_pushes_subsequent_ids_past_it()
     {
-        var sequence = _store.Database.SequenceFor(typeof(Tally));
-
-        await sequence.SetFloor(50_000);
+        await _store.Advanced.ResetHiloSequenceFloorAsync<Tally>(50_000);
 
         var tally = new Tally { Count = 1 };
 

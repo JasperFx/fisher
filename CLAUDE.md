@@ -140,6 +140,7 @@ Working, with tests:
 - `EventOperations` implements the full `IEventStoreOperations` — see below for which members throw
 - Document storage over Guid, string, int and long ids; numeric ids via Hi-Lo sequences (`fi_hilo`)
 - `EventProjection.storeEntity` — an `EventProjection`'s `Create`/`Project` results are stored inline
+- `DocumentStore.Advanced` — `Clean`, `ResetAllDataAsync`, `ResetHiloSequenceFloorAsync<T>`
 
 Not implemented yet — do not assume these work:
 
@@ -238,6 +239,23 @@ Three things worth knowing:
 Sequences are cached by sequence *name*, not by document type, so two types sharing a configured
 `SequenceName` share one allocation instead of each holding a private lo range over the same row.
 
+### `Advanced` and cleaning
+
+`DocumentStore.Advanced` carries `Clean` (`IDocumentCleaner`), `ResetAllDataAsync` and
+`ResetHiloSequenceFloorAsync<T>`. Two things about the cleaner are SQLite-specific rather than
+arbitrary:
+
+- **Scoping is by table prefix**, because there is no schema to scope to. `PrefixFor(schemaName)` is
+  the entire isolation boundary between two logical stores in one file, and
+  `cleaning_one_logical_store_does_not_touch_another_in_the_same_file` is what holds it.
+- **Table matching is done in C#, not with `LIKE`.** `_` is a single-character wildcard in SQL's
+  LIKE and every Fisher prefix contains one, so `like 'fi_%'` would happily match a table called
+  `fixtures`. Names come back from `sqlite_master` and are filtered with `StartsWith`.
+
+`CompletelyRemoveAllAsync` calls `FisherDatabase.ForgetEnsuredTables()` afterwards. Without it the
+"this document table already exists" cache would still claim tables that were just dropped, and the
+next `Store` would skip its migration and write to nothing.
+
 - **Projections — inline only.** `Snapshot<T>` and `Add(projection, lifecycle)` work for the Inline
   and Live lifecycles, and inline snapshots are written in the same transaction as the events that
   produced them. **Async is rejected outright** — it needs the daemon. `GetOrStartMessageSink` still
@@ -313,8 +331,9 @@ The mechanics, because they are not what the package's name suggests:
 - **`FisherComplianceFixture` throws `NotSupportedException` naming the milestone** for each member
   Fisher cannot honour (`LoadDocumentAsync`, `EventStore`, `AllAggregateTypes`, `CreateBatch`, the
   daemon pair). Enrolling a suite prematurely therefore fails loudly rather than passing on a stub.
-- `CleanEventDataAsync` deletes straight from the tables. It is called before every test, so it
-  cannot throw — it is a stand-in for `Advanced.Clean`, and should move there rather than grow here.
+- `CleanEventDataAsync` now delegates to `Advanced.Clean.DeleteAllEventDataAsync`. It is called
+  before every test, so it cannot throw the way the unsupported members do — hence the null guard
+  rather than the `Store` accessor.
 
 ### Session metadata on appended events
 
