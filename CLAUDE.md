@@ -8,8 +8,9 @@ SQLite-backed Event Store and lightweight Document Database in the Critter Stack
 subset of Marten (PostgreSQL) and Polecat (SQL Server), built on Weasel.Sqlite for schema management
 and Weasel.Storage for the shared closed-shape document/event runtime.
 
-**Fisher is early and incomplete.** See "Current state" below before assuming a feature exists, and
-[ROADMAP.md](ROADMAP.md) for what comes next and in what order.
+**Fisher is early and incomplete.** See "Current state" below before assuming a feature exists,
+[ROADMAP.md](ROADMAP.md) for what comes next and in what order, and [HANDOFF.md](HANDOFF.md) for the
+compliance scoreboard and the current state of play.
 
 ## Commands
 
