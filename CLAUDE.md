@@ -129,8 +129,11 @@ Working, with tests:
 
 Not implemented yet — do not assume these work:
 
-- **Document storage.** `IStorageSession.StorageFor`, `IStorageDatabase.Providers` and
-  `SequenceFor` throw `NotImplementedException`. No `Store`/`Load`/`Delete`, no LINQ.
+- **Document storage — in progress.** The mapping and schema layer is in: `DocumentMapping`,
+  `StoreOptions.Schema.For<T>()`, `fi_doc_<alias>` tables through `DocumentFeatureSchema`. Nothing
+  reads or writes one yet — `IStorageSession.StorageFor`, `IStorageDatabase.Providers` and
+  `SequenceFor` still throw `NotImplementedException`, and there is no `Store`/`Load`/`Delete` and no
+  LINQ.
 - **Projections.** `StoreOptions.Projections` exists but is thin — it carries the live aggregator
   cache and the source-generated-evolver discovery, nothing more. Nothing is persisted: no
   Inline/Async lifecycles, no `Snapshot<T>`, no way to register a projection at all.

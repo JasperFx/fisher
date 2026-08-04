@@ -55,6 +55,11 @@ public class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDatabase, I
     {
         var schemas = new List<IFeatureSchema> { new EventStoreFeatureSchema(_events) };
 
+        // One feature per registered document type, so a migration touches only the tables whose
+        // document types actually changed. Types that were never registered are absent by design —
+        // nothing knows they exist until something asks to store one.
+        schemas.AddRange(_options.Schema.AllMappings().Select(mapping => new DocumentFeatureSchema(mapping)));
+
         return schemas.ToArray();
     }
 

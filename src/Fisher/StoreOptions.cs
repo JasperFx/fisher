@@ -29,8 +29,15 @@ public class StoreOptions
         EventGraph = new EventGraph(this);
         Events.EventGraph = EventGraph;
         Projections = new Fisher.Projections.FisherProjectionOptions(EventGraph);
+        Schema = new DocumentSchema(this);
         ResiliencePipeline = new ResiliencePipelineBuilder().AddFisherDefaults().Build();
     }
+
+    /// <summary>
+    ///     Document type registration, mirroring Marten's <c>StoreOptions.Schema</c>. Registering a
+    ///     type here is what lets its table be created up front rather than on first use.
+    /// </summary>
+    public DocumentSchema Schema { get; }
 
     /// <summary>
     ///     The event graph configuration and registry. Created at construction time so projections can
