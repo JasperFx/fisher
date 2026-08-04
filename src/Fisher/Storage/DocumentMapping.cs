@@ -125,6 +125,29 @@ public class DocumentMapping
 
     internal DocumentTable BuildTable() => new(this);
 
+    /// <summary>
+    ///     Write an identity onto a document instance.
+    /// </summary>
+    /// <remarks>
+    ///     Weasel's <c>IIdentification</c> can read and generate an identity but not assign an
+    ///     arbitrary one, so the setter lives here. Reflection per call rather than a compiled
+    ///     delegate: this is reached only when something else has already decided the id — the
+    ///     identity-from-string and identity-from-guid seams — not on the store or load hot paths.
+    /// </remarks>
+    internal void SetRawId(object document, object id)
+    {
+        switch (IdMember)
+        {
+            case PropertyInfo property:
+                property.SetValue(document, id);
+                break;
+
+            case FieldInfo field:
+                field.SetValue(document, id);
+                break;
+        }
+    }
+
     private static Type TypeOf(MemberInfo member)
     {
         var type = member is PropertyInfo property ? property.PropertyType : ((FieldInfo)member).FieldType;

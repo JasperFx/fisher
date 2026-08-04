@@ -69,14 +69,21 @@ public class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDatabase, I
     internal async ValueTask<SqliteConnection> OpenConnectionAsync(CancellationToken token = default)
         => (SqliteConnection)await _dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
 
-    // TODO(task 4 — document storage): both members below are the document-side half of
-    // IStorageDatabase and have no event-store caller. They land with DocumentProviderRegistry and
-    // the Hi-Lo sequence support.
-    Weasel.Storage.IProviderGraph Weasel.Storage.IStorageDatabase.Providers
-        => throw new NotImplementedException("Fisher document storage is not implemented yet.");
+    private ClosedShape.DocumentProviderRegistry? _providers;
 
+    internal Weasel.Storage.IProviderGraph Providers
+        => _providers ??= new ClosedShape.DocumentProviderRegistry(_options);
+
+    Weasel.Storage.IProviderGraph Weasel.Storage.IStorageDatabase.Providers => Providers;
+
+    /// <summary>
+    ///     Hi-Lo sequences are not implemented, which is why only Guid and string document identities
+    ///     work — Weasel offers Hi-Lo as the only assignment strategy for int and long.
+    /// </summary>
     public Weasel.Core.Sequences.ISequence SequenceFor(Type documentType)
-        => throw new NotImplementedException("Fisher Hi-Lo sequences are not implemented yet.");
+        => throw new NotImplementedException(
+            $"Fisher has no Hi-Lo sequence support, so it cannot assign a numeric identity to " +
+            $"'{documentType.FullName}'. Use a Guid or string identity.");
 
     DbConnection Weasel.Storage.IStorageDatabase.CreateStorageConnection() => _dataSource.CreateConnection();
 

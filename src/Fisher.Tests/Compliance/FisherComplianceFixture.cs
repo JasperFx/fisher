@@ -80,6 +80,19 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
 
     public override IEnumerable<Type> AllAggregateTypes() => Store.Options.Projections.AllAggregateTypes();
 
+    public override Task<T?> LoadDocumentAsync<T>(IQuerySession session, object id, CancellationToken token)
+        where T : class
+        => id switch
+        {
+            Guid guid => session.LoadAsync<T>(guid, token),
+            string key => session.LoadAsync<T>(key, token),
+            _ => throw new NotSupportedException(
+                $"Fisher cannot load a document by an identity of type {id.GetType().FullName}. Numeric " +
+                "identities need Hi-Lo sequence support, which is not implemented.")
+        };
+
+    public override void StoreDocument<T>(IDocumentSession session, T document) => session.Store(document);
+
     public override string? CorrelationIdFor(IDocumentSession session) => AsFisherSession(session).CorrelationId;
 
     public override string? CausationIdFor(IDocumentSession session) => AsFisherSession(session).CausationId;
@@ -129,14 +142,6 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     //
     // Each of these names the milestone it waits on. A suite that touches one is a suite Fisher is
     // not ready to enroll; see Compliance/fisher_event_store_compliance.cs for what is enrolled.
-
-    public override Task<T?> LoadDocumentAsync<T>(IQuerySession session, object id, CancellationToken token)
-        where T : class
-        => throw new NotSupportedException(
-            "Fisher has no document storage yet, so a projected document cannot be loaded back.");
-
-    public override void StoreDocument<T>(IDocumentSession session, T document)
-        => throw new NotSupportedException("Fisher has no document storage yet.");
 
     public override IEventStore EventStore
         => throw new NotSupportedException(

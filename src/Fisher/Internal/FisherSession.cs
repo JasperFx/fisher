@@ -25,7 +25,7 @@ namespace Fisher.Internal;
 ///         contention against itself rather than throughput.
 ///     </para>
 /// </remarks>
-internal class FisherSession : IDocumentSession, IStorageSession, IAsyncDisposable
+internal partial class FisherSession : IDocumentSession, IStorageSession, IAsyncDisposable
 {
     private readonly List<Weasel.Storage.IStorageOperation> _operations = new();
     private List<IChangeTracker>? _changeTrackers;
@@ -229,12 +229,24 @@ internal class FisherSession : IDocumentSession, IStorageSession, IAsyncDisposab
     ConcurrencyChecks IStorageSession.Concurrency => ConcurrencyChecks.Enabled;
 
     IDocumentStorage IStorageSession.StorageFor(Type documentType)
-        => throw new NotImplementedException(
-            "Fisher document storage is not implemented yet; this session supports event store operations only.");
+        => (IDocumentStorage)typeof(FisherSession)
+            .GetMethod(nameof(StorageFor), System.Reflection.BindingFlags.NonPublic |
+                                           System.Reflection.BindingFlags.Instance)!
+            .MakeGenericMethod(documentType)
+            .Invoke(this, null)!;
 
-    IDocumentStorage<T> IStorageSession.StorageFor<T>()
-        => throw new NotImplementedException(
-            "Fisher document storage is not implemented yet; this session supports event store operations only.");
+    IDocumentStorage<T> IStorageSession.StorageFor<T>() => StorageFor<T>();
+
+    /// <summary>
+    ///     The storage flavor this session reads and writes <typeparamref name="T" /> through.
+    /// </summary>
+    /// <remarks>
+    ///     Fisher only opens lightweight sessions today, so this always resolves the lightweight
+    ///     flavor. The identity-map and query-only flavors are built and cached alongside it, waiting
+    ///     on the session kinds that would select them.
+    /// </remarks>
+    internal IDocumentStorage<T> StorageFor<T>() where T : notnull
+        => FisherDatabase.Providers.StorageFor<T>().Lightweight;
 
     // ---- JasperFx.Events.IStorageOperations ----
     //

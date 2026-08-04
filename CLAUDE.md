@@ -82,6 +82,13 @@ Traps that have already bitten and are easy to reintroduce:
   primary code `SQLITE_CONSTRAINT` (19); only 1555 (PRIMARYKEY) / 2067 (UNIQUE) distinguish them.
 - Binding a `Guid` without conversion writes a 16-byte BLOB that never matches the TEXT the schema
   holds.
+- **A `Guid` bound as a TEXT parameter is written UPPERCASE.** Microsoft.Data.Sqlite emits the
+  uppercase form for a raw `Guid`; `SqliteStorageDialect<T>.ToDatabaseValue` emits the lowercase
+  canonical form. SQLite's default collation is case-sensitive, so mixing the two writes rows that
+  can never be read back — every load returns null and every `json_each` id match fails, silently and
+  only for Guid-identified types. This is why `SqliteGuidIdentification` exists: the shared write
+  operations bind `Identification.ToRawSqlValue` directly, bypassing the dialect, so the conversion
+  has to live in the identity strategy. `a_guid_id_is_stored_as_lowercase_canonical_text` pins it.
 
 ### Row readers
 
@@ -130,13 +137,27 @@ Working, with tests:
 
 Not implemented yet — do not assume these work:
 
-- **Document storage — in progress.** Mapping, schema and the SQL are in: `DocumentMapping`,
-  `StoreOptions.Schema.For<T>()`, `fi_doc_<alias>` tables, and
-  `SqliteDocumentStorageDescriptorBuilder`. Nothing reads or writes one yet — the
-  `IDocumentStorage<T,TId>` implementations, the provider registry and the session API are the
-  remaining pieces, so `IStorageSession.StorageFor` and `IStorageDatabase.Providers` still throw.
-  Numeric ids need Hi-Lo sequences (`SequenceFor` throws), so only Guid and string identities will
-  work at first. No LINQ.
+- **Document storage — Guid and string identities only.** `Store`/`Insert`/`Update`/`Delete`/
+  `LoadAsync`/`LoadManyAsync` work, in the same unit of work and transaction as event appends.
+  Numeric ids need Hi-Lo sequences, which do not exist — `FisherDatabase.SequenceFor` throws, and the
+  provider registry rejects an int/long id up front naming Hi-Lo. No LINQ, no querying beyond load by
+  id, no soft delete, no hierarchies, no duplicated fields, no numeric revisions.
+
+### Document storage layout
+
+Weasel.Storage supplies the selectors and the write operations but **not** an
+`IDocumentStorage<T,TId>` implementation to hold them together — Marten and Polecat each write their
+own, and `FisherDocumentStorage<TDoc,TId>` is Fisher's. Around it:
+
+- `DocumentProviderRegistry` (`IProviderGraph`) caches one `DocumentProvider<T>` per document type,
+  holding four flavors. Fisher has no dirty tracking, so the identity-map storage takes that slot too.
+- **Storages record; the session queues.** `IStorageSession` has no operation queue, so
+  `IDocumentStorage.Store` only assigns an identity and registers the document; `FisherSession.Store<T>`
+  queues the `Upsert`. A storage that tried to enqueue would have to know a concrete session type.
+- The document is serialized when the batch runs, not when `Store` is called, so mutating it in
+  between still takes effect — matching Marten.
+- The read layout is a contract with the shared selectors: writeable flavors read `id` at column 0 and
+  `data` at 1 with metadata from 2; the query-only selectors omit `id` and read `data` at 0.
 
 ### Document write SQL
 

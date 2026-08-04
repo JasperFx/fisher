@@ -3,8 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of `ffaa688` + two more compliance suites. 98 tests green on net9.0 and net10.0, 33 of
-them shared cross-store suites.
+Status as of `8a75fbc` + document storage. 123 tests green on net9.0 and net10.0, 33 of them shared
+cross-store suites.
 
 ## The destination
 
@@ -39,6 +39,7 @@ Suite-by-suite blocking is tabulated under "Enrollment status".
 | Compliance enrollment | `FisherComplianceFixture` + 5 suites, 33 shared tests |
 | Session metadata | correlation/causation seeded from `Activity.Current`, applied to appended events |
 | `StoreOptions.Projections` | thin `ProjectionGraph` — aggregator cache + evolver discovery |
+| Document storage | `Store`/`Insert`/`Update`/`Delete`/`LoadAsync`/`LoadManyAsync`, Guid + string ids |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -69,17 +70,17 @@ suite source at all.
 
 ## Next, in order
 
-### 1. Document storage
+### 1. Finish document storage
 
-`IStorageSession.StorageFor`, `IStorageDatabase.Providers` and `FisherDatabase.SequenceFor` all
-throw `NotImplementedException` today. Needs `DocumentMapping`, a `DocumentProviderRegistry` behind
-`IProviderGraph`, the closed-shape document storages, `fi_doc_*` tables, and Store/Insert/Load/
-Delete.
+The write and load-by-id paths are done. What is left, roughly in value order:
 
-Prefer Weasel.Storage's closed-shape storages over hand-written SQL — the whole point of the
-dialect layer is that this should mostly be configuration. Polecat's
-`SqlServerDocumentStorageDescriptorBuilder` is the shape to mirror, minus the SQL Server type
-mapping.
+- **Hi-Lo sequences** — a `fi_hilo` table and an `ISequence`, which is the only thing standing
+  between Fisher and int/long document identities. Weasel offers no other numeric strategy, so
+  `FisherDatabase.SequenceFor` throwing is what makes those ids unusable today.
+- **Querying** — there is no LINQ and no way to fetch a document except by id. The
+  `ISelectClause` seam on `FisherDocumentStorage` is in place for it.
+- Soft delete, duplicated fields and user indexes, hierarchies, numeric revisions — each additive
+  against the existing column shape rather than a rewrite of it.
 
 ### 2. Projections
 
@@ -121,20 +122,21 @@ all and are `<Compile Remove>`d.
 | `LiveAggregationCompliance` | 7 | **green** |
 | `ActivityCorrelationCompliance` | 4 | **green** |
 | `AutoDiscoveredAggregateCompliance` | 2 | **green** |
-| `FetchForWritingCompliance` | 13 | snapshots + document load-back (1 + 2) |
-| `SelfAggregatingEvolveCompliance` | 8 | snapshots + document load-back (1 + 2) |
-| `StringIdentitySingleStreamCompliance` | 6 | projection registration + document load-back (1 + 2) |
-| `EventProjectionRegistrationCompliance` | 3 | document storage (1) — file excluded from compilation |
-| `EventProjectionEnrichmentCompliance` | 3 | document storage (1) — file excluded from compilation |
+| `FetchForWritingCompliance` | 13 | `Snapshot<T>` registration (2) — document load-back is ready |
+| `SelfAggregatingEvolveCompliance` | 8 | `Snapshot<T>` registration (2) — document load-back is ready |
+| `StringIdentitySingleStreamCompliance` | 6 | projection registration (2) |
+| `EventProjectionRegistrationCompliance` | 3 | projections (2) — file still excluded, needs `IDocumentSession.Store` on the alias |
+| `EventProjectionEnrichmentCompliance` | 3 | projections (2) — as above |
 | `AsyncDaemonCompliance` | 2 | daemon (3) |
 | `RebuildConcurrencyCapCompliance` | 5 | `IEventStore` on `DocumentStore` + rebuilds (3) |
 | `AssignTagWhereCompliance` | 6 | DCB tags |
 | `DcbTagQueryAndConsistencyCompliance` | 26 | DCB tags — the last one, 727 lines |
 
-Nothing on that list is a loose end any more: every unenrolled suite needs document storage,
-projections, the daemon, or DCB tags. `FetchForWritingCompliance` is the largest single prize at 13
-tests, and Fisher already implements the `FetchForWriting` surface it exercises — what it lacks is the
-snapshot registration and document load-back the suite asserts against.
+The fixture's `LoadDocumentAsync` and `StoreDocument` are live now, so the document half of those
+suites is satisfied. What still blocks the three biggest — 27 tests between them — is a single
+missing capability: **there is no way to register a projection**. `Snapshot<T>` and `AddProjection`
+throw on the compliance registrar, and until they do not, nothing writes a snapshot for the suites to
+read back. That makes projections (2) the highest-value next milestone by some distance.
 
 ## Open items not on the critical path
 
