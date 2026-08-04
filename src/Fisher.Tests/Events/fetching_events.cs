@@ -325,4 +325,75 @@ public class archiving_streams : IAsyncLifetime
         var events = await query.Events.FetchStreamAsync(_streamId, token: TestContext.Current.CancellationToken);
         events.ShouldAllBe(x => !x.IsArchived);
     }
+
+    [Fact]
+    public async Task tombstoning_removes_the_stream_and_its_events_outright()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.TombstoneStream(_streamId);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var query = _store.LightweightSession();
+
+        // Unlike archiving, there is nothing left to read.
+        (await query.Events.FetchStreamStateAsync(_streamId, TestContext.Current.CancellationToken))
+            .ShouldBeNull();
+
+        (await query.Events.FetchStreamAsync(_streamId, token: TestContext.Current.CancellationToken))
+            .ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task a_tombstoned_stream_does_not_release_its_sequence_numbers()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.TombstoneStream(_streamId);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        var replacement = Guid.NewGuid();
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.StartStream(replacement, new QuestStarted("Again"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var conn = new Microsoft.Data.Sqlite.SqliteConnection(_database.ConnectionString);
+        await conn.OpenAsync(TestContext.Current.CancellationToken);
+
+        await using var command = conn.CreateCommand();
+        command.CommandText = "select min(seq_id) from fi_events";
+
+        // AUTOINCREMENT, not a bare INTEGER PRIMARY KEY: a reused seq_id would sit below an async
+        // projection's high-water mark and be skipped forever.
+        Convert.ToInt64(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken))
+            .ShouldBeGreaterThan(2);
+    }
+
+    [Fact]
+    public async Task tombstoning_leaves_other_streams_alone()
+    {
+        var other = Guid.NewGuid();
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.StartStream(other, new QuestStarted("Survivor"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.TombstoneStream(_streamId);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var query = _store.LightweightSession();
+
+        (await query.Events.FetchStreamAsync(other, token: TestContext.Current.CancellationToken))
+            .Count.ShouldBe(1);
+    }
 }

@@ -72,6 +72,35 @@ public partial class EventOperations : IEventStoreOperations
         _session.QueueOperation(Graph.ArchiveStreamOperation(streamKey, _session.TenantId, false));
     }
 
+    /// <summary>
+    ///     Hard-delete a stream and every event in it. Queued until <c>SaveChangesAsync</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Unlike <see cref="ArchiveStream(Guid)" />, which only sets a flag, this destroys data —
+    ///         the events are gone and cannot be re-read or re-projected. Archiving is what you want
+    ///         for a stream that is merely finished.
+    ///     </para>
+    ///     <para>
+    ///         The deleted events keep their <c>seq_id</c> values reserved, because
+    ///         <c>AUTOINCREMENT</c> never reuses a sequence number. That is what stops a tombstoned
+    ///         stream from hiding later events behind an async projection's high-water mark — see
+    ///         CLAUDE.md.
+    ///     </para>
+    /// </remarks>
+    public void TombstoneStream(Guid streamId)
+    {
+        AssertGuidIdentity();
+        _session.QueueOperation(Graph.TombstoneStreamOperation(streamId, _session.TenantId));
+    }
+
+    /// <inheritdoc cref="TombstoneStream(Guid)" />
+    public void TombstoneStream(string streamKey)
+    {
+        AssertStringIdentity();
+        _session.QueueOperation(Graph.TombstoneStreamOperation(streamKey, _session.TenantId));
+    }
+
     // ---- StartStream ----
 
     public StreamAction StartStream<TAggregate>(Guid id, params object[] events) where TAggregate : class

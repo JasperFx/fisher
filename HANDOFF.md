@@ -1,12 +1,13 @@
 # Handoff
 
-State of Fisher after Hi-Lo sequences and the Advanced facade, written for whoever picks this up next.
+State of Fisher after Hi-Lo sequences, the `Advanced` facade and `TombstoneStream`, written for
+whoever picks this up next.
 
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps; [ROADMAP.md](ROADMAP.md) has the
 ordered plan. This document is the compliance scoreboard and the things that are true right now but
 not obvious from either.
 
-**175 tests green on net9.0 and net10.0.** 66 of them are shared cross-store compliance tests.
+**178 tests green on net9.0 and net10.0.** 66 of them are shared cross-store compliance tests.
 
 ## Where we are against the compliance suites
 

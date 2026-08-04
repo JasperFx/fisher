@@ -127,11 +127,11 @@ Working, with tests:
 
 - `fi_streams` / `fi_events` / `fi_event_progression` schema via Weasel.Sqlite
 - `SqliteStorageDialect<TId>` and `SqliteEventStoreDialect` (Quick append + auxiliary operations)
-- `DocumentStore`, `FisherSession` unit of work, `EventOperations` (`IEventOperations`)
+- `DocumentStore`, `FisherSession` unit of work, `EventOperations`
 - `StartStream` / `Append`, version assignment, optimistic concurrency, sequence read-back
 - Reads: `FetchStreamAsync` (version / from-version / timestamp bounded), `FetchStreamStateAsync`,
   `LoadAsync`, both stream identity styles
-- `ArchiveStream` / `UnArchiveStream`
+- `ArchiveStream` / `UnArchiveStream` / `TombstoneStream`
 - Live aggregation: `AggregateStreamAsync`, `AggregateStreamToLastKnownAsync`, over auto-discovered
   self-aggregating types
 - Inline projections: `Projections.Snapshot<T>` and `Projections.Add`, applied during

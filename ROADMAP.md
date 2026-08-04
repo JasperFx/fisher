@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of `eeac0e5` + the Advanced facade. 175 tests green on net9.0 and net10.0, **66 of them
+Status as of `4e7a026` + `TombstoneStream`. 178 tests green on net9.0 and net10.0, **66 of them
 shared cross-store compliance tests across 10 suites**.
 
 ## The destination
@@ -38,7 +38,7 @@ suite catalogue is blocked on document or projection work any more.
 | `fi_` schema | `fi_streams`, `fi_events`, `fi_event_progression` via Weasel.Sqlite |
 | SQLite dialects over Weasel.Storage | `SqliteStorageDialect<TId>`, `SqliteEventStoreDialect` |
 | Sessions + append | `DocumentStore`, `FisherSession` UoW, `EventOperations`, `AppendPlanner` |
-| Event store reads | `FetchStreamAsync`, `FetchStreamStateAsync`, `LoadAsync`, archive/un-archive |
+| Event store reads | `FetchStreamAsync`, `FetchStreamStateAsync`, `LoadAsync`, archive/un-archive/tombstone |
 | Live aggregation | `AggregateStreamAsync` over auto-discovered self-aggregating types |
 | Event store write surface | `IEventStoreOperations` in full — `FetchForWriting`, `WriteToAggregate`, `AppendOptimistic`, `FetchLatest`/`ProjectLatest` |
 | Compliance enrollment | `FisherComplianceFixture` + 5 suites, 33 shared tests |
@@ -155,8 +155,6 @@ not started at all.
   now covers the version-guard half (two sessions, one fails cleanly); what is still uncovered is a
   test that would fail if `Serializable` stopped producing `BEGIN IMMEDIATE` — that needs two
   genuinely interleaved writers, not two sequential `SaveChangesAsync` calls.
-- **`TombstoneStreamOperation` is unreachable.** Written into the dialect, no caller. Archive/
-  un-archive got wired up and tested; tombstone still needs a session-facing API.
 - **`Advanced` is a thin subset.** `Clean`, `ResetAllDataAsync` and `ResetHiloSequenceFloorAsync<T>`
   only. Marten and Polecat also carry bulk insert, `InitialData` and metadata helpers there.
 - **Not started at all:** DCB tags, multi-tenancy beyond a tenant id column, subscriptions, DI
