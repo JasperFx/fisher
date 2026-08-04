@@ -120,9 +120,6 @@ first two; `DcbTagQueryAndConsistencyCompliance` (727 lines, needs tag tables) i
 
 ## Open items not on the critical path
 
-- **Delete `FisherCommandBuilder`** once a Weasel.Sqlite release carries
-  [weasel#424](https://github.com/JasperFx/weasel/pull/424) and switch back to
-  `Weasel.Sqlite.CommandBuilder`. Check the PR's status before assuming the shim is still needed.
 - **Concurrency regression test.** The append path's safety rests on `BEGIN IMMEDIATE` being what
   `IsolationLevel.Serializable` produces — verified empirically against Microsoft.Data.Sqlite 10.0.9,
   but it is library behaviour Fisher does not own. `append_optimistic_loses_to_a_concurrent_commit`

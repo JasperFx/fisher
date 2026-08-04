@@ -154,7 +154,7 @@ internal class FisherSession : IDocumentSession, IStorageSession, IAsyncDisposab
 
         foreach (var operation in operations)
         {
-            var builder = new FisherCommandBuilder();
+            var builder = new Weasel.Sqlite.CommandBuilder();
             operation.ConfigureCommand(builder, this);
 
             var command = builder.Compile();

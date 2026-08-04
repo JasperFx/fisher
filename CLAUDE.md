@@ -99,17 +99,17 @@ own storage decisions — asymmetry that breaks quietly under a provider upgrade
 uses schema `main`, so nothing ever renders as qualified SQL. This is what gives logical-store and
 test isolation inside one database file without ATTACH lifecycle on every pooled connection.
 
-### Known upstream gap — weasel#423
+### Closed upstream gap — weasel#423
 
-`FisherCommandBuilder` exists only because Weasel.Sqlite 9.23.1's `CommandBuilder` does not declare
-`Weasel.Core.ICommandBuilder` (Weasel.Postgresql, Weasel.SqlServer, and Weasel.Oracle all do;
-Weasel.MySql is the other outlier). It is missing `TenantId`, `AppendParameters`,
-`CreateGroupedParameterBuilder`, and a `DbParameter`-returning `AppendParameter`. Without the shim,
-no Weasel.Storage operation can be configured against a SQLite command builder at all.
+Historical note, in case the shape of the session's execute loop looks over-engineered. Fisher used
+to carry a `FisherCommandBuilder` shim because Weasel.Sqlite's `CommandBuilder` did not declare
+`Weasel.Core.ICommandBuilder`, the surface every shared closed-shape storage operation configures
+itself against — without it, no Weasel.Storage operation could be configured against a SQLite command
+builder at all.
 
-Filed as [JasperFx/weasel#423](https://github.com/JasperFx/weasel/issues/423). It is a faithful port
-of the SQL Server implementation — **delete it and switch back to `Weasel.Sqlite.CommandBuilder`
-once a release carries the fix.**
+Fixed upstream by [weasel#424](https://github.com/JasperFx/weasel/pull/424) and shipped in
+**Weasel.Sqlite 9.23.2**. The shim is gone; `FisherSession` uses `Weasel.Sqlite.CommandBuilder`
+directly. Do not reintroduce it.
 
 ## Current state
 
