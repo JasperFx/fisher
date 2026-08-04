@@ -1,12 +1,12 @@
 # Handoff
 
-State of Fisher as of `c57ecc1`, written for whoever picks this up next.
+State of Fisher after Hi-Lo sequences, written for whoever picks this up next.
 
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps; [ROADMAP.md](ROADMAP.md) has the
 ordered plan. This document is the compliance scoreboard and the things that are true right now but
 not obvious from either.
 
-**156 tests green on net9.0 and net10.0.** 66 of them are shared cross-store compliance tests.
+**170 tests green on net9.0 and net10.0.** 66 of them are shared cross-store compliance tests.
 
 ## Where we are against the compliance suites
 
@@ -38,17 +38,21 @@ not obvious from either.
 | `AsyncDaemonCompliance` | 2 | the async daemon |
 
 **Two capabilities account for all 39.** Nothing is blocked on document storage or projections any
-more — that was true up to `69bf873` and is no longer.
+more — that was true up to `69bf873` and is no longer. Hi-Lo sequences and
+`EventProjection.storeEntity` closed the last two document-storage holes without moving the
+compliance number, because no enrolled suite exercised either.
 
 ### What the fixture still throws
 
-`FisherComplianceFixture` implements every member; five throw `NotSupportedException` naming the
+`FisherComplianceFixture` implements every member; four throw `NotSupportedException` naming the
 milestone. Enrolling a suite prematurely therefore fails loudly rather than passing on a stub.
 
 - `EventStore` — `DocumentStore` does not implement JasperFx's `IEventStore`
 - `CreateBatch` — no batched queries
 - `StartDaemonAsync`, `WaitForNonStaleProjectionDataAsync` — no daemon
-- `LoadDocumentAsync` — **partially** live: Guid and string ids work, numeric ids throw (Hi-Lo)
+
+`LoadDocumentAsync` is fully live now: Guid, string, int and long all load. It still throws for a
+strongly typed id, which Fisher does not support anywhere.
 
 ## Recommended next move
 
@@ -87,8 +91,8 @@ Each of these is a decision with a reason, not an oversight:
   holds a session. Safety is unchanged — the version guard still runs inside the write transaction —
   but a loser fails instead of waiting. **This is the most likely place a future compliance suite
   disagrees with Fisher.**
-- **Numeric document ids do not work.** Weasel offers only Hi-Lo for int/long, and there is no
-  `fi_hilo` table. The table shape already supports `INTEGER` ids; only assignment is missing.
+- **Hi-Lo gaps are expected, not a bug.** A process that stops mid-allocation abandons the rest of
+  its `MaxLo` range, and `SetFloor` rounds up to a whole page. Both match Marten and Polecat.
 - **No LINQ, no querying beyond load-by-id.** The `ISelectClause` seam on `FisherDocumentStorage` is
   in place for it.
 - **`Projections.Snapshot<T>` rejects `Async`.** See above.

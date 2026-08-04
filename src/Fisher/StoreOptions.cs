@@ -102,6 +102,12 @@ public class StoreOptions
     public int CommandTimeout { get; set; } = DefaultTimeout;
 
     /// <summary>
+    ///     The Hi-Lo settings applied to any document type with an <c>int</c> or <c>long</c> identity
+    ///     that has no <see cref="DocumentMapping.HiloSettings" /> of its own.
+    /// </summary>
+    public Weasel.Core.Sequences.HiloSettings HiloSequenceDefaults { get; } = new();
+
+    /// <summary>
     ///     Event store configuration.
     /// </summary>
     public EventStoreOptions Events { get; } = new();

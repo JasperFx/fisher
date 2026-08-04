@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using JasperFx;
 using JasperFx.MultiTenancy;
+using Weasel.Core.Sequences;
 using Weasel.Sqlite;
 using Weasel.Storage;
 
@@ -83,6 +84,13 @@ public class DocumentMapping
     ///     which keeps a snapshot in the same tenancy shape as the stream it came from.
     /// </summary>
     public TenancyStyle TenancyStyle { get; set; } = TenancyStyle.Single;
+
+    /// <summary>
+    ///     Per-type override of the Hi-Lo sequence configuration used to assign an <c>int</c> or
+    ///     <c>long</c> identity. Null falls back to <see cref="StoreOptions.HiloSequenceDefaults" />;
+    ///     ignored entirely for Guid and string identities, which need no sequence.
+    /// </summary>
+    public HiloSettings? HiloSettings { get; set; }
 
     internal bool IsConjoined => TenancyStyle == TenancyStyle.Conjoined;
 

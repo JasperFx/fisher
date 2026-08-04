@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of `69bf873` + inline projections. 156 tests green on net9.0 and net10.0, **66 of them
+Status as of `cc929b6` + Hi-Lo sequences. 170 tests green on net9.0 and net10.0, **66 of them
 shared cross-store compliance tests across 10 suites**.
 
 ## The destination
@@ -44,8 +44,10 @@ suite catalogue is blocked on document or projection work any more.
 | Compliance enrollment | `FisherComplianceFixture` + 5 suites, 33 shared tests |
 | Session metadata | correlation/causation seeded from `Activity.Current`, applied to appended events |
 | `StoreOptions.Projections` | thin `ProjectionGraph` — aggregator cache + evolver discovery |
-| Document storage | `Store`/`Insert`/`Update`/`Delete`/`LoadAsync`/`LoadManyAsync`, Guid + string ids |
+| Document storage | `Store`/`Insert`/`Update`/`Delete`/`LoadAsync`/`LoadManyAsync`, all four id types |
 | Inline projections | `Snapshot<T>`, `Add(projection, lifecycle)`, applied in the events' own transaction |
+| Hi-Lo sequences | `fi_hilo`, `HiloSequence`, `SequenceFactory` — int/long document identities |
+| `EventProjection.storeEntity` | a `Create`/`Project` result is stored in the events' own transaction |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -78,11 +80,9 @@ suite source at all.
 
 ### 1. Finish document storage
 
-The write and load-by-id paths are done. What is left, roughly in value order:
+The write and load-by-id paths are done, for all four identity types — Hi-Lo sequences landed, so
+`fi_hilo` exists and int/long ids work. What is left, roughly in value order:
 
-- **Hi-Lo sequences** — a `fi_hilo` table and an `ISequence`, which is the only thing standing
-  between Fisher and int/long document identities. Weasel offers no other numeric strategy, so
-  `FisherDatabase.SequenceFor` throwing is what makes those ids unusable today.
 - **Querying** — there is no LINQ and no way to fetch a document except by id. The
   `ISelectClause` seam on `FisherDocumentStorage` is in place for it.
 - Soft delete, duplicated fields and user indexes, hierarchies, numeric revisions — each additive
@@ -155,6 +155,9 @@ not started at all.
   genuinely interleaved writers, not two sequential `SaveChangesAsync` calls.
 - **`TombstoneStreamOperation` is unreachable.** Written into the dialect, no caller. Archive/
   un-archive got wired up and tested; tombstone still needs a session-facing API.
+- **Hi-Lo has no `Advanced.ResetHiloSequenceFloor`.** `ISequence.SetFloor` works and is tested, but
+  the only way to reach it is `store.Database.SequenceFor(type)`; Marten and Polecat both surface it
+  on an `Advanced` facade Fisher does not have.
 - **Not started at all:** DCB tags, multi-tenancy beyond a tenant id column, subscriptions, DI
   registration (`AddFisher`), LINQ, bulk insert, natural keys, strongly typed ids.
 

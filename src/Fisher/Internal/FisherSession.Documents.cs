@@ -89,6 +89,12 @@ internal partial class FisherSession
     /// <inheritdoc cref="Delete{T}(Guid)" />
     public void Delete<T>(string id) where T : notnull => DeleteById<T, string>(id);
 
+    /// <inheritdoc cref="Delete{T}(Guid)" />
+    public void Delete<T>(int id) where T : notnull => DeleteById<T, int>(id);
+
+    /// <inheritdoc cref="Delete{T}(Guid)" />
+    public void Delete<T>(long id) where T : notnull => DeleteById<T, long>(id);
+
     private void DeleteById<T, TId>(TId id) where T : notnull where TId : notnull
     {
         var storage = (Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>();
@@ -107,6 +113,14 @@ internal partial class FisherSession
     public Task<T?> LoadAsync<T>(string id, CancellationToken token = default) where T : class
         => LoadByIdAsync<T, string>(id, token);
 
+    /// <inheritdoc cref="LoadAsync{T}(Guid,CancellationToken)" />
+    public Task<T?> LoadAsync<T>(int id, CancellationToken token = default) where T : class
+        => LoadByIdAsync<T, int>(id, token);
+
+    /// <inheritdoc cref="LoadAsync{T}(Guid,CancellationToken)" />
+    public Task<T?> LoadAsync<T>(long id, CancellationToken token = default) where T : class
+        => LoadByIdAsync<T, long>(id, token);
+
     private Task<T?> LoadByIdAsync<T, TId>(TId id, CancellationToken token)
         where T : class where TId : notnull
         => ((Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>()).LoadAsync(id, this, token);
@@ -123,12 +137,28 @@ internal partial class FisherSession
         => LoadManyByIdAsync<T, string>(ids, CancellationToken.None);
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
+    public Task<IReadOnlyList<T>> LoadManyAsync<T>(params int[] ids) where T : class
+        => LoadManyByIdAsync<T, int>(ids, CancellationToken.None);
+
+    /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
+    public Task<IReadOnlyList<T>> LoadManyAsync<T>(params long[] ids) where T : class
+        => LoadManyByIdAsync<T, long>(ids, CancellationToken.None);
+
+    /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
     public Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params Guid[] ids) where T : class
         => LoadManyByIdAsync<T, Guid>(ids, token);
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
     public Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params string[] ids) where T : class
         => LoadManyByIdAsync<T, string>(ids, token);
+
+    /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
+    public Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params int[] ids) where T : class
+        => LoadManyByIdAsync<T, int>(ids, token);
+
+    /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
+    public Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params long[] ids) where T : class
+        => LoadManyByIdAsync<T, long>(ids, token);
 
     private Task<IReadOnlyList<T>> LoadManyByIdAsync<T, TId>(TId[] ids, CancellationToken token)
         where T : class where TId : notnull

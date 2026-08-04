@@ -58,6 +58,7 @@ These are the decisions that don't transfer from the sibling stores, and the rea
 | Exclusive append | row lock — the loser **waits** | no row lock — the loser **fails** (see below) |
 | Sequence read-back | bulk function / `OUTPUT ... INTO` | trailing SELECT by stream + version range |
 | Load-many ids | `= ANY($1)` / `OPENJSON` | `json_each(@ids)` |
+| Hi-Lo advance | stored function / optimistic UPDATE + retry | one atomic upsert (see below) |
 | Unit of work | parallel, aggregates failures | strictly sequential (one writer per file) |
 | Transient retry | none needed | real Polly retry on `SQLITE_BUSY` / `SQLITE_LOCKED` |
 
@@ -137,14 +138,15 @@ Working, with tests:
   `SaveChangesAsync` in the same transaction as the events
 - `FetchForWriting` / `WriteToAggregate` / `AppendOptimistic` / `FetchLatest` / `ProjectLatest`
 - `EventOperations` implements the full `IEventStoreOperations` — see below for which members throw
+- Document storage over Guid, string, int and long ids; numeric ids via Hi-Lo sequences (`fi_hilo`)
+- `EventProjection.storeEntity` — an `EventProjection`'s `Create`/`Project` results are stored inline
 
 Not implemented yet — do not assume these work:
 
-- **Document storage — Guid and string identities only.** `Store`/`Insert`/`Update`/`Delete`/
-  `LoadAsync`/`LoadManyAsync` work, in the same unit of work and transaction as event appends.
-  Numeric ids need Hi-Lo sequences, which do not exist — `FisherDatabase.SequenceFor` throws, and the
-  provider registry rejects an int/long id up front naming Hi-Lo. No LINQ, no querying beyond load by
-  id, no soft delete, no hierarchies, no duplicated fields, no numeric revisions.
+- **Document storage — all four identity types work.** `Store`/`Insert`/`Update`/`Delete`/
+  `LoadAsync`/`LoadManyAsync` over Guid, string, int and long ids, in the same unit of work and
+  transaction as event appends. What is still missing: no LINQ, no querying beyond load by id, no
+  soft delete, no hierarchies, no duplicated fields, no numeric revisions.
 
 ### Inline projections
 
@@ -205,6 +207,37 @@ RETURNING id` parses, and when the guard does not match it returns **no row** an
 untouched — which is exactly what the Optimistic operation's postprocessing reads as a concurrency
 failure. The `DO UPDATE SET` clause assigns from `excluded.*` for every column rather than repeating
 each binder's `ValueSql`, so the update branch cannot drift from the insert branch.
+
+### Hi-Lo sequences
+
+Numeric document identities go through `Storage/Sequences/`: `fi_hilo` (one row per sequence),
+`HiloSequence` over the shared `Weasel.Core.Sequences.HiloSequenceBase`, and `SequenceFactory` as the
+store's `ISequenceSource` — which is what `FisherDatabase.SequenceFor` delegates to and what the
+shared `HiloIntIdentification` / `HiloLongIdentification` strategies resolve through.
+
+Three things worth knowing:
+
+- **Advancing the hi is one statement, not read-then-compare-and-swap.** Marten calls a stored
+  function; Polecat reads `hi_value`, updates it guarded by the value it just read, and retries when
+  the row moved. SQLite's upsert does the whole thing atomically —
+  `insert … on conflict (entity_name) do update set hi_value = fi_hilo.hi_value + 1 returning
+  hi_value` — so there is no window to lose. The retry loop that survives in `HiloSequence` is there
+  only to honour the base class's "a negative hi means try again" contract.
+  `concurrent_stores_never_hand_out_the_same_id` pins it: six stores over one file with `MaxLo = 5`
+  must between them produce exactly 1..300, no duplicates and no gaps. Rewriting the advance as a
+  read followed by an unguarded update fails it every run.
+- **The sequence creates `fi_hilo` itself.** An id is assigned inside `session.Store(document)` —
+  `IIdentification.AssignIfMissing` is synchronous and returns before any commit — so the commit-time
+  `EnsureDocumentTablesAsync` path is far too late. `HiloFeatureSchema` also puts the table in the
+  store's migration, but only when a registered mapping actually has a numeric id; the runtime does
+  not depend on that having run. `AutoCreate.None` is honoured in both places.
+- **`AdvanceToNextHiSync` is not an oversight.** It exists because `AssignIfMissing` is synchronous,
+  and it runs through `StoreOptions.ResiliencePipeline` exactly as the async path does — otherwise
+  half of all `fi_hilo` access would skip the SQLITE_BUSY retry.
+
+Sequences are cached by sequence *name*, not by document type, so two types sharing a configured
+`SequenceName` share one allocation instead of each holding a private lo range over the same row.
+
 - **Projections — inline only.** `Snapshot<T>` and `Add(projection, lifecycle)` work for the Inline
   and Live lifecycles, and inline snapshots are written in the same transaction as the events that
   produced them. **Async is rejected outright** — it needs the daemon. `GetOrStartMessageSink` still
@@ -299,8 +332,12 @@ the same method compare that value against itself and pass unconditionally. Keep
 assignment and metadata application apart is what keeps the guard real; the cost is that a new
 metadata field in JasperFx will not reach Fisher's events until this method learns about it.
 
-`ComplianceEventProjection` binds to `Fisher.Projections.EventProjection`, which exists but is not
-exercised by anything yet: its one required member, `storeEntity`, is document storage and throws.
+`ComplianceEventProjection` binds to `Fisher.Projections.EventProjection`. Its one required member,
+`storeEntity`, is now an ordinary `IDocumentSession.Store` onto the session the events are committing
+in, so a `Create`/`Project` method's return value lands in the same transaction as the event that
+produced it. `inline_event_projections` covers it directly — note that a conventional-method
+projection class must be declared `partial`, because the dispatcher is source-generated into it and
+there is no runtime fallback.
 
 ## Conventions
 

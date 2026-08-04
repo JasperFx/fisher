@@ -20,6 +20,12 @@ public interface IQuerySession : IAsyncDisposable
     /// <inheritdoc cref="LoadAsync{T}(Guid,CancellationToken)" />
     Task<T?> LoadAsync<T>(string id, CancellationToken token = default) where T : class;
 
+    /// <inheritdoc cref="LoadAsync{T}(Guid,CancellationToken)" />
+    Task<T?> LoadAsync<T>(int id, CancellationToken token = default) where T : class;
+
+    /// <inheritdoc cref="LoadAsync{T}(Guid,CancellationToken)" />
+    Task<T?> LoadAsync<T>(long id, CancellationToken token = default) where T : class;
+
     /// <summary>
     ///     Load several documents by identity. Missing ids are absent from the result rather than
     ///     null entries, so it is not necessarily as long as the input.
@@ -28,6 +34,12 @@ public interface IQuerySession : IAsyncDisposable
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
     Task<IReadOnlyList<T>> LoadManyAsync<T>(params string[] ids) where T : class;
+
+    /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(params int[] ids) where T : class;
+
+    /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(params long[] ids) where T : class;
 }
 
 /// <summary>
@@ -78,6 +90,12 @@ public interface IDocumentSession : IQuerySession, JasperFx.Events.IStorageOpera
 
     /// <inheritdoc cref="Delete{T}(Guid)" />
     void Delete<T>(string id) where T : notnull;
+
+    /// <inheritdoc cref="Delete{T}(Guid)" />
+    void Delete<T>(int id) where T : notnull;
+
+    /// <inheritdoc cref="Delete{T}(Guid)" />
+    void Delete<T>(long id) where T : notnull;
 
     /// <summary>
     ///     Commit every queued operation in a single transaction.

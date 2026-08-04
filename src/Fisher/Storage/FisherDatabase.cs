@@ -1,6 +1,7 @@
 using System.Data.Common;
 using Fisher.Events;
 using Fisher.Events.Schema;
+using Fisher.Storage.Sequences;
 using Microsoft.Data.Sqlite;
 using Weasel.Core.Migrations;
 using Weasel.Sqlite;
@@ -55,10 +56,19 @@ public class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDatabase, I
     {
         var schemas = new List<IFeatureSchema> { new EventStoreFeatureSchema(_events) };
 
+        var mappings = _options.Schema.AllMappings();
+
         // One feature per registered document type, so a migration touches only the tables whose
         // document types actually changed. Types that were never registered are absent by design —
         // nothing knows they exist until something asks to store one.
-        schemas.AddRange(_options.Schema.AllMappings().Select(mapping => new DocumentFeatureSchema(mapping)));
+        schemas.AddRange(mappings.Select(mapping => new DocumentFeatureSchema(mapping)));
+
+        // Only when something actually needs a Hi-Lo allocation. See HiloFeatureSchema for why the
+        // sequence does not depend on this having run.
+        if (mappings.Any(x => x.IdType == typeof(int) || x.IdType == typeof(long)))
+        {
+            schemas.Add(new HiloFeatureSchema(_options.DatabaseSchemaName));
+        }
 
         return schemas.ToArray();
     }
@@ -71,6 +81,7 @@ public class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDatabase, I
 
     private readonly HashSet<Type> _ensuredDocumentTables = new();
     private ClosedShape.DocumentProviderRegistry? _providers;
+    private SequenceFactory? _sequences;
 
     /// <summary>
     ///     Create this document type's table if it is not known to exist yet.
@@ -105,13 +116,16 @@ public class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDatabase, I
     Weasel.Storage.IProviderGraph Weasel.Storage.IStorageDatabase.Providers => Providers;
 
     /// <summary>
-    ///     Hi-Lo sequences are not implemented, which is why only Guid and string document identities
-    ///     work — Weasel offers Hi-Lo as the only assignment strategy for int and long.
+    ///     The Hi-Lo sequence backing this document type's numeric identity — the assignment strategy
+    ///     Weasel offers for int and long ids.
     /// </summary>
     public Weasel.Core.Sequences.ISequence SequenceFor(Type documentType)
-        => throw new NotImplementedException(
-            $"Fisher has no Hi-Lo sequence support, so it cannot assign a numeric identity to " +
-            $"'{documentType.FullName}'. Use a Guid or string identity.");
+        => SequenceSource.SequenceFor(documentType);
+
+    /// <summary>
+    ///     This store's Hi-Lo sequences, one per logical sequence name.
+    /// </summary>
+    internal SequenceFactory SequenceSource => _sequences ??= new SequenceFactory(_options, _dataSource);
 
     DbConnection Weasel.Storage.IStorageDatabase.CreateStorageConnection() => _dataSource.CreateConnection();
 

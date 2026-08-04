@@ -35,10 +35,10 @@ internal class DocumentProviderRegistry : IProviderGraph
     ///     Close the storage generics over the document type and its identity type.
     /// </summary>
     /// <remarks>
-    ///     Only Guid and string identities are wired. Weasel offers Hi-Lo as the only strategy for
-    ///     <c>int</c> and <c>long</c>, and Hi-Lo needs a sequence table Fisher does not have yet — so a
-    ///     numeric id fails here, naming what is missing, rather than at some later point where the
-    ///     cause would be harder to see.
+    ///     The four identity types <see cref="DocumentMapping.SupportedIdTypes" /> names, and nothing
+    ///     else — a strongly typed id wrapper needs a strategy that unwraps it, and Fisher has no
+    ///     strong-typed-id support anywhere. The numeric pair resolve their sequence through
+    ///     <c>ISequenceSource</c>, which is <c>FisherDatabase</c>, keyed on the document type.
     /// </remarks>
     private object BuildProviderFor(DocumentMapping mapping)
     {
@@ -56,10 +56,18 @@ internal class DocumentProviderRegistry : IProviderGraph
                     mapping.IdMember))!,
             var t when t == typeof(string) => Activator.CreateInstance(
                 typeof(StringIdentification<>).MakeGenericType(mapping.DocumentType), mapping.IdMember)!,
+            // The document type is the sequence key, which SequenceFactory then resolves to a name —
+            // so two types sharing a configured SequenceName share one allocation.
+            var t when t == typeof(int) => Activator.CreateInstance(
+                typeof(HiloIntIdentification<>).MakeGenericType(mapping.DocumentType),
+                mapping.IdMember, mapping.DocumentType)!,
+            var t when t == typeof(long) => Activator.CreateInstance(
+                typeof(HiloLongIdentification<>).MakeGenericType(mapping.DocumentType),
+                mapping.IdMember, mapping.DocumentType)!,
             _ => throw new NotSupportedException(
                 $"Fisher cannot store '{mapping.DocumentType.FullName}' by its '{mapping.IdType.Name}' " +
-                "identity yet. Numeric identities need Hi-Lo sequence support, which is not implemented; " +
-                "use a Guid or string identity for now.")
+                $"identity. Supported identity types are " +
+                $"{string.Join(", ", DocumentMapping.SupportedIdTypes.Select(x => x.Name))}.")
         };
 
         return buildTyped.MakeGenericMethod(mapping.DocumentType, mapping.IdType)

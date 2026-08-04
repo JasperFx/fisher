@@ -13,18 +13,18 @@ namespace Fisher.Projections;
 ///         <c>JasperFx.Events</c>.
 ///     </para>
 ///     <para>
-///         <b>Storing an entity throws today.</b> The one member Fisher has to supply is
-///         <see cref="storeEntity{T}" />, which is document storage, and Fisher has none. The type
-///         exists ahead of that because it is what the <c>ComplianceEventProjection</c> global alias
-///         binds to, and the compliance suites declare their projection types at file scope where
-///         they cannot reach their suite's generic parameters. Registering one of these as an Inline
-///         or Async projection needs the projection graph as well.
+///         The one member Fisher has to supply is <see cref="storeEntity{T}" />, which is an ordinary
+///         document upsert onto the same unit of work the events are committing in — so an entity a
+///         <c>Project</c> method stores lands in the same transaction as the event that produced it,
+///         exactly as an inline snapshot does.
+///     </para>
+///     <para>
+///         The type is what the <c>ComplianceEventProjection</c> global alias binds to, because the
+///         compliance suites declare their projection types at file scope where they cannot reach
+///         their suite's generic parameters.
 ///     </para>
 /// </remarks>
 public abstract class EventProjection : JasperFxEventProjectionBase<IDocumentSession, IQuerySession>
 {
-    protected sealed override void storeEntity<T>(IDocumentSession ops, T entity)
-        => throw new NotImplementedException(
-            "Fisher cannot store a projected document yet — there is no document storage for an " +
-            "EventProjection to write to.");
+    protected sealed override void storeEntity<T>(IDocumentSession ops, T entity) => ops.Store(entity);
 }

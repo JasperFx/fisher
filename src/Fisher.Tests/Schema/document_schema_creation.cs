@@ -121,6 +121,47 @@ public class document_schema_creation : IAsyncLifetime
     }
 
     [Fact]
+    public async Task a_numeric_identity_brings_the_hilo_table_with_it()
+    {
+        await using var database = DatabaseFor(x => x.Schema.For<DocInvoice>());
+        await database.ApplyAllConfiguredChangesToDatabaseAsync(ct: TestContext.Current.CancellationToken);
+
+        (await TableNamesAsync()).ShouldContain("fi_hilo");
+
+        var columns = await ColumnsAsync("fi_hilo");
+        columns.Select(x => x.Name).ShouldBe(["entity_name", "hi_value"]);
+
+        // The primary key is what ON CONFLICT targets, which is what makes advancing the hi atomic.
+        columns.Single(x => x.Name == "entity_name").PrimaryKey.ShouldBeTrue();
+        columns.Single(x => x.Name == "hi_value").Type.ShouldBe("INTEGER");
+    }
+
+    [Fact]
+    public async Task a_store_with_no_numeric_identity_gets_no_hilo_table()
+    {
+        await using var database = DatabaseFor(x => x.Schema.For<DocUser>());
+        await database.ApplyAllConfiguredChangesToDatabaseAsync(ct: TestContext.Current.CancellationToken);
+
+        (await TableNamesAsync()).ShouldNotContain("fi_hilo");
+    }
+
+    [Fact]
+    public async Task the_hilo_table_takes_the_schema_name_prefix_too()
+    {
+        await using var database = DatabaseFor(x =>
+        {
+            x.DatabaseSchemaName = "billing";
+            x.Schema.For<DocInvoice>();
+        });
+
+        await database.ApplyAllConfiguredChangesToDatabaseAsync(ct: TestContext.Current.CancellationToken);
+
+        var tables = await TableNamesAsync();
+        tables.ShouldContain("billing_fi_hilo");
+        tables.ShouldNotContain("fi_hilo");
+    }
+
+    [Fact]
     public async Task optimistic_concurrency_adds_a_version_column()
     {
         await using var database = DatabaseFor(x => x.Schema.For<DocUser>().UseOptimisticConcurrency = true);

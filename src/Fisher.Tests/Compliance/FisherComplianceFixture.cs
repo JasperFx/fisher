@@ -86,9 +86,11 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         {
             Guid guid => session.LoadAsync<T>(guid, token),
             string key => session.LoadAsync<T>(key, token),
+            int number => session.LoadAsync<T>(number, token),
+            long number => session.LoadAsync<T>(number, token),
             _ => throw new NotSupportedException(
-                $"Fisher cannot load a document by an identity of type {id.GetType().FullName}. Numeric " +
-                "identities need Hi-Lo sequence support, which is not implemented.")
+                $"Fisher cannot load a document by an identity of type {id.GetType().FullName}. " +
+                "Strongly typed ids are not supported anywhere in Fisher yet.")
         };
 
     public override void StoreDocument<T>(IDocumentSession session, T document) => session.Store(document);

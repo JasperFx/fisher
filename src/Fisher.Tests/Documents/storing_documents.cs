@@ -286,12 +286,7 @@ public class storing_documents_with_a_numeric_identity : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        _store = DocumentStore.For(options =>
-        {
-            options.ConnectionString = _database.ConnectionString;
-            options.AutoCreateSchemaObjects = AutoCreate.All;
-            options.Schema.For<Ledger>();
-        });
+        _store = BuildStore();
 
         await _store.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
     }
@@ -302,17 +297,235 @@ public class storing_documents_with_a_numeric_identity : IAsyncLifetime
         _database.Dispose();
     }
 
-    [Fact]
-    public async Task is_rejected_with_a_message_about_hi_lo()
+    private DocumentStore BuildStore() => DocumentStore.For(options =>
     {
+        options.ConnectionString = _database.ConnectionString;
+        options.AutoCreateSchemaObjects = AutoCreate.All;
+        options.Schema.For<Ledger>();
+        options.Schema.For<Tally>();
+    });
+
+    [Fact]
+    public async Task round_trips_a_long_identified_document()
+    {
+        var ledger = new Ledger { Balance = 42.5m };
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Store(ledger);
+
+            // Hi-Lo assigns at Store, not at commit, so the caller can use the id straight away.
+            ledger.Id.ShouldBeGreaterThan(0L);
+
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var query = _store.LightweightSession();
+        var loaded = await query.LoadAsync<Ledger>(ledger.Id, TestContext.Current.CancellationToken);
+
+        loaded.ShouldNotBeNull();
+        loaded!.Id.ShouldBe(ledger.Id);
+        loaded.Balance.ShouldBe(42.5m);
+    }
+
+    [Fact]
+    public async Task round_trips_an_int_identified_document()
+    {
+        var tally = new Tally { Count = 7 };
+
         await using var session = _store.LightweightSession();
+        session.Store(tally);
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        // The table shape supports an INTEGER id; what is missing is a way to assign one, since Weasel
-        // offers only Hi-Lo for numeric identities and Fisher has no sequence table yet.
-        var ex = Should.Throw<NotSupportedException>(() => session.Store(new Ledger { Id = 1 }));
-        ex.Message.ShouldContain("Hi-Lo");
+        tally.Id.ShouldBeGreaterThan(0);
 
-        await Task.CompletedTask;
+        (await session.LoadAsync<Tally>(tally.Id, TestContext.Current.CancellationToken))!
+            .Count.ShouldBe(7);
+    }
+
+    [Fact]
+    public async Task assigns_increasing_ids_without_a_round_trip_per_document()
+    {
+        var first = new Ledger();
+        var second = new Ledger();
+        var third = new Ledger();
+
+        await using var session = _store.LightweightSession();
+        session.Store(first, second, third);
+
+        // The whole point of Hi-Lo: one database fetch buys MaxLo ids, handed out client side.
+        second.Id.ShouldBe(first.Id + 1);
+        third.Id.ShouldBe(second.Id + 1);
+    }
+
+    [Fact]
+    public async Task an_explicitly_assigned_id_is_left_alone()
+    {
+        var ledger = new Ledger { Id = 9_000, Balance = 1m };
+
+        await using var session = _store.LightweightSession();
+        session.Store(ledger);
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        ledger.Id.ShouldBe(9_000L);
+        (await session.LoadAsync<Ledger>(9_000L, TestContext.Current.CancellationToken)).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task a_second_store_over_the_same_file_does_not_reissue_ids()
+    {
+        var first = new Ledger();
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Store(first);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        // A fresh store starts with no client-side allocation, so it must claim a new "hi" from
+        // fi_hilo rather than start over at 1 — which is the whole reason the row is persisted.
+        await using var second = BuildStore();
+        var later = new Ledger();
+
+        await using (var session = second.LightweightSession())
+        {
+            session.Store(later);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        later.Id.ShouldBeGreaterThan(first.Id);
+    }
+
+    [Fact]
+    public async Task a_numeric_id_is_stored_as_an_integer()
+    {
+        var ledger = new Ledger { Balance = 3m };
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Store(ledger);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var conn = new Microsoft.Data.Sqlite.SqliteConnection(_database.ConnectionString);
+        await conn.OpenAsync(TestContext.Current.CancellationToken);
+
+        await using var command = conn.CreateCommand();
+        command.CommandText = "select typeof(id) from fi_doc_ledger where id = @id";
+        command.Parameters.AddWithValue("@id", ledger.Id);
+
+        (await command.ExecuteScalarAsync(TestContext.Current.CancellationToken)).ShouldBe("integer");
+    }
+
+    [Fact]
+    public async Task loads_many_and_deletes_by_numeric_id()
+    {
+        var first = new Ledger { Balance = 1m };
+        var second = new Ledger { Balance = 2m };
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Store(first, second);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using (var session = _store.LightweightSession())
+        {
+            (await session.LoadManyAsync<Ledger>(first.Id, second.Id, -1L)).Count.ShouldBe(2);
+
+            session.Delete<Ledger>(first.Id);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var query = _store.LightweightSession();
+        (await query.LoadAsync<Ledger>(first.Id, TestContext.Current.CancellationToken)).ShouldBeNull();
+        (await query.LoadAsync<Ledger>(second.Id, TestContext.Current.CancellationToken)).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task set_floor_pushes_subsequent_ids_past_it()
+    {
+        var sequence = _store.Database.SequenceFor(typeof(Tally));
+
+        await sequence.SetFloor(50_000);
+
+        var tally = new Tally { Count = 1 };
+
+        await using var session = _store.LightweightSession();
+        session.Store(tally);
+
+        tally.Id.ShouldBeGreaterThan(50_000);
+    }
+
+    [Fact]
+    public async Task the_hilo_table_is_part_of_the_applied_schema()
+    {
+        await using var conn = new Microsoft.Data.Sqlite.SqliteConnection(_database.ConnectionString);
+        await conn.OpenAsync(TestContext.Current.CancellationToken);
+
+        await using var command = conn.CreateCommand();
+        command.CommandText = "select count(*) from sqlite_master where type = 'table' and name = 'fi_hilo'";
+
+        // Registered up front because a mapped document type has a numeric id — the sequence would
+        // create it on demand anyway, but a consumer scripting the schema out should see it.
+        Convert.ToInt64(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken)).ShouldBe(1);
+    }
+}
+
+public class hilo_sequences_do_not_collide : IDisposable
+{
+    private readonly TemporaryDatabase _database = TemporaryDatabase.Create("documents-hilo-concurrency");
+
+    public void Dispose() => _database.Dispose();
+
+    /// <summary>
+    ///     Six stores over one database file, each with its own sequence instance and therefore its own
+    ///     "hi" allocation, pulling ids at the same time.
+    /// </summary>
+    /// <remarks>
+    ///     This is the guard on Fisher advancing the hi with a single atomic upsert rather than
+    ///     Polecat's read-then-compare-and-swap. Rewriting it as a read followed by an unguarded update
+    ///     would let two stores claim the same hi and hand out the same thousand ids, which is exactly
+    ///     what this asserts cannot happen.
+    /// </remarks>
+    [Fact]
+    public async Task concurrent_stores_never_hand_out_the_same_id()
+    {
+        const int stores = 6;
+        const int idsEach = 50;
+
+        var built = Enumerable.Range(0, stores).Select(_ => DocumentStore.For(options =>
+        {
+            options.ConnectionString = _database.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Schema.For<Ledger>();
+
+            // Small enough that 50 ids means ten trips to fi_hilo rather than one, so the stores
+            // actually contend for the row instead of each taking a single allocation up front.
+            options.HiloSequenceDefaults.MaxLo = 5;
+        })).ToArray();
+
+        try
+        {
+            var pulled = await Task.WhenAll(built.Select(store => Task.Run(() =>
+            {
+                var sequence = store.Database.SequenceFor(typeof(Ledger));
+                return Enumerable.Range(0, idsEach).Select(_ => sequence.NextLong()).ToArray();
+            }, TestContext.Current.CancellationToken)));
+
+            var all = pulled.SelectMany(x => x).OrderBy(x => x).ToArray();
+
+            // Exactly 1..300, no duplicates and no gaps: every store consumes each allocation of five
+            // in full, so the sixty hi values handed out have to be 0 through 59 with nothing repeated.
+            all.ShouldBe(Enumerable.Range(1, stores * idsEach).Select(x => (long)x));
+        }
+        finally
+        {
+            foreach (var store in built)
+            {
+                await store.DisposeAsync();
+            }
+        }
     }
 }
 
@@ -333,4 +546,10 @@ public class Ledger
 {
     public long Id { get; set; }
     public decimal Balance { get; set; }
+}
+
+public class Tally
+{
+    public int Id { get; set; }
+    public int Count { get; set; }
 }
