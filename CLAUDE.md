@@ -131,8 +131,9 @@ Not implemented yet — do not assume these work:
 
 - **Document storage.** `IStorageSession.StorageFor`, `IStorageDatabase.Providers` and
   `SequenceFor` throw `NotImplementedException`. No `Store`/`Load`/`Delete`, no LINQ.
-- **Projections.** Live aggregation works, but nothing is persisted: no `StoreOptions.Projections`,
-  no Inline/Async lifecycles, no `Snapshot<T>`, no `FetchForWriting`.
+- **Projections.** `StoreOptions.Projections` exists but is thin — it carries the live aggregator
+  cache and the source-generated-evolver discovery, nothing more. Nothing is persisted: no
+  Inline/Async lifecycles, no `Snapshot<T>`, no way to register a projection at all.
   `IStorageOperations.FetchProjectionStorageAsync` and `GetOrStartMessageSink` throw.
 - **Async daemon.** `FisherDatabase` does not implement `IEventDatabase`.
 - **DCB tags**, multi-tenancy beyond a tenant id column, subscriptions, DI registration.
@@ -163,10 +164,11 @@ events an earlier `Append` had queued for the same stream in the same session.
 
 `EventGraph` implements `IAggregationSourceFactory<IQuerySession>`: given an aggregate type it closes
 `Fisher.Projections.SingleStreamProjection<TDoc, TId>` (which only closes the JasperFx base over
-Fisher's session types), asserts validity, and caches the resulting aggregator. `AggregatorFor<T>` is
-the single seam — when `StoreOptions.Projections` lands it should defer to
-`ProjectionGraph.AggregatorFor<T>`, which checks registered projections first and *then* falls back to
-this same factory.
+Fisher's session types) and asserts validity. `EventGraph.AggregatorFor<T>` is the single seam every
+live aggregation goes through, and it defers to `FisherProjectionOptions.AggregatorFor<T>` — the
+shared `ProjectionGraph` implementation, which checks registered projections first and only then falls
+back to this factory. Fisher cannot register a projection yet, so auto-discovery is still the whole
+story; routing through the graph is what makes a registered projection win once there is one.
 
 Two things that are not obvious:
 
@@ -188,8 +190,10 @@ it, so the live-aggregation and snapshot paths cannot disagree about what `TId` 
 ### Compliance suites
 
 **Fisher is enrolled.** `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old
-`$(EnableComplianceTests)` gate is gone. Three suites are live in `Compliance/`:
-`StreamReadCompliance`, `EventMetadataCompliance`, `LiveAggregationCompliance`, 27 shared tests.
+`$(EnableComplianceTests)` gate is gone. Five suites are live in `Compliance/`:
+`StreamReadCompliance`, `EventMetadataCompliance`, `LiveAggregationCompliance`,
+`ActivityCorrelationCompliance`, `AutoDiscoveredAggregateCompliance` — 33 shared tests. Every suite
+still unenrolled is blocked on document storage, projections, the daemon, or DCB tags.
 
 The mechanics, because they are not what the package's name suggests:
 
@@ -207,6 +211,22 @@ The mechanics, because they are not what the package's name suggests:
   daemon pair). Enrolling a suite prematurely therefore fails loudly rather than passing on a stub.
 - `CleanEventDataAsync` deletes straight from the tables. It is called before every test, so it
   cannot throw — it is a stand-in for `Advanced.Clean`, and should move there rather than grow here.
+
+### Session metadata on appended events
+
+`AppendPlanner.ApplySessionMetadata` copies the session's correlation id, causation id, user name and
+headers onto each event that does not already carry its own, each gated on its `Enable*` option. The
+session seeds correlation/causation from `Activity.Current` (`RootId` and `ParentId`) at construction,
+so tracing context reaches events with no application code; an explicit assignment afterwards wins.
+
+This duplicates the private `StreamAction.ProcessMetadata`, which is normally reached through
+`StreamAction.PrepareEvents` — and Fisher **cannot** use `PrepareEvents`. In Quick mode it numbers
+events only when `ExpectedVersionOnServer` is already set, because Marten and Polecat let the database
+assign versions while Fisher numbers them client-side from the version it just read. Pre-setting
+`ExpectedVersionOnServer` to make it number them would make the optimistic-concurrency check inside
+the same method compare that value against itself and pass unconditionally. Keeping version
+assignment and metadata application apart is what keeps the guard real; the cost is that a new
+metadata field in JasperFx will not reach Fisher's events until this method learns about it.
 
 `ComplianceEventProjection` binds to `Fisher.Projections.EventProjection`, which exists but is not
 exercised by anything yet: its one required member, `storeEntity`, is document storage and throws.

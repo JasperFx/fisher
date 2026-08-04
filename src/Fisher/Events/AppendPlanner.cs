@@ -52,6 +52,8 @@ internal sealed class AppendPlanner
                 continue;
             }
 
+            ApplySessionMetadata(stream);
+
             var mode = await PlanStreamAsync(stream, connection, transaction, token).ConfigureAwait(false);
 
             var operation = (Storage.FisherQuickAppendEventsOperation)QuickAppendEvents(stream);
@@ -102,6 +104,58 @@ internal sealed class AppendPlanner
         AssignVersions(stream, currentVersion.Value);
 
         return Storage.StreamWriteMode.Update;
+    }
+
+    /// <summary>
+    ///     Copy the session's tracing and user metadata onto every event that does not already carry
+    ///     its own.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Mirrors the private <c>StreamAction.ProcessMetadata</c>, which Fisher reaches only
+    ///         through <c>StreamAction.PrepareEvents</c> — and cannot use. <c>PrepareEvents</c> assigns
+    ///         event versions only when <c>ExpectedVersionOnServer</c> is already set, because Marten
+    ///         and Polecat let the database assign them; Fisher numbers events client-side from the
+    ///         version it just read. Forcing <c>PrepareEvents</c> to number them would mean setting
+    ///         <c>ExpectedVersionOnServer</c> to the current version first, which makes the optimistic
+    ///         concurrency check inside the same method compare that value against itself and pass
+    ///         unconditionally. Keeping the two apart is what keeps the guard real.
+    ///     </para>
+    ///     <para>
+    ///         Each field is gated on its own <c>Enable*</c> option, because a disabled column is not
+    ///         written at all — stamping the envelope anyway would report metadata on append that no
+    ///         longer exists after a round trip.
+    ///     </para>
+    /// </remarks>
+    private void ApplySessionMetadata(StreamAction stream)
+    {
+        foreach (var @event in stream.Events)
+        {
+            if (_session.CorrelationIdEnabled)
+            {
+                @event.CorrelationId ??= _session.CorrelationId;
+            }
+
+            if (_session.CausationIdEnabled)
+            {
+                @event.CausationId ??= _session.CausationId;
+            }
+
+            if (_session.UserNameEnabled)
+            {
+                @event.UserName ??= _session.CurrentUserName;
+            }
+
+            if (!_session.HeadersEnabled || !(_session.Headers?.Count > 0))
+            {
+                continue;
+            }
+
+            foreach (var header in _session.Headers)
+            {
+                @event.SetHeader(header.Key, header.Value);
+            }
+        }
     }
 
     /// <summary>

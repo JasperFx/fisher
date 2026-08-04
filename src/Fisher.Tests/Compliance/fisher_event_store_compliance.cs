@@ -16,12 +16,11 @@ namespace Fisher.Tests.Compliance;
  *   EventProjection{Registration,Enrichment}Compliance   projections + document storage
  *   AsyncDaemonCompliance              the async daemon
  *   RebuildConcurrencyCapCompliance    IEventStore on DocumentStore + rebuilds
- *   AutoDiscoveredAggregateCompliance  AllAggregateTypes() — the [GeneratedEvolver] assembly scan
- *   ActivityCorrelationCompliance      session correlation seeded from Activity.Current
  *   DcbTagQueryAndConsistencyCompliance, AssignTagWhereCompliance   DCB tag tables
  *
- * The fixture throws a NotSupportedException naming the milestone for each of those, so enrolling a
- * suite prematurely fails loudly rather than silently passing on a stub.
+ * Every one of those is now blocked on a numbered roadmap milestone rather than on a loose end.
+ * The fixture throws a NotSupportedException naming the milestone for each, so enrolling a suite
+ * prematurely fails loudly rather than silently passing on a stub.
  */
 
 public class stream_read_compliance
@@ -32,3 +31,9 @@ public class event_metadata_compliance
 
 public class live_aggregation_compliance
     : LiveAggregationCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class activity_correlation_compliance
+    : ActivityCorrelationCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class auto_discovered_aggregate_compliance
+    : AutoDiscoveredAggregateCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

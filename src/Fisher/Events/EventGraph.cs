@@ -30,7 +30,6 @@ public class EventGraph : EventRegistry, IAggregationSourceFactory<IQuerySession
 {
     private readonly ConcurrentDictionary<string, Type> _aggregateTypes = new();
     private readonly ConcurrentDictionary<Type, FisherEventType> _eventTypes = new();
-    private readonly ConcurrentDictionary<Type, object> _liveAggregators = new();
     private readonly StoreOptions _options;
     private readonly List<ITagTypeRegistration> _tagTypes = new();
 
@@ -185,24 +184,14 @@ public class EventGraph : EventRegistry, IAggregationSourceFactory<IQuerySession
     ///     The cached live aggregator for an aggregate type.
     /// </summary>
     /// <remarks>
-    ///     The single seam every live aggregation goes through. Once <c>StoreOptions.Projections</c>
-    ///     exists this should defer to <c>ProjectionGraph.AggregatorFor&lt;T&gt;</c>, which checks
-    ///     registered projections first and only then falls back to
-    ///     <see cref="IAggregationSourceFactory{TQuerySession}" /> — that is, to the method above. Until
-    ///     then there are no registered projections to check, so auto-discovery is the whole story.
+    ///     The single seam every live aggregation goes through. It defers to the projection graph,
+    ///     which checks registered projections first and only then falls back to
+    ///     <see cref="IAggregationSourceFactory{TQuerySession}" /> — that is, to the method above. Fisher
+    ///     has no way to register a projection yet, so today auto-discovery is still the whole story;
+    ///     routing through the graph is what makes a registered projection win once there is one.
     /// </remarks>
     internal IAggregator<T, IQuerySession> AggregatorFor<T>() where T : class
-        => (IAggregator<T, IQuerySession>)_liveAggregators.GetOrAdd(typeof(T), _ => BuildAggregator<T>());
-
-    private IAggregator<T, IQuerySession> BuildAggregator<T>() where T : class
-    {
-        var source = ((IAggregationSourceFactory<IQuerySession>)this).Build<T>()
-            ?? throw new InvalidOperationException(
-                $"Unable to build a live aggregator for '{typeof(T).FullName}'. Aggregate types must be " +
-                "self-aggregating — carrying their own Create / Apply methods for the events they fold.");
-
-        return source.Build<T>();
-    }
+        => _options.Projections.AggregatorFor<T>();
 
     /// <summary>
     ///     Wrap raw event data into an <see cref="IEvent" /> carrying type metadata.

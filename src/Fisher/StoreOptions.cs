@@ -28,6 +28,7 @@ public class StoreOptions
     {
         EventGraph = new EventGraph(this);
         Events.EventGraph = EventGraph;
+        Projections = new Fisher.Projections.FisherProjectionOptions(EventGraph);
         ResiliencePipeline = new ResiliencePipelineBuilder().AddFisherDefaults().Build();
     }
 
@@ -36,6 +37,12 @@ public class StoreOptions
     ///     register event types during configuration.
     /// </summary>
     public EventGraph EventGraph { get; }
+
+    /// <summary>
+    ///     Projection registration, the live aggregator cache, and the registry of aggregate types
+    ///     discovered from source-generated evolvers.
+    /// </summary>
+    public Fisher.Projections.FisherProjectionOptions Projections { get; }
 
     /// <summary>
     ///     The connection string to the SQLite database, e.g. <c>Data Source=app.db</c>.

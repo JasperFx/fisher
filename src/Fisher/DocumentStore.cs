@@ -18,6 +18,16 @@ public class DocumentStore : IAsyncDisposable
         Options = options;
         Database = new FisherDatabase(options);
         options.StorageDatabase = Database;
+
+        // Register the self-aggregating types whose evolvers the source generator emitted, so
+        // Projections.AllAggregateTypes() reports an aggregate that was never registered by hand.
+        // Discovery is by assembly-level [GeneratedEvolver] attribute, and the scan skips framework
+        // assemblies, so this is cheap enough to do unconditionally at construction — which is the
+        // only place it can happen, since the point is to know about types nobody mentioned.
+        options.Projections.DiscoverGeneratedEvolvers(AppDomain.CurrentDomain.GetAssemblies());
+
+        // Builds the async shard registry and fails fast on duplicate projection names.
+        options.Projections.AssertValidity(options);
     }
 
     /// <summary>

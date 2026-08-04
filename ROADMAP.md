@@ -3,24 +3,27 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of `ed3833d` + compliance enrollment. 92 tests green on net9.0 and net10.0, 27 of them
-shared cross-store suites.
+Status as of `ffaa688` + two more compliance suites. 98 tests green on net9.0 and net10.0, 33 of
+them shared cross-store suites.
 
 ## The destination
 
 **First round of JasperFx compliance tests passing — reached.** `JasperFx.Events.ComplianceTests` is
 the shared cross-store suite Marten and Polecat both enroll in; passing it is what makes Fisher a
-real Critter Stack event store rather than a lookalike. Three suites are green:
+real Critter Stack event store rather than a lookalike. Five suites are green:
 
 | Suite | Tests |
 |---|---|
 | `StreamReadCompliance` | 11 |
 | `EventMetadataCompliance` | 9 |
 | `LiveAggregationCompliance` | 7 |
+| `ActivityCorrelationCompliance` | 4 |
+| `AutoDiscoveredAggregateCompliance` | 2 |
 
 The destination is now **the rest of them**, and the ordering below is unchanged, because what the
-remaining suites need is exactly what the remaining milestones build. Suite-by-suite blocking is
-tabulated under "Enrollment status".
+remaining suites need is exactly what the remaining milestones build. Every unenrolled suite is now
+blocked on a numbered milestone — there are no loose ends left between here and document storage.
+Suite-by-suite blocking is tabulated under "Enrollment status".
 
 ## Done
 
@@ -33,16 +36,18 @@ tabulated under "Enrollment status".
 | Event store reads | `FetchStreamAsync`, `FetchStreamStateAsync`, `LoadAsync`, archive/un-archive |
 | Live aggregation | `AggregateStreamAsync` over auto-discovered self-aggregating types |
 | Event store write surface | `IEventStoreOperations` in full — `FetchForWriting`, `WriteToAggregate`, `AppendOptimistic`, `FetchLatest`/`ProjectLatest` |
-| Compliance enrollment | `FisherComplianceFixture` + 3 suites, 27 shared tests |
+| Compliance enrollment | `FisherComplianceFixture` + 5 suites, 33 shared tests |
+| Session metadata | correlation/causation seeded from `Activity.Current`, applied to appended events |
+| `StoreOptions.Projections` | thin `ProjectionGraph` — aggregator cache + evolver discovery |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
 the shared `JasperFx.DocumentIdentity` helper — the same one Polecat's `DocumentMapping` delegates
 to. When `DocumentMapping` lands it should resolve identity *through* `AggregateIdentity` rather than
-beside it. `StoreOptions.Projections` was deliberately *not* stood up for this; `EventGraph`
-implements `IAggregationSourceFactory<IQuerySession>` and caches aggregators itself, which is the
-same seam a `ProjectionGraph` falls back to. See CLAUDE.md for the source-generator constraint that
-shapes all of it.
+beside it. `EventGraph` implements `IAggregationSourceFactory<IQuerySession>`; `StoreOptions.Projections`
+was deliberately *not* stood up for it at the time, and once it did land `EventGraph.AggregatorFor<T>`
+was repointed at `ProjectionGraph.AggregatorFor<T>` rather than keeping a second cache. See CLAUDE.md
+for the source-generator constraint that shapes all of it.
 
 `EventOperations` now declares the whole of `IEventStoreOperations`, which is what
 `EventStoreComplianceFixture.EventsFor(session)` must return — the single interface everything
@@ -51,16 +56,16 @@ portable in the compliance suites runs through. What is not implemented is colle
 decisions came out of it:
 
 - **Exclusive appends are the optimistic ones.** SQLite has no row lock; documented in CLAUDE.md's
-  divergence table with what revisiting it would cost.
-- **`AllAggregateTypes()` still has no assembly scan.** `AutoDiscoveredAggregateCompliance` wants
-  aggregate types discovered from `[GeneratedEvolver]` at construction. That is
-  `ProjectionGraph.DiscoverGeneratedEvolvers`, which Fisher gets for free the moment
-  `StoreOptions.Projections` exists — reimplementing it on `EventGraph` now would duplicate framework
-  logic with a one-milestone shelf life.
+  divergence table with what revisiting it would cost. Still open.
+- **`AllAggregateTypes()` had no assembly scan.** Settled by standing up a thin
+  `StoreOptions.Projections`, which was cheap only because the write-surface work had already made
+  `IDocumentSession` an `IStorageOperations` — the constraint `ProjectionGraph` imposes. Fisher gets
+  `DiscoverGeneratedEvolvers` from the framework rather than reimplementing it, which is what the
+  earlier deferral was waiting for.
 
-The `FisherCommandBuilder` shim is gone: weasel#424 shipped in Weasel.Sqlite 9.23.2. JasperFx moved
-2.37.2 → 2.39.1 in the same commit, which is where the six newer compliance suites came from —
-including the three Fisher enrolled in immediately.
+The `FisherCommandBuilder` shim is gone: weasel#424 shipped in Weasel.Sqlite 9.23.2. JasperFx is on
+2.39.3; 2.37.2 → 2.39.1 is where the six newer compliance suites came from, and 2.39.3 changes no
+suite source at all.
 
 ## Next, in order
 
@@ -78,12 +83,15 @@ mapping.
 
 ### 2. Projections
 
-`ProjectionGraph<IProjection, IDocumentSession, IQuerySession>` — needs `IProjection`,
-`StoreOptions.Projections`, the projection storage seam, and inline snapshot application during
-`SaveChangesAsync`. Live aggregation already put the two hard prerequisites in place:
-`IDocumentSession` implements `IStorageOperations`, and `Fisher.Projections.SingleStreamProjection<
-TDoc, TId>` exists. `FisherSession.FetchProjectionStorageAsync` and `GetOrStartMessageSink` are the
-`NotImplementedException`s to fill in.
+The scaffolding is up: `IProjection`, `Fisher.Projections.SingleStreamProjection<TDoc, TId>`,
+`EventProjection`, and a thin `FisherProjectionOptions : ProjectionGraph<...>` behind
+`StoreOptions.Projections` that carries the live aggregator cache and evolver discovery.
+
+What is missing is everything that writes. There is no way to register a projection at all —
+`Snapshot<T>` and `AddProjection` are the gap — no Inline/Async lifecycle, and no inline snapshot
+application during `SaveChangesAsync`. `FisherSession.FetchProjectionStorageAsync`,
+`GetOrStartMessageSink` and `EventProjection.storeEntity` are the `NotImplementedException`s to fill
+in.
 
 **Steps 1 and 2 are entangled, not sequential.** `Projections.Snapshot<T>` needs somewhere to write
 the snapshot, which is document storage. Expect to interleave them rather than finishing one first.
@@ -111,8 +119,8 @@ all and are `<Compile Remove>`d.
 | `StreamReadCompliance` | 11 | **green** |
 | `EventMetadataCompliance` | 9 | **green** |
 | `LiveAggregationCompliance` | 7 | **green** |
-| `ActivityCorrelationCompliance` | 4 | session correlation seeded from `Activity.Current.RootId` — small, self-contained, no milestone behind it |
-| `AutoDiscoveredAggregateCompliance` | 2 | `AllAggregateTypes()` → `ProjectionGraph.DiscoverGeneratedEvolvers`, i.e. projections (2) |
+| `ActivityCorrelationCompliance` | 4 | **green** |
+| `AutoDiscoveredAggregateCompliance` | 2 | **green** |
 | `FetchForWritingCompliance` | 13 | snapshots + document load-back (1 + 2) |
 | `SelfAggregatingEvolveCompliance` | 8 | snapshots + document load-back (1 + 2) |
 | `StringIdentitySingleStreamCompliance` | 6 | projection registration + document load-back (1 + 2) |
@@ -123,10 +131,10 @@ all and are `<Compile Remove>`d.
 | `AssignTagWhereCompliance` | 6 | DCB tags |
 | `DcbTagQueryAndConsistencyCompliance` | 26 | DCB tags — the last one, 727 lines |
 
-`ActivityCorrelationCompliance` is the only remaining suite not gated behind a numbered milestone.
-The three fixture members it needs (`CorrelationIdFor`, `CausationIdFor`, `SetCorrelationId`) are
-already implemented; what is missing is Fisher seeding a session's correlation id from the ambient
-`Activity` — there is no `System.Diagnostics.Activity` usage anywhere in Fisher today.
+Nothing on that list is a loose end any more: every unenrolled suite needs document storage,
+projections, the daemon, or DCB tags. `FetchForWritingCompliance` is the largest single prize at 13
+tests, and Fisher already implements the `FetchForWriting` surface it exercises — what it lacks is the
+snapshot registration and document load-back the suite asserts against.
 
 ## Open items not on the critical path
 

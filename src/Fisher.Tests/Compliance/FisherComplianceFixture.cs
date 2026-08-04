@@ -78,6 +78,8 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
 
     public override IEventRegistry Registry => Store.Options.EventGraph;
 
+    public override IEnumerable<Type> AllAggregateTypes() => Store.Options.Projections.AllAggregateTypes();
+
     public override string? CorrelationIdFor(IDocumentSession session) => AsFisherSession(session).CorrelationId;
 
     public override string? CausationIdFor(IDocumentSession session) => AsFisherSession(session).CausationId;
@@ -139,11 +141,6 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override IEventStore EventStore
         => throw new NotSupportedException(
             "Fisher's DocumentStore does not implement JasperFx's IEventStore yet.");
-
-    public override IEnumerable<Type> AllAggregateTypes()
-        => throw new NotSupportedException(
-            "Fisher has no StoreOptions.Projections, and so no ProjectionGraph.AllAggregateTypes() and " +
-            "no assembly scan for source-generated evolvers.");
 
     public override IComplianceBatch CreateBatch(IQuerySession session)
         => throw new NotSupportedException("Fisher has no batched query support yet.");

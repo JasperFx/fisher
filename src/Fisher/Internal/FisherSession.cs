@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Diagnostics;
 using Fisher.Events;
 using Fisher.Serialization;
 using Fisher.Storage;
@@ -40,6 +41,14 @@ internal class FisherSession : IDocumentSession, IStorageSession, IAsyncDisposab
         FisherDatabase = database;
         TenantId = tenantId;
         Events = new EventOperations(this);
+
+        // Seed distributed tracing context onto the session so appended events carry it without the
+        // application passing anything. Root, not Id: the correlation id identifies the whole trace,
+        // while the parent identifies the operation that caused this one. Marten and Polecat read the
+        // ambient activity exactly this way. A caller assigning either property afterwards wins,
+        // which is the point of doing it here rather than at append time.
+        CorrelationId = Activity.Current?.RootId;
+        CausationId = Activity.Current?.ParentId;
     }
 
     internal StoreOptions Options { get; }
