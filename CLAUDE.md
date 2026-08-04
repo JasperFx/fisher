@@ -53,6 +53,7 @@ These are the decisions that don't transfer from the sibling stores, and the rea
 | Guids | native | TEXT — bind via `SqliteStorageDialect<T>.ToDatabaseValue` |
 | Event sequence | sequence / IDENTITY | `INTEGER PRIMARY KEY AUTOINCREMENT` |
 | Append concurrency | advisory lock / UPDLOCK,HOLDLOCK | `BEGIN IMMEDIATE` (`IsolationLevel.Serializable`) |
+| Document upsert | `MERGE` (Polecat) | `INSERT … ON CONFLICT … DO UPDATE … RETURNING`, as Marten |
 | Exclusive append | row lock — the loser **waits** | no row lock — the loser **fails** (see below) |
 | Sequence read-back | bulk function / `OUTPUT ... INTO` | trailing SELECT by stream + version range |
 | Load-many ids | `= ANY($1)` / `OPENJSON` | `json_each(@ids)` |
@@ -129,11 +130,34 @@ Working, with tests:
 
 Not implemented yet — do not assume these work:
 
-- **Document storage — in progress.** The mapping and schema layer is in: `DocumentMapping`,
-  `StoreOptions.Schema.For<T>()`, `fi_doc_<alias>` tables through `DocumentFeatureSchema`. Nothing
-  reads or writes one yet — `IStorageSession.StorageFor`, `IStorageDatabase.Providers` and
-  `SequenceFor` still throw `NotImplementedException`, and there is no `Store`/`Load`/`Delete` and no
-  LINQ.
+- **Document storage — in progress.** Mapping, schema and the SQL are in: `DocumentMapping`,
+  `StoreOptions.Schema.For<T>()`, `fi_doc_<alias>` tables, and
+  `SqliteDocumentStorageDescriptorBuilder`. Nothing reads or writes one yet — the
+  `IDocumentStorage<T,TId>` implementations, the provider registry and the session API are the
+  remaining pieces, so `IStorageSession.StorageFor` and `IStorageDatabase.Providers` still throw.
+  Numeric ids need Hi-Lo sequences (`SequenceFor` throws), so only Guid and string identities will
+  work at first. No LINQ.
+
+### Document write SQL
+
+`SqliteDocumentStorageDescriptorBuilder` emits four statements whose **column order and `?` order are
+one contract**, because the shared closed-shape operations bind by position. Two different orders are
+in play, and they are not the same:
+
+- upsert / insert / overwrite — `[tenant,] id, data, client-side binders`, then the optional
+  concurrency guard (`ClosedShapeUpsertOperation.BindPreOnConflictParameters`)
+- update — `data, client-side binders, id, [tenant]`, then the guard. **The id moves from the front
+  to the back**, because it is a `WHERE` term rather than a value.
+
+A server-side binder contributes a column and an expression but no parameter mark, which is what lets
+`last_modified` sit in the middle of the column list without shifting a slot. That holds only while
+its `ValueSql` contains no `?`.
+
+Verified against SQLite 3.51 before anything was built on it: `ON CONFLICT … DO UPDATE SET … WHERE …
+RETURNING id` parses, and when the guard does not match it returns **no row** and leaves the row
+untouched — which is exactly what the Optimistic operation's postprocessing reads as a concurrency
+failure. The `DO UPDATE SET` clause assigns from `excluded.*` for every column rather than repeating
+each binder's `ValueSql`, so the update branch cannot drift from the insert branch.
 - **Projections.** `StoreOptions.Projections` exists but is thin — it carries the live aggregator
   cache and the source-generated-evolver discovery, nothing more. Nothing is persisted: no
   Inline/Async lifecycles, no `Snapshot<T>`, no way to register a projection at all.
