@@ -10,10 +10,6 @@ namespace Fisher.Tests.Compliance;
  *
  * Suites are added one at a time as Fisher grows into them. What is NOT enrolled yet, and why:
  *
- *   FetchForWritingCompliance          snapshots + document load-back
- *   SelfAggregatingEvolveCompliance    snapshots + document load-back
- *   StringIdentitySingleStreamCompliance   projection registration + document load-back
- *   EventProjection{Registration,Enrichment}Compliance   projections + document storage
  *   AsyncDaemonCompliance              the async daemon
  *   RebuildConcurrencyCapCompliance    IEventStore on DocumentStore + rebuilds
  *   DcbTagQueryAndConsistencyCompliance, AssignTagWhereCompliance   DCB tag tables
@@ -52,3 +48,10 @@ public class event_projection_registration_compliance
 
 public class event_projection_enrichment_compliance
     : EventProjectionEnrichmentCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class fetch_latest_compliance
+    : FetchLatestCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class stream_archiving_compliance
+    : StreamArchivingCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
