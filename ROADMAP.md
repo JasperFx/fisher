@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of the async daemon landing. **All 17 compliance suites green.** 385 tests green on net9.0
+Status as of the async daemon landing. **All 17 compliance suites green.** 396 tests green on net9.0
 and net10.0, **124 of them shared cross-store compliance tests across 17 suites**.
 
 ## The destination
@@ -50,7 +50,9 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | [fisher#2](https://github.com/JasperFx/fisher/issues/2) | Duplicated fields, so a query can use an index. The performance follow-on to #1, independent of it. |
 | [fisher#3](https://github.com/JasperFx/fisher/issues/3) | An async projection cannot append events of its own — needs version assignment and sequence read-back inside the batch's transaction. |
 | [fisher#4](https://github.com/JasperFx/fisher/issues/4) | Projection side effects cannot be published; `GetOrStartMessageSink` throws. |
-| [fisher#5](https://github.com/JasperFx/fisher/issues/5) | No dead letter queue, so a failing event stops its shard rather than being quarantined. |
+| ~~[fisher#5](https://github.com/JasperFx/fisher/issues/5)~~ | **Closed.** Dead letter queue — `fi_dead_letters`, so `SkipApplyErrors` quarantines rather than stopping the shard. |
+| ~~[fisher#6](https://github.com/JasperFx/fisher/issues/6)~~ | **Closed.** `DeleteAllEventDataAsync` violated the tag tables' foreign key. Found while building #5. |
+| ~~[fisher#7](https://github.com/JasperFx/fisher/issues/7)~~ | **Closed.** `WaitForNonStaleProjectionDataAsync` threw `OperationCanceledException` instead of `TimeoutException` when the clock landed mid-query. |
 
 Every deliberate gap gets an issue. A note in this file or in CLAUDE.md is context, not tracking —
 if something is deferred, it is in the list above.
@@ -79,6 +81,7 @@ if something is deferred, it is in the list above.
 | LINQ | `session.Query<T>()` — where, ordering, paging, async terminals |
 | DCB tags | tag tables, tagged appends, queries, `AssignTagWhere`, boundaries + consistency, batched queries |
 | Async daemon | `IEventDatabase`, high-water detector, event loader, projection batch, `IEventStore<,>`, `BuildProjectionDaemonAsync`, `SnapshotLifecycle.Async` |
+| Dead letters | `fi_dead_letters`; `SkipApplyErrors` quarantines a poison event instead of stopping its shard |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -114,12 +117,13 @@ first rather than by test count.
 
 ### 1. Finish the daemon's edges
 
-The daemon runs, but three things inside it throw by name rather than working. Each is a real
+The daemon runs, but two things inside it still throw by name rather than working. Each is a real
 capability a Marten user would expect:
 
 - **[fisher#3](https://github.com/JasperFx/fisher/issues/3)** — event-emitting async projections.
 - **[fisher#4](https://github.com/JasperFx/fisher/issues/4)** — projection side effects.
-- **[fisher#5](https://github.com/JasperFx/fisher/issues/5)** — dead letters.
+
+Dead letters ([fisher#5](https://github.com/JasperFx/fisher/issues/5)) were the third and are done.
 
 ### 2. Finish document storage
 
@@ -183,7 +187,7 @@ that adds a suite Fisher cannot pass still builds.
 - **`Advanced` is a thin subset.** `Clean`, `ResetAllDataAsync` and `ResetHiloSequenceFloorAsync<T>`
   only. Marten and Polecat also carry bulk insert, `InitialData` and metadata helpers there.
 - **Not started at all:** multi-tenancy beyond a tenant id column, subscriptions, DI registration
-  (`AddFisher`), bulk insert, natural keys, strongly typed ids, dead letters.
+  (`AddFisher`), bulk insert, natural keys, strongly typed ids.
 - **The daemon's WAL guard is a warning, not a refusal.** `BuildProjectionDaemonAsync` logs when
   `PragmaSettings.JournalMode` is not WAL, because without it the daemon and every writer serialize
   against each other. Refusing to start would be the stronger position; warning is what is there.

@@ -97,6 +97,9 @@ public class EventGraph : EventRegistry, IAggregationSourceFactory<IQuerySession
     internal string ProgressionTableName =>
         FisherTableNaming.QuotedTableName(DatabaseSchemaName, "event_progression");
 
+    internal string DeadLetterTableName =>
+        FisherTableNaming.QuotedTableName(DatabaseSchemaName, Schema.DeadLetterTable.TableSuffix);
+
     /// <summary>
     ///     The quoted table name holding one DCB tag type's rows.
     /// </summary>
@@ -275,6 +278,8 @@ public class EventGraph : EventRegistry, IAggregationSourceFactory<IQuerySession
     internal EventsTable BuildEventsTable() => new(this);
 
     internal EventProgressionTable BuildEventProgressionTable() => new(this);
+
+    internal DeadLetterTable BuildDeadLetterTable() => new(this);
 
     /// <summary>
     ///     One table per registered tag type.

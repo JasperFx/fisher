@@ -150,6 +150,8 @@ Working, with tests:
 - **Async daemon** — `IEventDatabase` on `FisherDatabase`, `FisherHighWaterDetector`,
   `FisherEventLoader`, `FisherProjectionBatch`, `IEventStore<IDocumentSession, IQuerySession>` on
   `DocumentStore`, `FisherProjectionDaemon`, and `Snapshot<T>(SnapshotLifecycle.Async)`
+- **Dead letters** — `fi_dead_letters`, so `SkipApplyErrors` quarantines a poison event instead of
+  stopping its shard
 
 Not implemented yet — do not assume these work:
 
@@ -232,6 +234,30 @@ WAL is what lets the daemon read while a session writes. It is on by default via
 the daemon and every writer serialize against each other and that presents as a slow projection
 rather than as a misconfiguration.
 
+### Dead letters
+
+`fi_dead_letters` holds one row per event a shard could not apply and was configured to skip, with
+`DeadLetterEvent`'s columns one for one so CritterWatch reads Fisher's the same way it reads
+Marten's. Three decisions in it:
+
+- **No foreign key to `fi_events`, deliberately** — the opposite of the tag tables. A tag is
+  meaningless without its event; a dead letter is the record that something went wrong and has to
+  survive the event being archived, compacted or cleaned away. A cascade would erase the evidence
+  somebody came looking for. Nothing else removes them either, which is why
+  `DeleteAllEventDataAsync` does.
+- **The write goes on its own connection, outside the failing batch's transaction.** That batch is
+  about to roll back; a dead letter written inside it would roll back with the very failure it is
+  recording, and the shard would skip the event leaving no trace. The `storage` parameter the daemon
+  offers as a session context is therefore ignored.
+- **It is an upsert, not an insert.** JasperFx assigns the version-7 id at construction and the
+  daemon retries the write in the background, so a retry landing after a successful first attempt
+  carries the same primary key.
+
+Ordering matters when clearing event data, and it is why `DeleteAllEventDataAsync` uses an ordered
+pass rather than the cleaner's unordered one: `fi_event_tag_*` rows have a real foreign key to
+`fi_events(seq_id)` and Weasel's default profile turns enforcement on, so clearing events first fails
+with `FOREIGN KEY constraint failed` (fisher#6). Tags go first, dead letters last.
+
 ### Document storage layout
 
 Weasel.Storage supplies the selectors and the write operations but **not** an
@@ -311,6 +337,9 @@ arbitrary:
 - **Table matching is done in C#, not with `LIKE`.** `_` is a single-character wildcard in SQL's
   LIKE and every Fisher prefix contains one, so `like 'fi_%'` would happily match a table called
   `fixtures`. Names come back from `sqlite_master` and are filtered with `StartsWith`.
+- **`DeleteAllEventDataAsync` deletes in a fixed order**, tag tables first — see "Dead letters".
+  `CompletelyRemoveAllAsync` needs no ordering: SQLite does not enforce a foreign key against a
+  dropped table.
 
 `CompletelyRemoveAllAsync` calls `FisherDatabase.ForgetEnsuredTables()` afterwards. Without it the
 "this document table already exists" cache would still claim tables that were just dropped, and the
@@ -319,8 +348,6 @@ next `Store` would skip its migration and write to nothing.
 - **An async projection that appends events of its own** — fisher#3.
 - **Projection side effects.** `GetOrStartMessageSink` throws, so `PublishMessageAsync` on the
   projection batch does too — fisher#4.
-- **Dead letters.** `StoreDeadLetterEventAsync` throws, so a failing event stops its shard —
-  fisher#5.
 - Multi-tenancy beyond a tenant id column, subscriptions, DI registration.
 - The two event-rewrite members in `EventOperations.Unsupported.cs`.
 

@@ -10,7 +10,7 @@ picks this up next.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**385 tests green on net9.0 and net10.0**, three consecutive full runs. 124 of them are shared
+**396 tests green on net9.0 and net10.0**, four consecutive full runs. 124 of them are shared
 cross-store compliance tests.
 
 ## Where we are against the compliance suites
@@ -217,10 +217,44 @@ than only as a note here:
   assignment and sequence read-back inside the batch's transaction.
 - **Projection side effects** — [fisher#4](https://github.com/JasperFx/fisher/issues/4).
   `PublishMessageAsync` throws; there is no message sink.
-- **Dead letters** — [fisher#5](https://github.com/JasperFx/fisher/issues/5).
-  `StoreDeadLetterEventAsync` throws, so a failing event stops its shard rather than being
-  quarantined. The interface's other dead-letter members take their empty defaults, which reads as
-  "none to report" rather than "cannot report".
+
+[fisher#5](https://github.com/JasperFx/fisher/issues/5) (dead letters) is **closed** — see below.
+
+### Dead letters
+
+`fi_dead_letters` carries `DeadLetterEvent`'s columns one for one, so CritterWatch reads Fisher's the
+same way it reads Marten's. `SkipApplyErrors` now works: a poison event is quarantined and its shard
+carries on, which `a_skipped_poison_event_is_quarantined_and_the_shard_carries_on` covers end to end
+rather than only at the storage layer.
+
+Three decisions worth not undoing:
+
+- **No foreign key to `fi_events`** — deliberately the opposite of the tag tables. A dead letter has
+  to survive the event being archived, compacted or cleaned away, or a cascade erases the evidence
+  somebody came looking for.
+- **The write is on its own connection**, outside the failing batch's transaction, which is about to
+  roll back. Writing it inside would roll the record back with the failure it records.
+- **It is an upsert.** The daemon retries the write in the background against a pre-assigned id.
+
+That "no foreign key" choice is also why the cleaner has to delete them: nothing else ever would.
+
+### Two bugs found while building the above
+
+**[fisher#6](https://github.com/JasperFx/fisher/issues/6)** — `DeleteAllEventDataAsync` failed with
+`FOREIGN KEY constraint failed` whenever DCB tag rows existed: tag tables have a real FK to
+`fi_events(seq_id)` and were not being cleared. The suite never caught it because every fixture gets
+a fresh database, so the clean always ran before any tag row existed. Fixed by deleting in a fixed
+order, tags first.
+
+**[fisher#7](https://github.com/JasperFx/fisher/issues/7)** — `WaitForNonStaleProjectionDataAsync`
+translated only its `Task.Delay` cancellation into a `TimeoutException`. Its two reads take the same
+token, so a timeout elapsing mid-query escaped as `OperationCanceledException` — the same condition
+reported as two different exception types depending on timing alone. It surfaced as a roughly
+1-in-8 flake on net9.0 under the full suite's load and would not reproduce in isolation, which is
+exactly what the "run the suite more than once" convention exists to catch. The regression test uses
+an already-elapsed timeout so the cancellation *must* come out of a read.
+
+Both fixes were verified by reverting them: each new test fails without its fix.
 
 ## The LINQ layer
 

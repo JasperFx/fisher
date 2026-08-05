@@ -156,40 +156,57 @@ public partial class FisherDatabase : IEventDatabase
     ///     Block until every registered async shard has caught up to the current high-water mark.
     /// </summary>
     /// <remarks>
-    ///     Polls rather than subscribing to the tracker, because the caller wants a definitive answer
-    ///     about persisted progression rather than about what the in-memory tracker has been told.
-    ///     Times out with <see cref="TimeoutException" /> rather than returning quietly, since a caller
-    ///     that asked to wait for non-stale data and got stale data anyway has no way to tell.
+    ///     <para>
+    ///         Polls rather than subscribing to the tracker, because the caller wants a definitive answer
+    ///         about persisted progression rather than about what the in-memory tracker has been told.
+    ///         Times out with <see cref="TimeoutException" /> rather than returning quietly, since a
+    ///         caller that asked to wait for non-stale data and got stale data anyway has no way to tell.
+    ///     </para>
+    ///     <para>
+    ///         <strong>Every cancellation this method's own clock causes becomes that
+    ///         <see cref="TimeoutException" />, wherever in the cycle it lands.</strong> The two reads
+    ///         take the same token as the delay, so translating only the delay's cancellation meant the
+    ///         caller saw an <see cref="OperationCanceledException" /> whenever the timeout happened to
+    ///         elapse while a query was in flight — the same condition reported as two different
+    ///         exception types depending on timing alone (fisher#7).
+    ///     </para>
     /// </remarks>
     public async Task WaitForNonStaleProjectionDataAsync(TimeSpan timeout)
     {
         using var cancellation = new CancellationTokenSource(timeout);
 
-        while (true)
+        var highWater = 0L;
+        var shards = Array.Empty<ShardState>();
+
+        try
         {
-            var highWater = await FetchHighestEventSequenceNumber(cancellation.Token).ConfigureAwait(false);
-            var progress = await AllProjectionProgress(cancellation.Token).ConfigureAwait(false);
-
-            var shards = progress
-                .Where(x => !string.Equals(x.ShardName, ShardState.HighWaterMark, StringComparison.OrdinalIgnoreCase))
-                .ToArray();
-
-            // No events means nothing can be stale. Shards that exist must all have reached the head.
-            if (highWater == 0 || (shards.Length > 0 && shards.All(x => x.Sequence >= highWater)))
+            while (true)
             {
-                return;
-            }
+                highWater = await FetchHighestEventSequenceNumber(cancellation.Token).ConfigureAwait(false);
+                var progress = await AllProjectionProgress(cancellation.Token).ConfigureAwait(false);
 
-            try
-            {
+                shards = progress
+                    .Where(x => !string.Equals(x.ShardName, ShardState.HighWaterMark,
+                        StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+
+                // No events means nothing can be stale. Shards that exist must all have reached the head.
+                if (highWater == 0 || (shards.Length > 0 && shards.All(x => x.Sequence >= highWater)))
+                {
+                    return;
+                }
+
                 await Task.Delay(50, cancellation.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
-            {
-                throw new TimeoutException(
-                    $"Projection data was still stale after {timeout}. High water is at {highWater}; "
-                    + $"shards are at [{string.Join(", ", shards.Select(x => $"{x.ShardName}:{x.Sequence}"))}].");
-            }
+        }
+        catch (OperationCanceledException e) when (e.CancellationToken == cancellation.Token
+                                                   || cancellation.IsCancellationRequested)
+        {
+            // Filtered on this method's own token so that if an overload ever accepts the caller's,
+            // their cancellation still surfaces as a cancellation rather than as a timeout.
+            throw new TimeoutException(
+                $"Projection data was still stale after {timeout}. High water is at {highWater}; "
+                + $"shards are at [{string.Join(", ", shards.Select(x => $"{x.ShardName}:{x.Sequence}"))}].");
         }
     }
 
@@ -207,17 +224,169 @@ public partial class FisherDatabase : IEventDatabase
             : Task.CompletedTask;
 
     /// <summary>
-    ///     fisher#5 — dead-letter storage is not implemented, so a failing event stops its shard rather
-    ///     than being quarantined.
+    ///     Quarantine an event a projection could not apply, so its shard can keep advancing.
     /// </summary>
     /// <remarks>
-    ///     The interface's other dead-letter members default to empty rather than throwing, which is
-    ///     honest for a store with no dead-letter table: there genuinely are none to report. This one
-    ///     throws because silently discarding a poison event would lose it.
+    ///     <para>
+    ///         <strong>On its own connection, outside any batch's transaction.</strong> The batch that
+    ///         produced this failure is about to roll back; a dead letter written inside it would roll
+    ///         back with the very failure it is recording, and the shard would skip the event with no
+    ///         trace of why. That is why <paramref name="storage" /> — the session the daemon offers as
+    ///         a storage context — is ignored.
+    ///     </para>
+    ///     <para>
+    ///         The write is an upsert on the version-7 id JasperFx assigns at construction. The daemon
+    ///         retries this write in the background, so a retry that lands after a successful first
+    ///         attempt must not fail on the primary key.
+    ///     </para>
     /// </remarks>
-    public Task StoreDeadLetterEventAsync(object storage, DeadLetterEvent deadLetterEvent, CancellationToken token)
-        => throw new NotSupportedException(
-            "Fisher has no dead letter queue yet, so a projection error cannot be quarantined — see "
-            + "https://github.com/JasperFx/fisher/issues/5. Configure the projection to stop on error "
-            + "instead of skipping.");
+    public async Task StoreDeadLetterEventAsync(object storage, DeadLetterEvent deadLetterEvent,
+        CancellationToken token)
+    {
+        await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"""
+                                   insert into {_events.DeadLetterTableName}
+                                     (id, projection_name, shard_name, event_sequence, tenant_id,
+                                      exception_type, exception_message, timestamp)
+                                   values (@id, @projection, @shard, @seq, @tenant, @type, @message, @timestamp)
+                                   on conflict (id) do update
+                                     set exception_type = excluded.exception_type,
+                                         exception_message = excluded.exception_message,
+                                         timestamp = excluded.timestamp;
+                                   """;
+
+            // Lowercase canonical text, as every Guid in Fisher is. A raw Guid binds as a 16-byte BLOB
+            // that never matches the TEXT column; the provider's own string form is uppercase and misses
+            // under the case-sensitive default collation.
+            command.Parameters.AddWithValue("@id", deadLetterEvent.Id.ToString("D").ToLowerInvariant());
+            command.Parameters.AddWithValue("@projection", deadLetterEvent.ProjectionName);
+            command.Parameters.AddWithValue("@shard", deadLetterEvent.ShardName);
+            command.Parameters.AddWithValue("@seq", deadLetterEvent.EventSequence);
+            command.Parameters.AddWithValue("@tenant", (object?)deadLetterEvent.TenantId ?? DBNull.Value);
+            command.Parameters.AddWithValue("@type", (object?)deadLetterEvent.ExceptionType ?? DBNull.Value);
+            command.Parameters.AddWithValue("@message", (object?)deadLetterEvent.ExceptionMessage ?? DBNull.Value);
+            command.Parameters.AddWithValue("@timestamp",
+                SqliteTimestamp.ToDatabaseValue(deadLetterEvent.Timestamp));
+
+            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     How many events one shard has quarantined — the primary "this projection is unhealthy"
+    ///     signal, since a skipping shard keeps advancing and reports healthy otherwise.
+    /// </summary>
+    public async Task<long> CountDeadLetterEventsAsync(ShardName shard, CancellationToken token = default)
+    {
+        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"""
+                                   select count(*) from {_events.DeadLetterTableName}
+                                   where projection_name = @projection and shard_name = @shard
+                                   """;
+            command.Parameters.AddWithValue("@projection", shard.Name);
+            command.Parameters.AddWithValue("@shard", shard.ShardKey);
+
+            return Convert.ToInt64(await command.ExecuteScalarAsync(ct).ConfigureAwait(false));
+        }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     One shard's quarantined events, newest first, paged.
+    /// </summary>
+    /// <remarks>
+    ///     A null <paramref name="tenantId" /> spans every tenant in the database. Fisher has no
+    ///     tenant-partitioned event sequence, so in practice that is all of them — the parameter is
+    ///     honoured rather than rejected because the column is there and a conjoined store can use it.
+    /// </remarks>
+    public async Task<IReadOnlyList<DeadLetterEvent>> QueryDeadLetterEventsAsync(ShardName shard,
+        string? tenantId, int offset, int limit, CancellationToken token = default)
+    {
+        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+
+            var tenantFilter = tenantId is null ? "" : " and tenant_id = @tenant";
+
+            // `limit`/`offset`, not TOP or FETCH NEXT. A bare offset is a parse error in SQLite, which
+            // is why the limit is always emitted even when the caller wanted everything.
+            command.CommandText = $"""
+                                   select id, projection_name, shard_name, event_sequence, tenant_id,
+                                          exception_type, exception_message, timestamp
+                                   from {_events.DeadLetterTableName}
+                                   where projection_name = @projection and shard_name = @shard{tenantFilter}
+                                   order by event_sequence desc
+                                   limit @limit offset @offset
+                                   """;
+            command.Parameters.AddWithValue("@projection", shard.Name);
+            command.Parameters.AddWithValue("@shard", shard.ShardKey);
+            command.Parameters.AddWithValue("@limit", limit <= 0 ? -1 : limit);
+            command.Parameters.AddWithValue("@offset", Math.Max(0, offset));
+
+            if (tenantId is not null)
+            {
+                command.Parameters.AddWithValue("@tenant", tenantId);
+            }
+
+            var results = new List<DeadLetterEvent>();
+
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                results.Add(new DeadLetterEvent
+                {
+                    Id = Guid.Parse(reader.GetString(0)),
+                    ProjectionName = reader.GetString(1),
+                    ShardName = reader.GetString(2),
+                    EventSequence = reader.GetInt64(3),
+                    TenantId = await reader.IsDBNullAsync(4, ct).ConfigureAwait(false) ? null : reader.GetString(4),
+                    ExceptionType = await reader.IsDBNullAsync(5, ct).ConfigureAwait(false)
+                        ? null!
+                        : reader.GetString(5),
+                    ExceptionMessage = await reader.IsDBNullAsync(6, ct).ConfigureAwait(false)
+                        ? null!
+                        : reader.GetString(6),
+                    Timestamp = SqliteTimestamp.FromDatabaseValue(reader.GetString(7))
+                });
+            }
+
+            return (IReadOnlyList<DeadLetterEvent>)results;
+        }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Every shard's dead-letter count in one read — the "give me every row" shape
+    ///     <see cref="AllProjectionProgress" /> has, for the monitoring tools that render a table.
+    /// </summary>
+    public async Task<IReadOnlyList<DeadLetterShardCount>> FetchDeadLetterCountsAsync(
+        CancellationToken token = default)
+    {
+        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"""
+                                   select projection_name, shard_name, count(*)
+                                   from {_events.DeadLetterTableName}
+                                   group by projection_name, shard_name
+                                   """;
+
+            var results = new List<DeadLetterShardCount>();
+
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                results.Add(new DeadLetterShardCount(reader.GetString(0), reader.GetString(1),
+                    reader.GetInt64(2)));
+            }
+
+            return (IReadOnlyList<DeadLetterShardCount>)results;
+        }, token).ConfigureAwait(false);
+    }
 }

@@ -1,5 +1,7 @@
 using Fisher.Tests.Events;
 using JasperFx;
+using JasperFx.Events;
+using JasperFx.Events.Tags;
 using Microsoft.Data.Sqlite;
 
 namespace Fisher.Tests.Documents;
@@ -145,5 +147,43 @@ public class cleaning_a_store : IAsyncLifetime
 
         (await TableExistsAsync("reporting_fi_doc_trail")).ShouldBeFalse();
         (await CountAsync("fi_doc_trail")).ShouldBe(1);
+    }
+
+    /// <summary>
+    ///     fisher#6 — tag tables have to be cleared before the events they point at.
+    /// </summary>
+    /// <remarks>
+    ///     Each <c>fi_event_tag_*</c> table carries a real foreign key to <c>fi_events(seq_id)</c> and
+    ///     Weasel's default profile turns foreign key enforcement on, so clearing events first fails
+    ///     with <c>FOREIGN KEY constraint failed</c>. The rest of the suite never caught it because
+    ///     every fixture gets a fresh database, so the clean always ran before any tag row existed.
+    /// </remarks>
+    [Fact]
+    public async Task deleting_all_event_data_clears_tag_rows_before_the_events_they_reference()
+    {
+        await using var tagged = DocumentStore.For(options =>
+        {
+            options.ConnectionString = _database.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.DatabaseSchemaName = "tagclean";
+            options.Events.RegisterTagType<Schema.TerritoryId>("territory");
+        });
+
+        await tagged.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
+
+        await using (var session = tagged.LightweightSession())
+        {
+            var @event = session.Events.BuildEvent(new QuestStarted("Tagged"));
+            @event.WithTag(new Schema.TerritoryId(Guid.NewGuid()));
+            session.Events.StartStream(Guid.NewGuid(), @event);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        (await CountAsync("tagclean_fi_event_tag_territory")).ShouldBe(1);
+
+        await tagged.Advanced.Clean.DeleteAllEventDataAsync(TestContext.Current.CancellationToken);
+
+        (await CountAsync("tagclean_fi_event_tag_territory")).ShouldBe(0);
+        (await CountAsync("tagclean_fi_events")).ShouldBe(0);
     }
 }

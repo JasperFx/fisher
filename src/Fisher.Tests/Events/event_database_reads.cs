@@ -178,6 +178,27 @@ public class event_database_reads : IAsyncLifetime
             await TheDatabase.WaitForNonStaleProjectionDataAsync(TimeSpan.FromMilliseconds(300)));
     }
 
+    /// <summary>
+    ///     fisher#7 — the timeout is reported as a <see cref="TimeoutException" /> wherever in the poll
+    ///     cycle the clock lands, not only when it lands in the delay.
+    /// </summary>
+    /// <remarks>
+    ///     An already-elapsed timeout is what makes this deterministic: the token is cancelled before
+    ///     the first query runs, so the cancellation necessarily comes out of a read rather than out of
+    ///     <c>Task.Delay</c>. That is the path that used to escape as an
+    ///     <see cref="OperationCanceledException" />, and it only showed up as a rare flake in
+    ///     <see cref="waiting_times_out_when_a_shard_never_catches_up" /> under the full suite's load.
+    /// </remarks>
+    [Fact]
+    public async Task waiting_reports_a_timeout_even_when_the_clock_elapses_inside_a_query()
+    {
+        await AppendAsync(3);
+        await WriteProgressAsync(new ShardName("tally").Identity, 1);
+
+        await Should.ThrowAsync<TimeoutException>(async () =>
+            await TheDatabase.WaitForNonStaleProjectionDataAsync(TimeSpan.Zero));
+    }
+
     [Fact]
     public async Task waiting_returns_once_every_shard_has_reached_the_head()
     {
