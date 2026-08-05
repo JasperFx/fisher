@@ -434,10 +434,12 @@ after would be checking against the session's own appends; checking outside the 
 prove nothing, because `BEGIN IMMEDIATE` is what holds the write lock. A boundary over an empty
 result still enforces consistency — `LastSeenSequence` is 0 and any later matching event exceeds it.
 
-`IBatchedQuery` matches the siblings' shape, but **the rationale does not transfer**: a batch exists
-elsewhere to collapse network round trips, and SQLite is embedded. What remains is that the reads run
-back to back on one connection with nothing interleaved. Implemented without statement coalescing on
-purpose.
+`IBatchedQuery` matches the siblings' shape but exists **for API parity, not for speed** — a batch
+elsewhere collapses network round trips, and SQLite is embedded, so there are none to collapse. It is
+carried so DCB code ports between stores unchanged and so Fisher enrolls in the shared batched-query
+tests with a real implementation rather than a test-only shim; `DcbTagQueryAndConsistencyCompliance`
+has no opt-out flag, so declining would have cost all 26 of its tests. Implemented without statement
+coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 

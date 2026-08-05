@@ -7,17 +7,23 @@ namespace Fisher.Events.Tags;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         Each method hands back a task that does <em>not</em> complete until <see cref="Execute" />
-///         runs. That is the contract Marten and Polecat's batched queries follow, and matching it is
-///         most of the point: code written against one store's batch ports to another.
+///         <strong>This exists for API parity, not for speed, and that is a deliberate choice rather
+///         than an unfinished one.</strong> In Marten and Polecat a batch earns its keep by collapsing
+///         several network round trips into one. SQLite is embedded, so there are no round trips to
+///         collapse and Fisher gains essentially nothing in throughput. It is here so that DCB code
+///         written against one Critter Stack store runs unchanged against another, and so Fisher can
+///         honestly enroll in the shared batched-query compliance tests rather than passing them on a
+///         test-only shim.
 ///     </para>
 ///     <para>
-///         <strong>The rationale differs on SQLite, and it is worth being honest about.</strong> In the
-///         siblings a batch exists to collapse several network round trips into one. SQLite is
-///         embedded, so there are no round trips to collapse and the throughput argument mostly
-///         evaporates. What remains is the part that still holds here: the reads run back to back
-///         against one connection with nothing interleaved, so a set of boundaries is established
-///         against a coherent view rather than drifting apart as each is fetched.
+///         Do not reach for this expecting it to be faster than the same reads issued directly — it is
+///         not, and it is not trying to be. The one property that does still hold: the reads run back
+///         to back against one connection with nothing interleaved, so a set of boundaries is
+///         established against a coherent view rather than drifting apart as each is fetched.
+///     </para>
+///     <para>
+///         Each method hands back a task that does <em>not</em> complete until <see cref="Execute" />
+///         runs, matching the siblings' contract.
 ///     </para>
 /// </remarks>
 public interface IBatchedQuery

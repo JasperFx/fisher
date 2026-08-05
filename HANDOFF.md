@@ -272,14 +272,22 @@ A boundary over an *empty* result still enforces consistency — `LastSeenSequen
 matching event appearing later has a sequence above it. That is what makes a boundary usable as a
 "this must not exist yet" assertion.
 
-### Batched queries exist, but the rationale differs here
+### Batched queries exist for parity, not for speed
 
 `IBatchedQuery` matches the siblings' shape — declared reads, tasks that do not complete until
-`Execute`. **The round-trip argument does not transfer.** In Marten and Polecat a batch collapses
-several network round trips; SQLite is embedded, so there are none to collapse. What remains is that
-the reads run back to back on one connection with nothing interleaved, so a set of boundaries is
-established against a coherent view. Implemented deliberately without statement coalescing, because
-the win it buys elsewhere is not there to collect.
+`Execute`. **It buys Fisher essentially nothing in throughput, and that is understood rather than
+unfinished.** In Marten and Polecat a batch collapses several network round trips; SQLite is
+embedded, so there are none to collapse. It is carried so DCB code ports between Critter Stack stores
+unchanged, and so Fisher can enroll in the shared batched-query tests with a real implementation
+rather than a test-only shim.
+
+The alternative was considered and rejected: `DcbTagQueryAndConsistencyCompliance` is a single class
+with no supported-flag opt-out, so declining batching would have cost all 26 of its tests, not the 4
+that touch a batch.
+
+Implemented without statement coalescing on purpose. The one property that does hold is that the
+reads run back to back on one connection with nothing interleaved, so a set of boundaries is
+established against a coherent view.
 
 ### Conversions that fail silently
 
