@@ -21,7 +21,7 @@ namespace Fisher.Storage;
 ///         the last connection closes.
 ///     </para>
 /// </remarks>
-public class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDatabase, IAsyncDisposable
+public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDatabase, IAsyncDisposable
 {
     private readonly SqliteDataSource _dataSource;
     private readonly EventGraph _events;
