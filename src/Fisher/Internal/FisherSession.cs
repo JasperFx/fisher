@@ -428,9 +428,13 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
         return new Projections.FisherProjectionStorage<TDoc, TId>(this, storage, tenantId);
     }
 
+    /// <summary>
+    ///     fisher#4 — there is no message sink, so a projection's side effects cannot be published.
+    /// </summary>
     public ValueTask<IMessageSink> GetOrStartMessageSink()
         => throw new NotImplementedException(
-            "Fisher has no message outbox yet, so projection side effects cannot be published.");
+            "Fisher has no message outbox yet, so projection side effects cannot be published — see "
+            + "https://github.com/JasperFx/fisher/issues/4.");
 
     public virtual void MarkAsAddedForStorage(object id, object document)
     {

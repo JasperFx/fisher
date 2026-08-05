@@ -48,6 +48,12 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 |---|---|
 | [fisher#1](https://github.com/JasperFx/fisher/issues/1) | LINQ: ordering and range comparison on date document members. Correctness only — `strftime` normalises inline, no duplicated column needed. |
 | [fisher#2](https://github.com/JasperFx/fisher/issues/2) | Duplicated fields, so a query can use an index. The performance follow-on to #1, independent of it. |
+| [fisher#3](https://github.com/JasperFx/fisher/issues/3) | An async projection cannot append events of its own — needs version assignment and sequence read-back inside the batch's transaction. |
+| [fisher#4](https://github.com/JasperFx/fisher/issues/4) | Projection side effects cannot be published; `GetOrStartMessageSink` throws. |
+| [fisher#5](https://github.com/JasperFx/fisher/issues/5) | No dead letter queue, so a failing event stops its shard rather than being quarantined. |
+
+Every deliberate gap gets an issue. A note in this file or in CLAUDE.md is context, not tracking —
+if something is deferred, it is in the list above.
 
 ## Done
 
@@ -111,12 +117,9 @@ first rather than by test count.
 The daemon runs, but three things inside it throw by name rather than working. Each is a real
 capability a Marten user would expect:
 
-- **Event-emitting async projections.** `FisherProjectionBatch.QuickAppendEvents` and friends throw.
-  They need the append planner's version assignment and sequence read-back to run inside the batch's
-  own transaction.
-- **Projection side effects.** `PublishMessageAsync` throws because `GetOrStartMessageSink` does.
-- **Dead letters.** `StoreDeadLetterEventAsync` throws, so a failing event stops its shard instead of
-  being quarantined. Needs a `fi_dead_letters` table and the read side to go with it.
+- **[fisher#3](https://github.com/JasperFx/fisher/issues/3)** — event-emitting async projections.
+- **[fisher#4](https://github.com/JasperFx/fisher/issues/4)** — projection side effects.
+- **[fisher#5](https://github.com/JasperFx/fisher/issues/5)** — dead letters.
 
 ### 2. Finish document storage
 

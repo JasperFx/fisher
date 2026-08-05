@@ -316,12 +316,11 @@ arbitrary:
 "this document table already exists" cache would still claim tables that were just dropped, and the
 next `Store` would skip its migration and write to nothing.
 
+- **An async projection that appends events of its own** — fisher#3.
 - **Projection side effects.** `GetOrStartMessageSink` throws, so `PublishMessageAsync` on the
-  projection batch does too.
-- **An async projection that appends events of its own.** `FisherProjectionBatch.QuickAppendEvents`
-  and friends throw — they need the append planner's version assignment and sequence read-back inside
-  the batch's transaction.
-- **Dead letters.** `StoreDeadLetterEventAsync` throws, so a failing event stops its shard.
+  projection batch does too — fisher#4.
+- **Dead letters.** `StoreDeadLetterEventAsync` throws, so a failing event stops its shard —
+  fisher#5.
 - Multi-tenancy beyond a tenant id column, subscriptions, DI registration.
 - The two event-rewrite members in `EventOperations.Unsupported.cs`.
 

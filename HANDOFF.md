@@ -209,14 +209,18 @@ why the contiguity argument above holds.
 
 ### Known gaps in what is built
 
-Deliberate, and each throws by name rather than failing quietly:
+Deliberate, and each throws by name rather than failing quietly. Each is tracked as an issue rather
+than only as a note here:
 
-- **Event-emitting async projections.** `QuickAppendEvents` and friends on the batch throw; they need
-  the append planner's version assignment and sequence read-back inside the batch's transaction.
-- **Projection side effects.** `PublishMessageAsync` throws — there is no message sink.
-- **Dead letters.** `StoreDeadLetterEventAsync` throws, so a failing event stops its shard rather
-  than being quarantined. The interface's other dead-letter members take their empty defaults, which
-  is honest for a store that genuinely has none to report.
+- **Event-emitting async projections** — [fisher#3](https://github.com/JasperFx/fisher/issues/3).
+  `QuickAppendEvents` and friends on the batch throw; they need the append planner's version
+  assignment and sequence read-back inside the batch's transaction.
+- **Projection side effects** — [fisher#4](https://github.com/JasperFx/fisher/issues/4).
+  `PublishMessageAsync` throws; there is no message sink.
+- **Dead letters** — [fisher#5](https://github.com/JasperFx/fisher/issues/5).
+  `StoreDeadLetterEventAsync` throws, so a failing event stops its shard rather than being
+  quarantined. The interface's other dead-letter members take their empty defaults, which reads as
+  "none to report" rather than "cannot report".
 
 ## The LINQ layer
 
@@ -419,11 +423,12 @@ Each of these is a decision with a reason, not an oversight:
 - **No ordering or range comparison on a date member.** See the LINQ section — the stored text does
   not sort by instant.
 - **`GetOrStartMessageSink` throws** — projection side effects cannot be published, which is why the
-  projection batch's `PublishMessageAsync` throws too.
-- **An async projection cannot append events of its own.** The batch's `QuickAppendEvents` and
-  friends throw; they need the append planner's version assignment and sequence read-back inside the
-  batch's transaction.
-- **No dead letters.** A failing event stops its shard rather than being quarantined.
+  projection batch's `PublishMessageAsync` throws too
+  ([fisher#4](https://github.com/JasperFx/fisher/issues/4)).
+- **An async projection cannot append events of its own**
+  ([fisher#3](https://github.com/JasperFx/fisher/issues/3)).
+- **No dead letters.** A failing event stops its shard rather than being quarantined
+  ([fisher#5](https://github.com/JasperFx/fisher/issues/5)).
 - **No soft delete, hierarchies, numeric revisions, sub-classing.** All additive against the current
   column shape.
 - **No duplicated fields**, so no query can use an index —

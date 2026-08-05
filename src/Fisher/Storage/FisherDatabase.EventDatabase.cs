@@ -207,8 +207,8 @@ public partial class FisherDatabase : IEventDatabase
             : Task.CompletedTask;
 
     /// <summary>
-    ///     Dead-letter storage is not implemented, so a failing event stops its shard rather than being
-    ///     quarantined.
+    ///     fisher#5 — dead-letter storage is not implemented, so a failing event stops its shard rather
+    ///     than being quarantined.
     /// </summary>
     /// <remarks>
     ///     The interface's other dead-letter members default to empty rather than throwing, which is
@@ -217,6 +217,7 @@ public partial class FisherDatabase : IEventDatabase
     /// </remarks>
     public Task StoreDeadLetterEventAsync(object storage, DeadLetterEvent deadLetterEvent, CancellationToken token)
         => throw new NotSupportedException(
-            "Fisher has no dead letter queue yet, so a projection error cannot be quarantined. Configure the "
-            + "projection to stop on error instead of skipping.");
+            "Fisher has no dead letter queue yet, so a projection error cannot be quarantined — see "
+            + "https://github.com/JasperFx/fisher/issues/5. Configure the projection to stop on error "
+            + "instead of skipping.");
 }

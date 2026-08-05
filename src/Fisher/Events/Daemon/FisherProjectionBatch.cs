@@ -146,9 +146,9 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
 
     // ---- event-emitting projections ----
     //
-    // A projection that appends events of its own needs the append planner's version assignment and
-    // sequence read-back inside this batch's transaction, which is a milestone in itself. Throwing
-    // names it rather than dropping the events.
+    // fisher#3. A projection that appends events of its own needs the append planner's version
+    // assignment and sequence read-back inside this batch's transaction. Throwing names the gap
+    // rather than dropping the events.
 
     public void QuickAppendEventWithVersion(StreamAction action, IEvent @event) => throw EventEmission();
 
@@ -157,13 +157,17 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
     public void QuickAppendEvents(StreamAction action) => throw EventEmission();
 
     private static NotSupportedException EventEmission()
-        => new("Fisher does not support an async projection that appends events yet. The projection's own "
-               + "document writes are supported; emitting new events from one is not.");
+        => new("Fisher does not support an async projection that appends events yet — see "
+               + "https://github.com/JasperFx/fisher/issues/3. The projection's own document writes are "
+               + "supported; emitting new events from one is not.");
 
+    /// <summary>
+    ///     fisher#4 — there is no message sink, so a projection's side effects cannot be published.
+    /// </summary>
     public Task PublishMessageAsync(object message, string tenantId)
         => throw new NotSupportedException(
             "Fisher cannot publish projection side effects — there is no message sink. See "
-            + "EventGraph.GetOrStartMessageSink.");
+            + "https://github.com/JasperFx/fisher/issues/4 and EventGraph.GetOrStartMessageSink.");
 
     public async ValueTask DisposeAsync()
     {
