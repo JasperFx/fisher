@@ -4,6 +4,7 @@ using System.Reflection;
 using Fisher.Linq.Members;
 using Fisher.Linq.Parsing.Methods;
 using Fisher.Linq.SqlGeneration;
+using Weasel.Core.SqlGeneration;
 
 namespace Fisher.Linq.Parsing;
 

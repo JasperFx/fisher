@@ -1,4 +1,5 @@
 using Fisher.Linq.SqlGeneration;
+using Weasel.Core.SqlGeneration;
 
 namespace Fisher.Tests.Linq;
 

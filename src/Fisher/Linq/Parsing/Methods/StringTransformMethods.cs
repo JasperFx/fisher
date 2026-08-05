@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using Fisher.Linq.Members;
 using Fisher.Linq.SqlGeneration;
+using Weasel.Core.SqlGeneration;
 
 namespace Fisher.Linq.Parsing.Methods;
 
