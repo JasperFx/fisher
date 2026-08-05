@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of DCB tags — 16 of 17 compliance suites green. 350 tests green on net9.0
+Status as of the async daemon, three of five increments in. 16 of 17 compliance suites green. 378 tests green on net9.0
 and net10.0, **122 of them shared cross-store compliance tests across 16 suites**.
 
 ## The destination
@@ -31,8 +31,13 @@ real Critter Stack event store rather than a lookalike. Sixteen of seventeen sui
 | `EventProjectionEnrichmentCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-**One suite remains**: `AsyncDaemonCompliance`, 2 tests, needing the async daemon. Nothing else in
-the catalogue is blocked on anything.
+**One suite remains**: `AsyncDaemonCompliance`, 2 tests. That work is **in progress** — three of five
+increments are committed (`IEventDatabase`, the high-water detector, the event loader and projection
+batch); what is left is the generic `IEventStore` half plus `BuildProjectionDaemonAsync`, then
+accepting `SnapshotLifecycle.Async` and enrolling. See HANDOFF.md, "The async daemon, mid-flight".
+
+The two-test count badly understates it: those tests demand the whole daemon. JasperFx supplies the
+machinery (~10,500 lines); a store supplies the storage seam, which is ~1,300 lines in Polecat.
 
 ## Filed follow-ups
 
@@ -64,6 +69,7 @@ the catalogue is blocked on anything.
 | Rebuild concurrency cap | `StoreOptions.MaxPoolSize`; `RebuildConcurrencyCapCompliance` green |
 | LINQ | `session.Query<T>()` — where, ordering, paging, async terminals |
 | DCB tags | tag tables, tagged appends, queries, `AssignTagWhere`, boundaries + consistency, batched queries |
+| Async daemon (in progress) | `IEventDatabase`, high-water detector, event loader, projection batch |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through

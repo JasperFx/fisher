@@ -1,13 +1,18 @@
 # Handoff
 
 State of Fisher after the JasperFx 2.39.4 upgrade, `DocumentStore : IEventStore`, the rebuild
-concurrency cap, the LINQ layer and DCB tags. Written for whoever picks this up next.
+concurrency cap, the LINQ layer, DCB tags, and **the async daemon in progress**. Written for whoever
+picks this up next.
+
+**Start at "The async daemon, mid-flight" below if you are continuing that work** — it is the only
+milestone currently half-built, and the section says exactly which increments are done.
 
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps; [ROADMAP.md](ROADMAP.md) has the
 ordered plan. This document is the compliance scoreboard and the things that are true right now but
 not obvious from either.
 
-**350 tests green on net9.0 and net10.0.** 90 of them are shared cross-store compliance tests.
+**378 tests green on net9.0 and net10.0**, three consecutive full runs. 122 of them are shared
+cross-store compliance tests.
 
 ## Where we are against the compliance suites
 
@@ -95,29 +100,109 @@ Two SQLite-specific things the shared suite does **not** cover, pinned by
 - **Recent-stream ordering is a string sort** over ISO-8601 TEXT, correct only while
   `SqliteTimestamp.Format` stays fixed-width, UTC and millisecond-precision.
 
-## Recommended next move
+## The async daemon, mid-flight
 
-**The async daemon** — the last suite, and the last thing gating `SnapshotLifecycle.Async`, which
-`Projections.Snapshot<T>` rejects outright. Two compliance tests, but an entire configured lifecycle
-is unreachable without it.
+**Three of five increments are committed, all green. Nothing is half-written on disk** — each
+increment builds, is tested, and was committed before the next began. The two that remain are
+additive.
 
-After that the compliance catalogue is exhausted, and the roadmap is Fisher's own: `Select`
-projections and `GroupBy` for LINQ, [fisher#1](https://github.com/JasperFx/fisher/issues/1) (date
-ordering) and [fisher#2](https://github.com/JasperFx/fisher/issues/2) (duplicated fields), soft
-delete, hierarchies, and the two event-rewrite members still in
-`EventOperations.Unsupported.cs`.
+`AsyncDaemonCompliance` is still unenrolled and `SupportsAsyncDaemon` is still false, so the suite
+count above has not moved. It will move by 2 when increment 5 lands.
 
-### Daemon-specific things to know before starting
+### Done
 
-Both are in CLAUDE.md, repeated because they will bite during this milestone specifically:
+| Increment | What | Commit |
+|---|---|---|
+| 1 | `IEventDatabase` on `FisherDatabase` — progress reads/writes, highest sequence, timestamp floor, non-stale wait | `1a0e15e` |
+| 2 | `FisherHighWaterDetector` | `f5d5cb8` |
+| 3 | `FisherEventLoader` + `FisherProjectionBatch` | `dc42709` |
 
-- **`AUTOINCREMENT` on `fi_events.seq_id` is load-bearing.** The high-water mark assumes sequence
-  numbers only move forward. A bare `INTEGER PRIMARY KEY` aliases the rowid, which SQLite reuses
-  after a delete — a reused `seq_id` would silently hide events from every async projection.
+### Left
+
+4. **The generic half of `IEventStore<IDocumentSession, IQuerySession>`** on `DocumentStore` —
+   `AllShards`, `StartProjectionBatchAsync`, `BuildEventLoader`, `OpenSession(IEventDatabase)`,
+   `ErrorHandlingOptions(ShardExecutionMode)`, and the Rewind / Teardown / DeleteProgress members.
+   Then `BuildProjectionDaemonAsync`, which currently throws in `DocumentStore.EventStore.cs`.
+5. **`Projections.Snapshot<T>` accepting `SnapshotLifecycle.Async`** — it rejects it outright today,
+   and that rejection is the user-visible half of this milestone. Then the fixture's
+   `StartDaemonAsync` / `WaitForNonStaleProjectionDataAsync`, flip `SupportsAsyncDaemon`, enroll, and
+   update the three docs.
+
+### The scale is not what the test count suggests
+
+Two compliance tests, but they demand the whole daemon: start it, catch up, persist a snapshot, and
+rebuild. The machinery is JasperFx's — coordinator, subscription agents, shard tracker, throttled and
+resilient loaders, roughly 10,500 lines. **What a store supplies is the storage seam**, which is the
+four types above. Polecat's equivalent is about 1,300 lines, so that is the shape of the whole.
+
+### The finding that shaped increment 2
+
+**Committed `seq_id`s are contiguous on SQLite, so there is no high-water gap problem at all.** Both
+halves verified against 3.51 rather than assumed:
+
+- **Writers are serialized.** One writer per file plus `BEGIN IMMEDIATE` means a transaction's
+  sequences fully commit before the next writer allocates any — no interleaving, so no hole.
+- **A rollback does not consume the sequence.** SQLite keeps the `AUTOINCREMENT` counter in
+  `sqlite_sequence`, an ordinary table that rolls back with the transaction. After a rolled-back
+  two-row insert, the next insert reuses the number the failed one had.
+
+Marten and Polecat must distinguish the highest sequence *issued* from the highest safe to *read*,
+because a PostgreSQL sequence or SQL Server IDENTITY hands out numbers outside the transaction — a
+writer can hold 7 uncommitted while 8 commits ahead of it, so reading to 8 would skip 7 forever.
+Their safe-zone polling, stale-gap skipping and `SafeStartMark` machinery exists for that.
+
+So the mark simply **is** `max(seq_id)`, and `DetectInSafeZone` has no separate answer to give.
+**Do not reintroduce gap-skipping on the assumption Fisher must need it too** — it would guard a
+state that cannot occur. The class comment says so as well.
+
+`a_rolled_back_append_leaves_no_gap_in_the_sequence` is written at raw SQL deliberately: failing a
+Fisher append instead proves nothing, because if the failure came before any row was inserted no
+sequence was consumed and the assertion holds either way. It inserts a row, **asserts that row took
+sequence 4**, rolls back, then requires the next real append to reuse 4.
+
+### The batch must stay atomic
+
+`FisherProjectionBatch` commits the projection's document writes **and** the progression row in one
+transaction. Splitting them lets a crash between them either replay events already applied or skip
+events never applied — the projection ends up permanently wrong in one direction or the other, with
+nothing to signal it.
+
+Sessions are collected rather than merged, and each flushes its *own* operations into the shared
+transaction (`FisherSession.FlushOperationsAsync`), because an operation is configured against a
+session as its storage context and that is what carries tenancy. Running one session's operations
+through another would quietly mis-scope them.
+
+### The loader diverges from the stream reads on purpose
+
+Fisher's stream reads skip an unresolvable `dotnet_type` unconditionally, so a deployment can still
+read events it does not know about. **The daemon must not** — silently skipping would leave the
+projection permanently wrong with no signal. It honours `SkipUnknownEvents`, and otherwise throws
+Fisher's own `UnknownEventTypeException`, which implements JasperFx's `IEventFailureContext` so the
+daemon can classify the shard failure and name the offending sequence without knowing Fisher's
+exception types. JasperFx owns only `ApplyEventException`; read-side failures belong to the store, as
+in both siblings.
+
+### Two hazards that will bite during increments 4 and 5
+
+- **`AUTOINCREMENT` on `fi_events.seq_id` is load-bearing, not decorative.** A bare
+  `INTEGER PRIMARY KEY` aliases the rowid, which SQLite **reuses** after a delete. A reused sequence
+  would sit below the high-water mark and be invisible to every async projection. It is also half of
+  why the contiguity argument above holds.
 - **WAL is what lets the daemon read while a session writes.** On by default via
   `SqlitePragmaSettings.Default`, but a consumer overriding `StoreOptions.PragmaSettings` can turn it
-  off and quietly serialize the daemon behind every write. Worth a guard or at least a documented
-  warning when the daemon starts.
+  off and quietly serialize the daemon behind every write. Worth a guard, or at minimum a warning
+  when the daemon starts — neither exists yet.
+
+### Known gaps in what is built
+
+Deliberate, and each throws by name rather than failing quietly:
+
+- **Event-emitting async projections.** `QuickAppendEvents` and friends on the batch throw; they need
+  the append planner's version assignment and sequence read-back inside the batch's transaction.
+- **Projection side effects.** `PublishMessageAsync` throws — there is no message sink.
+- **Dead letters.** `StoreDeadLetterEventAsync` throws, so a failing event stops its shard rather
+  than being quarantined. The interface's other dead-letter members take their empty defaults, which
+  is honest for a store that genuinely has none to report.
 
 ## The LINQ layer
 
@@ -319,10 +404,14 @@ Each of these is a decision with a reason, not an oversight:
   client-side evaluation.
 - **No ordering or range comparison on a date member.** See the LINQ section — the stored text does
   not sort by instant.
-- **`Projections.Snapshot<T>` rejects `Async`.** See above.
-- **`GetOrStartMessageSink` throws** — projection side effects cannot be published.
-- **No soft delete, hierarchies, duplicated fields, numeric revisions, sub-classing.** All additive
-  against the current column shape.
+- **`Projections.Snapshot<T>` still rejects `Async`** — increment 5 of the daemon milestone lifts
+  it. See "The async daemon, mid-flight".
+- **`GetOrStartMessageSink` throws** — projection side effects cannot be published, which is why the
+  projection batch's `PublishMessageAsync` throws too.
+- **No soft delete, hierarchies, numeric revisions, sub-classing.** All additive against the current
+  column shape.
+- **No duplicated fields**, so no query can use an index —
+  [fisher#2](https://github.com/JasperFx/fisher/issues/2).
 
 ## Traps that have already cost real time
 
