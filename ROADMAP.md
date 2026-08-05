@@ -34,6 +34,13 @@ real Critter Stack event store rather than a lookalike. Fourteen suites are gree
 `DcbTagQueryAndConsistencyCompliance` — 32 tests). Nothing else in the suite catalogue is blocked on
 document work, projection work or `IEventStore` any more.
 
+## Filed follow-ups
+
+| Issue | What |
+|---|---|
+| [fisher#1](https://github.com/JasperFx/fisher/issues/1) | LINQ: ordering and range comparison on date document members. Correctness only — `strftime` normalises inline, no duplicated column needed. |
+| [fisher#2](https://github.com/JasperFx/fisher/issues/2) | Duplicated fields, so a query can use an index. The performance follow-on to #1, independent of it. |
+
 ## Done
 
 | Milestone | Notes |

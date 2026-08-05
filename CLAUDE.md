@@ -381,8 +381,10 @@ Four SQLite decisions that are easy to get wrong and fail silently:
   the where parser and `OrderBy` refuse. System.Text.Json trims trailing fractional zeros and keeps
   the original offset, so `12:34:56-05:00` sorts before `12:34:56.789+00:00` while being five hours
   later. The literal for an equality comparison is rendered *through the store's own serializer*,
-  because no format string reproduces STJ's trimming. Lifting this needs a normalised sortable
-  duplicate — the same machinery duplicated fields will need. This is documents only: the
+  because no format string reproduces STJ's trimming. **Lifting this does not need a duplicated
+  column** — `strftime('%Y-%m-%dT%H:%M:%f', json_extract(...))` normalises the offset inline and
+  keeps milliseconds, verified against 3.51; see fisher#1. A duplicated column is what would make
+  the result *indexable* (fisher#2), which is a separate concern. This is documents only: the
   `fi_events`/`fi_streams` timestamp columns use `SqliteTimestamp`'s fixed-width UTC format precisely
   so they *do* sort as text.
 - **`array.Contains(x)` binds to `MemoryExtensions.Contains(ReadOnlySpan<T>, T)`**, not

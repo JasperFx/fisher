@@ -200,9 +200,16 @@ order-preserving**: STJ trims trailing fractional zeros and preserves the origin
 
 Equality works — the literal is rendered through the very serializer that wrote the document, because
 no format string reproduces STJ's trimming. Ordering and range comparison set
-`AllowsRangeComparison` false so the parser refuses rather than returning plausible-but-wrong rows.
-**Lifting this needs a normalised sortable duplicate — the same machinery duplicated fields will
-need**, so the two are worth planning together.
+`AllowsRangeComparison` false so the parser refuses rather than returning plausible-but-wrong rows,
+in both `Where` and `OrderBy`.
+
+**Correction, and it matters for planning.** Earlier notes here said lifting this requires a
+normalised sortable duplicated column. That is overstated: SQLite's
+`strftime('%Y-%m-%dT%H:%M:%f', json_extract(...))` normalises the offset *and* keeps milliseconds
+inline, verified against 3.51 — `order by datetime(...)` puts `12:34:56-05:00` last where raw text
+order puts it in the middle. So **fisher#1 (correctness) can ship without duplicated fields**;
+**fisher#2 (duplicated fields) is the performance follow-on**, since a function-wrapped locator
+cannot be served by an index.
 
 This concerns documents only. The `fi_events` / `fi_streams` timestamp columns are
 `SqliteTimestamp`'s fixed-width UTC format precisely so they *do* sort as text.
