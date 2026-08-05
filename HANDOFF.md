@@ -8,7 +8,7 @@ next.
 ordered plan. This document is the compliance scoreboard and the things that are true right now but
 not obvious from either.
 
-**248 tests green on net9.0 and net10.0.** 90 of them are shared cross-store compliance tests.
+**272 tests green on net9.0 and net10.0.** 90 of them are shared cross-store compliance tests.
 
 ## Where we are against the compliance suites
 
@@ -142,9 +142,10 @@ Committed:
 1. **`Fisher.Linq.SqlGeneration`** — the where-fragment set. `Statement` is the one genuinely
    dialect-specific file; see below.
 2. **`Fisher.Linq.Members`** — member locators over `json_extract`.
+3. **`Fisher.Linq.Parsing`** — `WhereClauseParser` and the method-call parsers.
 
-Left: the `WhereClauseParser` / query-parser core, then the queryable, provider, selectors and query
-handlers. `Joins`, `CursorPaging`, `SoftDeletes`, `GroupBySelectBuilder` and
+Left: the queryable, provider, selectors and query handlers — the part that turns a parsed predicate
+into `session.Query<T>()`. `Joins`, `CursorPaging`, `SoftDeletes`, `GroupBySelectBuilder` and
 `SelectProjectionAnalyzer` are deliberately out of scope — they serve features Fisher does not have.
 
 ### Why the port is smaller than its source
@@ -178,6 +179,36 @@ need**, so the two are worth planning together.
 
 This concerns documents only. The `fi_events` / `fi_streams` timestamp columns are
 `SqliteTimestamp`'s fixed-width UTC format precisely so they *do* sort as text.
+
+### String predicates use `instr`, not `LIKE`
+
+The central decision in `Parsing/Methods`. Polecat translates `Contains`/`StartsWith`/`EndsWith` to
+`LIKE` patterns; on SQLite that would be wrong twice, both verified against 3.51:
+
+- **`LIKE` is case-insensitive for ASCII by default, while `=` is case-sensitive.** A LIKE-based
+  `Contains("frodo")` matches `"Frodo"` on the very same data where `== "frodo"` does not — a query
+  surface that contradicts itself, and not what .NET's ordinal `string.Contains` means.
+- **`_` and `%` are `LIKE` wildcards**, so a literal needle containing either needs escaping.
+  Polecat's `[_]` bracket escaping is T-SQL-only; SQLite needs an `ESCAPE` clause. This is the same
+  trap CLAUDE.md records for the document cleaner. `instr` takes its needle literally.
+
+So `Contains` is `instr(loc, ?) > 0`, `StartsWith` is `instr(loc, ?) = 1`, and `EndsWith` is
+`substr(loc, -n) = ?` where `n` is the needle's length computed at translation time — the needle is a
+constant, so this binds one parameter rather than two. An explicit `StringComparison` of
+`OrdinalIgnoreCase` folds both sides with `lower()`. Empty-needle behaviour matches .NET: `instr`
+returns 1 for an empty needle so `StartsWith("")` is true, and `EndsWith("")` is special-cased to
+`1=1` because `substr(x, 0)` returns the whole string.
+
+`x.Name.Length` uses SQLite's `length`, not SQL Server's `LEN` — `LEN` ignores trailing spaces and
+`length` does not, which is what `string.Length` means.
+
+### `Contains` over a collection has two bindings
+
+`array.Contains(x)` binds to `MemoryExtensions.Contains(ReadOnlySpan<T>, T)` on modern .NET, not
+`Enumerable.Contains` — so `EnumerableContains` matches on the *shape* of the call (a source plus a
+document member) rather than on the declaring type. The span operand also cannot be evaluated by
+compiling a lambda, because `ReadOnlySpan<T>` is a ref struct and cannot be returned as `object`;
+`StripSpanConversion` unwraps back to the underlying array first. Three tests caught this.
 
 ### Conversions that fail silently
 
