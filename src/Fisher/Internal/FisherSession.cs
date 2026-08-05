@@ -186,10 +186,26 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
                     .WriteAsync(streams, connection, transaction, ct).ConfigureAwait(false);
             }
 
+            // Last thing inside the transaction: an outbox that wants its messages to be atomic with
+            // the write persists them here. Null unless something actually published.
+            if (_messageBatch is not null)
+            {
+                await _messageBatch.BeforeCommitAsync(ct).ConfigureAwait(false);
+            }
+
             await transaction.CommitAsync(ct).ConfigureAwait(false);
+
+            if (_messageBatch is not null)
+            {
+                await _messageBatch.AfterCommitAsync(ct).ConfigureAwait(false);
+            }
 
             NotifyAppendObserver(streams);
         }, token).ConfigureAwait(false);
+
+        // Not reused across units of work: a batch's hooks have fired, and a second SaveChangesAsync
+        // publishing through it would flush the same messages again.
+        _messageBatch = null;
     }
 
     /// <summary>
@@ -428,13 +444,20 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
         return new Projections.FisherProjectionStorage<TDoc, TId>(this, storage, tenantId);
     }
 
+    private Events.Messaging.IMessageBatch? _messageBatch;
+
     /// <summary>
-    ///     fisher#4 — there is no message sink, so a projection's side effects cannot be published.
+    ///     The message batch this unit of work publishes side effects through, created on first use.
     /// </summary>
-    public ValueTask<IMessageSink> GetOrStartMessageSink()
-        => throw new NotImplementedException(
-            "Fisher has no message outbox yet, so projection side effects cannot be published — see "
-            + "https://github.com/JasperFx/fisher/issues/4.");
+    /// <remarks>
+    ///     Lazy on purpose: a session that never publishes never asks the outbox for a batch, so the
+    ///     commit-time hooks stay no-ops for the overwhelmingly common case of an application with no
+    ///     bus integration.
+    /// </remarks>
+    public async ValueTask<IMessageSink> GetOrStartMessageSink()
+    {
+        return _messageBatch ??= await Options.Events.MessageOutbox.CreateBatch(this).ConfigureAwait(false);
+    }
 
     public virtual void MarkAsAddedForStorage(object id, object document)
     {

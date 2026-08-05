@@ -306,6 +306,20 @@ public class EventStoreOptions : IEventStoreInstrumentation
     public Action<IReadOnlyList<IEvent>>? AppendObserver { get; set; }
 
     /// <summary>
+    ///     Where a projection's side-effect messages go. Defaults to a no-op that drops them.
+    /// </summary>
+    /// <remarks>
+    ///     Fisher itself has no message bus and no outbox table, so the default
+    ///     <c>NulloMessageOutbox</c> discards every published message rather than throwing. Replace this
+    ///     with a bus integration's implementation to give <c>PublishMessage</c> somewhere to go — the
+    ///     batch it vends chooses its own delivery guarantee through
+    ///     <see cref="Events.Messaging.IMessageBatch.BeforeCommitAsync" /> (transactional) or
+    ///     <see cref="Events.Messaging.IMessageBatch.AfterCommitAsync" /> (post-commit).
+    /// </remarks>
+    public Events.Messaging.IMessageOutbox MessageOutbox { get; set; }
+        = Events.Messaging.NulloMessageOutbox.Instance;
+
+    /// <summary>
     ///     Pre-register an event type. Not strictly necessary — event types are registered on the fly as
     ///     they are appended — but pre-registration lets the async daemon resolve an event type name
     ///     before that process has ever appended one.

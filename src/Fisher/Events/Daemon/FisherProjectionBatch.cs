@@ -37,6 +37,11 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
     private readonly ConcurrentBag<IDocumentSession> _sessions = [];
     private readonly ConcurrentQueue<Weasel.Storage.IStorageOperation> _progress = new();
 
+    // Null until a projection in this batch actually publishes, which keeps both commit hooks
+    // no-ops for the common case of no bus integration.
+    private Messaging.IMessageBatch? _messageBatch;
+    private readonly SemaphoreSlim _messageBatchGate = new(1, 1);
+
     internal FisherProjectionBatch(DocumentStore store, EventGraph events)
     {
         _store = store;
@@ -110,8 +115,23 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
                     .ConfigureAwait(false);
             }
 
+            // Last thing inside the transaction, so an outbox wanting its messages atomic with the
+            // projection write and the progression row gets exactly that.
+            if (_messageBatch is not null)
+            {
+                await _messageBatch.BeforeCommitAsync(ct).ConfigureAwait(false);
+            }
+
             await transaction.CommitAsync(ct).ConfigureAwait(false);
         }, token).ConfigureAwait(false);
+
+        // Outside the resilience pipeline: a retried SQLITE_BUSY re-runs the whole delegate, and a
+        // post-commit publish that ran inside it would fire again for a transaction that already
+        // committed. There is nothing to retry here anyway — the write is durable.
+        if (_messageBatch is not null)
+        {
+            await _messageBatch.AfterCommitAsync(token).ConfigureAwait(false);
+        }
     }
 
     private async Task ExecuteProgressAsync(Weasel.Storage.IStorageOperation operation,
@@ -161,16 +181,70 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
                + "https://github.com/JasperFx/fisher/issues/3. The projection's own document writes are "
                + "supported; emitting new events from one is not.");
 
+    // ---- projection side effects ----
+
     /// <summary>
-    ///     fisher#4 — there is no message sink, so a projection's side effects cannot be published.
+    ///     Publish a message a projection emitted while processing this batch.
     /// </summary>
-    public Task PublishMessageAsync(object message, string tenantId)
-        => throw new NotSupportedException(
-            "Fisher cannot publish projection side effects — there is no message sink. See "
-            + "https://github.com/JasperFx/fisher/issues/4 and EventGraph.GetOrStartMessageSink.");
+    /// <remarks>
+    ///     Buffered into the batch's <see cref="Messaging.IMessageBatch" /> rather than sent here.
+    ///     <see cref="ExecuteAsync" /> fires its hooks around the commit, so a transaction that rolls
+    ///     back publishes nothing. The default outbox drops the message; see
+    ///     <see cref="StoreOptions.MessageOutbox" />.
+    /// </remarks>
+    public async Task PublishMessageAsync(object message, string tenantId)
+    {
+        var batch = await CurrentMessageBatchAsync().ConfigureAwait(false);
+        await Messaging.MessagePublishing.PublishAsync(batch, message, tenantId).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc cref="PublishMessageAsync(object, string)" />
+    public async Task PublishMessageAsync(object message, MessageMetadata metadata)
+    {
+        var batch = await CurrentMessageBatchAsync().ConfigureAwait(false);
+        await Messaging.MessagePublishing.PublishAsync(batch, message, metadata).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     The batch's message buffer, created on first publish.
+    /// </summary>
+    /// <remarks>
+    ///     Guarded, because a composite projection can publish from several tenants' work concurrently
+    ///     — the same reason <see cref="SessionForTenant" /> writes into a concurrent collection. The
+    ///     outbox is handed a session so it can enlist in this batch's transaction if it wants the
+    ///     before-commit guarantee; one is opened if the batch has produced none of its own, which
+    ///     happens when a projection publishes without writing a document.
+    /// </remarks>
+    private async ValueTask<Messaging.IMessageBatch> CurrentMessageBatchAsync()
+    {
+        if (_messageBatch is not null)
+        {
+            return _messageBatch;
+        }
+
+        await _messageBatchGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_messageBatch is not null)
+            {
+                return _messageBatch;
+            }
+
+            var session = _sessions.FirstOrDefault() ?? SessionForTenant(JasperFx.StorageConstants.DefaultTenantId);
+
+            return _messageBatch = await _store.Options.Events.MessageOutbox.CreateBatch(session)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _messageBatchGate.Release();
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {
+        _messageBatchGate.Dispose();
+
         foreach (var session in _sessions)
         {
             await session.DisposeAsync().ConfigureAwait(false);

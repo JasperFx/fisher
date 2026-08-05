@@ -10,7 +10,7 @@ picks this up next.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**396 tests green on net9.0 and net10.0**, four consecutive full runs. 124 of them are shared
+**403 tests green on net9.0 and net10.0**, three consecutive full runs. 124 of them are shared
 cross-store compliance tests.
 
 ## Where we are against the compliance suites
@@ -214,11 +214,30 @@ than only as a note here:
 
 - **Event-emitting async projections** — [fisher#3](https://github.com/JasperFx/fisher/issues/3).
   `QuickAppendEvents` and friends on the batch throw; they need the append planner's version
-  assignment and sequence read-back inside the batch's transaction.
-- **Projection side effects** — [fisher#4](https://github.com/JasperFx/fisher/issues/4).
-  `PublishMessageAsync` throws; there is no message sink.
+  assignment and sequence read-back inside the batch's transaction. The last one still throwing.
+- **A message bus** — [fisher#8](https://github.com/JasperFx/fisher/issues/8). The side-effect seam
+  is built, but the default outbox drops every message and nothing in the box delivers one. Whether
+  that stays Fisher's answer (as it is Marten's and Polecat's) is the open question on the issue.
 
-[fisher#5](https://github.com/JasperFx/fisher/issues/5) (dead letters) is **closed** — see below.
+[fisher#4](https://github.com/JasperFx/fisher/issues/4) (side effects) and
+[fisher#5](https://github.com/JasperFx/fisher/issues/5) (dead letters) are **closed** — see below.
+
+### Projection side effects
+
+`IMessageOutbox` vends an `IMessageBatch` per unit of work, and both commit paths bracket their
+transaction with its two hooks. Type names match Polecat's exactly — messaging is not dialect-specific,
+so projection code ports between the stores unchanged.
+
+**The thing worth knowing is what the tests pin, because the obvious test does not.** Recording the
+hook order proves nothing: `before` then `after` is the order even if both run before the commit. The
+invariant is what the rest of the database can see when each fires, so each hook probes the committed
+state over a *separate* connection — invisible at `BeforeCommit`, visible at `AfterCommit`. The
+hook-order test passed with `AfterCommitAsync` deliberately moved to before the commit; the probe
+does not. Both commit paths have their own.
+
+A related trap already avoided: `AfterCommitAsync` runs *outside* the resilience pipeline in the
+projection batch. A retried `SQLITE_BUSY` re-executes the whole delegate, so a post-commit publish
+inside it would fire twice for a transaction that had already committed.
 
 ### Dead letters
 

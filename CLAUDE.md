@@ -152,6 +152,8 @@ Working, with tests:
   `DocumentStore`, `FisherProjectionDaemon`, and `Snapshot<T>(SnapshotLifecycle.Async)`
 - **Dead letters** — `fi_dead_letters`, so `SkipApplyErrors` quarantines a poison event instead of
   stopping its shard
+- **Projection side effects** — `IMessageOutbox` / `IMessageBatch`, with both commit paths bracketing
+  their transaction; the default outbox drops every message
 
 Not implemented yet — do not assume these work:
 
@@ -233,6 +235,35 @@ WAL is what lets the daemon read while a session writes. It is on by default via
 `SqlitePragmaSettings.Default`; `BuildProjectionDaemonAsync` warns when it is not, because without it
 the daemon and every writer serialize against each other and that presents as a slow projection
 rather than as a misconfiguration.
+
+### Projection side effects
+
+`IMessageOutbox` vends an `IMessageBatch` per unit of work; a projection's `PublishMessage` buffers
+into it, and the batch flushes in whichever hook its delivery guarantee needs. Both of Fisher's commit
+paths bracket their transaction the same way — `FisherSession.SaveChangesAsync` and
+`FisherProjectionBatch.ExecuteAsync` each call `BeforeCommitAsync` as the last thing inside the
+transaction and `AfterCommitAsync` after it commits. Type names match Polecat's exactly, because
+messaging is not dialect-specific and projection code should port between the stores unchanged.
+
+- **The default `NulloMessageOutbox` drops messages rather than throwing.** That is the sibling
+  behaviour: publishing means something only once a bus is wired in, and a store that threw would make
+  every projection that *might* publish untestable without one. fisher#8 tracks whether Fisher should
+  ship a real outbox rather than waiting on a bus integration.
+- **The batch is created lazily and never reused across units of work.** A session that publishes
+  nothing never asks the outbox for one, so both hooks stay no-ops for the common case; and clearing
+  it after commit is what stops a second `SaveChangesAsync` re-flushing the first one's messages.
+- **`AfterCommitAsync` runs outside the resilience pipeline** in the projection batch. A retried
+  `SQLITE_BUSY` re-executes the whole delegate, so a post-commit publish inside it would fire twice
+  for a transaction that had already committed.
+- Hook *order* is not the invariant — both hooks would fire in order even if both ran before the
+  commit. What is pinned is what the rest of the database can see when each runs, probed over a
+  separate connection: invisible at `BeforeCommit`, visible at `AfterCommit`. Verified by moving the
+  call, in both paths.
+
+`IProjectionBatch.PublishMessageAsync` hands over an `object`, but `IMessageSink.PublishAsync<T>` is
+generic, so `MessagePublishing` closes it over the runtime message type and caches the compiled
+delegate per type. Polecat does the same via polecat#46, with `FastExpressionCompiler` where Fisher
+uses the BCL's `Expression.Compile` — not worth a dependency for one call site.
 
 ### Dead letters
 
@@ -346,8 +377,8 @@ arbitrary:
 next `Store` would skip its migration and write to nothing.
 
 - **An async projection that appends events of its own** — fisher#3.
-- **Projection side effects.** `GetOrStartMessageSink` throws, so `PublishMessageAsync` on the
-  projection batch does too — fisher#4.
+- **A message bus.** The side-effect seam exists and the default outbox drops every message; nothing
+  in the box delivers one — fisher#8.
 - Multi-tenancy beyond a tenant id column, subscriptions, DI registration.
 - The two event-rewrite members in `EventOperations.Unsupported.cs`.
 
