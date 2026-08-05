@@ -27,10 +27,6 @@ public partial class EventOperations
         "by tag does not.";
 
     /// <inheritdoc />
-    public void AssignTagWhere(Expression<Func<IEvent, bool>> expression, object tag)
-        => throw new NotImplementedException(TagsMessage);
-
-    /// <inheritdoc />
     public Task<T?> AggregateByTagsAsync<T>(EventTagQuery query, CancellationToken cancellation = default)
         where T : class
         => throw new NotImplementedException(TagsMessage);

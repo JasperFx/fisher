@@ -1,6 +1,9 @@
+using System.Linq.Expressions;
 using System.Text;
 using Fisher.Events.Internal;
 using Fisher.Events.Storage;
+using Fisher.Linq.Members;
+using Fisher.Linq.Parsing;
 using JasperFx.Events;
 using JasperFx.Events.Tags;
 using Microsoft.Data.Sqlite;
@@ -12,6 +15,39 @@ namespace Fisher.Events;
 /// </summary>
 public partial class EventOperations
 {
+    /// <summary>
+    ///     Retroactively apply a tag to every already-persisted event matching a predicate.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The predicate is translated by the same <c>WhereClauseParser</c> the document LINQ layer
+    ///         uses, over an <see cref="EventMemberFactory" /> that resolves <see cref="IEvent" />
+    ///         members to <c>fi_events</c> columns instead of <c>json_extract</c> paths. That is how
+    ///         Marten builds this feature too, and it is why the LINQ layer came first: a bespoke
+    ///         translator here would have been thrown away.
+    ///     </para>
+    ///     <para>
+    ///         Queued rather than executed, so the tagging commits in the same transaction as whatever
+    ///         else the session is doing.
+    ///     </para>
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The tag's type is not registered on this store.</exception>
+    public void AssignTagWhere(Expression<Func<IEvent, bool>> expression, object tag)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        ArgumentNullException.ThrowIfNull(tag);
+
+        var registration = Graph.FindTagType(tag.GetType())
+                           ?? throw new InvalidOperationException(
+                               $"Tag type '{tag.GetType().Name}' is not registered on this event store. Call "
+                               + $"RegisterTagType<{tag.GetType().Name}>() first.");
+
+        var predicate = new WhereClauseParser(new EventMemberFactory(Graph)).Parse(expression.Body);
+
+        _session.QueueOperation(new AssignTagWhereOperation(Graph, registration,
+            EventTagWriter.ToDatabaseValue(registration.ExtractValue(tag)), predicate));
+    }
+
     /// <summary>
     ///     Every event matching any of the query's conditions, in global sequence order.
     /// </summary>

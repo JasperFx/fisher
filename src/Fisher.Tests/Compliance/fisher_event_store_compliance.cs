@@ -61,3 +61,6 @@ public class event_store_explorer_compliance
 public class rebuild_concurrency_cap_compliance
     : RebuildConcurrencyCapCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
+public class assign_tag_where_compliance
+    : AssignTagWhereCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
