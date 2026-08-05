@@ -286,6 +286,28 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     ///     with NextResult in lockstep. Sharing the transaction preserves the atomicity that matters
     ///     without that fragility.
     /// </remarks>
+    /// <summary>
+    ///     Run this session's queued operations on someone else's connection and transaction, and clear
+    ///     the queue.
+    /// </summary>
+    /// <remarks>
+    ///     For the async daemon's projection batch, which spans several tenant sessions but must commit
+    ///     them — and the progression write — in one transaction, so a crash cannot leave a projection
+    ///     ahead of or behind its recorded progress. Each session flushes its own operations because
+    ///     <c>ConfigureCommand</c> takes the session as its storage context, and that is what carries
+    ///     tenancy; executing one session's operations against another's would quietly mis-scope them.
+    /// </remarks>
+    internal Task FlushOperationsAsync(SqliteConnection connection, SqliteTransaction transaction,
+        CancellationToken token)
+    {
+        var queued = _operations.ToArray();
+        _operations.Clear();
+
+        return queued.Length == 0
+            ? Task.CompletedTask
+            : ExecuteBatchAsync(connection, transaction, queued, token);
+    }
+
     private async Task ExecuteBatchAsync(SqliteConnection connection, SqliteTransaction transaction,
         IReadOnlyList<Weasel.Storage.IStorageOperation> operations, CancellationToken token)
     {

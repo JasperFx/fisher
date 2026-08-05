@@ -148,6 +148,18 @@ internal static class FisherEventsRowReader
     }
 
     /// <summary>
+    ///     The identity of a row whose <c>dotnet_type</c> did not resolve, for an error message.
+    /// </summary>
+    /// <remarks>
+    ///     Exists so the async daemon can raise <c>UnknownEventTypeException</c> naming the offending
+    ///     sequence and type when it is configured <em>not</em> to skip unknown events. Reading those
+    ///     two columns at the call site instead would put ordinal knowledge outside this file, which is
+    ///     the one thing the column order contract forbids.
+    /// </remarks>
+    internal static (long Sequence, string? DotNetTypeName) ReadUnresolvedIdentity(DbDataReader reader)
+        => (reader.GetInt64(0), reader.IsDBNull(8) ? null : reader.GetString(8));
+
+    /// <summary>
     ///     Everything except the stream identity, which the specialized wrappers assign.
     /// </summary>
     private static IEvent? ReadEventCore(DbDataReader reader, in EventHydrationContext ctx,
