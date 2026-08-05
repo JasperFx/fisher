@@ -118,6 +118,29 @@ public class StoreOptions
     public DaemonSettings DaemonSettings { get; } = new();
 
     /// <summary>
+    ///     The concurrent-connection ceiling this store assumes, used to derive
+    ///     <see cref="JasperFx.Events.IEventStore.MaxConcurrentRebuildsPerDatabase" /> when that is not
+    ///     configured explicitly.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <strong>This is not a connection-string setting, and that is the divergence.</strong>
+    ///         Marten and Polecat derive the rebuild cap from a real pool ceiling — Npgsql's and
+    ///         SqlClient's <c>Max Pool Size</c> keyword. <c>Microsoft.Data.Sqlite</c> has no such
+    ///         keyword; its <c>SqliteConnectionStringBuilder</c> exposes only a boolean
+    ///         <c>Pooling</c>. So Fisher carries the ceiling as a store option instead, and nothing
+    ///         folds it into the connection string.
+    ///     </para>
+    ///     <para>
+    ///         The default of 8 is chosen for the cap it produces, not as a pooling recommendation:
+    ///         <c>max(1, 8 / 8)</c> is 1, and one is the honest answer for SQLite. Writers serialize at
+    ///         the file level, so concurrent rebuild cells contend for the same write lock rather than
+    ///         running in parallel. Raise it only against a measurement.
+    ///     </para>
+    /// </remarks>
+    public int MaxPoolSize { get; set; } = 8;
+
+    /// <summary>
     ///     Get or set the serializer. Defaults to Fisher's System.Text.Json <see cref="Serializer" />.
     /// </summary>
     public Serialization.ISerializer Serializer

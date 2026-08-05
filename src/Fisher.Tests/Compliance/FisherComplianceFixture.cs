@@ -61,6 +61,21 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
                 options.Events.EnableHeaders = true;
             }
 
+            if (config.MaxConcurrentRebuildsPerDatabase.HasValue)
+            {
+                options.DaemonSettings.MaxConcurrentRebuildsPerDatabase =
+                    config.MaxConcurrentRebuildsPerDatabase.Value;
+            }
+
+            // The suite describes this as "folded into the connection string by the fixture", which is
+            // what Marten and Polecat do with Npgsql's / SqlClient's Max Pool Size keyword.
+            // Microsoft.Data.Sqlite has no such keyword, so Fisher carries the ceiling as a store
+            // option — see StoreOptions.MaxPoolSize.
+            if (config.MaxPoolSize.HasValue)
+            {
+                options.MaxPoolSize = config.MaxPoolSize.Value;
+            }
+
             config.ApplyTo(new FisherComplianceRegistrar(options));
         });
 

@@ -351,8 +351,8 @@ non-nullable, and returning null there is what polecat#412 was.
 ### Compliance suites
 
 **Fisher is enrolled.** `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old
-`$(EnableComplianceTests)` gate is gone. **Thirteen suites are live, 85 shared tests.** The four
-still unenrolled need the async daemon (`AsyncDaemon`, `RebuildConcurrencyCap`) or DCB tags
+`$(EnableComplianceTests)` gate is gone. **Fourteen suites are live, 90 shared tests.** The three
+still unenrolled need the async daemon (`AsyncDaemon`) or DCB tags
 (`AssignTagWhere`, `DcbTagQueryAndConsistency`).
 
 The mechanics, because they are not what the package's name suggests:

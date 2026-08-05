@@ -56,6 +56,30 @@ public partial class DocumentStore : IEventStore
 
     EventStoreIdentity IEventStore.Identity => new(Options.DatabaseSchemaName, "fisher");
 
+    /// <summary>
+    ///     jasperfx#420 — how many projection rebuild cells may run concurrently against this database.
+    /// </summary>
+    /// <remarks>
+    ///     An explicit <see cref="DaemonSettings.MaxConcurrentRebuildsPerDatabase" /> wins; a
+    ///     non-positive value disables the cap entirely (<see langword="null" /> means "unbounded" to
+    ///     JasperFx). Otherwise it derives from <see cref="StoreOptions.MaxPoolSize" /> as
+    ///     <c>max(1, poolSize / 8)</c>, the same formula Marten and Polecat use — see
+    ///     <see cref="StoreOptions.MaxPoolSize" /> for why Fisher's ceiling is a store option rather
+    ///     than a connection-string keyword.
+    /// </remarks>
+    int? IEventStore.MaxConcurrentRebuildsPerDatabase => ResolveMaxConcurrentRebuilds();
+
+    private int? ResolveMaxConcurrentRebuilds()
+    {
+        var configured = Options.DaemonSettings.MaxConcurrentRebuildsPerDatabase;
+        if (configured.HasValue)
+        {
+            return configured.Value > 0 ? configured.Value : null;
+        }
+
+        return Math.Max(1, Options.MaxPoolSize / 8);
+    }
+
     // ---- explorer reads ----
 
     Task<IReadOnlyList<StreamSummary>> IEventStore.GetRecentStreamsAsync(int count, CancellationToken ct)
@@ -174,6 +198,10 @@ public partial class DocumentStore : IEventStore
         usage.AddValue(nameof(EventGraph.AppendMode), EventGraph.AppendMode);
         usage.AddValue(nameof(Options.DatabaseSchemaName), Options.DatabaseSchemaName);
         usage.AddValue(nameof(Options.AutoCreateSchemaObjects), Options.AutoCreateSchemaObjects);
+
+        // jasperfx#434 — surface the effective cap so a rebuild orchestrator can size itself off the
+        // wire rather than guessing.
+        usage.MaxConcurrentRebuildsPerDatabase = ResolveMaxConcurrentRebuilds();
 
         foreach (var eventType in EventGraph.AllKnownEventTypes())
         {

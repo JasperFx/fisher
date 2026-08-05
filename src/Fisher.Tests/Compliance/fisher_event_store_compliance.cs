@@ -58,3 +58,6 @@ public class stream_archiving_compliance
 public class event_store_explorer_compliance
     : EventStoreExplorerCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
+public class rebuild_concurrency_cap_compliance
+    : RebuildConcurrencyCapCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+

@@ -3,14 +3,14 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of the JasperFx 2.39.4 upgrade + `DocumentStore : IEventStore`. 204 tests green on net9.0
-and net10.0, **85 of them shared cross-store compliance tests across 13 suites**.
+Status as of the rebuild concurrency cap + the first two LINQ increments. 248 tests green on net9.0
+and net10.0, **90 of them shared cross-store compliance tests across 14 suites**.
 
 ## The destination
 
 **First round of JasperFx compliance tests passing — reached.** `JasperFx.Events.ComplianceTests` is
 the shared cross-store suite Marten and Polecat both enroll in; passing it is what makes Fisher a
-real Critter Stack event store rather than a lookalike. Thirteen suites are green:
+real Critter Stack event store rather than a lookalike. Fourteen suites are green:
 
 | Suite | Tests |
 |---|---|
@@ -23,15 +23,16 @@ real Critter Stack event store rather than a lookalike. Thirteen suites are gree
 | `StringIdentitySingleStreamCompliance` | 6 |
 | `StreamArchivingCompliance` | 6 |
 | `EventStoreExplorerCompliance` | 6 |
+| `RebuildConcurrencyCapCompliance` | 5 |
 | `ActivityCorrelationCompliance` | 4 |
 | `EventProjectionRegistrationCompliance` | 3 |
 | `EventProjectionEnrichmentCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-**Only four suites remain**, and between them they need exactly two things: the async daemon
-(`AsyncDaemonCompliance`, `RebuildConcurrencyCapCompliance` — 7 tests) and DCB tags
-(`AssignTagWhereCompliance`, `DcbTagQueryAndConsistencyCompliance` — 32 tests). Nothing else in the
-suite catalogue is blocked on document work, projection work or `IEventStore` any more.
+**Only three suites remain**, and between them they need exactly two things: the async daemon
+(`AsyncDaemonCompliance` — 2 tests) and DCB tags (`AssignTagWhereCompliance`,
+`DcbTagQueryAndConsistencyCompliance` — 32 tests). Nothing else in the suite catalogue is blocked on
+document work, projection work or `IEventStore` any more.
 
 ## Done
 
@@ -53,6 +54,8 @@ suite catalogue is blocked on document work, projection work or `IEventStore` an
 | `EventProjection.storeEntity` | a `Create`/`Project` result is stored in the events' own transaction |
 | `Advanced` | `Clean` (`IDocumentCleaner`), `ResetAllDataAsync`, `ResetHiloSequenceFloorAsync<T>` |
 | `IEventStore` on `DocumentStore` | explorer reads + `TryCreateUsage`; `EventStoreExplorerCompliance` green |
+| Rebuild concurrency cap | `StoreOptions.MaxPoolSize`; `RebuildConcurrencyCapCompliance` green |
+| LINQ (in progress) | SQL fragment set + `json_extract` member locators |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -146,7 +149,7 @@ any more.
 | `StreamArchivingCompliance` | 6 | **green** |
 | `EventStoreExplorerCompliance` | 6 | **green** |
 | `AsyncDaemonCompliance` | 2 | daemon (3) |
-| `RebuildConcurrencyCapCompliance` | 5 | projection rebuilds (3) |
+| `RebuildConcurrencyCapCompliance` | 5 | **green** |
 | `AssignTagWhereCompliance` | 6 | DCB tags |
 | `DcbTagQueryAndConsistencyCompliance` | 26 | DCB tags — the last one, 727 lines |
 
