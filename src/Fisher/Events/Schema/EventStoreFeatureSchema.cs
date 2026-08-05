@@ -27,5 +27,12 @@ internal class EventStoreFeatureSchema : FeatureSchemaBase
         yield return _events.BuildStreamsTable();
         yield return _events.BuildEventsTable();
         yield return _events.BuildEventProgressionTable();
+
+        // Tag tables last: each carries a real foreign key to fi_events(seq_id), so the referenced
+        // table has to exist first.
+        foreach (var tagTable in _events.BuildTagTables())
+        {
+            yield return tagTable;
+        }
     }
 }

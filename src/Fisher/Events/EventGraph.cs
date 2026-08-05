@@ -98,6 +98,12 @@ public class EventGraph : EventRegistry, IAggregationSourceFactory<IQuerySession
         FisherTableNaming.QuotedTableName(DatabaseSchemaName, "event_progression");
 
     /// <summary>
+    ///     The quoted table name holding one DCB tag type's rows.
+    /// </summary>
+    internal string TagTableName(ITagTypeRegistration registration)
+        => FisherTableNaming.QuotedTableName(DatabaseSchemaName, EventTagTable.SuffixFor(registration));
+
+    /// <summary>
     ///     The shared closed-shape <c>Weasel.Storage.EventStorage&lt;TId&gt;</c> for this event graph,
     ///     built once from <see cref="Storage.SqliteEventStoreDialect" /> and cached. Boxed as
     ///     <see cref="object" /> because <c>TId</c> is fixed by <see cref="StreamIdentity" />; callers
@@ -269,6 +275,12 @@ public class EventGraph : EventRegistry, IAggregationSourceFactory<IQuerySession
     internal EventsTable BuildEventsTable() => new(this);
 
     internal EventProgressionTable BuildEventProgressionTable() => new(this);
+
+    /// <summary>
+    ///     One table per registered tag type.
+    /// </summary>
+    internal IEnumerable<EventTagTable> BuildTagTables()
+        => _tagTypes.Select(registration => new EventTagTable(this, registration));
 
     /// <summary>
     ///     Register a tag type for Dynamic Consistency Boundary support, deriving the table suffix from
