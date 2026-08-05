@@ -16,24 +16,18 @@ public partial class EventOperations
 {
     // ---- Dynamic Consistency Boundary tags ----
     //
-    // All of these need the fi_event_tag_* tables and the tag registration pipeline. EventGraph
-    // already accepts RegisterTagType<TTag>, but nothing reads or writes a tag table yet.
+    // The tag tables, the write path and the two read members are live — see
+    // EventOperations.Tags.cs and Events/Storage/EventTagWriter.cs. What remains here needs the
+    // aggregate-routing half: folding tag-matched events into an aggregate, and the boundary that
+    // appends back to a tag-derived stream under an optimistic consistency check.
 
     private const string TagsMessage =
-        "Dynamic Consistency Boundary tags are not implemented in Fisher yet — there are no tag tables " +
-        "to query. EventGraph.RegisterTagType exists, but nothing reads or writes them.";
+        "This part of the Dynamic Consistency Boundary surface is not implemented in Fisher yet. " +
+        "Tag tables, tagged appends, QueryByTagsAsync and EventsExistAsync work; aggregate routing " +
+        "by tag does not.";
 
     /// <inheritdoc />
     public void AssignTagWhere(Expression<Func<IEvent, bool>> expression, object tag)
-        => throw new NotImplementedException(TagsMessage);
-
-    /// <inheritdoc />
-    public Task<bool> EventsExistAsync(EventTagQuery query, CancellationToken cancellation = default)
-        => throw new NotImplementedException(TagsMessage);
-
-    /// <inheritdoc />
-    public Task<IReadOnlyList<IEvent>> QueryByTagsAsync(EventTagQuery query,
-        CancellationToken cancellation = default)
         => throw new NotImplementedException(TagsMessage);
 
     /// <inheritdoc />

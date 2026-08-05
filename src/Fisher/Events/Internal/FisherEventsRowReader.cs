@@ -114,6 +114,40 @@ internal static class FisherEventsRowReader
     }
 
     /// <summary>
+    ///     Read the current row for a query that spans streams, taking the stream identity from the row
+    ///     rather than from the context.
+    /// </summary>
+    /// <remarks>
+    ///     The single-stream reads above take the identity from
+    ///     <see cref="EventHydrationContext.StreamId" /> because the caller filtered on it and already
+    ///     knows the answer. A DCB tag query does not: matching events can come from any number of
+    ///     streams, and taking the identity from the context would stamp every result with the same
+    ///     wrong id. <c>stream_id</c> is at ordinal 2 of <see cref="CoreSelectColumns" />, which is why
+    ///     this belongs here rather than at the call site.
+    /// </remarks>
+    internal static IEvent? ReadEventAcrossStreams(DbDataReader reader, in EventHydrationContext ctx,
+        in MetadataSlots slots, bool isGuidIdentity)
+    {
+        var @event = ReadEventCore(reader, ctx, slots);
+
+        if (@event is null)
+        {
+            return null;
+        }
+
+        if (isGuidIdentity)
+        {
+            @event.StreamId = Guid.Parse(reader.GetString(2));
+        }
+        else
+        {
+            @event.StreamKey = reader.GetString(2);
+        }
+
+        return @event;
+    }
+
+    /// <summary>
     ///     Everything except the stream identity, which the specialized wrappers assign.
     /// </summary>
     private static IEvent? ReadEventCore(DbDataReader reader, in EventHydrationContext ctx,

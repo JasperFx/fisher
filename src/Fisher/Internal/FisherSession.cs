@@ -132,6 +132,16 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
 
             await ExecuteBatchAsync(connection, transaction, operations, ct).ConfigureAwait(false);
 
+            // After the batch, because a tag row is keyed by the seq_id the append's trailing
+            // read-back has only just supplied; inside the transaction, because an event that is
+            // visible but not yet tagged is indistinguishable to a tag query from one that was never
+            // tagged at all.
+            if (streams.Length > 0)
+            {
+                await new Events.Storage.EventTagWriter(EventGraph)
+                    .WriteAsync(streams, connection, transaction, ct).ConfigureAwait(false);
+            }
+
             await transaction.CommitAsync(ct).ConfigureAwait(false);
 
             NotifyAppendObserver(streams);
