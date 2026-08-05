@@ -163,18 +163,33 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     /// </summary>
     public override bool SupportsLiveAggregationRegistration => false;
 
-    public override bool SupportsAsyncDaemon => false;
+    public override bool SupportsAsyncDaemon => true;
 
-    // ---- not supported yet ----
-    //
-    // Each of these names the milestone it waits on. A suite that touches one is a suite Fisher is
-    // not ready to enroll; see Compliance/fisher_event_store_compliance.cs for what is enrolled.
+    private IProjectionDaemon? _daemon;
 
-    public override Task<IProjectionDaemon> StartDaemonAsync()
-        => throw new NotSupportedException("Fisher has no async projection daemon yet.");
+    /// <summary>
+    ///     Start the async projection daemon for the suite's store.
+    /// </summary>
+    /// <remarks>
+    ///     One daemon per fixture, kept so <see cref="DisposeAsync" /> can stop it — a suite that started
+    ///     a second one would leave the first still polling the same file, which on SQLite means two
+    ///     writers contending for one lock and a rebuild racing catch-up.
+    /// </remarks>
+    public override async Task<IProjectionDaemon> StartDaemonAsync()
+    {
+        if (_daemon is not null)
+        {
+            return _daemon;
+        }
+
+        _daemon = await Store.BuildProjectionDaemonAsync().ConfigureAwait(false);
+        await _daemon.StartAllAsync().ConfigureAwait(false);
+
+        return _daemon;
+    }
 
     public override Task WaitForNonStaleProjectionDataAsync(TimeSpan timeout)
-        => throw new NotSupportedException("Fisher has no async projection daemon yet.");
+        => Store.Database.WaitForNonStaleProjectionDataAsync(timeout);
 
     public override async ValueTask DisposeAsync()
     {
@@ -183,6 +198,15 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
 
     private async Task DisposeStoreAsync()
     {
+        if (_daemon is not null)
+        {
+            // Stopped before the store, because the daemon's shards hold sessions against the database
+            // the store is about to dispose.
+            await _daemon.StopAllAsync().ConfigureAwait(false);
+            _daemon.Dispose();
+            _daemon = null;
+        }
+
         if (_store is not null)
         {
             await _store.DisposeAsync().ConfigureAwait(false);

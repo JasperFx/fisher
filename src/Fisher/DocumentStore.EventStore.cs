@@ -217,13 +217,6 @@ public partial class DocumentStore : IEventStore
     // monitoring tool that reaches for one of these gets told Fisher cannot do it, rather than an
     // empty result it would render as "nothing here".
 
-    ValueTask<IProjectionDaemon> IEventStore.BuildProjectionDaemonAsync(
-        string? tenantIdOrDatabaseIdentifier, ILogger? logger)
-        => throw new NotSupportedException("Fisher has no async projection daemon yet.");
-
-    ValueTask<IProjectionDaemon> IEventStore.BuildProjectionDaemonAsync(DatabaseId id)
-        => throw new NotSupportedException("Fisher has no async projection daemon yet.");
-
     /// <summary>
     ///     Fisher answers four of <see cref="IReadOnlyEventStore" />'s five members through a session
     ///     already; the gap is <c>QueryEventsAsync</c>, which needs the paged event query Fisher has no

@@ -10,12 +10,12 @@ namespace Fisher.Projections;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         Deliberately thin. Fisher cannot persist a projection yet, so there is no <c>Snapshot&lt;T&gt;</c>
-///         and no inline application during <c>SaveChangesAsync</c>; what the graph is carrying its
-///         weight for today is the two things that need no storage at all — the live aggregator cache
-///         behind <see cref="ProjectionGraph{TProjection,TOperations,TQuerySession}.AggregatorFor{T}" />,
-///         and <c>DiscoverGeneratedEvolvers</c> / <c>AllAggregateTypes</c>, which report the
-///         self-aggregating types whose evolvers the source generator emitted.
+///         All three lifecycles work: Live goes through the aggregator cache behind
+///         <see cref="ProjectionGraph{TProjection,TOperations,TQuerySession}.AggregatorFor{T}" />, Inline
+///         is applied during <c>SaveChangesAsync</c> in the same transaction as the events, and Async is
+///         run by the projection daemon. The graph also carries <c>DiscoverGeneratedEvolvers</c> /
+///         <c>AllAggregateTypes</c>, which report the self-aggregating types whose evolvers the source
+///         generator emitted.
 ///     </para>
 ///     <para>
 ///         Standing this up was cheap only because the write surface work already paid its
@@ -53,10 +53,13 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     ///     <c>Projections.Snapshot&lt;T&gt;()</c>.
     /// </summary>
     /// <remarks>
-    ///     Only <see cref="SnapshotLifecycle.Inline" /> works today: an inline snapshot is written in
-    ///     the same transaction as the events that produced it, whereas an async one needs the daemon
-    ///     Fisher does not have. Registering the document mapping here is what gets the snapshot's
-    ///     table created with the rest of the schema.
+    ///     <para>
+    ///         <see cref="SnapshotLifecycle.Inline" /> writes the snapshot in the same transaction as the
+    ///         events that produced it; <see cref="SnapshotLifecycle.Async" /> hands it to the projection
+    ///         daemon, which writes it in its own transaction alongside the shard's progress. Registering
+    ///         the document mapping here is what gets the snapshot's table created with the rest of the
+    ///         schema either way.
+    ///     </para>
     /// </remarks>
     /// <typeparam name="T">
     ///     The aggregate type. It must be self-aggregating — carrying its own <c>Create</c> /
@@ -73,11 +76,9 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
                 $"Add() instead of {typeof(T).FullNameInCode()}.");
         }
 
-        if (lifecycle == SnapshotLifecycle.Async)
-        {
-            throw new NotSupportedException(
-                "Fisher has no async projection daemon, so a snapshot can only be maintained inline.");
-        }
+        var projectionLifecycle = lifecycle == SnapshotLifecycle.Async
+            ? ProjectionLifecycle.Async
+            : ProjectionLifecycle.Inline;
 
         // Closed over the aggregate's own identity type, not the stream identity primitive — the same
         // rule live aggregation follows, and for the same source-generator reason. See CLAUDE.md.
@@ -85,13 +86,13 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
         var source = typeof(SingleStreamProjection<,>)
             .CloseAndBuildAs<ProjectionBase>(typeof(T), idType);
 
-        source.Lifecycle = ProjectionLifecycle.Inline;
+        source.Lifecycle = projectionLifecycle;
         source.AssembleAndAssertValidity();
 
         // The snapshot needs somewhere to live; registering the mapping puts its table in the schema.
         _events.Options.Schema.MappingFor(typeof(T));
 
-        Add((IProjectionSource<IDocumentSession, IQuerySession>)source, ProjectionLifecycle.Inline);
+        Add((IProjectionSource<IDocumentSession, IQuerySession>)source, projectionLifecycle);
     }
 
     /// <summary>
@@ -99,12 +100,6 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     /// </summary>
     public void Add(ProjectionBase projection, ProjectionLifecycle lifecycle)
     {
-        if (lifecycle == ProjectionLifecycle.Async)
-        {
-            throw new NotSupportedException(
-                "Fisher has no async projection daemon; register the projection as Inline or Live.");
-        }
-
         projection.Lifecycle = lifecycle;
         projection.AssembleAndAssertValidity();
 

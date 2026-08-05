@@ -3,14 +3,15 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of the async daemon, three of five increments in. 16 of 17 compliance suites green. 378 tests green on net9.0
-and net10.0, **122 of them shared cross-store compliance tests across 16 suites**.
+Status as of the async daemon landing. **All 17 compliance suites green.** 385 tests green on net9.0
+and net10.0, **124 of them shared cross-store compliance tests across 17 suites**.
 
 ## The destination
 
-**First round of JasperFx compliance tests passing — reached.** `JasperFx.Events.ComplianceTests` is
-the shared cross-store suite Marten and Polecat both enroll in; passing it is what makes Fisher a
-real Critter Stack event store rather than a lookalike. Sixteen of seventeen suites are green:
+**First round of JasperFx compliance tests passing — reached, in full.**
+`JasperFx.Events.ComplianceTests` is the shared cross-store suite Marten and Polecat both enroll in;
+passing it is what makes Fisher a real Critter Stack event store rather than a lookalike. All
+seventeen suites are green:
 
 | Suite | Tests |
 |---|---|
@@ -29,15 +30,17 @@ real Critter Stack event store rather than a lookalike. Sixteen of seventeen sui
 | `ActivityCorrelationCompliance` | 4 |
 | `EventProjectionRegistrationCompliance` | 3 |
 | `EventProjectionEnrichmentCompliance` | 3 |
+| `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-**One suite remains**: `AsyncDaemonCompliance`, 2 tests. That work is **in progress** — three of five
-increments are committed (`IEventDatabase`, the high-water detector, the event loader and projection
-batch); what is left is the generic `IEventStore` half plus `BuildProjectionDaemonAsync`, then
-accepting `SnapshotLifecycle.Async` and enrolling. See HANDOFF.md, "The async daemon, mid-flight".
+`AsyncDaemonCompliance` was the last one in, and its two-test count badly understated it: those tests
+demand the whole daemon. JasperFx supplies the machinery (~10,500 lines); a store supplies the
+storage seam — for Fisher that is `IEventDatabase` on `FisherDatabase`, the high-water detector, the
+event loader, the projection batch, and the generic half of `IEventStore<IDocumentSession,
+IQuerySession>`.
 
-The two-test count badly understates it: those tests demand the whole daemon. JasperFx supplies the
-machinery (~10,500 lines); a store supplies the storage seam, which is ~1,300 lines in Polecat.
+Being green on all seventeen is not the same as being feature-complete against Marten. The suites
+cover what is portable across stores; the deliberate gaps listed in HANDOFF.md are still gaps.
 
 ## Filed follow-ups
 
@@ -69,7 +72,7 @@ machinery (~10,500 lines); a store supplies the storage seam, which is ~1,300 li
 | Rebuild concurrency cap | `StoreOptions.MaxPoolSize`; `RebuildConcurrencyCapCompliance` green |
 | LINQ | `session.Query<T>()` — where, ordering, paging, async terminals |
 | DCB tags | tag tables, tagged appends, queries, `AssignTagWhere`, boundaries + consistency, batched queries |
-| Async daemon (in progress) | `IEventDatabase`, high-water detector, event loader, projection batch |
+| Async daemon | `IEventDatabase`, high-water detector, event loader, projection batch, `IEventStore<,>`, `BuildProjectionDaemonAsync`, `SnapshotLifecycle.Async` |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -95,50 +98,45 @@ decisions came out of it:
   earlier deferral was waiting for.
 
 The `FisherCommandBuilder` shim is gone: weasel#424 shipped in Weasel.Sqlite 9.23.2. JasperFx is on
-2.39.3; 2.37.2 → 2.39.1 is where the six newer compliance suites came from, and 2.39.3 changes no
+2.39.4; 2.37.2 → 2.39.1 is where the six newer compliance suites came from, and 2.39.4 changes no
 suite source at all.
 
 ## Next, in order
 
-### 1. Finish document storage
+Nothing left is unblocking a compliance suite, so ordering is by what a real application would miss
+first rather than by test count.
 
-The write and load-by-id paths are done, for all four identity types — Hi-Lo sequences landed, so
-`fi_hilo` exists and int/long ids work. What is left, roughly in value order:
+### 1. Finish the daemon's edges
 
-- **Querying** — there is no LINQ and no way to fetch a document except by id. The
-  `ISelectClause` seam on `FisherDocumentStorage` is in place for it.
-- Soft delete, duplicated fields and user indexes, hierarchies, numeric revisions — each additive
-  against the existing column shape rather than a rewrite of it.
+The daemon runs, but three things inside it throw by name rather than working. Each is a real
+capability a Marten user would expect:
 
-### 2. Async daemon
+- **Event-emitting async projections.** `FisherProjectionBatch.QuickAppendEvents` and friends throw.
+  They need the append planner's version assignment and sequence read-back to run inside the batch's
+  own transaction.
+- **Projection side effects.** `PublishMessageAsync` throws because `GetOrStartMessageSink` does.
+- **Dead letters.** `StoreDeadLetterEventAsync` throws, so a failing event stops its shard instead of
+  being quarantined. Needs a `fi_dead_letters` table and the read side to go with it.
 
-**Now the highest-value milestone**: it is the only thing standing between Fisher and
-`AsyncDaemonCompliance` + `RebuildConcurrencyCapCompliance`, and it is what makes
-`SnapshotLifecycle.Async` — currently rejected outright — mean anything.
+### 2. Finish document storage
 
-`FisherDatabase` must implement `IEventDatabase`. Needs high-water detection over `fi_events`,
-event loading/paging, and `BuildProjectionDaemonAsync`. `DocumentStore` also needs to implement
-JasperFx's `IEventStore` for the rebuild suite.
+Write, load-by-id and LINQ are done for all four identity types. What is left, roughly in value
+order: soft delete, duplicated fields and user indexes ([fisher#2](https://github.com/JasperFx/fisher/issues/2)),
+hierarchies, numeric revisions — each additive against the existing column shape rather than a
+rewrite of it. Ordering and range comparison on a date member is
+[fisher#1](https://github.com/JasperFx/fisher/issues/1).
 
-Two SQLite-specific things to think about up front:
-- The high-water mark assumes `seq_id` only moves forward. `AUTOINCREMENT` is what guarantees that
-  (see CLAUDE.md) — do not weaken it.
-- WAL journaling is what lets the daemon read while a session writes. It is on by default via
-  `SqlitePragmaSettings.Default`, but a consumer overriding `StoreOptions.PragmaSettings` could turn
-  it off and quietly serialize the daemon behind every write.
+### 3. Projections, the rest
 
-### 3. DCB tags
+All three lifecycles work, including `EventProjection`s that store arbitrary documents. Still
+missing: composite projections, and the side-effect and event-emission paths above.
 
-The largest remaining block of compliance tests (32) and the only area Fisher has not started at
-all. Needs the `fi_event_tag_*` tables, the tag write path, and the batched-query seam
-(`IComplianceBatch`, `CreateBatch`). `EventGraph.RegisterTagType` already accepts registrations that
-nothing reads.
+### 4. DI registration and subscriptions
 
-### 4. Projections, the rest
-
-Inline works, including `EventProjection`s that store arbitrary documents. Still missing: the Async
-lifecycle (daemon), projection side effects (`GetOrStartMessageSink` throws), and composite
-projections.
+`AddFisher` has no equivalent yet, so every consumer builds a `DocumentStore` by hand and hosts the
+daemon itself. `ISubscriptionRunner` is the other half — Polecat implements it beside its
+`IEventStore<,>`, and Fisher's projection batch is already the piece a subscription would commit
+through.
 
 ## Enrollment status
 
@@ -149,29 +147,27 @@ any more.
 
 | Suite | Tests | Status |
 |---|---|---|
+| `DcbTagQueryAndConsistencyCompliance` | 26 | **green** |
+| `FetchForWritingCompliance` | 13 | **green** |
 | `StreamReadCompliance` | 11 | **green** |
 | `EventMetadataCompliance` | 9 | **green** |
-| `LiveAggregationCompliance` | 7 | **green** |
-| `ActivityCorrelationCompliance` | 4 | **green** |
-| `AutoDiscoveredAggregateCompliance` | 2 | **green** |
-| `DcbTagQueryAndConsistencyCompliance` | 26 |
-| `FetchForWritingCompliance` | 13 | **green** |
 | `SelfAggregatingEvolveCompliance` | 8 | **green** |
-| `StringIdentitySingleStreamCompliance` | 6 | **green** |
-| `EventProjectionRegistrationCompliance` | 3 | **green** |
-| `EventProjectionEnrichmentCompliance` | 3 | **green** |
 | `FetchLatestCompliance` | 7 | **green** |
+| `LiveAggregationCompliance` | 7 | **green** |
+| `StringIdentitySingleStreamCompliance` | 6 | **green** |
 | `StreamArchivingCompliance` | 6 | **green** |
 | `EventStoreExplorerCompliance` | 6 | **green** |
-| `AsyncDaemonCompliance` | 2 | daemon (3) |
-| `AssignTagWhereCompliance` | 6 |
-| `RebuildConcurrencyCapCompliance` | 5 | **green** |
 | `AssignTagWhereCompliance` | 6 | **green** |
-| `DcbTagQueryAndConsistencyCompliance` | 26 | **green** |
+| `RebuildConcurrencyCapCompliance` | 5 | **green** |
+| `ActivityCorrelationCompliance` | 4 | **green** |
+| `EventProjectionRegistrationCompliance` | 3 | **green** |
+| `EventProjectionEnrichmentCompliance` | 3 | **green** |
+| `AsyncDaemonCompliance` | 2 | **green** |
+| `AutoDiscoveredAggregateCompliance` | 2 | **green** |
 
-Every suite that document storage or projections could unblock is enrolled. The async daemon is the
-next unlock at 7 tests; DCB tags are the larger prize at 32, and the only remaining area Fisher has
-not started at all.
+Every suite the package ships is enrolled. New suites arriving in a JasperFx bump are the only way
+this table grows now — and each one compiles against Fisher whether or not it is enrolled, so a bump
+that adds a suite Fisher cannot pass still builds.
 
 ## Open items not on the critical path
 
@@ -183,8 +179,11 @@ not started at all.
   genuinely interleaved writers, not two sequential `SaveChangesAsync` calls.
 - **`Advanced` is a thin subset.** `Clean`, `ResetAllDataAsync` and `ResetHiloSequenceFloorAsync<T>`
   only. Marten and Polecat also carry bulk insert, `InitialData` and metadata helpers there.
-- **Not started at all:** DCB tags, multi-tenancy beyond a tenant id column, subscriptions, DI
-  registration (`AddFisher`), LINQ, bulk insert, natural keys, strongly typed ids.
+- **Not started at all:** multi-tenancy beyond a tenant id column, subscriptions, DI registration
+  (`AddFisher`), bulk insert, natural keys, strongly typed ids, dead letters.
+- **The daemon's WAL guard is a warning, not a refusal.** `BuildProjectionDaemonAsync` logs when
+  `PragmaSettings.JournalMode` is not WAL, because without it the daemon and every writer serialize
+  against each other. Refusing to start would be the stronger position; warning is what is there.
 
 ## Things not to rediscover the hard way
 

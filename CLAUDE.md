@@ -147,6 +147,9 @@ Working, with tests:
 - **DCB tags** — tag tables, tagged appends, `QueryByTagsAsync`, `EventsExistAsync`,
   `AssignTagWhere`, `AggregateByTagsAsync`, `FetchForWritingByTags` with its consistency guard, and
   batched queries
+- **Async daemon** — `IEventDatabase` on `FisherDatabase`, `FisherHighWaterDetector`,
+  `FisherEventLoader`, `FisherProjectionBatch`, `IEventStore<IDocumentSession, IQuerySession>` on
+  `DocumentStore`, `FisherProjectionDaemon`, and `Snapshot<T>(SnapshotLifecycle.Async)`
 
 Not implemented yet — do not assume these work:
 
@@ -177,6 +180,57 @@ type can be stored without ever being registered and a snapshot type is register
 configuration — either way the first write may be the first time the table is needed. Only types the
 schema has already mapped are considered, which is how a document operation is told apart from an
 event one.
+
+### The async daemon
+
+The daemon itself is JasperFx's — coordinator, subscription agents, shard tracker, throttled and
+resilient loaders, roughly 10,500 lines. **What Fisher supplies is the storage seam**, and that is
+all of it:
+
+| Piece | Where | What it does |
+|---|---|---|
+| `IEventDatabase` | `Storage/FisherDatabase.EventDatabase.cs` | progress reads/writes, highest sequence, timestamp floor, non-stale wait |
+| `FisherHighWaterDetector` | `Events/Daemon/` | how far it is safe to read |
+| `FisherEventLoader` | `Events/Daemon/` | pages `fi_events` by sequence |
+| `FisherProjectionBatch` | `Events/Daemon/` | one transaction of projection writes + the progression row |
+| `IEventStore<IDocumentSession, IQuerySession>` | `DocumentStore.Daemon.cs` | shards, sessions, loaders, batches, progression bookkeeping |
+| `FisherProjectionDaemon` | `Events/Daemon/` | a dozen lines closing `JasperFxAsyncDaemon<,,>` over Fisher's session pair |
+
+Five things that are decisions rather than mechanics:
+
+- **The high-water mark simply is `max(seq_id)`.** Marten and Polecat must distinguish the highest
+  sequence *issued* from the highest safe to *read*, because a PostgreSQL sequence or SQL Server
+  IDENTITY hands out numbers outside the transaction — a writer can hold 7 uncommitted while 8
+  commits ahead of it. On SQLite one writer per file plus `BEGIN IMMEDIATE` means a transaction's
+  sequences fully commit before the next writer allocates any, and a rollback returns the number
+  (`sqlite_sequence` is an ordinary table and rolls back with it). Committed sequences are contiguous,
+  so `DetectInSafeZone` has no separate answer to give. **Do not reintroduce gap-skipping** — it would
+  guard a state that cannot occur.
+- **The batch must stay atomic.** It commits the projection's document writes *and* the progression
+  row in one transaction. Splitting them lets a crash between them either replay events already
+  applied or skip events never applied, permanently and with nothing to signal it. Sessions are
+  collected rather than merged, and each flushes its own operations into the shared transaction,
+  because an operation is configured against a session as its storage context and that is what
+  carries tenancy.
+- **The loader diverges from the stream reads on purpose.** Fisher's stream reads skip an
+  unresolvable `dotnet_type` unconditionally so a deployment can still read events it does not know
+  about; the daemon must not, because silently skipping one leaves the projection permanently wrong.
+  It honours `SkipUnknownEvents` and otherwise throws `UnknownEventTypeException`, which implements
+  JasperFx's `IEventFailureContext` so the shard failure can be classified without knowing Fisher's
+  exception types.
+- **The generic interface's `IEventDatabase` parameter is ignored throughout.** Marten and Polecat
+  resolve a connection string off it because they can be database-per-tenant; a SQLite store is one
+  file. Separate-database tenancy is what would make those parameters start mattering.
+- **Rebuild teardown checks for the table in C#, not in SQL.** SQLite resolves a table name when it
+  *prepares* a statement, so a `where exists (select 1 from sqlite_master ...)` guard on the delete
+  fails before the guard runs. Names come back from `sqlite_master` first and missing tables are
+  skipped. Both halves of teardown — progression and documents — run in one transaction, because
+  clearing progress without clearing documents replays a projection on top of rows it already wrote.
+
+WAL is what lets the daemon read while a session writes. It is on by default via
+`SqlitePragmaSettings.Default`; `BuildProjectionDaemonAsync` warns when it is not, because without it
+the daemon and every writer serialize against each other and that presents as a slow projection
+rather than as a misconfiguration.
 
 ### Document storage layout
 
@@ -262,11 +316,12 @@ arbitrary:
 "this document table already exists" cache would still claim tables that were just dropped, and the
 next `Store` would skip its migration and write to nothing.
 
-- **Projections — inline only.** `Snapshot<T>` and `Add(projection, lifecycle)` work for the Inline
-  and Live lifecycles, and inline snapshots are written in the same transaction as the events that
-  produced them. **Async is rejected outright** — it needs the daemon. `GetOrStartMessageSink` still
-  throws, so projection side effects cannot be published.
-- **Async daemon.** `FisherDatabase` does not implement `IEventDatabase`.
+- **Projection side effects.** `GetOrStartMessageSink` throws, so `PublishMessageAsync` on the
+  projection batch does too.
+- **An async projection that appends events of its own.** `FisherProjectionBatch.QuickAppendEvents`
+  and friends throw — they need the append planner's version assignment and sequence read-back inside
+  the batch's transaction.
+- **Dead letters.** `StoreDeadLetterEventAsync` throws, so a failing event stops its shard.
 - Multi-tenancy beyond a tenant id column, subscriptions, DI registration.
 - The two event-rewrite members in `EventOperations.Unsupported.cs`.
 
@@ -328,9 +383,10 @@ Polecat does, so none of a tooling-only surface lands on the store's own public 
 Most of `IEventStore` is default-implemented by JasperFx and deliberately left alone. Fisher supplies
 the required members plus the three things `EventStoreExplorerCompliance` exercises:
 `GetRecentStreamsAsync`, `GetStreamMetadataAsync` and `TryCreateUsage`. The required members it
-cannot honour — `BuildProjectionDaemonAsync`, `OpenReadOnlyEventStore`, `CompactStreamAsync` — throw
-naming their milestone rather than returning an empty result a monitoring tool would render as
-"no data". Same discipline as `EventOperations.Unsupported.cs`.
+cannot honour — `OpenReadOnlyEventStore`, `CompactStreamAsync` — throw naming their milestone rather
+than returning an empty result a monitoring tool would render as "no data". Same discipline as
+`EventOperations.Unsupported.cs`. The generic half of the interface, and `BuildProjectionDaemonAsync`
+with it, lives in `DocumentStore.Daemon.cs` — see "The async daemon" below.
 
 Three SQLite-specific points:
 
@@ -443,9 +499,9 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher is enrolled.** `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old
-`$(EnableComplianceTests)` gate is gone. **Sixteen suites are live, 122 shared tests — 16 of 17.**
-The one still unenrolled, `AsyncDaemonCompliance`, needs the async daemon.
+**Fisher is enrolled, in full.** `JasperFx.Events.ComplianceTests` is referenced unconditionally —
+the old `$(EnableComplianceTests)` gate is gone. **All 17 suites are live, 124 shared tests.**
+`AsyncDaemonCompliance` was the last one in.
 
 The mechanics, because they are not what the package's name suggests:
 
@@ -457,9 +513,8 @@ The mechanics, because they are not what the package's name suggests:
   they call `IDocumentSession.Store` and `IQuerySession.LoadAsync`; document storage made them
   compile and they are enrolled.
 - **`FisherComplianceFixture` throws `NotSupportedException` naming the milestone** for each member
-  Fisher cannot honour (`CreateBatch` and the daemon pair; `LoadDocumentAsync` still throws for a
-  strongly typed id). Enrolling a suite prematurely therefore fails loudly rather than passing on a
-  stub.
+  Fisher cannot honour. Only `LoadDocumentAsync` for a strongly typed id still does. Enrolling a
+  suite prematurely therefore fails loudly rather than passing on a stub.
 - `CleanEventDataAsync` now delegates to `Advanced.Clean.DeleteAllEventDataAsync`. It is called
   before every test, so it cannot throw the way the unsupported members do — hence the null guard
   rather than the `Store` accessor.

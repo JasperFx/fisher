@@ -8,15 +8,11 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites are added one at a time as Fisher grows into them. What is NOT enrolled yet, and why:
+ * Suites were added one at a time as Fisher grew into them. All seventeen are now enrolled — the
+ * async daemon was the last one, and AsyncDaemonCompliance closed it out.
  *
- *   AsyncDaemonCompliance              the async daemon
- *   RebuildConcurrencyCapCompliance    IEventStore on DocumentStore + rebuilds
- *   DcbTagQueryAndConsistencyCompliance, AssignTagWhereCompliance   DCB tag tables
- *
- * Every one of those is now blocked on a numbered roadmap milestone rather than on a loose end.
- * The fixture throws a NotSupportedException naming the milestone for each, so enrolling a suite
- * prematurely fails loudly rather than silently passing on a stub.
+ * The fixture still throws a NotSupportedException naming the milestone for each member Fisher
+ * cannot honour, so a future suite reaching for one fails loudly rather than passing on a stub.
  */
 
 public class stream_read_compliance
@@ -66,3 +62,6 @@ public class assign_tag_where_compliance
 
 public class dcb_tag_query_and_consistency_compliance
     : DcbTagQueryAndConsistencyCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class async_daemon_compliance
+    : AsyncDaemonCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
