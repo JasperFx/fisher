@@ -154,6 +154,8 @@ Working, with tests:
   stopping its shard
 - **Projection side effects** — `IMessageOutbox` / `IMessageBatch`, with both commit paths bracketing
   their transaction; the default outbox drops every message
+- **Event-emitting async projections** — a projection's raised events are planned and appended inside
+  the batch's own transaction
 
 Not implemented yet — do not assume these work:
 
@@ -235,6 +237,31 @@ WAL is what lets the daemon read while a session writes. It is on by default via
 `SqlitePragmaSettings.Default`; `BuildProjectionDaemonAsync` warns when it is not, because without it
 the daemon and every writer serialize against each other and that presents as a slow projection
 rather than as a misconfiguration.
+
+### Event-emitting async projections
+
+JasperFx's `EventSlice.BuildOperations` drives three synchronous members on the projection batch —
+`QuickAppendEventWithVersion`, `UpdateStreamVersion`, `QuickAppendEvents`. **All three do the same
+thing in Fisher: record the `StreamAction` and let `ExecuteAsync` plan it inside the transaction.**
+
+That is a deliberate divergence from Marten, which queues three different storage operations. Two
+reasons, both SQLite-shaped:
+
+- **The version has to come from a read under the write lock.** The slice pre-assigns versions
+  client-side from its own event count, which is only the stream's version when the projection has
+  seen every event on it. Fisher's `AppendPlanner` re-reads inside the batch's `BEGIN IMMEDIATE` and
+  the optimistic guard runs there, so a projection raising events onto a stream another writer has
+  moved on fails the batch instead of writing a wrong version.
+- **Tags need the trailing sequence read-back.** Routing raised events through
+  `FisherQuickAppendEventsOperation` is the only thing that supplies the `seq_id` a tag row is keyed
+  by. Queuing Weasel's bare per-event operations would silently make raised events untaggable.
+
+Funnelling all three members into one list works because the `StreamAction` JasperFx hands over
+already carries every raised event, and the single-stream-start path passes the *same* action
+instance to each call — reference identity is what dedupes them.
+
+**Polecat no-ops these three rather than throwing**, so an event-raising projection there drops its
+events with no signal. Do not copy that.
 
 ### Projection side effects
 
@@ -376,7 +403,6 @@ arbitrary:
 "this document table already exists" cache would still claim tables that were just dropped, and the
 next `Store` would skip its migration and write to nothing.
 
-- **An async projection that appends events of its own** — fisher#3.
 - **A message bus.** The side-effect seam exists and the default outbox drops every message; nothing
   in the box delivers one — fisher#8.
 - Multi-tenancy beyond a tenant id column, subscriptions, DI registration.

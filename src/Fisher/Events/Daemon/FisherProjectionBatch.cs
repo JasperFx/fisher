@@ -42,6 +42,9 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
     private Messaging.IMessageBatch? _messageBatch;
     private readonly SemaphoreSlim _messageBatchGate = new(1, 1);
 
+    // Streams a projection raised events onto, planned at commit rather than when recorded.
+    private readonly List<StreamAction> _raisedStreams = [];
+
     internal FisherProjectionBatch(DocumentStore store, EventGraph events)
     {
         _store = store;
@@ -109,6 +112,8 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
                 await session.FlushOperationsAsync(connection, transaction, ct).ConfigureAwait(false);
             }
 
+            await AppendRaisedEventsAsync(connection, transaction, sessions, ct).ConfigureAwait(false);
+
             foreach (var operation in _progress)
             {
                 await ExecuteProgressAsync(operation, connection, transaction, sessions.FirstOrDefault(), ct)
@@ -131,6 +136,64 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
         if (_messageBatch is not null)
         {
             await _messageBatch.AfterCommitAsync(token).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    ///     Plan and write the events this batch's projections raised, inside the batch's transaction.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The same <see cref="AppendPlanner" /> a session's <c>SaveChangesAsync</c> uses, on the
+    ///         batch's own connection and transaction — so a raised event is numbered from the stream's
+    ///         version as read under the write lock, and the optimistic concurrency check runs there
+    ///         too. A projection raising events onto a stream another writer has moved on fails the
+    ///         batch, which is what stops the shard rather than writing a wrong version.
+    ///     </para>
+    ///     <para>
+    ///         Tag rows come last and inside the same transaction, for the reason the session path has:
+    ///         a tag is keyed by the <c>seq_id</c> only the append's trailing read-back supplies, and an
+    ///         event that is visible but untagged is indistinguishable to a tag query from one that was
+    ///         never tagged.
+    ///     </para>
+    /// </remarks>
+    private async Task AppendRaisedEventsAsync(SqliteConnection connection, SqliteTransaction transaction,
+        IReadOnlyList<FisherSession> sessions, CancellationToken token)
+    {
+        StreamAction[] raised;
+
+        lock (_raisedStreams)
+        {
+            raised = _raisedStreams.ToArray();
+        }
+
+        if (raised.Length == 0)
+        {
+            return;
+        }
+
+        // The planner and the batch executor both need a session as their storage context. Any of this
+        // batch's will do — the append is scoped by each StreamAction's own tenant id, not by the
+        // session's — and one is opened only when no projection wrote a document.
+        var owned = sessions.Count == 0;
+        var context = owned ? (FisherSession)_store.LightweightSession() : sessions[0];
+
+        try
+        {
+            var operations = await new AppendPlanner(context)
+                .PlanAsync(raised, connection, transaction, token).ConfigureAwait(false);
+
+            await context.ExecuteOperationsAsync(connection, transaction, operations, token).ConfigureAwait(false);
+
+            await new Storage.EventTagWriter(_events)
+                .WriteAsync(raised, connection, transaction, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (owned)
+            {
+                await context.DisposeAsync().ConfigureAwait(false);
+            }
         }
     }
 
@@ -166,20 +229,53 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
 
     // ---- event-emitting projections ----
     //
-    // fisher#3. A projection that appends events of its own needs the append planner's version
-    // assignment and sequence read-back inside this batch's transaction. Throwing names the gap
-    // rather than dropping the events.
+    // JasperFx's EventSlice.BuildOperations drives these three. They are synchronous, but Fisher
+    // cannot build an append operation without reading the stream's current version, and that read has
+    // to happen under the write lock this batch's transaction has not yet taken. So all three do the
+    // same thing: record the StreamAction, and let ExecuteAsync plan it inside the transaction.
+    //
+    // All three funnel into one list because the StreamAction JasperFx hands over already carries every
+    // raised event. The single-stream-start path calls QuickAppendEventWithVersion once per event and
+    // then UpdateStreamVersion, all with the SAME action instance — so recording it once and planning
+    // it whole covers that path too. Reference identity is what dedupes them.
+    //
+    // Marten queues three different storage operations here instead, which is right for Postgres. It
+    // is not right for Fisher: the versions the slice pre-assigns are computed client-side from the
+    // slice's own event count, whereas the planner re-reads the stream under the write lock and keeps
+    // the optimistic guard real. Routing everything through the planner also means raised events go
+    // through FisherQuickAppendEventsOperation and therefore get the trailing sequence read-back —
+    // without which no tag row could be written for an event a projection raised.
 
-    public void QuickAppendEventWithVersion(StreamAction action, IEvent @event) => throw EventEmission();
+    public void QuickAppendEventWithVersion(StreamAction action, IEvent @event) => RecordRaisedStream(action);
 
-    public void UpdateStreamVersion(StreamAction action) => throw EventEmission();
+    public void UpdateStreamVersion(StreamAction action) => RecordRaisedStream(action);
 
-    public void QuickAppendEvents(StreamAction action) => throw EventEmission();
+    public void QuickAppendEvents(StreamAction action) => RecordRaisedStream(action);
 
-    private static NotSupportedException EventEmission()
-        => new("Fisher does not support an async projection that appends events yet — see "
-               + "https://github.com/JasperFx/fisher/issues/3. The projection's own document writes are "
-               + "supported; emitting new events from one is not.");
+    /// <summary>
+    ///     Note a stream a projection raised events onto, for planning at commit.
+    /// </summary>
+    /// <remarks>
+    ///     Locked rather than lock-free: a composite projection can raise events from several slices
+    ///     concurrently, and the dedupe is a scan for reference identity rather than a hash lookup —
+    ///     <see cref="StreamAction" /> overrides neither <c>Equals</c> nor <c>GetHashCode</c>, so a set
+    ///     would compare by identity anyway but read as though it compared by value.
+    /// </remarks>
+    private void RecordRaisedStream(StreamAction action)
+    {
+        lock (_raisedStreams)
+        {
+            foreach (var existing in _raisedStreams)
+            {
+                if (ReferenceEquals(existing, action))
+                {
+                    return;
+                }
+            }
+
+            _raisedStreams.Add(action);
+        }
+    }
 
     // ---- projection side effects ----
 

@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of the async daemon landing. **All 17 compliance suites green.** 403 tests green on net9.0
+Status as of the async daemon landing. **All 17 compliance suites green.** 406 tests green on net9.0
 and net10.0, **124 of them shared cross-store compliance tests across 17 suites**.
 
 ## The destination
@@ -48,7 +48,7 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 |---|---|
 | [fisher#1](https://github.com/JasperFx/fisher/issues/1) | LINQ: ordering and range comparison on date document members. Correctness only — `strftime` normalises inline, no duplicated column needed. |
 | [fisher#2](https://github.com/JasperFx/fisher/issues/2) | Duplicated fields, so a query can use an index. The performance follow-on to #1, independent of it. |
-| [fisher#3](https://github.com/JasperFx/fisher/issues/3) | An async projection cannot append events of its own — needs version assignment and sequence read-back inside the batch's transaction. |
+| ~~[fisher#3](https://github.com/JasperFx/fisher/issues/3)~~ | **Closed.** Event-emitting async projections — raised events are planned and appended inside the batch's transaction. |
 | ~~[fisher#4](https://github.com/JasperFx/fisher/issues/4)~~ | **Closed.** Projection side effects — `IMessageOutbox` / `IMessageBatch`, both commit paths bracketed. |
 | [fisher#8](https://github.com/JasperFx/fisher/issues/8) | No built-in outbox, so a published side effect has no durable delivery without a bus integration. Follow-on from #4; whether it is Fisher's job is the open question. |
 | ~~[fisher#5](https://github.com/JasperFx/fisher/issues/5)~~ | **Closed.** Dead letter queue — `fi_dead_letters`, so `SkipApplyErrors` quarantines rather than stopping the shard. |
@@ -84,6 +84,7 @@ if something is deferred, it is in the list above.
 | Async daemon | `IEventDatabase`, high-water detector, event loader, projection batch, `IEventStore<,>`, `BuildProjectionDaemonAsync`, `SnapshotLifecycle.Async` |
 | Dead letters | `fi_dead_letters`; `SkipApplyErrors` quarantines a poison event instead of stopping its shard |
 | Projection side effects | `IMessageOutbox` / `IMessageBatch`; both commit paths bracket their transaction |
+| Event-emitting projections | raised events planned and appended inside the projection batch's transaction |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -117,17 +118,18 @@ suite source at all.
 Nothing left is unblocking a compliance suite, so ordering is by what a real application would miss
 first rather than by test count.
 
-### 1. Finish the daemon's edges
+### 1. A durable outbox, or a decision not to have one
 
-The daemon runs, but one thing inside it still throws by name rather than working:
+**Nothing in the daemon throws any more.** Event-emitting projections
+([fisher#3](https://github.com/JasperFx/fisher/issues/3)), side effects
+([fisher#4](https://github.com/JasperFx/fisher/issues/4)) and dead letters
+([fisher#5](https://github.com/JasperFx/fisher/issues/5)) are all built.
 
-- **[fisher#3](https://github.com/JasperFx/fisher/issues/3)** — event-emitting async projections, the
-  last of the three still throwing.
-
-Side effects ([fisher#4](https://github.com/JasperFx/fisher/issues/4)) and dead letters
-([fisher#5](https://github.com/JasperFx/fisher/issues/5)) were the other two and are done.
-[fisher#8](https://github.com/JasperFx/fisher/issues/8) is what #4 left open: the seam exists, a
-durable delivery mechanism does not.
+What #4 left open is [fisher#8](https://github.com/JasperFx/fisher/issues/8): the side-effect seam
+exists, but the default outbox drops every message and Fisher ships no delivery mechanism. Neither
+sibling ships one either — they delegate to Wolverine — so the first question is whether Fisher
+should differ, given that "add a broker" is a much bigger ask for an embedded single-file store.
+Settle that before building anything.
 
 ### 2. Finish document storage
 

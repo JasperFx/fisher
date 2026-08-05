@@ -10,7 +10,7 @@ picks this up next.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**403 tests green on net9.0 and net10.0**, three consecutive full runs. 124 of them are shared
+**406 tests green on net9.0 and net10.0**, three consecutive full runs. 124 of them are shared
 cross-store compliance tests.
 
 ## Where we are against the compliance suites
@@ -212,15 +212,32 @@ why the contiguity argument above holds.
 Deliberate, and each throws by name rather than failing quietly. Each is tracked as an issue rather
 than only as a note here:
 
-- **Event-emitting async projections** — [fisher#3](https://github.com/JasperFx/fisher/issues/3).
-  `QuickAppendEvents` and friends on the batch throw; they need the append planner's version
-  assignment and sequence read-back inside the batch's transaction. The last one still throwing.
-- **A message bus** — [fisher#8](https://github.com/JasperFx/fisher/issues/8). The side-effect seam
-  is built, but the default outbox drops every message and nothing in the box delivers one. Whether
-  that stays Fisher's answer (as it is Marten's and Polecat's) is the open question on the issue.
+**Nothing in the daemon throws any more.** What is left is one open question rather than a gap:
 
+- **A message bus** — [fisher#8](https://github.com/JasperFx/fisher/issues/8). The side-effect seam
+  is built, but the default outbox drops every message and Fisher ships no delivery mechanism.
+  Whether that stays Fisher's answer (as it is Marten's and Polecat's) is the question on the issue.
+
+[fisher#3](https://github.com/JasperFx/fisher/issues/3) (event-emitting projections),
 [fisher#4](https://github.com/JasperFx/fisher/issues/4) (side effects) and
-[fisher#5](https://github.com/JasperFx/fisher/issues/5) (dead letters) are **closed** — see below.
+[fisher#5](https://github.com/JasperFx/fisher/issues/5) (dead letters) are all **closed** — see below.
+
+### Event-emitting async projections
+
+JasperFx drives three synchronous members on the batch. **All three do the same thing: record the
+`StreamAction` and let `ExecuteAsync` plan it inside the transaction.** They can, because the action
+JasperFx hands over already carries every raised event, and the single-stream-start path passes the
+same action instance to each call — reference identity dedupes them.
+
+Marten queues three different storage operations instead. That is right for Postgres and wrong here,
+for two SQLite reasons: the version has to come from a read under the write lock (the slice
+pre-assigns client-side from its own event count, which only matches when the projection has seen the
+whole stream), and routing through `FisherQuickAppendEventsOperation` is the only thing that supplies
+the `seq_id` a tag row is keyed by. Queueing Weasel's bare per-event operations would have made
+raised events silently untaggable.
+
+**Polecat no-ops these three members rather than throwing**, so an event-raising projection there
+drops its events with no signal at all. Worth reporting upstream; do not copy it.
 
 ### Projection side effects
 

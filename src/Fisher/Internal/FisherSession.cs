@@ -324,6 +324,21 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
             : ExecuteBatchAsync(connection, transaction, queued, token);
     }
 
+    /// <summary>
+    ///     Run a set of operations built elsewhere through this session's batch executor, on a
+    ///     connection and transaction it does not own.
+    /// </summary>
+    /// <remarks>
+    ///     For the projection batch's raised events: the operations are planned there but still need a
+    ///     session as their storage context, and the executor's exception transforms are what turn a
+    ///     SQLite constraint code into Fisher's own exception types.
+    /// </remarks>
+    internal Task ExecuteOperationsAsync(SqliteConnection connection, SqliteTransaction transaction,
+        IReadOnlyList<Weasel.Storage.IStorageOperation> operations, CancellationToken token)
+        => operations.Count == 0
+            ? Task.CompletedTask
+            : ExecuteBatchAsync(connection, transaction, operations, token);
+
     private async Task ExecuteBatchAsync(SqliteConnection connection, SqliteTransaction transaction,
         IReadOnlyList<Weasel.Storage.IStorageOperation> operations, CancellationToken token)
     {
