@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of the rebuild concurrency cap + three of four LINQ increments. 272 tests green on net9.0
+Status as of the LINQ layer — session.Query<T>() works. 294 tests green on net9.0
 and net10.0, **90 of them shared cross-store compliance tests across 14 suites**.
 
 ## The destination
@@ -55,7 +55,7 @@ document work, projection work or `IEventStore` any more.
 | `Advanced` | `Clean` (`IDocumentCleaner`), `ResetAllDataAsync`, `ResetHiloSequenceFloorAsync<T>` |
 | `IEventStore` on `DocumentStore` | explorer reads + `TryCreateUsage`; `EventStoreExplorerCompliance` green |
 | Rebuild concurrency cap | `StoreOptions.MaxPoolSize`; `RebuildConcurrencyCapCompliance` green |
-| LINQ (in progress) | SQL fragment set, `json_extract` member locators, `WhereClauseParser` |
+| LINQ | `session.Query<T>()` — where, ordering, paging, async terminals |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through

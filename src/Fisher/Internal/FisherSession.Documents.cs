@@ -32,6 +32,18 @@ internal partial class FisherSession
         QueueOperation(storage.Upsert(document, this, TenantId));
     }
 
+    private Linq.FisherQueryProvider? _queryProvider;
+
+    /// <summary>
+    ///     Start a LINQ query over a document type.
+    /// </summary>
+    /// <remarks>
+    ///     The provider is cached per session because it holds the session, and the session's single
+    ///     connection is what lets a query inside a unit of work see that unit of work's own writes.
+    /// </remarks>
+    public IQueryable<T> Query<T>() where T : notnull
+        => new Linq.FisherQueryable<T>(_queryProvider ??= new Linq.FisherQueryProvider(this));
+
     /// <inheritdoc cref="Store{T}" />
     public void Store<T>(params T[] documents) where T : notnull
     {

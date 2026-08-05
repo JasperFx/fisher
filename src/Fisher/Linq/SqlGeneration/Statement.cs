@@ -49,6 +49,19 @@ internal class Statement
     public int? Offset { get; set; }
 
     /// <summary>
+    ///     When set, this statement selects from the nested statement instead of from
+    ///     <see cref="FromTable" />.
+    /// </summary>
+    /// <remarks>
+    ///     Exists for counting a paged query: <c>Take(5).CountAsync()</c> must count the page, not the
+    ///     table, so the paged query becomes a subquery and the count wraps it. Modelled as a nested
+    ///     <see cref="Statement" /> rather than pre-rendered SQL text so the inner statement's
+    ///     parameters are appended to the same command builder — rendering it separately would leave
+    ///     its parameters behind.
+    /// </remarks>
+    public Statement? Subquery { get; set; }
+
+    /// <summary>
     ///     Wraps the statement so it yields a single 0/1 rather than rows — what
     ///     <c>EventsExistAsync</c> reads. SQLite has no boolean type, so this is an INTEGER by
     ///     necessity, matching how Fisher stores every other boolean.
@@ -73,7 +86,17 @@ internal class Statement
         builder.Append("select ");
         builder.Append(SelectColumns);
         builder.Append(" from ");
-        builder.Append(FromTable);
+
+        if (Subquery != null)
+        {
+            builder.Append('(');
+            Subquery.Apply(builder);
+            builder.Append(')');
+        }
+        else
+        {
+            builder.Append(FromTable);
+        }
 
         AppendWheres(builder);
 

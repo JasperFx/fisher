@@ -1,14 +1,13 @@
 # Handoff
 
 State of Fisher after the JasperFx 2.39.4 upgrade, `DocumentStore : IEventStore`, the rebuild
-concurrency cap, and the first two increments of the LINQ layer. Written for whoever picks this up
-next.
+concurrency cap, and the LINQ layer. Written for whoever picks this up next.
 
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps; [ROADMAP.md](ROADMAP.md) has the
 ordered plan. This document is the compliance scoreboard and the things that are true right now but
 not obvious from either.
 
-**272 tests green on net9.0 and net10.0.** 90 of them are shared cross-store compliance tests.
+**294 tests green on net9.0 and net10.0.** 90 of them are shared cross-store compliance tests.
 
 ## Where we are against the compliance suites
 
@@ -142,11 +141,39 @@ Committed:
 1. **`Fisher.Linq.SqlGeneration`** — the where-fragment set. `Statement` is the one genuinely
    dialect-specific file; see below.
 2. **`Fisher.Linq.Members`** — member locators over `json_extract`.
-3. **`Fisher.Linq.Parsing`** — `WhereClauseParser` and the method-call parsers.
+3. **`Fisher.Linq.Parsing`** — `WhereClauseParser`, `LinqQueryParser` and the method-call parsers.
+4. **The provider** — `FisherQueryable<T>`, `FisherQueryProvider`, the async terminal operators, and
+   `session.Query<T>()`.
 
-Left: the queryable, provider, selectors and query handlers — the part that turns a parsed predicate
-into `session.Query<T>()`. `Joins`, `CursorPaging`, `SoftDeletes`, `GroupBySelectBuilder` and
-`SelectProjectionAnalyzer` are deliberately out of scope — they serve features Fisher does not have.
+**`session.Query<T>()` works.** Supported: `Where`, `OrderBy`/`OrderByDescending`/`ThenBy`/
+`ThenByDescending`, `Take`, `Skip`, and the async terminals `ToListAsync`, `FirstAsync`/
+`FirstOrDefaultAsync`, `SingleAsync`/`SingleOrDefaultAsync`, `CountAsync`/`LongCountAsync`,
+`AnyAsync`. Anything else throws `BadLinqExpressionException` naming the operator.
+
+`Joins`, `CursorPaging`, `SoftDeletes`, `GroupBySelectBuilder` and `SelectProjectionAnalyzer` remain
+out of scope — they serve features Fisher does not have. So do `Select` projections and `GroupBy`;
+`Statement` has no DISTINCT / GROUP BY / HAVING because nothing exercises them yet.
+
+### The provider reuses the closed-shape storage rather than hand-writing SQL
+
+`FisherQueryProvider.Build<T>` takes the column list from `ISelectClause.SelectFields()` and the
+materializer from `ISelectClause.BuildSelector()`, both off the **query-only** storage flavour — the
+seam CLAUDE.md notes was left in place for exactly this. That is what stops the query path's read
+layout drifting away from `LoadAsync`'s. Predicates also go through `storage.FilterDocuments`, which
+is a no-op today but is where a conjoined table's tenant filter lands; going around it is how a query
+path silently stops honouring tenancy the moment tenancy arrives.
+
+Two things worth knowing:
+
+- **The provider is cached per session and uses the session's own connection**, which is why a query
+  inside a unit of work sees writes that session already committed.
+- **Counting a paged query wraps it as a subquery.** `Take(2).CountAsync()` must count the page, not
+  the table. The subquery is modelled as a nested `Statement` rather than pre-rendered SQL so its
+  parameters reach the same command builder. `counting_a_paged_query_counts_the_page` fails without
+  it — verified by removing the wrap.
+- **Synchronous enumeration throws.** There is no non-blocking way to serve `IEnumerator<T>` over an
+  async read, and blocking inside `GetEnumerator` is how a library deadlocks a caller. Marten and
+  Polecat refuse here too.
 
 ### Why the port is smaller than its source
 
@@ -235,8 +262,11 @@ Each of these is a decision with a reason, not an oversight:
   disagrees with Fisher.**
 - **Hi-Lo gaps are expected, not a bug.** A process that stops mid-allocation abandons the rest of
   its `MaxLo` range, and `SetFloor` rounds up to a whole page. Both match Marten and Polecat.
-- **Querying is still load-by-id.** The LINQ layer is two increments in but not yet wired to a
-  session; the `ISelectClause` seam on `FisherDocumentStorage` is what it will hang off.
+- **No `Select` projections, `GroupBy`, `Include`/joins or `Distinct`.** `session.Query<T>()` covers
+  filtering, ordering and paging; anything else throws by name rather than falling back to
+  client-side evaluation.
+- **No ordering or range comparison on a date member.** See the LINQ section — the stored text does
+  not sort by instant.
 - **`Projections.Snapshot<T>` rejects `Async`.** See above.
 - **`GetOrStartMessageSink` throws** — projection side effects cannot be published.
 - **No soft delete, hierarchies, duplicated fields, numeric revisions, sub-classing.** All additive

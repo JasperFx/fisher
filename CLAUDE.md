@@ -143,6 +143,7 @@ Working, with tests:
 - `DocumentStore.Advanced` — `Clean`, `ResetAllDataAsync`, `ResetHiloSequenceFloorAsync<T>`
 - `DocumentStore : IEventStore` — the explorer reads (`GetRecentStreamsAsync`,
   `GetStreamMetadataAsync`) and `TryCreateUsage`; see below
+- **LINQ** — `session.Query<T>()` over `json_extract`: where, ordering, paging, async terminals
 
 Not implemented yet — do not assume these work:
 
@@ -347,6 +348,51 @@ Three SQLite-specific points:
 `ReadStreamMetadata` sit beside `Read`, so all three move together when the table's shape does.
 `ReadStreamMetadata` returns an **empty tag dictionary, not null**: the record declares `Tags`
 non-nullable, and returning null there is what polecat#412 was.
+
+### LINQ
+
+Ported from Polecat, which owns `Polecat.Linq.SqlGeneration` itself rather than taking it from
+`Weasel.SqlServer` — so Fisher carrying its own fragment set is the mirror, not a divergence, and no
+upstream Weasel change was needed. The fragments bind to `Weasel.Core.SqlGeneration.ISqlFragment`
+(the neutral one the storage layer already uses) rather than a Fisher-local copy, so a parsed
+predicate can be handed to `FisherDocumentStorage.FilterDocuments`.
+
+`session.Query<T>()` supports `Where`, the four ordering operators, `Take`/`Skip`, and async
+terminals. Anything else throws `BadLinqExpressionException` naming the operator rather than falling
+back to client-side evaluation.
+
+The port is **smaller** than its source. `json_extract` returns a JSON number as INTEGER, a float as
+REAL, a string as TEXT and `true`/`false` as INTEGER 1/0 — unlike `JSON_VALUE`, which always returns
+`nvarchar`. So there is no `CAST` anywhere, and Polecat's `SqlTypeMap` / `BuildTypedLocator` /
+`SupportsReturning` machinery has no analogue; `TypedLocator` and `RawLocator` are the same string.
+
+Four SQLite decisions that are easy to get wrong and fail silently:
+
+- **String predicates use `instr`/`substr`, not `LIKE`.** SQLite's `LIKE` is case-*insensitive* for
+  ASCII while `=` is case-*sensitive*, so a LIKE-based `Contains("frodo")` matches `"Frodo"` on data
+  where `== "frodo"` does not — a query surface contradicting itself, and not what .NET's ordinal
+  `string.Contains` means. `_` and `%` are also `LIKE` wildcards needing an `ESCAPE` clause (Polecat's
+  `[_]` bracket form is T-SQL-only) — the same trap as the document cleaner's table matching.
+- **Paging is `limit m offset n`.** `TOP(n)` and `OFFSET … FETCH NEXT` collapse to one form; T-SQL's
+  `ORDER BY (SELECT NULL)` filler is not emitted because SQLite does not need it and it would impose a
+  sort nobody asked for. An offset with no limit must say `limit -1` first — a bare `offset` is a
+  parse error.
+- **Dates support equality but not ordering.** `DateMember.AllowsRangeComparison` is false and both
+  the where parser and `OrderBy` refuse. System.Text.Json trims trailing fractional zeros and keeps
+  the original offset, so `12:34:56-05:00` sorts before `12:34:56.789+00:00` while being five hours
+  later. The literal for an equality comparison is rendered *through the store's own serializer*,
+  because no format string reproduces STJ's trimming. Lifting this needs a normalised sortable
+  duplicate — the same machinery duplicated fields will need. This is documents only: the
+  `fi_events`/`fi_streams` timestamp columns use `SqliteTimestamp`'s fixed-width UTC format precisely
+  so they *do* sort as text.
+- **`array.Contains(x)` binds to `MemoryExtensions.Contains(ReadOnlySpan<T>, T)`**, not
+  `Enumerable.Contains`, so `EnumerableContains` matches on the call's shape rather than its declaring
+  type. The span operand cannot be evaluated by compiling a lambda either — `ReadOnlySpan<T>` is a ref
+  struct and cannot be returned as `object` — so it is unwrapped back to the array first.
+
+The provider takes both the column list and the materializer from the **query-only** closed-shape
+storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,
+which is what keeps the query path's read layout aligned with `LoadAsync`'s.
 
 ### Compliance suites
 

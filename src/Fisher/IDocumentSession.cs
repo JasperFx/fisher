@@ -13,6 +13,16 @@ public interface IQuerySession : IAsyncDisposable
     string TenantId { get; }
 
     /// <summary>
+    ///     Start a LINQ query over a document type.
+    /// </summary>
+    /// <remarks>
+    ///     Terminal operators are the async ones in <see cref="Linq.QueryableExtensions" /> —
+    ///     <c>ToListAsync</c> and friends. Synchronous enumeration throws rather than blocking on the
+    ///     async path; see <see cref="Linq.FisherQueryable{T}.GetEnumerator" />.
+    /// </remarks>
+    IQueryable<T> Query<T>() where T : notnull;
+
+    /// <summary>
     ///     Load a document by its identity, or null when there is none.
     /// </summary>
     Task<T?> LoadAsync<T>(Guid id, CancellationToken token = default) where T : class;
