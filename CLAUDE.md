@@ -144,6 +144,9 @@ Working, with tests:
 - `DocumentStore : IEventStore` — the explorer reads (`GetRecentStreamsAsync`,
   `GetStreamMetadataAsync`) and `TryCreateUsage`; see below
 - **LINQ** — `session.Query<T>()` over `json_extract`: where, ordering, paging, async terminals
+- **DCB tags** — tag tables, tagged appends, `QueryByTagsAsync`, `EventsExistAsync`,
+  `AssignTagWhere`, `AggregateByTagsAsync`, `FetchForWritingByTags` with its consistency guard, and
+  batched queries
 
 Not implemented yet — do not assume these work:
 
@@ -264,7 +267,8 @@ next `Store` would skip its migration and write to nothing.
   produced them. **Async is rejected outright** — it needs the daemon. `GetOrStartMessageSink` still
   throws, so projection side effects cannot be published.
 - **Async daemon.** `FisherDatabase` does not implement `IEventDatabase`.
-- **DCB tags**, multi-tenancy beyond a tenant id column, subscriptions, DI registration.
+- Multi-tenancy beyond a tenant id column, subscriptions, DI registration.
+- The two event-rewrite members in `EventOperations.Unsupported.cs`.
 
 ### The `IEventStoreOperations` surface
 
@@ -396,12 +400,50 @@ The provider takes both the column list and the materializer from the **query-on
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,
 which is what keeps the query path's read layout aligned with `LoadAsync`'s.
 
+### DCB tags
+
+One `fi_event_tag_<suffix>` table per registered tag type, composite primary key leading with
+`value`. That key is load-bearing twice over: a tag query filters on `value`, so leading with it makes
+the lookup a range scan; and it is what lets both the append path and `AssignTagWhere` write
+`on conflict do nothing` instead of reading first, which is where idempotency comes from.
+
+**Tags are written after the batch and inside its transaction** (`FisherSession.SaveChangesAsync` →
+`EventTagWriter`). A tag row is keyed by the `seq_id` SQLite assigns on insert, which Fisher only
+learns from the trailing sequence read-back in `FisherQuickAppendEventsOperation` — so there is
+nothing to write until the appends postprocess. Committing separately would leave an event visible
+but untagged, and to a tag query that is indistinguishable from an event that was never tagged.
+
+Query shape: each condition is a `seq_id in (select seq_id from <tag table> where value = ?)`
+subselect, OR'd. **Subselects rather than joins**, because joining several tag tables multiplies rows
+when one event carries two matching tags and the caller expects each event once. Ordering is by
+`seq_id`, since a tag query spans streams and version is not a global order — which is also why
+`FisherEventsRowReader.ReadEventAcrossStreams` exists, taking stream identity from the row rather
+than from the hydration context the single-stream reads use.
+
+Guid tag values bind as lowercase canonical text, same trap as `SqliteGuidIdentification`.
+
+**`AssignTagWhere` is a client of the LINQ `WhereClauseParser`**, as Marten builds it. The only piece
+it needed was `EventMemberFactory`, an `IMemberResolver` resolving `IEvent` members to `fi_events`
+columns instead of `json_extract` paths — which is why `IMemberResolver` is an interface rather than
+a concrete type. Note `IEvent.Timestamp` permits range comparison where a document's
+`DateTimeOffset` does not: same CLR type, but `fi_events.timestamp` is `SqliteTimestamp`'s
+fixed-width UTC format, chosen precisely so a string comparison is an instant comparison.
+
+**The consistency check runs inside the write transaction, before anything is written.** Checking
+after would be checking against the session's own appends; checking outside the transaction would
+prove nothing, because `BEGIN IMMEDIATE` is what holds the write lock. A boundary over an empty
+result still enforces consistency — `LastSeenSequence` is 0 and any later matching event exceeds it.
+
+`IBatchedQuery` matches the siblings' shape, but **the rationale does not transfer**: a batch exists
+elsewhere to collapse network round trips, and SQLite is embedded. What remains is that the reads run
+back to back on one connection with nothing interleaved. Implemented without statement coalescing on
+purpose.
+
 ### Compliance suites
 
 **Fisher is enrolled.** `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old
-`$(EnableComplianceTests)` gate is gone. **Fourteen suites are live, 90 shared tests.** The three
-still unenrolled need the async daemon (`AsyncDaemon`) or DCB tags
-(`AssignTagWhere`, `DcbTagQueryAndConsistency`).
+`$(EnableComplianceTests)` gate is gone. **Sixteen suites are live, 122 shared tests — 16 of 17.**
+The one still unenrolled, `AsyncDaemonCompliance`, needs the async daemon.
 
 The mechanics, because they are not what the package's name suggests:
 

@@ -26,16 +26,6 @@ public partial class EventOperations
         "Tag tables, tagged appends, QueryByTagsAsync and EventsExistAsync work; aggregate routing " +
         "by tag does not.";
 
-    /// <inheritdoc />
-    public Task<T?> AggregateByTagsAsync<T>(EventTagQuery query, CancellationToken cancellation = default)
-        where T : class
-        => throw new NotImplementedException(TagsMessage);
-
-    /// <inheritdoc />
-    public Task<IEventBoundary<T>> FetchForWritingByTags<T>(EventTagQuery query,
-        CancellationToken cancellation = default) where T : class
-        => throw new NotImplementedException(TagsMessage);
-
     // ---- Event rewriting ----
     //
     // Both of these mutate events that are already committed, which Fisher has no operation for. The

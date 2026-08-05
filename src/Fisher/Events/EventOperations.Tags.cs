@@ -16,6 +16,69 @@ namespace Fisher.Events;
 public partial class EventOperations
 {
     /// <summary>
+    ///     Start a batch of DCB reads to be run together.
+    /// </summary>
+    /// <remarks>
+    ///     See <see cref="Tags.IBatchedQuery" /> for why this exists on an embedded database, where the
+    ///     round-trip argument the siblings make does not apply.
+    /// </remarks>
+    public Tags.IBatchedQuery CreateBatchQuery() => new Tags.FisherBatchedQuery(this);
+
+    /// <summary>
+    ///     Fold every event matching the tag query into an aggregate, or null when none match.
+    /// </summary>
+    /// <remarks>
+    ///     Live aggregation over a cross-stream event set. There is no snapshot to read instead — a DCB
+    ///     aggregate is defined by a tag query rather than by a stream, so nothing has stored it under
+    ///     an identity this could look up.
+    /// </remarks>
+    public async Task<T?> AggregateByTagsAsync<T>(EventTagQuery query, CancellationToken cancellation = default)
+        where T : class
+    {
+        var events = await QueryByTagsAsync(query, cancellation).ConfigureAwait(false);
+
+        return events.Count == 0
+            ? null
+            : await Graph.AggregatorFor<T>().BuildAsync(events, _session, null, cancellation).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Open a writable boundary over every stream the tag query reaches.
+    /// </summary>
+    /// <remarks>
+    ///     The returned boundary records the highest sequence it saw. <c>SaveChangesAsync</c> re-runs
+    ///     the query inside its write transaction and fails with
+    ///     <see cref="DcbConcurrencyException" /> if anything matching has been appended since — see
+    ///     <c>FisherSession.AssertBoundariesAreStillConsistentAsync</c>.
+    /// </remarks>
+    /// <exception cref="ArgumentException">The query has no conditions.</exception>
+    public async Task<IEventBoundary<T>> FetchForWritingByTags<T>(EventTagQuery query,
+        CancellationToken cancellation = default) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        // An unconditioned query matches nothing, so a boundary over it would assert nothing and
+        // route nothing. Refusing is better than handing back a boundary that silently cannot fail.
+        if (query.Conditions.Count == 0)
+        {
+            throw new ArgumentException(
+                "A DCB boundary needs at least one tag condition; an empty query matches no events and "
+                + "would assert nothing on save.", nameof(query));
+        }
+
+        var events = await QueryByTagsAsync(query, cancellation).ConfigureAwait(false);
+
+        var aggregate = events.Count == 0
+            ? null
+            : await Graph.AggregatorFor<T>().BuildAsync(events, _session, null, cancellation).ConfigureAwait(false);
+
+        var boundary = new Tags.FisherEventBoundary<T>(_session, Graph, query, aggregate, events);
+        _session.TrackBoundary(boundary.Query, boundary.LastSeenSequence);
+
+        return boundary;
+    }
+
+    /// <summary>
     ///     Retroactively apply a tag to every already-persisted event matching a predicate.
     /// </summary>
     /// <remarks>
@@ -159,6 +222,48 @@ public partial class EventOperations
 
         var result = await command.ExecuteScalarAsync(cancellation).ConfigureAwait(false);
         return Convert.ToInt64(result) != 0;
+    }
+
+    /// <summary>
+    ///     Whether any event matching the query has a sequence above <paramref name="lastSeenSequence" />
+    ///     — the DCB consistency check.
+    /// </summary>
+    /// <remarks>
+    ///     Takes the connection and transaction explicitly rather than reaching for the session's,
+    ///     because this runs inside <c>SaveChangesAsync</c>'s write transaction and must be enrolled in
+    ///     it. A command on the same connection but outside the transaction would not see the lock's
+    ///     guarantee.
+    /// </remarks>
+    internal async Task<bool> AnyMatchingEventBeyondAsync(EventTagQuery query, long lastSeenSequence,
+        SqliteConnection connection, SqliteTransaction transaction, CancellationToken token)
+    {
+        if (query.Conditions.Count == 0)
+        {
+            return false;
+        }
+
+        var sql = new StringBuilder("select exists (select 1 from ")
+            .Append(Graph.EventsTableName)
+            .Append(" where ");
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+
+        AppendConditions(query, sql, command);
+
+        sql.Append(" and seq_id > @last_seen");
+        command.Parameters.AddWithValue("@last_seen", lastSeenSequence);
+
+        if (IsConjoined)
+        {
+            sql.Append(" and tenant_id = @tenant_id");
+            command.Parameters.AddWithValue("@tenant_id", _session.TenantId);
+        }
+
+        sql.Append(')');
+        command.CommandText = sql.ToString();
+
+        return Convert.ToInt64(await command.ExecuteScalarAsync(token).ConfigureAwait(false)) != 0;
     }
 
     /// <summary>

@@ -71,6 +71,44 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
 
     internal void QueueOperation(Weasel.Storage.IStorageOperation operation) => _operations.Add(operation);
 
+    private List<(JasperFx.Events.Tags.EventTagQuery Query, long LastSeenSequence)>? _boundaries;
+
+    /// <summary>
+    ///     Record a DCB boundary's consistency marker for checking at commit.
+    /// </summary>
+    internal void TrackBoundary(JasperFx.Events.Tags.EventTagQuery query, long lastSeenSequence)
+        => (_boundaries ??= []).Add((query, lastSeenSequence));
+
+    /// <summary>
+    ///     Fail the commit if any event matching a tracked boundary's query has been appended since the
+    ///     boundary was read.
+    /// </summary>
+    /// <remarks>
+    ///     Runs on the session's own connection inside the write transaction. <c>BEGIN IMMEDIATE</c>
+    ///     already holds the write lock by this point, so no competing writer can slip an event in
+    ///     between this check and the commit — the same property that makes the append planner's
+    ///     version read safe.
+    /// </remarks>
+    private async Task AssertBoundariesAreStillConsistentAsync(SqliteConnection connection,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        if (_boundaries is not { Count: > 0 })
+        {
+            return;
+        }
+
+        foreach (var (query, lastSeen) in _boundaries)
+        {
+            if (await Events.AnyMatchingEventBeyondAsync(query, lastSeen, connection, transaction, token)
+                    .ConfigureAwait(false))
+            {
+                throw new JasperFx.Events.DcbConcurrencyException(query, lastSeen);
+            }
+        }
+
+        _boundaries.Clear();
+    }
+
     /// <summary>
     ///     Open (or return) this session's connection. One connection per session for its whole
     ///     lifetime, so that reads inside a unit of work see the session's own uncommitted writes.
@@ -129,6 +167,12 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
 
                 operations.AddRange(planned);
             }
+
+            // Before anything is written: a boundary's guarantee is that no matching event has landed
+            // since it was read, and checking after the write would be checking against our own
+            // appends. Inside the transaction because BEGIN IMMEDIATE already holds the write lock,
+            // which is what makes the check meaningful rather than advisory.
+            await AssertBoundariesAreStillConsistentAsync(connection, transaction, ct).ConfigureAwait(false);
 
             await ExecuteBatchAsync(connection, transaction, operations, ct).ConfigureAwait(false);
 

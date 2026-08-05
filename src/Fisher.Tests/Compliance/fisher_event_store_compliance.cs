@@ -64,3 +64,5 @@ public class rebuild_concurrency_cap_compliance
 public class assign_tag_where_compliance
     : AssignTagWhereCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
+public class dcb_tag_query_and_consistency_compliance
+    : DcbTagQueryAndConsistencyCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

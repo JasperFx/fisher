@@ -1,28 +1,31 @@
 # Handoff
 
 State of Fisher after the JasperFx 2.39.4 upgrade, `DocumentStore : IEventStore`, the rebuild
-concurrency cap, and the LINQ layer. Written for whoever picks this up next.
+concurrency cap, the LINQ layer and DCB tags. Written for whoever picks this up next.
 
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps; [ROADMAP.md](ROADMAP.md) has the
 ordered plan. This document is the compliance scoreboard and the things that are true right now but
 not obvious from either.
 
-**294 tests green on net9.0 and net10.0.** 90 of them are shared cross-store compliance tests.
+**350 tests green on net9.0 and net10.0.** 90 of them are shared cross-store compliance tests.
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.39.4 ships **17 suites, 124 tests**. Fisher passes **90 of 124
-(73%), 14 suites of 17**. Every suite compiles; only the subclassed ones run.
+`JasperFx.Events.ComplianceTests` 2.39.4 ships **17 suites, 124 tests**. Fisher passes **122 of 124
+(98%), 16 suites of 17**. Every suite compiles; only the subclassed ones run.
+
+**One suite remains: `AsyncDaemonCompliance`, 2 tests, needing the async daemon.**
 
 2.39.4 added three suites. Two of them — `FetchLatestCompliance` and `StreamArchivingCompliance` —
 went green on the version bump alone, with no production change: `FetchLatest`/`ProjectLatest` and
 `ArchiveStream` were already built to the shape the shared suite expects. The third,
 `EventStoreExplorerCompliance`, is what motivated `DocumentStore : IEventStore`.
 
-### Green — 14 suites, 90 tests
+### Green — 16 suites, 122 tests
 
 | Suite | Tests |
 |---|---|
+| `DcbTagQueryAndConsistencyCompliance` | 26 |
 | `FetchForWritingCompliance` | 13 |
 | `StreamReadCompliance` | 11 |
 | `EventMetadataCompliance` | 9 |
@@ -32,39 +35,31 @@ went green on the version bump alone, with no production change: `FetchLatest`/`
 | `StringIdentitySingleStreamCompliance` | 6 |
 | `StreamArchivingCompliance` | 6 |
 | `EventStoreExplorerCompliance` | 6 |
+| `AssignTagWhereCompliance` | 6 |
 | `RebuildConcurrencyCapCompliance` | 5 |
 | `ActivityCorrelationCompliance` | 4 |
 | `EventProjectionRegistrationCompliance` | 3 |
 | `EventProjectionEnrichmentCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-### Remaining — 3 suites, 34 tests
+### Remaining — 1 suite, 2 tests
 
 | Suite | Tests | Needs |
 |---|---|---|
-| `DcbTagQueryAndConsistencyCompliance` | 26 | DCB tags + batched queries |
-| `AssignTagWhereCompliance` | 6 | DCB tags |
 | `AsyncDaemonCompliance` | 2 | the async daemon |
-
-**Two capabilities still account for all 34.** Nothing is blocked on document storage, projections
-or `IEventStore` any more.
-
-`RebuildConcurrencyCapCompliance` was long described here and in the roadmap as needing projection
-rebuilds. It does not touch them: all five tests read
-`IEventStore.MaxConcurrentRebuildsPerDatabase` and one reads it back off `TryCreateUsage`. It went
-green with a config knob and no daemon work.
 
 ### What the fixture still throws
 
-`FisherComplianceFixture` implements every member; three throw `NotSupportedException` naming the
-milestone. Enrolling a suite prematurely therefore fails loudly rather than passing on a stub.
+`FisherComplianceFixture` implements every member; only the daemon pair still throws
+(`StartDaemonAsync`, `WaitForNonStaleProjectionDataAsync`). Enrolling a suite prematurely therefore
+fails loudly rather than passing on a stub.
 
-- `CreateBatch` — no batched queries
-- `StartDaemonAsync`, `WaitForNonStaleProjectionDataAsync` — no daemon
+`CreateBatch` went live with DCB tags, adapting Fisher's own `IBatchedQuery`. `EventStore` hands back
+the `DocumentStore`. `LoadDocumentAsync` covers Guid, string, int and long; it still throws for a
+strongly typed id, which Fisher does not support anywhere.
 
-`EventStore` is live as of the `IEventStore` milestone — the fixture hands back the `DocumentStore`
-itself. `LoadDocumentAsync` is fully live too: Guid, string, int and long all load. It still throws
-for a strongly typed id, which Fisher does not support anywhere.
+`EventOperations.Unsupported.cs` is now down to **two members**, both event-rewrite
+(`OverwriteEvent`, `CompletelyReplaceEvent`). That file shrinking is the progress measure.
 
 ### The rebuild concurrency cap
 
@@ -102,21 +97,15 @@ Two SQLite-specific things the shared suite does **not** cover, pinned by
 
 ## Recommended next move
 
-**Finish the LINQ layer, then DCB tags.** Two of four LINQ increments are committed; see
-"The LINQ layer" below for what is done and what is left.
+**The async daemon** — the last suite, and the last thing gating `SnapshotLifecycle.Async`, which
+`Projections.Snapshot<T>` rejects outright. Two compliance tests, but an entire configured lifecycle
+is unreachable without it.
 
-The ordering is not a preference. `AssignTagWhere` — 6 of the 34 remaining compliance tests — takes
-an `Expression<Func<IEvent, bool>>`, and in Marten it is a *client* of the LINQ `WhereClauseParser`
-over an event-metadata member set, not a bespoke translator. Building a special-purpose predicate
-translator for it would be thrown away as soon as LINQ landed, and would diverge from both siblings.
-
-LINQ also unblocks more than DCB: document querying (the largest remaining product gap),
-`QueryEventsAsync` for `OpenReadOnlyEventStore`, and the batched-query seam (`CreateBatch`) that the
-DCB suite needs anyway.
-
-**The async daemon is now the smallest block at 2 tests**, and is still the only thing gating
-`SnapshotLifecycle.Async`, which `Projections.Snapshot<T>` rejects outright. Take it whenever an
-entire configured lifecycle being unreachable outweighs the tag count.
+After that the compliance catalogue is exhausted, and the roadmap is Fisher's own: `Select`
+projections and `GroupBy` for LINQ, [fisher#1](https://github.com/JasperFx/fisher/issues/1) (date
+ordering) and [fisher#2](https://github.com/JasperFx/fisher/issues/2) (duplicated fields), soft
+delete, hierarchies, and the two event-rewrite members still in
+`EventOperations.Unsupported.cs`.
 
 ### Daemon-specific things to know before starting
 
@@ -243,6 +232,54 @@ returns 1 for an empty needle so `StartsWith("")` is true, and `EndsWith("")` is
 document member) rather than on the declaring type. The span operand also cannot be evaluated by
 compiling a lambda, because `ReadOnlySpan<T>` is a ref struct and cannot be returned as `object`;
 `StripSpanConversion` unwraps back to the underlying array first. Three tests caught this.
+
+### DCB tags
+
+All 32 tag tests pass. The shape, and the parts that are SQLite-specific:
+
+- **One `fi_event_tag_<suffix>` table per registered tag type**, composite primary key leading with
+  `value` because a tag query filters on it. That key is also what makes tagging idempotent: both the
+  append path and `AssignTagWhere` write `on conflict do nothing` rather than reading first.
+- **Tags are written after the batch and inside its transaction.** A tag row is keyed by the `seq_id`
+  SQLite assigns on insert, which Fisher only learns from the append's trailing sequence read-back —
+  so there is nothing to write until the appends postprocess. Committing separately would leave an
+  event visible but untagged, which a tag query cannot tell apart from never-tagged.
+- **Queries use `seq_id in (select …)` subselects, not joins.** Joining several tag tables multiplies
+  rows when one event carries two matching tags, and the caller expects each event once.
+- **Ordering is by `seq_id`** — a tag query spans streams, so version is not a global order.
+- **Guid tag values bind as lowercase canonical text.** The raw Guid writes a BLOB and
+  Microsoft.Data.Sqlite's string form is uppercase; under the case-sensitive default collation either
+  writes a row that can never be read back.
+
+`AssignTagWhere` is a **client of the LINQ `WhereClauseParser`**, exactly as Marten builds it. The
+only new piece was `EventMemberFactory`, an `IMemberResolver` resolving `IEvent` members to
+`fi_events` columns instead of `json_extract` paths — which is why `IMemberResolver` is an interface.
+All six of its compliance tests passed on the first run with no translator written for them.
+
+One asymmetry worth knowing: **`IEvent.Timestamp` allows range comparison where a document's
+`DateTimeOffset` member does not.** Same CLR type, different storage — `fi_events.timestamp` is
+`SqliteTimestamp`'s fixed-width UTC format, chosen so a string comparison *is* an instant comparison.
+
+### The DCB consistency check
+
+`FetchForWritingByTags` records the highest sequence it saw; `SaveChangesAsync` re-runs the query
+**inside its write transaction, before anything is written**, and throws `DcbConcurrencyException` if
+anything matching has landed since. Both halves matter: checking after the write would be checking
+against our own appends, and checking outside the transaction would prove nothing because
+`BEGIN IMMEDIATE` is what holds the write lock.
+
+A boundary over an *empty* result still enforces consistency — `LastSeenSequence` is 0, and any
+matching event appearing later has a sequence above it. That is what makes a boundary usable as a
+"this must not exist yet" assertion.
+
+### Batched queries exist, but the rationale differs here
+
+`IBatchedQuery` matches the siblings' shape — declared reads, tasks that do not complete until
+`Execute`. **The round-trip argument does not transfer.** In Marten and Polecat a batch collapses
+several network round trips; SQLite is embedded, so there are none to collapse. What remains is that
+the reads run back to back on one connection with nothing interleaved, so a set of boundaries is
+established against a coherent view. Implemented deliberately without statement coalescing, because
+the win it buys elsewhere is not there to collect.
 
 ### Conversions that fail silently
 

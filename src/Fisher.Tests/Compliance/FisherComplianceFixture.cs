@@ -94,6 +94,28 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
 
     public override IEventStore EventStore => Store;
 
+    /// <summary>
+    ///     Adapts Fisher's own <see cref="Fisher.Events.Tags.IBatchedQuery" /> to the shared shape. The
+    ///     methods already match one for one — only the accessor path differs between stores, which is
+    ///     what <see cref="IComplianceBatch" /> exists to bridge.
+    /// </summary>
+    public override IComplianceBatch CreateBatch(IQuerySession session)
+        => new FisherComplianceBatch(((IDocumentSession)session).Events.CreateBatchQuery());
+
+    private sealed class FisherComplianceBatch : IComplianceBatch
+    {
+        private readonly Fisher.Events.Tags.IBatchedQuery _batch;
+
+        internal FisherComplianceBatch(Fisher.Events.Tags.IBatchedQuery batch) => _batch = batch;
+
+        public Task<bool> EventsExist(EventTagQuery query) => _batch.EventsExist(query);
+
+        public Task<IEventBoundary<T>> FetchForWritingByTags<T>(EventTagQuery query) where T : class
+            => _batch.FetchForWritingByTags<T>(query);
+
+        public Task Execute(CancellationToken token = default) => _batch.Execute(token);
+    }
+
     public override IEnumerable<Type> AllAggregateTypes() => Store.Options.Projections.AllAggregateTypes();
 
     public override Task<T?> LoadDocumentAsync<T>(IQuerySession session, object id, CancellationToken token)
@@ -147,9 +169,6 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     //
     // Each of these names the milestone it waits on. A suite that touches one is a suite Fisher is
     // not ready to enroll; see Compliance/fisher_event_store_compliance.cs for what is enrolled.
-
-    public override IComplianceBatch CreateBatch(IQuerySession session)
-        => throw new NotSupportedException("Fisher has no batched query support yet.");
 
     public override Task<IProjectionDaemon> StartDaemonAsync()
         => throw new NotSupportedException("Fisher has no async projection daemon yet.");

@@ -3,17 +3,18 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of the LINQ layer — session.Query<T>() works. 294 tests green on net9.0
-and net10.0, **90 of them shared cross-store compliance tests across 14 suites**.
+Status as of DCB tags — 16 of 17 compliance suites green. 350 tests green on net9.0
+and net10.0, **122 of them shared cross-store compliance tests across 16 suites**.
 
 ## The destination
 
 **First round of JasperFx compliance tests passing — reached.** `JasperFx.Events.ComplianceTests` is
 the shared cross-store suite Marten and Polecat both enroll in; passing it is what makes Fisher a
-real Critter Stack event store rather than a lookalike. Fourteen suites are green:
+real Critter Stack event store rather than a lookalike. Sixteen of seventeen suites are green:
 
 | Suite | Tests |
 |---|---|
+| `DcbTagQueryAndConsistencyCompliance` | 26 |
 | `FetchForWritingCompliance` | 13 |
 | `StreamReadCompliance` | 11 |
 | `EventMetadataCompliance` | 9 |
@@ -23,16 +24,15 @@ real Critter Stack event store rather than a lookalike. Fourteen suites are gree
 | `StringIdentitySingleStreamCompliance` | 6 |
 | `StreamArchivingCompliance` | 6 |
 | `EventStoreExplorerCompliance` | 6 |
+| `AssignTagWhereCompliance` | 6 |
 | `RebuildConcurrencyCapCompliance` | 5 |
 | `ActivityCorrelationCompliance` | 4 |
 | `EventProjectionRegistrationCompliance` | 3 |
 | `EventProjectionEnrichmentCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-**Only three suites remain**, and between them they need exactly two things: the async daemon
-(`AsyncDaemonCompliance` — 2 tests) and DCB tags (`AssignTagWhereCompliance`,
-`DcbTagQueryAndConsistencyCompliance` — 32 tests). Nothing else in the suite catalogue is blocked on
-document work, projection work or `IEventStore` any more.
+**One suite remains**: `AsyncDaemonCompliance`, 2 tests, needing the async daemon. Nothing else in
+the catalogue is blocked on anything.
 
 ## Filed follow-ups
 
@@ -63,6 +63,7 @@ document work, projection work or `IEventStore` any more.
 | `IEventStore` on `DocumentStore` | explorer reads + `TryCreateUsage`; `EventStoreExplorerCompliance` green |
 | Rebuild concurrency cap | `StoreOptions.MaxPoolSize`; `RebuildConcurrencyCapCompliance` green |
 | LINQ | `session.Query<T>()` — where, ordering, paging, async terminals |
+| DCB tags | tag tables, tagged appends, queries, `AssignTagWhere`, boundaries + consistency, batched queries |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -147,6 +148,7 @@ any more.
 | `LiveAggregationCompliance` | 7 | **green** |
 | `ActivityCorrelationCompliance` | 4 | **green** |
 | `AutoDiscoveredAggregateCompliance` | 2 | **green** |
+| `DcbTagQueryAndConsistencyCompliance` | 26 |
 | `FetchForWritingCompliance` | 13 | **green** |
 | `SelfAggregatingEvolveCompliance` | 8 | **green** |
 | `StringIdentitySingleStreamCompliance` | 6 | **green** |
@@ -156,9 +158,10 @@ any more.
 | `StreamArchivingCompliance` | 6 | **green** |
 | `EventStoreExplorerCompliance` | 6 | **green** |
 | `AsyncDaemonCompliance` | 2 | daemon (3) |
+| `AssignTagWhereCompliance` | 6 |
 | `RebuildConcurrencyCapCompliance` | 5 | **green** |
-| `AssignTagWhereCompliance` | 6 | DCB tags |
-| `DcbTagQueryAndConsistencyCompliance` | 26 | DCB tags — the last one, 727 lines |
+| `AssignTagWhereCompliance` | 6 | **green** |
+| `DcbTagQueryAndConsistencyCompliance` | 26 | **green** |
 
 Every suite that document storage or projections could unblock is enrolled. The async daemon is the
 next unlock at 7 tests; DCB tags are the larger prize at 32, and the only remaining area Fisher has
