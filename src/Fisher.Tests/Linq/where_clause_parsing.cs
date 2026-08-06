@@ -3,6 +3,7 @@ using Fisher.Linq;
 using Fisher.Linq.Members;
 using Fisher.Linq.Parsing;
 using JasperFx;
+using Weasel.Core;
 
 namespace Fisher.Tests.Linq;
 
@@ -276,28 +277,53 @@ public class where_clause_parsing : IAsyncLifetime
     }
 
     /// <summary>
-    ///     Equality on a date is supported because the literal is rendered by the same serializer that
-    ///     wrote the document.
+    ///     Both equality and range comparison on a timestamp go through the same normalising locator, so
+    ///     two spellings of one instant cannot be equal for one operator and unequal for the other.
     /// </summary>
-    [Fact]
-    public void equality_on_a_date_is_allowed()
+    [Theory]
+    [InlineData("=")]
+    [InlineData(">")]
+    [InlineData("<")]
+    public void comparisons_on_a_timestamp_normalise_through_strftime(string op)
     {
-        Should.NotThrow(() => SqlFor(x => x.JoinedAt == DateTimeOffset.UtcNow));
+        var when = DateTimeOffset.UtcNow;
+
+        var sql = op switch
+        {
+            "=" => SqlFor(x => x.JoinedAt == when),
+            ">" => SqlFor(x => x.JoinedAt > when),
+            _ => SqlFor(x => x.JoinedAt < when)
+        };
+
+        sql.ShouldContain("strftime('%Y-%m-%dT%H:%M:%f', json_extract(data, '$.joinedAt'))");
     }
 
     /// <summary>
-    ///     Ordering is not, and refusing is the point — the stored text does not sort by instant, so any
-    ///     emitted range predicate would return plausible but wrong rows.
+    ///     What is still refused, and why refusing is the point: a string-stored enum sorts
+    ///     alphabetically, so any emitted range predicate would return plausible but wrong rows.
     /// </summary>
     [Theory]
     [InlineData(">")]
     [InlineData("<")]
-    public void range_comparison_on_a_date_is_refused(string op)
+    public void range_comparison_on_a_string_stored_enum_is_refused(string op)
     {
-        var when = DateTimeOffset.UtcNow;
+        // Its own options rather than the fixture's: Fisher stores enums as integers by default, and
+        // an integer enum orders perfectly well. The refusal is specific to AsString.
+        var options = new StoreOptions { ConnectionString = "Data Source=:memory:" };
+        options.ConfigureSerialization(EnumStorage.AsString);
+
+        var factory = new MemberFactory(options, options.Schema.For<Explorer>());
+        var grade = Grade.Pass;
+
+        string Parse(Expression<Func<Explorer, bool>> predicate)
+        {
+            var builder = new Weasel.Sqlite.CommandBuilder();
+            new WhereClauseParser(factory).Parse(predicate.Body).Apply(builder);
+            return builder.Compile().CommandText;
+        }
 
         var ex = Should.Throw<BadLinqExpressionException>(() =>
-            op == ">" ? SqlFor(x => x.JoinedAt > when) : SqlFor(x => x.JoinedAt < when));
+            op == ">" ? Parse(x => x.Grade > grade) : Parse(x => x.Grade < grade));
 
         ex.Message.ShouldContain("order-preserving");
     }

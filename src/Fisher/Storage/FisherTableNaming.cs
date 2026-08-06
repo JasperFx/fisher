@@ -51,6 +51,27 @@ internal static class FisherTableNaming
     public static string TableName(string schemaName, string suffix) => PrefixFor(schemaName) + suffix;
 
     /// <summary>
+    ///     The physical table name for a table the <em>user</em> named — today only a flat-table
+    ///     projection's target.
+    /// </summary>
+    /// <remarks>
+    ///     Same schema folding as <see cref="TableName" /> but without the <see cref="FamilyPrefix" />:
+    ///     the family prefix marks a table Fisher owns the shape of, and a flat table's shape is
+    ///     declared by the projection that writes it. So <c>compliance_flat_values</c> in logical
+    ///     schema <c>reporting</c> is <c>reporting_compliance_flat_values</c>, and in the default
+    ///     schema it is left exactly as the caller wrote it.
+    /// </remarks>
+    public static string UserTableName(string? schemaName, string tableName)
+        => IsDefaultSchema(schemaName) ? tableName : $"{schemaName}_{tableName}";
+
+    /// <summary>
+    ///     The Weasel object name for a table the user named. Schema <c>main</c>, for the same reason
+    ///     <see cref="ObjectFor" /> uses it.
+    /// </summary>
+    public static SqliteObjectName UserObjectFor(string? schemaName, string tableName)
+        => new(DefaultSchemaName, UserTableName(schemaName, tableName));
+
+    /// <summary>
     ///     The Weasel object name for a Fisher table. Always in schema <c>main</c> — the logical
     ///     schema has already been folded into the name — so it never renders as qualified SQL.
     /// </summary>
@@ -63,7 +84,7 @@ internal static class FisherTableNaming
     public static string QuotedTableName(string schemaName, string suffix)
         => SchemaUtils.QuoteName(TableName(schemaName, suffix));
 
-    private static bool IsDefaultSchema(string schemaName)
+    private static bool IsDefaultSchema(string? schemaName)
         => string.IsNullOrWhiteSpace(schemaName) ||
            schemaName.Equals(DefaultSchemaName, StringComparison.OrdinalIgnoreCase);
 }

@@ -3,36 +3,21 @@ using System.Text.Json;
 namespace Fisher.Linq.Members;
 
 /// <summary>
-///     A <see cref="DateTime" /> / <see cref="DateTimeOffset" /> document member.
+///     A <see cref="DateOnly" /> / <see cref="TimeOnly" /> document member.
 /// </summary>
 /// <remarks>
 ///     <para>
-///         This type has no Polecat counterpart, and the reason is worth stating plainly. Polecat writes
-///         <c>CAST(JSON_VALUE(data,'$.When') AS datetimeoffset)</c> and lets SQL Server compare real
-///         timestamps. SQLite has no date type, so the comparison is against whatever text
-///         System.Text.Json wrote into the document — and that text is <em>not</em> order-preserving:
+///         Unlike a timestamp, these two are already sortable in the form System.Text.Json writes them,
+///         so they need no normalisation — which is why they are not
+///         <see cref="TimestampMember" />. A <c>DateOnly</c> is a fixed-width <c>yyyy-MM-dd</c> with no
+///         offset to preserve and no fractional part to trim. A <c>TimeOnly</c> is a fixed-width
+///         <c>HH:mm:ss</c> whose optional fractional part is a strict suffix, so trailing-zero trimming
+///         shortens the string without ever changing which of two values compares smaller.
 ///     </para>
-///     <list type="bullet">
-///         <item>
-///             <description>
-///                 STJ trims trailing fractional zeros, so the same instant can be written
-///                 <c>12:34:56</c> or <c>12:34:56.789</c> depending on its precision.
-///             </description>
-///         </item>
-///         <item>
-///             <description>
-///                 The offset is preserved rather than normalised, so <c>12:34:56-05:00</c> sorts before
-///                 <c>12:34:56.789+00:00</c> as text while being five hours <em>later</em> in fact.
-///             </description>
-///         </item>
-///     </list>
 ///     <para>
-///         Equality still works, because the literal is rendered through the very serializer that wrote
-///         the document. Ordering and range comparison do not, so
-///         <see cref="AllowsRangeComparison" /> is false and the parser raises
-///         <see cref="BadLinqExpressionException" /> rather than emitting a predicate that returns
-///         plausible-but-wrong rows. Lifting the restriction means storing a normalised, sortable
-///         duplicate — the same shape Fisher will need for duplicated fields generally.
+///         There is consequently no locator wrapping here: <see cref="TypedLocator" /> and
+///         <see cref="RawLocator" /> are the same bare <c>json_extract</c>, as they are for every member
+///         whose stored form needs no help.
 ///     </para>
 ///     <para>
 ///         Note this concerns dates <em>inside document JSON</em> only. The <c>fi_events</c> and
@@ -57,7 +42,6 @@ internal class DateMember : IQueryableMember
     public string TypedLocator { get; }
     public string RawLocator { get; }
     public bool IsBoolean => false;
-    public bool AllowsRangeComparison => false;
 
     /// <summary>
     ///     Renders the value through the store's own serializer and strips the surrounding quotes, so

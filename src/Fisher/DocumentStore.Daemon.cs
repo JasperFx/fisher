@@ -200,8 +200,14 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     }
 
     /// <summary>
-    ///     The unquoted tables a projection publishes into, for those types the schema has mapped.
+    ///     The unquoted tables a projection publishes into.
     /// </summary>
+    /// <remarks>
+    ///     Normally that means one document table per published type the schema has mapped. A
+    ///     flat-table projection publishes no types at all — its rows are not documents — so it names
+    ///     its table directly through <c>IPublishesTables</c>; without that a rebuild would replay onto
+    ///     the rows the previous run left behind.
+    /// </remarks>
     private IReadOnlyList<string> PublishedTableNamesFor(string subscriptionName)
     {
         if (!Options.Projections.TryFindProjection(subscriptionName, out var source))
@@ -209,10 +215,17 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
             return [];
         }
 
-        return source.PublishedTypes()
+        var tables = source.PublishedTypes()
             .Where(Options.Schema.HasMappingFor)
             .Select(x => Options.Schema.MappingFor(x).TableName.Name)
-            .ToArray();
+            .ToList();
+
+        if (source is Projections.Flattened.IPublishesTables publisher)
+        {
+            tables.AddRange(publisher.PublishedTableNames());
+        }
+
+        return tables;
     }
 
     private static async Task<HashSet<string>> ReadExistingTableNamesAsync(

@@ -156,13 +156,19 @@ Working, with tests:
   their transaction; the default outbox drops every message
 - **Event-emitting async projections** — a projection's raised events are planned and appended inside
   the batch's own transaction
+- **Multi-stream projections** — `MultiStreamProjection<TDoc, TId>`, with `Identity` / `Identities` /
+  `FanOut` grouping, inline and async
+- **Flat-table projections** — `FlatTableProjection`, projecting into a plain relational table
+  through declarative column mappings rather than into a document
 
 Not implemented yet — do not assume these work:
 
-- **Document storage — all four identity types work.** `Store`/`Insert`/`Update`/`Delete`/
-  `LoadAsync`/`LoadManyAsync` over Guid, string, int and long ids, in the same unit of work and
-  transaction as event appends. What is still missing: no LINQ, no querying beyond load by id, no
-  soft delete, no hierarchies, no duplicated fields, no numeric revisions.
+- **Document storage** — `Store`/`Insert`/`Update`/`Delete`/`LoadAsync`/`LoadManyAsync` and LINQ all
+  work over Guid, string, int and long ids, in the same unit of work and transaction as event
+  appends. What is still missing: no soft delete, no hierarchies, no duplicated fields (fisher#2),
+  no numeric revisions.
+- **Event rewriting** — `OverwriteEvent` / `CompletelyReplaceEvent` throw, stream compacting throws
+  (fisher#10), and `IEventDataMasking` has no implementation at all (fisher#9).
 
 ### Inline projections
 
@@ -186,6 +192,42 @@ type can be stored without ever being registered and a snapshot type is register
 configuration — either way the first write may be the first time the table is needed. Only types the
 schema has already mapped are considered, which is how a document operation is told apart from an
 event one.
+
+### Flat-table projections
+
+`Projections/Flattened/` — a `FlatTableProjection` writes into a plain relational table keyed on the
+stream, through `Project<T>(map => …)` mappings (`Map`, `SetValue`, `Increment`, `Decrement`) and
+`Delete<T>()`. Ported from Polecat's, which is the closest template; the mapping API and the column-map
+shapes are its, and four things are not.
+
+- **One `insert … on conflict … do update`, where Polecat emits a `MERGE`.** SQLite has had upsert
+  syntax since 3.24, so the matched and not-matched branches are two clauses of one statement — which
+  is also why a parameter appearing in both is bound once by name rather than duplicated. **An
+  unqualified column on the right of the update assignment is the pre-update row**, which is what makes
+  `"a" = "a" + @p1` an increment; `excluded."a"` would be the value the insert branch would have
+  written. Polecat spells the same thing `target.[a]`.
+- **The table is created by the migration, not lazily on first write.** Registering the projection puts
+  a `FlatTableFeatureSchema` into the store's feature set, so `ApplyAllConfiguredChangesToDatabaseAsync`
+  creates it with everything else and `AutoCreate.None` is honoured for free. Polecat issues a CREATE
+  TABLE from inside its first apply, which works but routes around the store's schema policy.
+- **The physical name folds the store's logical schema in, and is resolved in `DocumentStore`'s
+  constructor** rather than in the projection's. SQLite has no schemas, so the prefix *is* the isolation
+  boundary between two logical stores in one file — a flat table that kept the bare name would be
+  silently shared by both. The projection's constructor cannot see the store, and the projection is
+  usually registered in the same configuration lambda that sets `DatabaseSchemaName`, in either order,
+  so the fold happens once the options are final. The `fi_` family prefix is *not* applied:
+  `FisherTableNaming.UserTableName` exists precisely because that prefix marks a table Fisher owns the
+  shape of, and a flat table's shape is the projection's. The rename needs `FlatTable : Table`, because
+  `SchemaObjectBase.Identifier` has a protected setter and Weasel's `MoveToSchema` only changes the
+  qualifier.
+- **Rebuild teardown is told the table name directly.** `PublishedTypes()` is empty — a flat table's
+  rows are not documents — so the mapped-type sweep in `TeardownExistingProjectionStateAsync` cannot see
+  it, and `IPublishesTables` is what closes that. Without it a rebuild replays onto the rows the
+  previous run left, which the compliance suite catches with a row the replay cannot recreate.
+
+The primary key holds a stream id, so it is TEXT and bound through the lowercase-canonical conversion —
+the `SqliteGuidIdentification` trap, in the one place a flat table meets it. Bound any other way, the
+second event on a stream inserts a second row instead of updating the first.
 
 ### The async daemon
 
@@ -507,9 +549,10 @@ back to client-side evaluation.
 The port is **smaller** than its source. `json_extract` returns a JSON number as INTEGER, a float as
 REAL, a string as TEXT and `true`/`false` as INTEGER 1/0 — unlike `JSON_VALUE`, which always returns
 `nvarchar`. So there is no `CAST` anywhere, and Polecat's `SqlTypeMap` / `BuildTypedLocator` /
-`SupportsReturning` machinery has no analogue; `TypedLocator` and `RawLocator` are the same string.
+`SupportsReturning` machinery has no analogue; `TypedLocator` and `RawLocator` are the same string for
+every member except a timestamp, which is the one case that needs wrapping.
 
-Four SQLite decisions that are easy to get wrong and fail silently:
+Five SQLite decisions that are easy to get wrong and fail silently:
 
 - **String predicates use `instr`/`substr`, not `LIKE`.** SQLite's `LIKE` is case-*insensitive* for
   ASCII while `=` is case-*sensitive*, so a LIKE-based `Contains("frodo")` matches `"Frodo"` on data
@@ -520,16 +563,29 @@ Four SQLite decisions that are easy to get wrong and fail silently:
   `ORDER BY (SELECT NULL)` filler is not emitted because SQLite does not need it and it would impose a
   sort nobody asked for. An offset with no limit must say `limit -1` first — a bare `offset` is a
   parse error.
-- **Dates support equality but not ordering.** `DateMember.AllowsRangeComparison` is false and both
-  the where parser and `OrderBy` refuse. System.Text.Json trims trailing fractional zeros and keeps
-  the original offset, so `12:34:56-05:00` sorts before `12:34:56.789+00:00` while being five hours
-  later. The literal for an equality comparison is rendered *through the store's own serializer*,
-  because no format string reproduces STJ's trimming. **Lifting this does not need a duplicated
-  column** — `strftime('%Y-%m-%dT%H:%M:%f', json_extract(...))` normalises the offset inline and
-  keeps milliseconds, verified against 3.51; see fisher#1. A duplicated column is what would make
-  the result *indexable* (fisher#2), which is a separate concern. This is documents only: the
-  `fi_events`/`fi_streams` timestamp columns use `SqliteTimestamp`'s fixed-width UTC format precisely
-  so they *do* sort as text.
+- **A timestamp is compared through SQLite's date parser, not against the raw JSON.**
+  `TimestampMember.TypedLocator` is `strftime('%Y-%m-%dT%H:%M:%f', json_extract(...))`, which folds the
+  trailing offset into UTC and renders fixed-width to the millisecond. Without it the comparison is
+  against the text System.Text.Json wrote, and that is not order-preserving twice over: trailing
+  fractional zeros are trimmed, and the original offset is kept, so `12:34:56-05:00` sorts before
+  `12:34:56.789+00:00` while being five hours later. **Equality goes through the same normalisation as
+  ordering** — two spellings of one instant must not be equal for `>=` and unequal for `==` — which
+  costs sub-millisecond discrimination on `==`, as it does on the siblings (`timestamptz` is microsecond
+  precision). `RawLocator` stays bare, because a null test asks whether the member is present, not
+  whether it parses. **`DateOnly` and `TimeOnly` need none of this** and stay on `DateMember`: a
+  `DateOnly` is fixed-width with no offset and no fraction, and a `TimeOnly`'s optional fraction is a
+  strict suffix, so trimming shortens the string without changing which of two values compares smaller.
+  This is documents only — the `fi_events`/`fi_streams` timestamp columns use `SqliteTimestamp`'s
+  fixed-width UTC format precisely so they *do* sort as text. Making the result *indexable* is a
+  separate concern (fisher#2), and `strftime` over `json_extract` being computed per row is what makes
+  it worth having.
+- **`AllowsRangeComparison` is still false for one member: a string-stored enum.** Under
+  `EnumStorage.AsString` the stored value is the member's *name*, so ordering by it sorts alphabetically
+  rather than by the enum's declared order — `HighDistinction` before `Pass`, whatever the values say.
+  Both the where parser and `OrderBy` refuse rather than answer wrongly, naming `EnumStorage` in the
+  message. Fisher's default is `AsInteger`, where `json_extract` yields a number that orders correctly
+  with no help. That property survives fisher#1 precisely because this case exists; it is the seam for
+  "correct for equality, meaningless when ordered", not a date-specific flag.
 - **`array.Contains(x)` binds to `MemoryExtensions.Contains(ReadOnlySpan<T>, T)`**, not
   `Enumerable.Contains`, so `EnumerableContains` matches on the call's shape rather than its declaring
   type. The span operand cannot be evaluated by compiling a lambda either — `ReadOnlySpan<T>` is a ref
@@ -583,14 +639,16 @@ coalescing on purpose. Do not present it as a performance feature.
 ### Compliance suites
 
 **Fisher is enrolled, in full.** `JasperFx.Events.ComplianceTests` is referenced unconditionally —
-the old `$(EnableComplianceTests)` gate is gone. **All 17 suites are live, 124 shared tests.**
-`AsyncDaemonCompliance` was the last one in.
+the old `$(EnableComplianceTests)` gate is gone. **All 21 suites are live, 167 shared tests**, as of
+2.41.0. The four that arrived in 2.40.0/2.41.0 — `StringStreamIdentityCompliance`,
+`SnapshotLifecycleCompliance`, `MultiStreamProjectionCompliance`, `FlatTableProjectionCompliance` — went
+in on the same bump.
 
 The mechanics, because they are not what the package's name suggests:
 
 - **Every suite compiles; only the subclassed ones run.** Enrolling is one empty class in
   `fisher_event_store_compliance.cs`. Not enrolling costs nothing at runtime — but the shared source
-  still has to compile, which is why all four global aliases in `ComplianceAliases.cs` must resolve
+  still has to compile, which is why every global alias in `ComplianceAliases.cs` must resolve
   even for suites Fisher cannot pass.
 - Every suite now compiles. The two `EventProjection*` suites were once `<Compile Remove>`d because
   they call `IDocumentSession.Store` and `IQuerySession.LoadAsync`; document storage made them
@@ -601,6 +659,19 @@ The mechanics, because they are not what the package's name suggests:
 - `CleanEventDataAsync` now delegates to `Advanced.Clean.DeleteAllEventDataAsync`. It is called
   before every test, so it cannot throw the way the unsupported members do — hence the null guard
   rather than the `Store` accessor.
+- **`QueryTableAsync` is the seam's only raw data access**, added in 2.41.0 for the flat-table suite —
+  a table name in, every row out, deliberately predicate-free. Fisher's implementation does the
+  schema fold and **converts a lowercase-canonical Guid string back to a `Guid`**. That conversion is
+  not a fudge: SQL Server has `uniqueidentifier` and PostgreSQL has `uuid`, so on both siblings the
+  provider hands the suite a `Guid` and `Equals(row["id"], streamId)` matches. SQLite has no such
+  type, so something has to convert, and doing it there is the same explicit `Guid.Parse` the row
+  readers do. Matching on the canonical rendering rather than `Guid.TryParse` alone is what keeps it
+  from claiming an ordinary string column holding Guid-shaped text in some other casing.
+- A suite may gate itself on a fixture capability flag rather than on enrollment —
+  `SupportsFlatTableProjections` is the 2.41.0 example, and exists so a store can enroll the suite
+  before the feature and use it as the specification. Fisher leaves it true; the suite's projection
+  still needs a real `FlatTableProjection` base to compile against either way, and Fisher's half of
+  that shim is `Compliance/ComplianceFlatTableProjection.Fisher.cs`.
 
 ### Session metadata on appended events
 

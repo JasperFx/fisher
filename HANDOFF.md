@@ -1,8 +1,8 @@
 # Handoff
 
-State of Fisher after the JasperFx 2.39.4 upgrade, `DocumentStore : IEventStore`, the rebuild
-concurrency cap, the LINQ layer, DCB tags, and **the async daemon, now landed**. Written for whoever
-picks this up next.
+State of Fisher after the **JasperFx 2.41.0 upgrade**, which brought four new compliance suites and
+with them multi-stream projections, flat-table projections, and the fix for fisher#1. Written for
+whoever picks this up next.
 
 **Nothing is half-built.** Every milestone on disk builds, is tested, and was committed complete.
 [ROADMAP.md](ROADMAP.md) says what comes next and why in that order.
@@ -10,33 +10,43 @@ picks this up next.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**406 tests green on net9.0 and net10.0**, three consecutive full runs. 124 of them are shared
-cross-store compliance tests.
+**461 tests green on net9.0 and net10.0.** 167 of them are shared cross-store compliance tests, and
+those ran three consecutive times clean before this was written.
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.39.4 ships **17 suites, 124 tests**. Fisher passes **all 124,
-all 17 suites**. Every suite compiles; every one is now also subclassed and running.
+`JasperFx.Events.ComplianceTests` 2.41.0 ships **21 suites, 167 tests**. Fisher passes **all 167,
+all 21 suites**. Every suite compiles; every one is also subclassed and running.
 
-`AsyncDaemonCompliance` was the last one in. 2.39.4 had added three suites: `FetchLatestCompliance`
-and `StreamArchivingCompliance` went green on the version bump alone, with no production change,
-because `FetchLatest`/`ProjectLatest` and `ArchiveStream` were already built to the shape the shared
-suite expects. The third, `EventStoreExplorerCompliance`, is what motivated
-`DocumentStore : IEventStore`.
+The four that arrived in 2.40.0 and 2.41.0 divided cleanly into "already true" and "had to be built":
 
-### Green — 17 suites, 124 tests
+| New suite | What it cost |
+|---|---|
+| `StringStreamIdentityCompliance` | Nothing. 19 tests green on the bump alone — `StreamIdentity.AsString` was already built to the shape the suite expects. |
+| `SnapshotLifecycleCompliance` | Nothing. 6 tests green on the bump alone; inline and async snapshots already agreed. |
+| `MultiStreamProjectionCompliance` | One file. `MultiStreamProjection<TDoc, TId>` closes JasperFx's shared base over Fisher's session pair, and all 10 tests passed first run — slicing, `Identities`, `FanOut`, inline and async. The document-storage work that let a projection key on a string paid for this. |
+| `FlatTableProjectionCompliance` | A real feature: `Projections/Flattened/`, ~700 lines. See CLAUDE.md. |
+
+**Green on all twenty-one is not the same as feature-complete.** The suites cover what is portable
+across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
+
+### Green — 21 suites, 167 tests
 
 | Suite | Tests |
 |---|---|
 | `DcbTagQueryAndConsistencyCompliance` | 26 |
+| `StringStreamIdentityCompliance` | 19 |
 | `FetchForWritingCompliance` | 13 |
 | `StreamReadCompliance` | 11 |
+| `MultiStreamProjectionCompliance` | 10 |
 | `EventMetadataCompliance` | 9 |
 | `SelfAggregatingEvolveCompliance` | 8 |
+| `FlatTableProjectionCompliance` | 8 |
 | `FetchLatestCompliance` | 7 |
 | `LiveAggregationCompliance` | 7 |
 | `StringIdentitySingleStreamCompliance` | 6 |
 | `StreamArchivingCompliance` | 6 |
+| `SnapshotLifecycleCompliance` | 6 |
 | `EventStoreExplorerCompliance` | 6 |
 | `AssignTagWhereCompliance` | 6 |
 | `RebuildConcurrencyCapCompliance` | 5 |
@@ -46,8 +56,14 @@ suite expects. The third, `EventStoreExplorerCompliance`, is what motivated
 | `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-**Green on all seventeen is not the same as feature-complete.** The suites cover what is portable
-across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
+### What the 2.41.0 bump did *not* cost
+
+`CompactStreamAsync<T>` moved onto `IEventStoreOperations` (jasperfx#635). The upstream note warns that
+adoption is not optional, because Marten and Polecat both declared the member themselves and would go
+ambiguous on bumping. **Fisher never declared it**, so there was nothing to collapse and the
+default-implemented throw is exactly the right behaviour here. `IEventDataMasking` moved into
+`JasperFx.Events/Protected/` in the same release; Fisher implements none of it. Both are now tracked —
+fisher#10 and fisher#9.
 
 ### What the fixture still throws
 
@@ -60,7 +76,13 @@ enrolling prematurely fails loudly rather than passing on a stub.
 the `DocumentStore`. `StartDaemonAsync` builds one daemon per fixture and keeps it, so disposal can
 stop it — a second daemon over the same file would mean two writers contending for one lock.
 
-`EventOperations.Unsupported.cs` is now down to **two members**, both event-rewrite
+`QueryTableAsync` arrived with 2.41.0 and is the seam's only raw data access — a table name in, every
+row out, deliberately predicate-free. Fisher's does the schema fold and converts a lowercase-canonical
+Guid string back to a `Guid`, because SQL Server has `uniqueidentifier` and PostgreSQL has `uuid` while
+SQLite has neither, so on Fisher *something* has to convert. See CLAUDE.md for why that is the honest
+answer rather than a fudge.
+
+`EventOperations.Unsupported.cs` is still **two members**, both event-rewrite
 (`OverwriteEvent`, `CompletelyReplaceEvent`). That file shrinking is the progress measure.
 
 ### The rebuild concurrency cap
@@ -83,9 +105,9 @@ pins the default.
 none of it lands on the store's own public API. Most of the interface is default-implemented by
 JasperFx and left alone. Fisher overrides the two explorer reads it can answer out of `fi_streams`
 (`GetRecentStreamsAsync`, `GetStreamMetadataAsync`) and supplies `TryCreateUsage`; the required
-members it cannot honour — `BuildProjectionDaemonAsync`, `OpenReadOnlyEventStore`,
-`CompactStreamAsync` — throw naming their milestone, the same discipline as
-`EventOperations.Unsupported.cs`.
+members it cannot honour — `OpenReadOnlyEventStore` and `CompactStreamAsync` (fisher#10) — throw
+naming their milestone, the same discipline as `EventOperations.Unsupported.cs`.
+`BuildProjectionDaemonAsync` used to be on that list and is now real.
 
 Two SQLite-specific things the shared suite does **not** cover, pinned by
 `src/Fisher.Tests/Events/event_store_explorer.cs` instead:
@@ -292,6 +314,52 @@ an already-elapsed timeout so the cancellation *must* come out of a read.
 
 Both fixes were verified by reverting them: each new test fails without its fix.
 
+## Flat-table projections — the one new feature 2.41.0 demanded
+
+`FlatTableProjectionCompliance` is the only one of the four new suites Fisher could not pass by being
+enrolled. It needs a real flat-table projection base, and it says so plainly: the shared partial
+carries the table name, the projection name and every mapping, and each consumer supplies a small
+partial with the constructor and the primary key column, because no single `base(...)` call satisfies
+Marten, Polecat and Fisher. Fisher's half is three lines, in
+`Compliance/ComplianceFlatTableProjection.Fisher.cs`.
+
+`src/Fisher/Projections/Flattened/` is a port of Polecat's — the mapping API and the column-map shapes
+are its. Four things are not, and each is a decision rather than a translation:
+
+1. **One `insert … on conflict … do update` where Polecat emits a `MERGE`.** SQLite has had upsert
+   syntax since 3.24, so matched and not-matched are two clauses of one statement, and a parameter
+   appearing in both is bound once by name. **An unqualified column on the right of the update
+   assignment is the pre-update row** — that is what makes `"a" = "a" + @p1` an increment, where
+   `excluded."a"` would be what the insert branch would have written. Polecat spells it `target.[a]`.
+2. **The table is created by the migration, not lazily on first write.** Registering the projection
+   puts a `FlatTableFeatureSchema` into the store's feature set. Polecat issues a CREATE TABLE from
+   inside its first apply, which works but routes around `AutoCreateSchemaObjects` — a store set to
+   `AutoCreate.None` would still get DDL. `auto_create_none_leaves_the_table_alone` pins Fisher's.
+3. **The physical name folds the store's logical schema in, resolved in `DocumentStore`'s
+   constructor.** SQLite has no schemas, so the prefix *is* the isolation boundary between two logical
+   stores in one file, and a flat table that kept its bare name would be silently shared by both. The
+   projection's constructor cannot see the store and is usually registered in the same lambda that sets
+   `DatabaseSchemaName`, in either order — so the fold waits until the options are final. The `fi_`
+   family prefix is deliberately *not* applied: it marks a table Fisher owns the shape of, and a flat
+   table's shape is the projection's. The rename needs `FlatTable : Table`, because
+   `SchemaObjectBase.Identifier` has a protected setter and Weasel's `MoveToSchema` only changes the
+   qualifier.
+4. **Rebuild teardown is told the table name directly**, through `IPublishesTables`. `PublishedTypes()`
+   is empty — a flat table's rows are not documents — so the mapped-type sweep in
+   `TeardownExistingProjectionStateAsync` cannot see it, and without this a rebuild replays onto the
+   rows the previous run left. The compliance suite catches exactly that, with a row whose events it
+   archives so the replay cannot recreate it.
+
+The Guid trap shows up here too, in the one place a flat table meets it: the primary key holds a stream
+id, so it goes down through the lowercase-canonical conversion. Bound any other way, the second event
+on a stream inserts a second row instead of updating the first —
+`the_stream_id_key_is_stored_as_lowercase_canonical_text` is what would fail.
+
+`MultiStreamProjection<TDoc, TId>`, by contrast, is one file that closes JasperFx's shared base over
+Fisher's session pair, and all ten of its compliance tests passed on the first run — grouping,
+`Identities`, `FanOut`, inline and async. The reason it was that cheap is that the document-storage
+work already let a projection key on something other than the stream identity.
+
 ## The LINQ layer
 
 Ported from Polecat, which owns `Polecat.Linq.SqlGeneration` itself rather than taking it from
@@ -353,25 +421,43 @@ ORDER BY before OFFSET and emits `ORDER BY (SELECT NULL)` as filler; SQLite does
 one would impose a sort the caller never asked for. An offset with no limit must say `limit -1`
 first — a bare `offset 2` is a parse error, verified.
 
-### Dates are a real capability gap, not a port detail
+### Dates — fisher#1, closed, and it did not need duplicated fields
 
-`DateMember` has no Polecat counterpart. Polecat casts to `datetimeoffset` and lets SQL Server
-compare instants. Fisher can only compare the text System.Text.Json wrote, and that text is **not
-order-preserving**: STJ trims trailing fractional zeros and preserves the original offset, so
-`12:34:56-05:00` sorts before `12:34:56.789+00:00` while being five hours later.
+Earlier handoffs said lifting this needed a normalised sortable duplicated column. It did not.
+`TimestampMember.TypedLocator` is `strftime('%Y-%m-%dT%H:%M:%f', json_extract(...))`, which hands the
+stored text to SQLite's own date parser: the trailing offset is folded into UTC and the result is
+fixed-width to the millisecond, so it sorts as text. That is the same move Polecat makes with
+`CAST(... AS datetimeoffset)` and Marten with `timestamptz`, spelled the way SQLite spells it.
 
-Equality works — the literal is rendered through the very serializer that wrote the document, because
-no format string reproduces STJ's trimming. Ordering and range comparison set
-`AllowsRangeComparison` false so the parser refuses rather than returning plausible-but-wrong rows,
-in both `Where` and `OrderBy`.
+Three decisions in it worth not relitigating:
 
-**Correction, and it matters for planning.** Earlier notes here said lifting this requires a
-normalised sortable duplicated column. That is overstated: SQLite's
-`strftime('%Y-%m-%dT%H:%M:%f', json_extract(...))` normalises the offset *and* keeps milliseconds
-inline, verified against 3.51 — `order by datetime(...)` puts `12:34:56-05:00` last where raw text
-order puts it in the middle. So **fisher#1 (correctness) can ship without duplicated fields**;
-**fisher#2 (duplicated fields) is the performance follow-on**, since a function-wrapped locator
-cannot be served by an index.
+- **Equality goes through the same normalisation as ordering**, not the exact serializer rendering it
+  used before. Two spellings of one instant must not be equal for `>=` and unequal for `==`. The cost
+  is that `==` discriminates only to the millisecond — `%f` has no sub-millisecond form — but
+  `timestamptz` is microsecond precision, so the siblings truncate a `DateTimeOffset` too. This is
+  closer to their behaviour, not further from it.
+- **`DateOnly` and `TimeOnly` did not need it and did not get it.** A `DateOnly` is fixed-width
+  `yyyy-MM-dd` with no offset and no fraction; a `TimeOnly`'s optional fraction is a strict suffix, so
+  trimming shortens the string without changing which of two values compares smaller. They stay on
+  `DateMember` and the bare locator.
+- **A `DateTime` with `Kind.Unspecified` is not shifted.** STJ writes it with no offset and SQLite
+  reads an offsetless string as already UTC, so converting the literal would move it off the values it
+  is meant to match.
+
+`querying_documents` pins it end to end with four documents whose *text* order and *instant* order
+disagree at every position — that list is the test, and a locator that compared raw text would pass an
+assertion built on the wrong one.
+
+**`AllowsRangeComparison` survives**, because building this turned up a second unsortable member: a
+string-stored enum. Under `EnumStorage.AsString` the stored value is the member's name, so
+`x.Grade > Grade.Pass` and `OrderBy(x => x.Grade)` sorted alphabetically rather than by the enum's
+declared order — quietly wrong, no signal. Both now refuse and name `EnumStorage` in the message.
+Fisher's default is `AsInteger`, which orders correctly and is unaffected.
+
+fisher#2 (duplicated fields) is still the performance follow-on and is now more clearly worth having:
+`strftime` over `json_extract` is computed per row and no index can serve it. A **generated column**
+may be the better shape than a written one — SQLite indexes `VIRTUAL` generated columns, so the
+duplication costs index space but not row space, and it cannot drift from `data`.
 
 This concerns documents only. The `fi_events` / `fi_streams` timestamp columns are
 `SqliteTimestamp`'s fixed-width UTC format precisely so they *do* sort as text.
@@ -490,19 +576,24 @@ Each of these is a decision with a reason, not an oversight:
 - **No `Select` projections, `GroupBy`, `Include`/joins or `Distinct`.** `session.Query<T>()` covers
   filtering, ordering and paging; anything else throws by name rather than falling back to
   client-side evaluation.
-- **No ordering or range comparison on a date member.** See the LINQ section — the stored text does
-  not sort by instant.
-- **`GetOrStartMessageSink` throws** — projection side effects cannot be published, which is why the
-  projection batch's `PublishMessageAsync` throws too
-  ([fisher#4](https://github.com/JasperFx/fisher/issues/4)).
-- **An async projection cannot append events of its own**
-  ([fisher#3](https://github.com/JasperFx/fisher/issues/3)).
-- **No dead letters.** A failing event stops its shard rather than being quarantined
-  ([fisher#5](https://github.com/JasperFx/fisher/issues/5)).
+- **No ordering or range comparison on a string-stored enum.** See the LINQ section — the stored form
+  is the member's name, so it sorts alphabetically rather than by declared order. Timestamps used to
+  be on this list and no longer are (fisher#1).
+- **No message bus.** The side-effect seam is real and both commit paths bracket their transaction,
+  but the default `NulloMessageOutbox` drops every message, so nothing in the box delivers one —
+  [fisher#8](https://github.com/JasperFx/fisher/issues/8). That is the sibling behaviour, not a stub.
+- **No event rewriting.** `OverwriteEvent` / `CompletelyReplaceEvent` throw, stream compacting throws
+  ([fisher#10](https://github.com/JasperFx/fisher/issues/10)), and `IEventDataMasking` — lifted into
+  JasperFx.Events in 2.41.0 — has no implementation at all
+  ([fisher#9](https://github.com/JasperFx/fisher/issues/9)). All three share a hazard: an async
+  projection that has already passed a rewritten event does not see the rewrite.
 - **No soft delete, hierarchies, numeric revisions, sub-classing.** All additive against the current
   column shape.
 - **No duplicated fields**, so no query can use an index —
   [fisher#2](https://github.com/JasperFx/fisher/issues/2).
+- **Multi-tenancy stops at a tenant id column.** No database-per-tenant, which is why every
+  `IEventDatabase` parameter in `DocumentStore.Daemon.cs` is ignored.
+- **No DI registration.** There is no `AddFisher(...)`; a store is built with `DocumentStore.For`.
 
 ## Traps that have already cost real time
 

@@ -70,6 +70,12 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
             schemas.Add(new HiloFeatureSchema(_options.DatabaseSchemaName));
         }
 
+        // A flat table has no document mapping to be discovered through — the projection itself owns
+        // the table definition, which is complete by the time it was registered.
+        schemas.AddRange(_options.Projections.All
+            .OfType<Projections.Flattened.FlatTableProjection>()
+            .Select(x => new Projections.Flattened.FlatTableFeatureSchema(x)));
+
         return schemas.ToArray();
     }
 

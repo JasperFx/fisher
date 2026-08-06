@@ -140,30 +140,74 @@ public class member_locators
     }
 
     /// <summary>
-    ///     Rendered through the serializer rather than a format string, because STJ trims trailing
-    ///     fractional zeros and no single format reproduces that.
+    ///     A timestamp is compared through SQLite's date parser rather than against the raw JSON, so the
+    ///     locator wraps the extract in the <c>strftime</c> that normalises it.
     /// </summary>
     [Fact]
-    public void a_date_converts_to_exactly_what_the_serializer_writes()
+    public void a_timestamp_locator_normalises_through_strftime()
+    {
+        var member = Resolve(x => x.JoinedAt);
+
+        member.TypedLocator.ShouldBe("strftime('%Y-%m-%dT%H:%M:%f', json_extract(data, '$.joinedAt'))");
+
+        // The bare extract, because a null test asks whether the member is present — not whether it
+        // parses as a date.
+        member.RawLocator.ShouldBe("json_extract(data, '$.joinedAt')");
+    }
+
+    /// <summary>
+    ///     The literal has to be rendered the way the locator renders the stored value: UTC, fixed
+    ///     width, milliseconds. This is the half that makes fisher#1's fix correct rather than merely
+    ///     emitted — an offset literal compared against a normalised column matches nothing.
+    /// </summary>
+    [Fact]
+    public void a_timestamp_converts_to_the_normalised_utc_rendering()
     {
         var member = Resolve(x => x.JoinedAt);
 
         member.ConvertValue(new DateTimeOffset(2026, 8, 4, 12, 34, 56, 789, TimeSpan.Zero))
-            .ShouldBe("2026-08-04T12:34:56.789+00:00");
+            .ShouldBe("2026-08-04T12:34:56.789");
+
+        // Trailing zeros are written out rather than trimmed, which is exactly the asymmetry the raw
+        // serializer rendering had.
         member.ConvertValue(new DateTimeOffset(2026, 8, 4, 12, 34, 56, 0, TimeSpan.Zero))
-            .ShouldBe("2026-08-04T12:34:56+00:00");
+            .ShouldBe("2026-08-04T12:34:56.000");
+
+        // And an offset is folded into UTC, so the same instant written two ways converts identically.
+        member.ConvertValue(new DateTimeOffset(2026, 8, 4, 7, 34, 56, 789, TimeSpan.FromHours(-5)))
+            .ShouldBe("2026-08-04T12:34:56.789");
     }
 
     /// <summary>
-    ///     Those two values above are the whole argument: the same member can be written with or
-    ///     without a fractional part, and the offset is preserved rather than normalised, so ordering
-    ///     the stored text does not order the instants. Range comparison is refused rather than
-    ///     answered wrongly.
+    ///     A DateTime with no Kind is written by STJ without an offset, and SQLite reads an offsetless
+    ///     string as already UTC — so shifting it here would move the literal off the values it means to
+    ///     match.
     /// </summary>
     [Fact]
-    public void a_date_refuses_range_comparison()
+    public void an_unspecified_datetime_is_not_shifted()
     {
-        Resolve(x => x.JoinedAt).AllowsRangeComparison.ShouldBeFalse();
+        var member = new TimestampMember("json_extract(data, '$.when')", typeof(DateTime));
+
+        member.ConvertValue(new DateTime(2026, 8, 4, 12, 34, 56, DateTimeKind.Unspecified))
+            .ShouldBe("2026-08-04T12:34:56.000");
+    }
+
+    /// <summary>
+    ///     What remains unsortable after fisher#1: a string-stored enum, whose stored form is the
+    ///     member's name. Ordering by it would sort alphabetically rather than by the enum's declared
+    ///     order, so it is refused rather than answered wrongly — the call timestamps used to make.
+    /// </summary>
+    [Fact]
+    public void a_string_stored_enum_refuses_range_comparison()
+    {
+        Resolve(x => x.Grade, o => o.ConfigureSerialization(EnumStorage.AsString))
+            .AllowsRangeComparison.ShouldBeFalse();
+
+        // Fisher's default. A JSON number orders by the enum's declared values, so there is nothing to
+        // refuse.
+        Resolve(x => x.Grade).AllowsRangeComparison.ShouldBeTrue();
+
+        Resolve(x => x.JoinedAt).AllowsRangeComparison.ShouldBeTrue();
         Resolve(x => x.Age).AllowsRangeComparison.ShouldBeTrue();
         Resolve(x => x.Name).AllowsRangeComparison.ShouldBeTrue();
     }

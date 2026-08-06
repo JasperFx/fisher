@@ -3,27 +3,31 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of the async daemon landing. **All 17 compliance suites green.** 406 tests green on net9.0
-and net10.0, **124 of them shared cross-store compliance tests across 17 suites**.
+Status as of the JasperFx 2.41.0 upgrade. **All 21 compliance suites green.** 461 tests green on
+net9.0 and net10.0, **167 of them shared cross-store compliance tests across 21 suites**.
 
 ## The destination
 
-**First round of JasperFx compliance tests passing — reached, in full.**
-`JasperFx.Events.ComplianceTests` is the shared cross-store suite Marten and Polecat both enroll in;
-passing it is what makes Fisher a real Critter Stack event store rather than a lookalike. All
-seventeen suites are green:
+**First round of JasperFx compliance tests passing — reached, and held through two package bumps
+that added four suites.** `JasperFx.Events.ComplianceTests` is the shared cross-store suite Marten and
+Polecat both enroll in; passing it is what makes Fisher a real Critter Stack event store rather than a
+lookalike. All twenty-one suites are green:
 
 | Suite | Tests |
 |---|---|
 | `DcbTagQueryAndConsistencyCompliance` | 26 |
+| `StringStreamIdentityCompliance` | 19 |
 | `FetchForWritingCompliance` | 13 |
 | `StreamReadCompliance` | 11 |
+| `MultiStreamProjectionCompliance` | 10 |
 | `EventMetadataCompliance` | 9 |
 | `SelfAggregatingEvolveCompliance` | 8 |
+| `FlatTableProjectionCompliance` | 8 |
 | `FetchLatestCompliance` | 7 |
 | `LiveAggregationCompliance` | 7 |
 | `StringIdentitySingleStreamCompliance` | 6 |
 | `StreamArchivingCompliance` | 6 |
+| `SnapshotLifecycleCompliance` | 6 |
 | `EventStoreExplorerCompliance` | 6 |
 | `AssignTagWhereCompliance` | 6 |
 | `RebuildConcurrencyCapCompliance` | 5 |
@@ -33,27 +37,33 @@ seventeen suites are green:
 | `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-`AsyncDaemonCompliance` was the last one in, and its two-test count badly understated it: those tests
-demand the whole daemon. JasperFx supplies the machinery (~10,500 lines); a store supplies the
-storage seam — for Fisher that is `IEventDatabase` on `FisherDatabase`, the high-water detector, the
-event loader, the projection batch, and the generic half of `IEventStore<IDocumentSession,
-IQuerySession>`.
+Two of the four new suites — `StringStreamIdentityCompliance` and `SnapshotLifecycleCompliance` — went
+green on the version bump alone, which is the useful signal: string stream identity and the
+inline/async snapshot equivalence were already built to the shape the shared suite expects.
+`MultiStreamProjectionCompliance` cost one file. `FlatTableProjectionCompliance` cost a real feature,
+and is the only one that did.
 
-Being green on all seventeen is not the same as being feature-complete against Marten. The suites
+Test counts keep understating the suites that matter. `AsyncDaemonCompliance` is two tests that demand
+the whole daemon; `FlatTableProjectionCompliance` is eight that demand an upsert generator, a
+migration hook and rebuild teardown.
+
+Being green on all twenty-one is not the same as being feature-complete against Marten. The suites
 cover what is portable across stores; the deliberate gaps listed in HANDOFF.md are still gaps.
 
 ## Filed follow-ups
 
 | Issue | What |
 |---|---|
-| [fisher#1](https://github.com/JasperFx/fisher/issues/1) | LINQ: ordering and range comparison on date document members. Correctness only — `strftime` normalises inline, no duplicated column needed. |
-| [fisher#2](https://github.com/JasperFx/fisher/issues/2) | Duplicated fields, so a query can use an index. The performance follow-on to #1, independent of it. |
+| ~~[fisher#1](https://github.com/JasperFx/fisher/issues/1)~~ | **Closed.** LINQ ordering and range comparison on date document members — `strftime` normalises inline, no duplicated column needed, exactly as predicted. |
+| [fisher#2](https://github.com/JasperFx/fisher/issues/2) | Duplicated fields, so a query can use an index. The performance follow-on to #1, and more clearly worth having now that a timestamp locator is a function computed per row. |
 | ~~[fisher#3](https://github.com/JasperFx/fisher/issues/3)~~ | **Closed.** Event-emitting async projections — raised events are planned and appended inside the batch's transaction. |
 | ~~[fisher#4](https://github.com/JasperFx/fisher/issues/4)~~ | **Closed.** Projection side effects — `IMessageOutbox` / `IMessageBatch`, both commit paths bracketed. |
 | [fisher#8](https://github.com/JasperFx/fisher/issues/8) | No built-in outbox, so a published side effect has no durable delivery without a bus integration. Follow-on from #4; whether it is Fisher's job is the open question. |
 | ~~[fisher#5](https://github.com/JasperFx/fisher/issues/5)~~ | **Closed.** Dead letter queue — `fi_dead_letters`, so `SkipApplyErrors` quarantines rather than stopping the shard. |
 | ~~[fisher#6](https://github.com/JasperFx/fisher/issues/6)~~ | **Closed.** `DeleteAllEventDataAsync` violated the tag tables' foreign key. Found while building #5. |
 | ~~[fisher#7](https://github.com/JasperFx/fisher/issues/7)~~ | **Closed.** `WaitForNonStaleProjectionDataAsync` threw `OperationCanceledException` instead of `TimeoutException` when the clock landed mid-query. |
+| [fisher#9](https://github.com/JasperFx/fisher/issues/9) | Event data masking. `IEventDataMasking` was lifted into JasperFx.Events in 2.41.0; Fisher implements none of it. |
+| [fisher#10](https://github.com/JasperFx/fisher/issues/10) | Stream compacting. `CompactStreamAsync` throws at both levels. |
 
 Every deliberate gap gets an issue. A note in this file or in CLAUDE.md is context, not tracking —
 if something is deferred, it is in the list above.
@@ -85,6 +95,9 @@ if something is deferred, it is in the list above.
 | Dead letters | `fi_dead_letters`; `SkipApplyErrors` quarantines a poison event instead of stopping its shard |
 | Projection side effects | `IMessageOutbox` / `IMessageBatch`; both commit paths bracket their transaction |
 | Event-emitting projections | raised events planned and appended inside the projection batch's transaction |
+| Multi-stream projections | `MultiStreamProjection<TDoc, TId>` — `Identity`/`Identities`/`FanOut`, inline and async |
+| Flat-table projections | `Projections/Flattened/` — upsert generator, migration-created table, rebuild teardown |
+| LINQ date ordering (fisher#1) | `TimestampMember` normalises through `strftime`; string-stored enums now refuse instead |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -110,8 +123,12 @@ decisions came out of it:
   earlier deferral was waiting for.
 
 The `FisherCommandBuilder` shim is gone: weasel#424 shipped in Weasel.Sqlite 9.23.2. JasperFx is on
-2.39.4; 2.37.2 → 2.39.1 is where the six newer compliance suites came from, and 2.39.4 changes no
-suite source at all.
+**2.41.0** and Weasel on 9.23.2, which is current. 2.40.0 and 2.41.0 are where the four newest
+compliance suites came from. 2.41.0 also lifted `CompactStreamAsync<T>` onto `IEventStoreOperations`
+and `IEventDataMasking` into `JasperFx.Events/Protected/`; the upstream note warns consumers that
+adopting the first is not optional, but that applies to Marten and Polecat, which declared the member
+themselves and would go ambiguous. **Fisher never did**, so the bump needed no change and the
+default-implemented throw is the right behaviour here.
 
 ## Next, in order
 
@@ -133,16 +150,24 @@ Settle that before building anything.
 
 ### 2. Finish document storage
 
-Write, load-by-id and LINQ are done for all four identity types. What is left, roughly in value
-order: soft delete, duplicated fields and user indexes ([fisher#2](https://github.com/JasperFx/fisher/issues/2)),
-hierarchies, numeric revisions — each additive against the existing column shape rather than a
-rewrite of it. Ordering and range comparison on a date member is
-[fisher#1](https://github.com/JasperFx/fisher/issues/1).
+Write, load-by-id and LINQ are done for all four identity types, and LINQ now orders and range-compares
+timestamps correctly ([fisher#1](https://github.com/JasperFx/fisher/issues/1), closed). What is left,
+roughly in value order: soft delete, duplicated fields and user indexes
+([fisher#2](https://github.com/JasperFx/fisher/issues/2)), hierarchies, numeric revisions — each
+additive against the existing column shape rather than a rewrite of it.
+
+#2 is the one that changed character. It was "so a query can use an index" in general; it is now also
+the answer to the specific cost fisher#1 introduced, because `strftime` over `json_extract` is computed
+per row. A **generated column** may be the better shape than a written one — SQLite indexes `VIRTUAL`
+generated columns, so the duplication costs index space but not row space and cannot drift from `data`.
 
 ### 3. Projections, the rest
 
-All three lifecycles work, including `EventProjection`s that store arbitrary documents. Still
-missing: composite projections, and the side-effect and event-emission paths above.
+All three lifecycles work across all four projection shapes: self-aggregating snapshots,
+`EventProjection`s that store arbitrary documents, `MultiStreamProjection<TDoc, TId>` with
+`Identity`/`Identities`/`FanOut` grouping, and `FlatTableProjection` writing into a plain relational
+table. Still missing: composite projections, and a real delivery mechanism behind the side-effect seam
+([fisher#8](https://github.com/JasperFx/fisher/issues/8)).
 
 ### 4. DI registration and subscriptions
 
@@ -154,21 +179,25 @@ through.
 ## Enrollment status
 
 Enrolling is one empty subclass per suite in `Compliance/fisher_event_store_compliance.cs`. Every
-suite compiles whether or not it is enrolled, which is why all four global aliases in
+suite compiles whether or not it is enrolled, which is why every global alias in
 `ComplianceAliases.cs` must resolve even for suites Fisher cannot pass. Nothing is `<Compile Remove>`d
 any more.
 
 | Suite | Tests | Status |
 |---|---|---|
 | `DcbTagQueryAndConsistencyCompliance` | 26 | **green** |
+| `StringStreamIdentityCompliance` | 19 | **green** |
 | `FetchForWritingCompliance` | 13 | **green** |
 | `StreamReadCompliance` | 11 | **green** |
+| `MultiStreamProjectionCompliance` | 10 | **green** |
 | `EventMetadataCompliance` | 9 | **green** |
 | `SelfAggregatingEvolveCompliance` | 8 | **green** |
+| `FlatTableProjectionCompliance` | 8 | **green** |
 | `FetchLatestCompliance` | 7 | **green** |
 | `LiveAggregationCompliance` | 7 | **green** |
 | `StringIdentitySingleStreamCompliance` | 6 | **green** |
 | `StreamArchivingCompliance` | 6 | **green** |
+| `SnapshotLifecycleCompliance` | 6 | **green** |
 | `EventStoreExplorerCompliance` | 6 | **green** |
 | `AssignTagWhereCompliance` | 6 | **green** |
 | `RebuildConcurrencyCapCompliance` | 5 | **green** |
@@ -193,7 +222,9 @@ that adds a suite Fisher cannot pass still builds.
 - **`Advanced` is a thin subset.** `Clean`, `ResetAllDataAsync` and `ResetHiloSequenceFloorAsync<T>`
   only. Marten and Polecat also carry bulk insert, `InitialData` and metadata helpers there.
 - **Not started at all:** multi-tenancy beyond a tenant id column, subscriptions, DI registration
-  (`AddFisher`), bulk insert, natural keys, strongly typed ids.
+  (`AddFisher`), bulk insert, natural keys, strongly typed ids, event data masking
+  ([fisher#9](https://github.com/JasperFx/fisher/issues/9)), stream compacting
+  ([fisher#10](https://github.com/JasperFx/fisher/issues/10)).
 - **The daemon's WAL guard is a warning, not a refusal.** `BuildProjectionDaemonAsync` logs when
   `PragmaSettings.JournalMode` is not WAL, because without it the daemon and every writer serialize
   against each other. Refusing to start would be the stronger position; warning is what is there.

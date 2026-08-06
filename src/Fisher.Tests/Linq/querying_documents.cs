@@ -27,25 +27,48 @@ public class querying_documents : IAsyncLifetime
         session.Store(new Explorer
         {
             Id = _frodoId, Name = "Frodo", Age = 33, Active = true,
-            Grade = Grade.HighDistinction, Home = new Address { City = "Bag End" }
+            Grade = Grade.HighDistinction, Home = new Address { City = "Bag End" },
+            JoinedAt = JoinedAtFor("Frodo")
         });
         session.Store(new Explorer
         {
             Id = Guid.NewGuid(), Name = "Samwise", Age = 38, Active = true,
-            Grade = Grade.Pass, Home = new Address { City = "Bag End" }
+            Grade = Grade.Pass, Home = new Address { City = "Bag End" },
+            JoinedAt = JoinedAtFor("Samwise")
         });
         session.Store(new Explorer
         {
             Id = Guid.NewGuid(), Name = "Merry", Age = 36, Active = false,
-            Grade = Grade.Pass, Home = new Address { City = "Buckland" }
+            Grade = Grade.Pass, Home = new Address { City = "Buckland" },
+            JoinedAt = JoinedAtFor("Merry")
         });
         session.Store(new Explorer
         {
             Id = Guid.NewGuid(), Name = "Pippin", Age = 28, Active = false,
-            Grade = Grade.Pass, Home = new Address { City = "Tuckborough" }
+            Grade = Grade.Pass, Home = new Address { City = "Tuckborough" },
+            JoinedAt = JoinedAtFor("Pippin")
         });
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
     }
+
+    /// <summary>
+    ///     Four join times chosen so that <em>text</em> order and <em>instant</em> order disagree
+    ///     completely, which is what makes the ordering and range tests below discriminating.
+    /// </summary>
+    /// <remarks>
+    ///     By instant, ascending: Pippin 11:00, Frodo 12:34:56.789, Samwise 13:00, Merry 14:00.
+    ///     By the raw JSON text System.Text.Json wrote, ascending: Samwise ("...T08:00:00-05:00"),
+    ///     Frodo, Merry, Pippin ("...T20:00:00+09:00"). No two positions agree. A query that compared
+    ///     the stored text directly would pass an assertion built on the wrong list and nothing else
+    ///     would notice.
+    /// </remarks>
+    private static DateTimeOffset JoinedAtFor(string name) => name switch
+    {
+        "Frodo" => new DateTimeOffset(2026, 8, 4, 12, 34, 56, 789, TimeSpan.Zero),
+        "Samwise" => new DateTimeOffset(2026, 8, 4, 8, 0, 0, TimeSpan.FromHours(-5)),
+        "Merry" => new DateTimeOffset(2026, 8, 4, 14, 0, 0, TimeSpan.Zero),
+        _ => new DateTimeOffset(2026, 8, 4, 20, 0, 0, TimeSpan.FromHours(9))
+    };
 
     public async ValueTask DisposeAsync()
     {
@@ -334,18 +357,73 @@ public class querying_documents : IAsyncLifetime
     }
 
     /// <summary>
-    ///     Ordering by a date is refused for the same reason range comparison is: the stored text does
-    ///     not order by instant.
+    ///     fisher#1: ordering by a timestamp orders by <em>instant</em>, not by the text System.Text.Json
+    ///     happened to write.
     /// </summary>
+    /// <remarks>
+    ///     The expected list is the whole test. Every one of these four documents carries a different
+    ///     UTC offset and only one of them has a fractional part, so ordering the stored text would
+    ///     produce Samwise, Frodo, Merry, Pippin — a different answer at every position. See
+    ///     <see cref="JoinedAtFor" />.
+    /// </remarks>
     [Fact]
-    public async Task ordering_by_a_date_is_refused()
+    public async Task ordering_by_a_timestamp_orders_by_instant()
     {
         await using var session = Session();
 
-        var ex = await Should.ThrowAsync<BadLinqExpressionException>(async () =>
-            await session.Query<Explorer>().OrderBy(x => x.JoinedAt)
-                .ToListAsync(TestContext.Current.CancellationToken));
+        var ascending = await session.Query<Explorer>().OrderBy(x => x.JoinedAt)
+            .ToListAsync(TestContext.Current.CancellationToken);
 
-        ex.Message.ShouldContain("order-preserving");
+        ascending.Select(x => x.Name).ShouldBe(["Pippin", "Frodo", "Samwise", "Merry"]);
+
+        var descending = await session.Query<Explorer>().OrderByDescending(x => x.JoinedAt)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        descending.Select(x => x.Name).ShouldBe(["Merry", "Samwise", "Frodo", "Pippin"]);
+    }
+
+    /// <summary>
+    ///     The other half of fisher#1: a range predicate compares instants too, and the boundary is
+    ///     rendered into the same normalised form the locator produces.
+    /// </summary>
+    [Fact]
+    public async Task range_comparison_on_a_timestamp_compares_instants()
+    {
+        await using var session = Session();
+
+        // 13:00 UTC. Expressed with an offset, so this also proves the literal is normalised rather
+        // than compared as written.
+        var boundary = new DateTimeOffset(2026, 8, 4, 9, 0, 0, TimeSpan.FromHours(-4));
+
+        var after = await session.Query<Explorer>()
+            .Where(x => x.JoinedAt >= boundary)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        after.Select(x => x.Name).OrderBy(x => x).ShouldBe(["Merry", "Samwise"]);
+
+        var before = await session.Query<Explorer>()
+            .Where(x => x.JoinedAt < boundary)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        before.Select(x => x.Name).OrderBy(x => x).ShouldBe(["Frodo", "Pippin"]);
+    }
+
+    /// <summary>
+    ///     Equality goes through the same normalisation, so the same instant written with a different
+    ///     offset than the document holds still matches.
+    /// </summary>
+    [Fact]
+    public async Task equality_on_a_timestamp_matches_across_offsets()
+    {
+        await using var session = Session();
+
+        // Frodo joined at 12:34:56.789 UTC; ask for it as 07:34:56.789-05:00.
+        var sameInstant = new DateTimeOffset(2026, 8, 4, 7, 34, 56, 789, TimeSpan.FromHours(-5));
+
+        var matches = await session.Query<Explorer>()
+            .Where(x => x.JoinedAt == sameInstant)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        matches.Select(x => x.Name).ShouldBe(["Frodo"]);
     }
 }

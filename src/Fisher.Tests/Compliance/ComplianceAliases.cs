@@ -13,3 +13,8 @@ global using ComplianceEventProjection = Fisher.Projections.EventProjection;
 // rather than an open one.
 global using ComplianceStringPartyProjectionBase =
     Fisher.Projections.SingleStreamProjection<JasperFx.Events.ComplianceTests.StringQuestParty, string>;
+
+// The multi-stream suite groups by department name, so the base closes over a string identity even
+// though the events it slices arrive on Guid-identified streams. Same closed-generic reason as above.
+global using ComplianceMultiStreamProjectionBase =
+    Fisher.Projections.MultiStreamProjection<JasperFx.Events.ComplianceTests.ComplianceDepartment, string>;

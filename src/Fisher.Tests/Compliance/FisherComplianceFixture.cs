@@ -191,6 +191,70 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override Task WaitForNonStaleProjectionDataAsync(TimeSpan timeout)
         => Store.Database.WaitForNonStaleProjectionDataAsync(timeout);
 
+    /// <summary>
+    ///     Read every row of a flat-table projection's table.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The suite hands over the unqualified name the projection was declared with, so the
+    ///         schema resolution is the same fold <see cref="Fisher.Storage.FisherTableNaming.UserTableName" />
+    ///         applies when the projection creates the table — SQLite has no schemas, so "resolving the
+    ///         schema" means prepending it to the name.
+    ///     </para>
+    ///     <para>
+    ///         Values come back through <see cref="System.Data.Common.DbDataReader.GetValue" />, which
+    ///         yields exactly the five SQLite storage classes — so an INTEGER column arrives as a
+    ///         <c>long</c> and the suite's <c>Convert.ToInt32</c> handles the width, as it says it will.
+    ///     </para>
+    ///     <para>
+    ///         <strong>The one conversion is Guid.</strong> SQL Server has <c>uniqueidentifier</c> and
+    ///         PostgreSQL has <c>uuid</c>, so on both siblings the provider hands the suite a
+    ///         <see cref="Guid" /> and its <c>Equals(row["id"], streamId)</c> matches. SQLite has no such
+    ///         type: Fisher stores a Guid as lowercase canonical text everywhere (the
+    ///         <c>SqliteGuidIdentification</c> rule), so something has to convert on the way out, and
+    ///         doing it here is the same explicit <c>Guid.Parse</c> <c>FisherEventsRowReader</c> does.
+    ///         Matching on the canonical rendering rather than <c>Guid.TryParse</c> alone is what keeps
+    ///         it from claiming an ordinary string column that merely happens to hold Guid-shaped text
+    ///         in some other casing or format.
+    ///     </para>
+    /// </remarks>
+    public override async Task<IReadOnlyList<IReadOnlyDictionary<string, object?>>> QueryTableAsync(
+        string tableName, CancellationToken token)
+    {
+        var physical = Fisher.Storage.FisherTableNaming.UserTableName(
+            Store.Options.DatabaseSchemaName, tableName);
+
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(_database!.ConnectionString);
+        await connection.OpenAsync(token).ConfigureAwait(false);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"select * from {Weasel.Sqlite.SchemaUtils.QuoteName(physical)}";
+
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
+
+        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
+        {
+            var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < reader.FieldCount; i++)
+            {
+                row[reader.GetName(i)] = await reader.IsDBNullAsync(i, token).ConfigureAwait(false)
+                    ? null
+                    : AsClrValue(reader.GetValue(i));
+            }
+
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
+    /// <inheritdoc cref="QueryTableAsync" />
+    private static object AsClrValue(object raw)
+        => raw is string text && Guid.TryParse(text, out var guid) && guid.ToString() == text
+            ? guid
+            : raw;
+
     public override async ValueTask DisposeAsync()
     {
         await DisposeStoreAsync().ConfigureAwait(false);

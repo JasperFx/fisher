@@ -31,6 +31,14 @@ public partial class DocumentStore : IAsyncDisposable
         // only place it can happen, since the point is to know about types nobody mentioned.
         options.Projections.DiscoverGeneratedEvolvers(AppDomain.CurrentDomain.GetAssemblies());
 
+        // A flat table's physical name folds in the store's logical schema, and this is the first
+        // moment that schema is final — the projection and DatabaseSchemaName are usually set in the
+        // same configuration lambda, in whichever order the caller wrote them.
+        foreach (var flatTable in options.Projections.All.OfType<Projections.Flattened.FlatTableProjection>())
+        {
+            flatTable.ResolveTableName(options.DatabaseSchemaName);
+        }
+
         // Builds the async shard registry and fails fast on duplicate projection names.
         options.Projections.AssertValidity(options);
 

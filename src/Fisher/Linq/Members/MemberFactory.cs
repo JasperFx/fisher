@@ -88,8 +88,15 @@ internal class MemberFactory : IMemberResolver
             return new QueryableMember(locator, memberType, isBoolean: true);
         }
 
-        if (underlying == typeof(DateTime) || underlying == typeof(DateTimeOffset)
-                                           || underlying == typeof(DateOnly) || underlying == typeof(TimeOnly))
+        // A timestamp's stored text carries an un-normalised offset and a trimmed fractional part, so
+        // it is compared through SQLite's date parser. DateOnly and TimeOnly have neither problem and
+        // sort as written — see the two member types for why they are not one.
+        if (underlying == typeof(DateTime) || underlying == typeof(DateTimeOffset))
+        {
+            return new TimestampMember(locator, memberType);
+        }
+
+        if (underlying == typeof(DateOnly) || underlying == typeof(TimeOnly))
         {
             return new DateMember(locator, memberType, _serializerOptions);
         }

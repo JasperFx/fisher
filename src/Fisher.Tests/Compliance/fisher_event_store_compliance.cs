@@ -65,3 +65,15 @@ public class dcb_tag_query_and_consistency_compliance
 
 public class async_daemon_compliance
     : AsyncDaemonCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class string_stream_identity_compliance
+    : StringStreamIdentityCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class snapshot_lifecycle_compliance
+    : SnapshotLifecycleCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class multi_stream_projection_compliance
+    : MultiStreamProjectionCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class flat_table_projection_compliance
+    : FlatTableProjectionCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

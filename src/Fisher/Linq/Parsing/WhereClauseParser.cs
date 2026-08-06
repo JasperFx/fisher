@@ -236,10 +236,12 @@ internal class WhereClauseParser
     ///     Refuses an ordering comparison against a member whose stored form does not sort.
     /// </summary>
     /// <remarks>
-    ///     This has no Polecat counterpart because SQL Server can cast a JSON string back to a real
-    ///     <c>datetimeoffset</c> and compare instants. Fisher compares the text System.Text.Json wrote,
-    ///     and that text is not order-preserving — so the choice is between refusing and being quietly
-    ///     wrong.
+    ///     This has no Polecat counterpart, because SQL Server can cast a JSON string to whatever type
+    ///     the comparison wants. Where SQLite offers an equivalent the member wraps its locator in one
+    ///     — <see cref="Members.TimestampMember" /> normalises through <c>strftime</c> — and this guard
+    ///     never fires. Where it does not, the choice is between refusing and being quietly wrong;
+    ///     today that is a string-stored enum, whose stored form is a name and therefore sorts
+    ///     alphabetically rather than by the enum's declared order.
     /// </remarks>
     private static void AssertRangeIsMeaningful(IQueryableMember member, string op)
     {
@@ -249,11 +251,10 @@ internal class WhereClauseParser
         }
 
         throw new BadLinqExpressionException(
-            $"Cannot order or range-compare a {member.MemberType.Name} member in SQLite. It is stored as the "
-            + "text System.Text.Json wrote, which is not order-preserving: trailing fractional zeros are "
-            + "trimmed and the original UTC offset is kept, so '12:34:56-05:00' sorts before "
-            + "'12:34:56.789+00:00' while being five hours later. Equality is supported. Ordering needs a "
-            + "normalised, sortable duplicated field, which Fisher does not have yet.");
+            $"Cannot order or range-compare the {member.MemberType.Name} member in SQLite: its stored form "
+            + "is not order-preserving, so any range predicate would return plausible but wrong rows. "
+            + "Equality is supported. For an enum, storing it as an integer "
+            + "(StoreOptions.Serializer.EnumStorage) makes ordering meaningful.");
     }
 
     private ISqlFragment ParseNot(UnaryExpression unary)

@@ -148,11 +148,10 @@ internal class LinqQueryParser
         if (!member.AllowsRangeComparison)
         {
             throw new BadLinqExpressionException(
-                $"Cannot order by a {member.MemberType.Name} member in SQLite. It is stored as the text "
-                + "System.Text.Json wrote, which is not order-preserving: trailing fractional zeros are "
-                + "trimmed and the original UTC offset is kept, so the text order is not the chronological "
-                + "order. Ordering needs a normalised, sortable duplicated field, which Fisher does not "
-                + "have yet.");
+                $"Cannot order by the {member.MemberType.Name} member in SQLite: its stored form is not "
+                + "order-preserving, so the rows would come back in a plausible but wrong order. For an "
+                + "enum, storing it as an integer (StoreOptions.Serializer.EnumStorage) makes ordering "
+                + "meaningful.");
         }
 
         return member.TypedLocator;

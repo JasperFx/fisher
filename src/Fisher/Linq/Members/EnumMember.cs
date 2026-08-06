@@ -32,6 +32,16 @@ internal class EnumMember : IQueryableMember
     public string RawLocator { get; }
     public bool IsBoolean => false;
 
+    /// <summary>
+    ///     Under <see cref="EnumStorage.AsString" /> the stored form is the member's <em>name</em>, so
+    ///     comparing it with <c>&lt;</c> or ordering by it sorts alphabetically rather than by the
+    ///     enum's declared order — <c>HighDistinction</c> before <c>Pass</c>, whatever the values say.
+    ///     Refused rather than answered wrongly, the same call <see cref="TimestampMember" /> used to
+    ///     make. Under <see cref="EnumStorage.AsInteger" /> the value is a JSON number and orders
+    ///     correctly with no help.
+    /// </summary>
+    public bool AllowsRangeComparison => _enumStorage != EnumStorage.AsString;
+
     public object? ConvertValue(object? value)
     {
         if (value == null)
