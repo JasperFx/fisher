@@ -160,13 +160,17 @@ Working, with tests:
   `FanOut` grouping, inline and async
 - **Flat-table projections** — `FlatTableProjection`, projecting into a plain relational table
   through declarative column mappings rather than into a document
+- **Soft delete** — `is_deleted` / `deleted_at`, `HardDelete`, `DeleteWhere` / `HardDeleteWhere` /
+  `UndoDeleteWhere`, and the `MaybeDeleted` / `IsDeleted` / `DeletedSince` / `DeletedBefore` query
+  operators
 
 Not implemented yet — do not assume these work:
 
-- **Document storage** — `Store`/`Insert`/`Update`/`Delete`/`LoadAsync`/`LoadManyAsync` and LINQ all
-  work over Guid, string, int and long ids, in the same unit of work and transaction as event
-  appends. What is still missing: no soft delete, no hierarchies, no duplicated fields (fisher#2),
-  no numeric revisions.
+- **Document storage** — `Store`/`Insert`/`Update`/`Delete`/`LoadAsync`/`LoadManyAsync`, soft delete
+  and LINQ all work over Guid, string, int and long ids, in the same unit of work and transaction as
+  event appends. What is still missing: no hierarchies, no duplicated fields (fisher#2), no numeric
+  revisions, and no metadata member mapping — a document's own `ISoftDeleted` members are not
+  populated on read (fisher#11).
 - **Event rewriting** — `OverwriteEvent` / `CompletelyReplaceEvent` throw, stream compacting throws
   (fisher#10), and `IEventDataMasking` has no implementation at all (fisher#9).
 
@@ -394,6 +398,53 @@ RETURNING id` parses, and when the guard does not match it returns **no row** an
 untouched — which is exactly what the Optimistic operation's postprocessing reads as a concurrency
 failure. The `DO UPDATE SET` clause assigns from `excluded.*` for every column rather than repeating
 each binder's `ValueSql`, so the update branch cannot drift from the insert branch.
+
+### Soft delete
+
+A document type marked with `[SoftDeleted]`, implementing `JasperFx.Metadata.ISoftDeleted`, or
+registered with `Schema.For<T>().SoftDeleted()` gets two columns — `is_deleted` INTEGER 0/1 and a
+nullable ISO-8601 `deleted_at` — and `Delete` becomes an `update … set is_deleted = 1` instead of a
+`delete from`. `SoftDelete` owns both column names and the SQL that reads and writes them, because
+the table definition, the storage and the LINQ layer would otherwise each spell them out.
+
+Ported from Polecat, whose column names these are. What is worth knowing:
+
+- **The load SQL carries the filter, not the caller.** `LoadAsync` / `LoadManyAsync` are reached from
+  the session, the projection loader and the daemon alike, so a filter added by callers would present
+  as a deleted document coming back to life on whichever path forgot it. The LINQ side gets the same
+  filter from `DefaultWhereFragment()` — one source, so the query path cannot drift from the load
+  path.
+- **Storing a soft-deleted document undeletes it**, and that falls out of the upsert rather than
+  being arranged. Weasel's `DocumentSoftDeletedBinder` / `DocumentSoftDeletedAtBinder` bind the *live*
+  values on every write, and the `do update set` clause assigns every column from `excluded.*` — so
+  the insert branch and the update branch agree without either being written twice.
+- **A soft delete guards on `is_deleted = 0`; an undelete guards on `is_deleted = 1`.** Deleting an
+  already-deleted document must not push `deleted_at` forward, or `DeletedSince` answers about the
+  most recent call rather than about the deletion. Polecat has the guard on its by-id delete but not
+  on `DeleteWhere`; Fisher has it on both, and
+  `deleting_an_already_deleted_document_leaves_its_deletion_time_alone` pins it against a planted
+  timestamp, because two deletes in the same millisecond would agree either way.
+- **`DeletedSince` / `DeletedBefore` compare `deleted_at` as text**, with none of the `strftime`
+  normalisation a document's own `DateTimeOffset` member needs (fisher#1). The column is
+  `SqliteTimestamp`'s fixed-width UTC format, chosen so a string comparison *is* an instant
+  comparison — the same property `fi_events.timestamp` relies on. A document member is whatever
+  System.Text.Json wrote, which is why that one needs the wrapper and this one does not.
+- **A soft-delete operator against a type that is not soft-deleted throws**, in the query layer and in
+  `UndoDeleteWhere` alike. There is no column to answer from, so `IsDeleted()` would come back empty
+  and `MaybeDeleted()` complete — both of which look like real answers.
+- **Nothing is projected back onto the document.** `ISoftDeleted` declares `Deleted` and `DeletedAt`
+  and Fisher populates neither, because there is no metadata member mapping for any column —
+  `guid_version` and `last_modified` are bound with a null member for the same reason. fisher#11
+  tracks it; the interface is an opt-in marker and nothing more here.
+
+`DocumentWhereOperation` is the criteria-based half — `DeleteWhere`, `HardDeleteWhere` and
+`UndoDeleteWhere` differ only in the SQL head they are handed and the guard they carry. The predicate
+goes through the same `WhereClauseParser` as `Query<T>()`, and the caller's predicate is applied
+*last*, after the tenant scope and the guard, because a compound predicate is parenthesized and so
+cannot swallow them.
+
+`TruncateDocumentStorageAsync` stays a real `delete from` — a rebuild's teardown clears rows rather
+than flagging them, or the replay would write onto rows it cannot see.
 
 ### Hi-Lo sequences
 

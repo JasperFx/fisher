@@ -1,4 +1,5 @@
 using System.Data.Common;
+using JasperFx;
 using JasperFx.MultiTenancy;
 using Weasel.Core;
 using Weasel.Core.SqlGeneration;
@@ -23,7 +24,7 @@ namespace Fisher.Storage.ClosedShape;
 ///         why <see cref="IncludeIdInSelect" /> and <see cref="ReadBinders" /> are both overridable.
 ///     </para>
 /// </remarks>
-internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc, TId>
+internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc, TId>, IFisherDocumentStorage
     where TDoc : notnull
     where TId : notnull
 {
@@ -31,6 +32,8 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
     protected readonly DocumentMapping _mapping;
 
     private readonly IOperationFragment _deleteFragment;
+    private readonly IOperationFragment _hardDeleteFragment;
+    private readonly IOperationFragment _undeleteFragment;
     private readonly string _loaderSql;
     private readonly string _loadManySql;
     private readonly string[] _selectFields;
@@ -57,13 +60,29 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
         // tenant parameter on the load path; on a single-tenant table the SQL simply never mentions it.
         var tenantFilter = _mapping.IsConjoined ? " and tenant_id = @tenant_id" : string.Empty;
 
-        _loaderSql = $"{select} where id = @id{tenantFilter}";
+        // A soft-deleted row is invisible to a load by id, exactly as it is to a query. Baked into
+        // the SQL rather than added by a caller, because LoadAsync and LoadManyAsync are reached from
+        // the session, the projection loader and the daemon alike, and a filter one of them forgot
+        // would present as a deleted document coming back to life on one path only.
+        var deletedFilter = _mapping.IsSoftDeleted ? $" and {SoftDelete.NotDeletedSql}" : string.Empty;
+
+        _loaderSql = $"{select} where id = @id{tenantFilter}{deletedFilter}";
 
         // No array parameters in SQLite — ids arrive as a JSON array that json_each unpacks. The
         // dialect writes that array; see SqliteStorageDialect.CreateIdArrayParameter.
-        _loadManySql = $"{select} where id in (select value from json_each(@ids)){tenantFilter}";
+        _loadManySql =
+            $"{select} where id in (select value from json_each(@ids)){tenantFilter}{deletedFilter}";
 
-        _deleteFragment = new DocumentDeleteFragment($"delete from {_mapping.QuotedTableName}");
+        _hardDeleteFragment = new DocumentSqlFragment($"delete from {_mapping.QuotedTableName}",
+            OperationRole.Deletion);
+
+        _deleteFragment = _mapping.IsSoftDeleted
+            ? new DocumentSqlFragment(SoftDelete.MarkDeletedSql(_mapping.QuotedTableName),
+                OperationRole.Deletion)
+            : _hardDeleteFragment;
+
+        _undeleteFragment = new DocumentSqlFragment(SoftDelete.ClearDeletedSql(_mapping.QuotedTableName),
+            OperationRole.Update);
     }
 
     /// <summary>The read binders backing this flavor's SELECT. Query-only narrows the set.</summary>
@@ -125,7 +144,13 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
 
     public IOperationFragment DeleteFragment => _deleteFragment;
 
-    public IOperationFragment HardDeleteFragment => _deleteFragment;
+    public IOperationFragment HardDeleteFragment => _hardDeleteFragment;
+
+    public IOperationFragment UndeleteFragment => _undeleteFragment;
+
+    public DeleteStyle DeleteStyle => _mapping.DeleteStyle;
+
+    public bool IsConjoined => _mapping.IsConjoined;
 
     /// <summary>
     ///     Empty — Fisher has no duplicated fields, so nothing is projected out of the JSON body into
@@ -157,9 +182,17 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
             : query;
 
     /// <summary>
-    ///     Null — with no soft delete there is no row a query should implicitly exclude.
+    ///     The filter every read of this type carries implicitly — <c>is_deleted = 0</c> for a
+    ///     soft-deleted type, and null for one whose rows are removed outright, where there is nothing
+    ///     to exclude.
     /// </summary>
-    public ISqlFragment? DefaultWhereFragment() => null;
+    /// <remarks>
+    ///     The LINQ provider applies this unless the query said otherwise with <c>MaybeDeleted()</c> or
+    ///     <c>IsDeleted()</c>; the load-by-id SQL carries its own copy, because it is not built through
+    ///     a statement.
+    /// </remarks>
+    public ISqlFragment? DefaultWhereFragment()
+        => _mapping.IsSoftDeleted ? new Linq.SqlGeneration.LiteralSqlFragment(SoftDelete.NotDeletedSql) : null;
 
     public ISqlFragment ByIdFilter(TId id) => _descriptor.Dialect.ByIdFilter(RawIdentityValue(id));
 
@@ -271,22 +304,59 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
     // ---- deletions ----
 
     public IDeletion DeleteForDocument(TDoc document, string tenantId)
-        => BuildDeletion(Identity(document), tenantId);
+        => BuildDeletion(Identity(document), tenantId, hard: !_mapping.IsSoftDeleted);
 
     public IDeletion HardDeleteForDocument(TDoc document, string tenantId)
-        => BuildDeletion(Identity(document), tenantId);
+        => BuildDeletion(Identity(document), tenantId, hard: true);
 
-    public IDeletion DeleteForId(TId id, string tenantId) => BuildDeletion(id, tenantId);
+    public IDeletion DeleteForId(TId id, string tenantId)
+        => BuildDeletion(id, tenantId, hard: !_mapping.IsSoftDeleted);
 
-    public IDeletion HardDeleteForId(TId id, string tenantId) => BuildDeletion(id, tenantId);
+    public IDeletion HardDeleteForId(TId id, string tenantId) => BuildDeletion(id, tenantId, hard: true);
 
-    private IDeletion BuildDeletion(TId id, string tenantId)
+    /// <summary>
+    ///     Bring one soft-deleted row back, or null for a type whose rows are removed outright and
+    ///     therefore has nothing to bring back.
+    /// </summary>
+    public Weasel.Storage.IStorageOperation? UndeleteForId(TId id, string tenantId)
     {
-        var sql = _mapping.IsConjoined
-            ? $"delete from {_mapping.QuotedTableName} where id = ? and tenant_id = ?"
-            : $"delete from {_mapping.QuotedTableName} where id = ?";
+        if (!_mapping.IsSoftDeleted)
+        {
+            return null;
+        }
+
+        return new DocumentByIdCommand<TDoc, TId>(
+            SoftDelete.ClearDeletedSql(_mapping.QuotedTableName) + WhereIdSql(guard: SoftDelete.DeletedSql),
+            id, tenantId, _descriptor, _mapping.IsConjoined, OperationRole.Update);
+    }
+
+    private IDeletion BuildDeletion(TId id, string tenantId, bool hard)
+    {
+        // The soft form guards on is_deleted = 0 so that deleting an already-deleted document is a
+        // no-op rather than a second deletion: without it a repeated Delete would push deleted_at
+        // forward, and "deleted since" would be answering about the last call rather than the first.
+        var sql = hard
+            ? $"delete from {_mapping.QuotedTableName}{WhereIdSql(guard: null)}"
+            : SoftDelete.MarkDeletedSql(_mapping.QuotedTableName) + WhereIdSql(guard: SoftDelete.NotDeletedSql);
 
         return new DocumentDeletion<TDoc, TId>(sql, id, tenantId, _descriptor, _mapping.IsConjoined);
+    }
+
+    /// <summary>
+    ///     The trailing <c>where</c>, in the order <see cref="DocumentByIdCommand{TDoc,TId}" /> binds:
+    ///     id, then the tenant when there is a column for it. A guard adds no parameter, so it can sit
+    ///     at the end without moving a slot.
+    /// </summary>
+    private string WhereIdSql(string? guard)
+    {
+        var sql = " where id = ?";
+
+        if (_mapping.IsConjoined)
+        {
+            sql += " and tenant_id = ?";
+        }
+
+        return guard is null ? sql : $"{sql} and {guard}";
     }
 
     public async Task TruncateDocumentStorageAsync(IStorageDatabase database, CancellationToken ct = default)

@@ -73,6 +73,23 @@ internal static class SqliteDocumentStorageDescriptorBuilder
         writeBinders.Add(new DocumentLastModifiedBinder<TDoc>(
             "last_modified", lastModifiedMember: null, SqliteTimestamp.NowExpression));
 
+        // Soft delete's two columns are written by every save and never selected. Both binders write
+        // the *live* value — false and null — which is what makes storing a soft-deleted document
+        // undelete it, in the insert branch and (through excluded.*) in the update branch alike.
+        //
+        // Neither is given a member to project onto, matching guid_version and last_modified above:
+        // Fisher has no document metadata member mapping at all, so a document implementing
+        // ISoftDeleted is opted into the behaviour without having its Deleted/DeletedAt populated on
+        // read. Tracked as fisher#11.
+        if (mapping.IsSoftDeleted)
+        {
+            writeBinders.Add(new DocumentSoftDeletedBinder<TDoc>(
+                SoftDelete.IsDeletedColumn, dialect, member: null));
+
+            writeBinders.Add(new DocumentSoftDeletedAtBinder<TDoc>(
+                SoftDelete.DeletedAtColumn, dialect, member: null));
+        }
+
         var writeArray = writeBinders.ToArray();
         var readArray = readBinders.ToArray();
         var clientSide = writeArray.Where(x => !x.IsServerSide).ToArray();

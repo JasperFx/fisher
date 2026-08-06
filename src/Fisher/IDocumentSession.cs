@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Fisher.Events;
 
 namespace Fisher;
@@ -89,7 +90,7 @@ public interface IDocumentSession : IQuerySession, JasperFx.Events.IStorageOpera
     void Update<T>(T document) where T : notnull;
 
     /// <summary>
-    ///     Queue a document for deletion.
+    ///     Queue a document for deletion. A soft-deleted type is flagged rather than removed.
     /// </summary>
     void Delete<T>(T document) where T : notnull;
 
@@ -106,6 +107,46 @@ public interface IDocumentSession : IQuerySession, JasperFx.Events.IStorageOpera
 
     /// <inheritdoc cref="Delete{T}(Guid)" />
     void Delete<T>(long id) where T : notnull;
+
+    /// <summary>
+    ///     Queue a document to be removed outright, even if its type is soft-deleted. Identical to
+    ///     <see cref="Delete{T}(T)" /> for every other type.
+    /// </summary>
+    void HardDelete<T>(T document) where T : notnull;
+
+    /// <inheritdoc cref="HardDelete{T}(T)" />
+    void HardDelete<T>(Guid id) where T : notnull;
+
+    /// <inheritdoc cref="HardDelete{T}(T)" />
+    void HardDelete<T>(string id) where T : notnull;
+
+    /// <inheritdoc cref="HardDelete{T}(T)" />
+    void HardDelete<T>(int id) where T : notnull;
+
+    /// <inheritdoc cref="HardDelete{T}(T)" />
+    void HardDelete<T>(long id) where T : notnull;
+
+    /// <summary>
+    ///     Queue every document matching the predicate for deletion, without loading any of them. A
+    ///     soft-deleted type is flagged rather than removed.
+    /// </summary>
+    /// <remarks>
+    ///     The predicate is translated by the same LINQ layer <see cref="IQuerySession.Query{T}" />
+    ///     uses, so it supports what that supports and refuses the rest by name.
+    /// </remarks>
+    void DeleteWhere<T>(Expression<Func<T, bool>> predicate) where T : notnull;
+
+    /// <summary>
+    ///     Queue every document matching the predicate to be removed outright, even if its type is
+    ///     soft-deleted.
+    /// </summary>
+    void HardDeleteWhere<T>(Expression<Func<T, bool>> predicate) where T : notnull;
+
+    /// <summary>
+    ///     Bring every soft-deleted document matching the predicate back. Throws for a type that is not
+    ///     soft-deleted, where there is nothing to bring back.
+    /// </summary>
+    void UndoDeleteWhere<T>(Expression<Func<T, bool>> predicate) where T : notnull;
 
     /// <summary>
     ///     Commit every queued operation in a single transaction.

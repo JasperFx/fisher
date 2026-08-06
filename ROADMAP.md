@@ -3,8 +3,9 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of the JasperFx 2.41.0 upgrade. **All 21 compliance suites green.** 461 tests green on
-net9.0 and net10.0, **167 of them shared cross-store compliance tests across 21 suites**.
+Status as of **soft delete**, the first item of step 2 below. **All 21 compliance suites green.** 479
+tests green on net9.0 and net10.0, **167 of them shared cross-store compliance tests across 21
+suites**.
 
 ## The destination
 
@@ -63,6 +64,7 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | ~~[fisher#6](https://github.com/JasperFx/fisher/issues/6)~~ | **Closed.** `DeleteAllEventDataAsync` violated the tag tables' foreign key. Found while building #5. |
 | ~~[fisher#7](https://github.com/JasperFx/fisher/issues/7)~~ | **Closed.** `WaitForNonStaleProjectionDataAsync` threw `OperationCanceledException` instead of `TimeoutException` when the clock landed mid-query. |
 | [fisher#9](https://github.com/JasperFx/fisher/issues/9) | Event data masking. `IEventDataMasking` was lifted into JasperFx.Events in 2.41.0; Fisher implements none of it. |
+| [fisher#11](https://github.com/JasperFx/fisher/issues/11) | Document metadata member mapping. Five metadata columns are written and none is read back onto a member, so `ISoftDeleted`'s own `Deleted` / `DeletedAt` stay empty. Found while building soft delete. |
 | [fisher#10](https://github.com/JasperFx/fisher/issues/10) | Stream compacting. `CompactStreamAsync` throws at both levels. |
 
 Every deliberate gap gets an issue. A note in this file or in CLAUDE.md is context, not tracking —
@@ -98,6 +100,7 @@ if something is deferred, it is in the list above.
 | Multi-stream projections | `MultiStreamProjection<TDoc, TId>` — `Identity`/`Identities`/`FanOut`, inline and async |
 | Flat-table projections | `Projections/Flattened/` — upsert generator, migration-created table, rebuild teardown |
 | LINQ date ordering (fisher#1) | `TimestampMember` normalises through `strftime`; string-stored enums now refuse instead |
+| Soft delete | `is_deleted` / `deleted_at`, `HardDelete`, the three `*Where` operations, and the four query operators |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -150,11 +153,17 @@ Settle that before building anything.
 
 ### 2. Finish document storage
 
-Write, load-by-id and LINQ are done for all four identity types, and LINQ now orders and range-compares
-timestamps correctly ([fisher#1](https://github.com/JasperFx/fisher/issues/1), closed). What is left,
-roughly in value order: soft delete, duplicated fields and user indexes
-([fisher#2](https://github.com/JasperFx/fisher/issues/2)), hierarchies, numeric revisions — each
-additive against the existing column shape rather than a rewrite of it.
+Write, load-by-id and LINQ are done for all four identity types, LINQ orders and range-compares
+timestamps correctly ([fisher#1](https://github.com/JasperFx/fisher/issues/1), closed), and **soft
+delete is done** — two columns, the `HardDelete` / `*Where` surface, and the four query operators,
+all of it additive against the existing column shape exactly as predicted. What is left, roughly in
+value order: duplicated fields and user indexes
+([fisher#2](https://github.com/JasperFx/fisher/issues/2)), metadata member mapping
+([fisher#11](https://github.com/JasperFx/fisher/issues/11)), hierarchies, numeric revisions.
+
+Soft delete is also the first feature no compliance suite asks for, which is the useful signal about
+what comes next: the shared suites are event-store suites, so everything remaining in document storage
+is pinned by Fisher's own tests and judged against Marten's behaviour rather than against a scoreboard.
 
 #2 is the one that changed character. It was "so a query can use an index" in general; it is now also
 the answer to the specific cost fisher#1 introduced, because `strftime` over `json_extract` is computed
@@ -222,7 +231,8 @@ that adds a suite Fisher cannot pass still builds.
 - **`Advanced` is a thin subset.** `Clean`, `ResetAllDataAsync` and `ResetHiloSequenceFloorAsync<T>`
   only. Marten and Polecat also carry bulk insert, `InitialData` and metadata helpers there.
 - **Not started at all:** multi-tenancy beyond a tenant id column, subscriptions, DI registration
-  (`AddFisher`), bulk insert, natural keys, strongly typed ids, event data masking
+  (`AddFisher`), bulk insert, natural keys, strongly typed ids, document metadata member mapping
+  ([fisher#11](https://github.com/JasperFx/fisher/issues/11)), event data masking
   ([fisher#9](https://github.com/JasperFx/fisher/issues/9)), stream compacting
   ([fisher#10](https://github.com/JasperFx/fisher/issues/10)).
 - **The daemon's WAL guard is a warning, not a refusal.** `BuildProjectionDaemonAsync` logs when

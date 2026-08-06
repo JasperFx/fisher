@@ -1,6 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
+using Fisher.Attributes;
 using JasperFx;
+using JasperFx.Metadata;
 using JasperFx.MultiTenancy;
 using Weasel.Core.Sequences;
 using Weasel.Sqlite;
@@ -15,9 +17,9 @@ namespace Fisher.Storage;
 /// <remarks>
 ///     <para>
 ///         Deliberately a subset of Marten's and Polecat's <c>DocumentMapping</c>. There is no
-///         hierarchy or sub-classing, no duplicated fields or user indexes, no foreign keys, no soft
-///         delete, and no numeric revisions — every one of those is a column-shape or SQL-generation
-///         concern that can be added later without disturbing what is here.
+///         hierarchy or sub-classing, no duplicated fields or user indexes, no foreign keys, and no
+///         numeric revisions — every one of those is a column-shape or SQL-generation concern that can
+///         be added later without disturbing what is here.
 ///     </para>
 ///     <para>
 ///         Identity resolution goes through <see cref="AggregateIdentity" />, the same helper live
@@ -53,6 +55,14 @@ public class DocumentMapping
         IdType = TypeOf(IdMember);
 
         Alias = DefaultAliasFor(documentType);
+
+        // Read once, here, because the table shape and the storage's SQL are both derived from it —
+        // see the DeleteStyle remarks for what changing it after that point does not do.
+        if (documentType.GetCustomAttribute<SoftDeletedAttribute>() is not null
+            || typeof(ISoftDeleted).IsAssignableFrom(documentType))
+        {
+            DeleteStyle = DeleteStyle.SoftDelete;
+        }
     }
 
     /// <summary>The .NET type being stored.</summary>
@@ -91,6 +101,31 @@ public class DocumentMapping
     ///     ignored entirely for Guid and string identities, which need no sequence.
     /// </summary>
     public HiloSettings? HiloSettings { get; set; }
+
+    /// <summary>
+    ///     Whether <c>Delete</c> removes the row or flags it. Defaults to
+    ///     <see cref="JasperFx.DeleteStyle.Remove" />, and is set to
+    ///     <see cref="JasperFx.DeleteStyle.SoftDelete" /> by a <see cref="SoftDeletedAttribute" />, by
+    ///     implementing <see cref="ISoftDeleted" />, or by <see cref="SoftDeleted" />.
+    /// </summary>
+    /// <remarks>
+    ///     Read when the document's table and its storage are built, which happens on first use — so
+    ///     like <see cref="UseOptimisticConcurrency" />, changing it after a document of this type has
+    ///     been stored in this process does not reshape what is already there. Configure it where the
+    ///     rest of the store is configured.
+    /// </remarks>
+    public DeleteStyle DeleteStyle { get; set; } = DeleteStyle.Remove;
+
+    /// <summary>
+    ///     Flag this document type for soft deletion, returning the mapping so configuration chains.
+    /// </summary>
+    public DocumentMapping SoftDeleted()
+    {
+        DeleteStyle = DeleteStyle.SoftDelete;
+        return this;
+    }
+
+    internal bool IsSoftDeleted => DeleteStyle == DeleteStyle.SoftDelete;
 
     internal bool IsConjoined => TenancyStyle == TenancyStyle.Conjoined;
 

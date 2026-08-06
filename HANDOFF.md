@@ -1,8 +1,9 @@
 # Handoff
 
-State of Fisher after the **JasperFx 2.41.0 upgrade**, which brought four new compliance suites and
-with them multi-stream projections, flat-table projections, and the fix for fisher#1. Written for
-whoever picks this up next.
+State of Fisher after **soft delete**, the first item of ROADMAP step 2 (finish document storage),
+built on top of the JasperFx 2.41.0 upgrade that brought four new compliance suites and with them
+multi-stream projections, flat-table projections, and the fix for fisher#1. Written for whoever picks
+this up next.
 
 **Nothing is half-built.** Every milestone on disk builds, is tested, and was committed complete.
 [ROADMAP.md](ROADMAP.md) says what comes next and why in that order.
@@ -10,8 +11,9 @@ whoever picks this up next.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**461 tests green on net9.0 and net10.0.** 167 of them are shared cross-store compliance tests, and
-those ran three consecutive times clean before this was written.
+**479 tests green on net9.0 and net10.0.** 167 of them are shared cross-store compliance tests, and
+those ran clean repeatedly before this was written. No compliance suite covers soft delete, so all 18
+of the new tests are Fisher's own.
 
 ## Where we are against the compliance suites
 
@@ -360,6 +362,44 @@ Fisher's session pair, and all ten of its compliance tests passed on the first r
 `Identities`, `FanOut`, inline and async. The reason it was that cheap is that the document-storage
 work already let a projection key on something other than the stream identity.
 
+## Soft delete
+
+The first item of "finish document storage", and the first feature since document storage landed that
+no compliance suite asks for — the shared suites are event-store suites, so this one is pinned
+entirely by `src/Fisher.Tests/Documents/soft_deleted_documents.cs` (18 tests). Three of them were
+verified by reverting the thing they cover; see below.
+
+Opting in has three spellings, all read once when the mapping is created: `[SoftDeleted]`,
+implementing `JasperFx.Metadata.ISoftDeleted`, and `Schema.For<T>().SoftDeleted()`. The surface that
+follows is Polecat's and Marten's — `HardDelete`, `DeleteWhere`, `HardDeleteWhere`,
+`UndoDeleteWhere`, and `MaybeDeleted()` / `IsDeleted()` / `DeletedSince()` / `DeletedBefore()` on a
+query — so soft-delete code ports between the stores unchanged. CLAUDE.md has the design; what is
+worth carrying separately:
+
+- **The one place this diverges from Polecat on purpose** is the `is_deleted = 0` guard on
+  `DeleteWhere`. Polecat guards its by-id delete and not its criteria-based one, so re-deleting via a
+  predicate moves `deleted_at` forward there. Fisher guards both, which makes "when was this deleted"
+  mean the first deletion rather than the most recent call.
+  `deleting_an_already_deleted_document_leaves_its_deletion_time_alone` plants an old timestamp
+  before the second delete, because two deletes in the same millisecond would agree with or without
+  the guard.
+- **Undeleting is not a separate feature.** Storing a soft-deleted document brings it back, and that
+  falls out of the upsert rather than being arranged: Weasel's soft-delete binders write the live
+  values, and `do update set` assigns every column from `excluded.*`.
+- **`ISoftDeleted`'s own members stay empty.** The interface opts the type in and nothing more —
+  Fisher has no metadata member mapping for any column, so `guid_version` and `last_modified` are in
+  the same position. [fisher#11](https://github.com/JasperFx/fisher/issues/11) is the follow-up, and
+  it names the one real hazard in doing it: Weasel's `DocumentSoftDeletedAtBinder` reads its column
+  with `GetFieldValue<DateTimeOffset>`, which would be the only place Fisher leans on
+  Microsoft.Data.Sqlite's coercion of ISO-8601 TEXT instead of converting explicitly.
+- **`DeletedSince` / `DeletedBefore` need none of fisher#1's `strftime` machinery.** `deleted_at` is
+  `SqliteTimestamp`'s fixed-width UTC format, so text order is instant order — the same reason
+  `fi_events.timestamp` sorts as text. A document's own `DateTimeOffset` member is whatever
+  System.Text.Json wrote, which is why that one is the case that needed wrapping.
+- The three reverts that were run: dropping the load SQL's `and is_deleted = 0` fails
+  `a_deleted_document_is_invisible_to_load_and_load_many`; dropping the query layer's default filter
+  fails three query tests; dropping the delete guard fails the deletion-time test above.
+
 ## The LINQ layer
 
 Ported from Polecat, which owns `Polecat.Linq.SqlGeneration` itself rather than taking it from
@@ -587,8 +627,12 @@ Each of these is a decision with a reason, not an oversight:
   JasperFx.Events in 2.41.0 — has no implementation at all
   ([fisher#9](https://github.com/JasperFx/fisher/issues/9)). All three share a hazard: an async
   projection that has already passed a rewritten event does not see the rewrite.
-- **No soft delete, hierarchies, numeric revisions, sub-classing.** All additive against the current
-  column shape.
+- **No hierarchies, numeric revisions or sub-classing.** All additive against the current column
+  shape, as soft delete's two columns were.
+- **No document metadata is projected back onto the document.** `guid_version`, `last_modified` and
+  soft delete's two columns are all written and none is read onto a member, so implementing
+  `ISoftDeleted` opts a type in without populating its `Deleted` / `DeletedAt` —
+  [fisher#11](https://github.com/JasperFx/fisher/issues/11).
 - **No duplicated fields**, so no query can use an index —
   [fisher#2](https://github.com/JasperFx/fisher/issues/2).
 - **Multi-tenancy stops at a tenant id column.** No database-per-tenant, which is why every

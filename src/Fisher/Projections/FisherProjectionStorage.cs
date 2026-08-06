@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using Fisher.Internal;
+using Fisher.Storage.ClosedShape;
 using JasperFx.Events;
 using JasperFx.Events.Aggregation;
 using JasperFx.Events.Daemon;
@@ -57,21 +58,36 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
     public void Delete(TId identity, string tenantId)
         => _session.QueueOperation(_storage.DeleteForId(identity, tenantId));
 
-    // Fisher has no soft delete, so a hard delete is the only delete there is and there is nothing to
-    // undo. Rather than throw — these are reached through shared aggregation code paths that a
-    // ShouldDelete convention can trigger — they collapse onto the ordinary delete and no-op.
-
     public void HardDelete(TDoc snapshot) => HardDelete(snapshot, TenantId);
 
     public void HardDelete(TDoc snapshot, string tenantId)
         => _session.QueueOperation(_storage.HardDeleteForDocument(snapshot, tenantId));
 
-    public void UnDelete(TDoc snapshot)
-    {
-    }
+    public void UnDelete(TDoc snapshot) => UnDelete(snapshot, TenantId);
 
+    /// <summary>
+    ///     Bring a soft-deleted snapshot back, and no-op for a snapshot type whose delete removes the
+    ///     row outright — where the projection would have to re-create it, which is what a subsequent
+    ///     <c>Store</c> does.
+    /// </summary>
+    /// <remarks>
+    ///     A no-op rather than a throw because this is reached through shared aggregation code that a
+    ///     <c>ShouldDelete</c> convention can trigger, so a projection written against a store where
+    ///     every document is soft-deleted must not fail here for saying so.
+    /// </remarks>
     public void UnDelete(TDoc snapshot, string tenantId)
     {
+        if (_storage is not FisherDocumentStorage<TDoc, TId> fisher)
+        {
+            return;
+        }
+
+        var operation = fisher.UndeleteForId((TId)_storage.IdentityFor(snapshot), tenantId);
+
+        if (operation is not null)
+        {
+            _session.QueueOperation(operation);
+        }
     }
 
     /// <summary>

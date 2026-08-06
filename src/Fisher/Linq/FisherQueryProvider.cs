@@ -3,6 +3,7 @@ using Fisher.Internal;
 using Fisher.Linq.Members;
 using Fisher.Linq.Parsing;
 using Fisher.Linq.SqlGeneration;
+using Fisher.Storage;
 using Weasel.Core.SqlGeneration;
 using Weasel.Storage;
 
@@ -190,20 +191,73 @@ public class FisherQueryProvider : IQueryProvider
 
         statement.OrderBys.AddRange(parser.OrderBys);
 
-        // Route the predicate through the storage so a conjoined table gets its tenant filter, and
-        // pick up any default filter the storage imposes. Both are no-ops today, but going around them
-        // is how a query path silently stops honouring tenancy the moment it lands.
+        // Route the predicate through the storage so a conjoined table gets its tenant filter. Going
+        // around it is how a query path silently stops honouring tenancy the moment it lands.
         foreach (var where in parser.Wheres)
         {
             statement.Wheres.Add(storage.FilterDocuments(where, _session));
         }
 
-        if (storage.DefaultWhereFragment() is { } defaultWhere)
-        {
-            statement.Wheres.Add(defaultWhere);
-        }
+        ApplySoftDeleteFilters(statement, parser, storage, mapping);
 
         return (statement, (ISelector<T>)selectClause.BuildSelector(_session));
+    }
+
+    /// <summary>
+    ///     Add whichever of <c>is_deleted = 0</c> / <c>= 1</c> the query asked for, plus any
+    ///     <c>deleted_at</c> bound.
+    /// </summary>
+    /// <remarks>
+    ///     A soft-delete operator against a type that is not soft-deleted is refused rather than
+    ///     ignored: there is no column to answer from, so <c>IsDeleted()</c> would come back empty and
+    ///     <c>MaybeDeleted()</c> would come back complete, both of which look like real answers.
+    /// </remarks>
+    private static void ApplySoftDeleteFilters(Statement statement, LinqQueryParser parser,
+        Weasel.Storage.IDocumentStorage storage, DocumentMapping mapping)
+    {
+        if (!mapping.IsSoftDeleted)
+        {
+            if (parser.UsedSoftDeleteOperator)
+            {
+                throw new BadLinqExpressionException(
+                    $"'{mapping.DocumentType.Name}' is not configured for soft deletes, so it has no "
+                    + "deletion state to query. Mark it with [SoftDeleted], implement ISoftDeleted, or "
+                    + "call StoreOptions.Schema.For<T>().SoftDeleted().");
+            }
+
+            return;
+        }
+
+        switch (parser.SoftDeleteScope)
+        {
+            case SoftDeleteScope.LiveOnly:
+                // From the storage rather than composed here, so the implicit filter has one source
+                // and the query path cannot drift from the load path.
+                statement.Wheres.Add(storage.DefaultWhereFragment()!);
+                break;
+
+            case SoftDeleteScope.DeletedOnly:
+                statement.Wheres.Add(new LiteralSqlFragment(SoftDelete.DeletedSql));
+                break;
+
+            case SoftDeleteScope.LiveAndDeleted:
+                break;
+        }
+
+        // deleted_at is SqliteTimestamp's fixed-width UTC text, chosen so that a string comparison is
+        // an instant comparison — the same property fi_events.timestamp relies on, and the reason
+        // these need none of the strftime normalisation a document's own DateTimeOffset member does.
+        if (parser.DeletedSince is { } since)
+        {
+            statement.Wheres.Add(new ComparisonFilter(SoftDelete.DeletedAtColumn, ">=",
+                SqliteTimestamp.ToDatabaseValue(since)));
+        }
+
+        if (parser.DeletedBefore is { } before)
+        {
+            statement.Wheres.Add(new ComparisonFilter(SoftDelete.DeletedAtColumn, "<",
+                SqliteTimestamp.ToDatabaseValue(before)));
+        }
     }
 
     private async Task<System.Data.Common.DbDataReader> ExecuteReaderAsync(Statement statement,

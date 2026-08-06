@@ -8,9 +8,9 @@ namespace Fisher.Storage;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         The column set is intentionally small and fixed. Marten and Polecat carry more here
-///         (duplicated fields, soft-delete markers, hierarchy discriminators, partition keys); each of
-///         those is additive and can arrive without changing the columns below.
+///         The column set is intentionally small. Marten and Polecat carry more here (duplicated
+///         fields, hierarchy discriminators, partition keys); each of those is additive and can arrive
+///         without changing the columns below, as soft delete's two did.
 ///     </para>
 ///     <para>
 ///         <c>tenant_id</c> exists only on conjoined mappings, matching Polecat. A single-tenant table
@@ -56,5 +56,15 @@ internal class DocumentTable : Table
         AddColumn("last_modified", "TEXT")
             .NotNull()
             .DefaultValueByExpression(SqliteTimestamp.NowDefaultExpression);
+
+        // Soft delete adds two columns and nothing else. is_deleted is INTEGER 0/1 rather than a
+        // boolean and carries a DEFAULT so a row written by anything that predates the flag still
+        // reads as live; deleted_at is nullable because a live row has no deletion time. Only the
+        // soft-delete operation writes a concrete timestamp there — every ordinary write clears it.
+        if (mapping.IsSoftDeleted)
+        {
+            AddColumn(SoftDelete.IsDeletedColumn, "INTEGER").NotNull().DefaultValue(0);
+            AddColumn(SoftDelete.DeletedAtColumn, "TEXT").AllowNulls();
+        }
     }
 }

@@ -6,6 +6,21 @@ using Weasel.Core.SqlGeneration;
 namespace Fisher.Linq.Parsing;
 
 /// <summary>
+///     Which rows of a soft-deleted document type a query wants.
+/// </summary>
+internal enum SoftDeleteScope
+{
+    /// <summary>The default: <c>is_deleted = 0</c>.</summary>
+    LiveOnly,
+
+    /// <summary><c>MaybeDeleted()</c> — no filter at all.</summary>
+    LiveAndDeleted,
+
+    /// <summary><c>IsDeleted()</c>, <c>DeletedSince()</c>, <c>DeletedBefore()</c>.</summary>
+    DeletedOnly
+}
+
+/// <summary>
 ///     Walks a LINQ method chain into a <see cref="Statement" />.
 /// </summary>
 /// <remarks>
@@ -42,6 +57,25 @@ internal class LinqQueryParser
     public int? Limit { get; private set; }
 
     public int? Offset { get; private set; }
+
+    /// <summary>
+    ///     Which soft-deleted rows the query asked for. The last such operator in the chain wins, so
+    ///     <c>MaybeDeleted().IsDeleted()</c> is the deleted ones — reading left to right, as the chain
+    ///     does.
+    /// </summary>
+    public SoftDeleteScope SoftDeleteScope { get; private set; } = SoftDeleteScope.LiveOnly;
+
+    /// <summary>Set by <c>DeletedSince</c>; a lower bound on <c>deleted_at</c>.</summary>
+    public DateTimeOffset? DeletedSince { get; private set; }
+
+    /// <summary>Set by <c>DeletedBefore</c>; an upper bound on <c>deleted_at</c>.</summary>
+    public DateTimeOffset? DeletedBefore { get; private set; }
+
+    /// <summary>
+    ///     Whether the chain used any soft-delete operator at all — asked so that using one against a
+    ///     type that is not soft-deleted can be refused rather than silently ignored.
+    /// </summary>
+    public bool UsedSoftDeleteOperator { get; private set; }
 
     public void Parse(Expression expression)
     {
@@ -93,6 +127,30 @@ internal class LinqQueryParser
                 Offset = (int)WhereClauseParser.ExtractValue(call.Arguments[1])!;
                 break;
 
+            // Matched on the declaring type as well as the name: these are Fisher's own marker
+            // methods, and a caller's extension method that happened to share a name is not one.
+            case nameof(SoftDeletes.SoftDeletedExtensions.MaybeDeleted)
+                when call.Method.DeclaringType == typeof(SoftDeletes.SoftDeletedExtensions):
+                MarkSoftDelete(SoftDeleteScope.LiveAndDeleted);
+                break;
+
+            case nameof(SoftDeletes.SoftDeletedExtensions.IsDeleted)
+                when call.Method.DeclaringType == typeof(SoftDeletes.SoftDeletedExtensions):
+                MarkSoftDelete(SoftDeleteScope.DeletedOnly);
+                break;
+
+            case nameof(SoftDeletes.SoftDeletedExtensions.DeletedSince)
+                when call.Method.DeclaringType == typeof(SoftDeletes.SoftDeletedExtensions):
+                MarkSoftDelete(SoftDeleteScope.DeletedOnly);
+                DeletedSince = (DateTimeOffset)WhereClauseParser.ExtractValue(call.Arguments[1])!;
+                break;
+
+            case nameof(SoftDeletes.SoftDeletedExtensions.DeletedBefore)
+                when call.Method.DeclaringType == typeof(SoftDeletes.SoftDeletedExtensions):
+                MarkSoftDelete(SoftDeleteScope.DeletedOnly);
+                DeletedBefore = (DateTimeOffset)WhereClauseParser.ExtractValue(call.Arguments[1])!;
+                break;
+
             // Terminal operators are handled by the provider, which knows what shape of result to
             // ask the statement for; they contribute nothing to the WHERE/ORDER BY.
             case "Count":
@@ -110,6 +168,12 @@ internal class LinqQueryParser
                     $"Fisher cannot translate '{call.Method.Name}' to SQL yet. Supported operators are "
                     + "Where, OrderBy, OrderByDescending, ThenBy, ThenByDescending, Take and Skip.");
         }
+    }
+
+    private void MarkSoftDelete(SoftDeleteScope scope)
+    {
+        UsedSoftDeleteOperator = true;
+        SoftDeleteScope = scope;
     }
 
     /// <summary>
