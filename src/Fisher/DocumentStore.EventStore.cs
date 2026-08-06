@@ -214,18 +214,26 @@ public partial class DocumentStore : IEventStore
 
     // ---- not supported yet ----
     //
-    // Each names the milestone it waits on. Same discipline as EventOperations.Unsupported.cs: a
-    // monitoring tool that reaches for one of these gets told Fisher cannot do it, rather than an
-    // empty result it would render as "nothing here".
+    // The one member left, naming the milestone it waits on. A monitoring tool that reaches for it
+    // gets told Fisher cannot do it, rather than an empty result it would render as "nothing here".
+    // This is the last throw of its kind in Fisher; EventOperations.Unsupported.cs, which held the
+    // rest, reached zero members and was deleted.
 
     /// <summary>
-    ///     Fisher answers four of <see cref="IReadOnlyEventStore" />'s five members through a session
-    ///     already; the gap is <c>QueryEventsAsync</c>, which needs the paged event query Fisher has no
-    ///     querying layer for.
+    ///     Not implemented — <see href="https://github.com/JasperFx/fisher/issues/15">fisher#15</see>.
     /// </summary>
+    /// <remarks>
+    ///     Fisher answers four of <see cref="IReadOnlyEventStore" />'s five members through a session
+    ///     already; the gap is <c>QueryEventsAsync</c>. <b>That gap is smaller than it looks.</b>
+    ///     <c>EventQuery</c> is a flat bag of optional exact-match filters plus paging rather than an
+    ///     expression, every column it names is already on <c>fi_events</c>, and
+    ///     <see cref="Events.EventOperations.QueryEventsAsync" /> already does the cross-stream read
+    ///     this would page over. What is missing is the filter-to-SQL mapping, <c>limit</c>/<c>offset</c>
+    ///     and a <c>count(*)</c>.
+    /// </remarks>
     IReadOnlyEventStore IEventStore.OpenReadOnlyEventStore()
         => throw new NotSupportedException(
-            "Fisher has no read-only event store session yet — it needs the paged event query surface.");
+            "Fisher has no read-only event store session yet — see fisher#15.");
 
     /// <summary>
     ///     The tooling-facing compaction entry point, which has no aggregate type parameter and so has

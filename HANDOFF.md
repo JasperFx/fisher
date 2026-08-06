@@ -47,6 +47,22 @@ documented public API to 2.42.2. This was a compliance-tests release.
 **fisher#13's intermittent rebuild failure is gone**, fixed at `e3c9912` — the session's operation
 queue was not thread-safe. Earlier handoffs described it as the one known flake; it no longer is.
 
+## Seven issues filed, none of them a bug
+
+The tracker was empty when this pass started, while ROADMAP named five unbuilt features — against
+Fisher's own convention that a deferred gap lives in the tracker rather than in a doc. All seven are
+enhancements; nothing is broken.
+
+| Issue | Why it is worth knowing |
+|---|---|
+| [#15](https://github.com/JasperFx/fisher/issues/15) `OpenReadOnlyEventStore` | **The one real finding.** Its doc comment blamed a missing paged event query layer; fisher#9 built one. `EventQuery` is flat exact-match filters plus paging, not an expression, and every column it names is on `fi_events`. Small, with a Polecat template. |
+| [#16](https://github.com/JasperFx/fisher/issues/16) indexes | `Duplicate` is currently the only way to get one. SQLite indexes expressions directly, so this is *cheaper* here than on the siblings — but the indexed expression must be built from `MemberFactory`'s `TypedLocator`, or it is created, never used, and reports nothing. |
+| [#17](https://github.com/JasperFx/fisher/issues/17) hierarchies | `dotnet_type` is already the discriminator, so no schema change. Decide whether it holds a short alias before anything writes rows. |
+| [#18](https://github.com/JasperFx/fisher/issues/18) numeric revisions | The one item on this list with no SQLite-specific answer needed, which is unusual enough to say. |
+| [#19](https://github.com/JasperFx/fisher/issues/19) composite projections | Possibly close to free — `ProjectionGraph` already discovers them. Also the most likely place to find whatever fisher#13 did not cover. |
+| [#20](https://github.com/JasperFx/fisher/issues/20) `AddFisher` | The largest gap between "works" and "usable without boilerplate". |
+| [#21](https://github.com/JasperFx/fisher/issues/21) subscriptions | `ISubscriptionRunner` is resolved by a soft `as` cast, so not implementing it fails at runtime rather than at compile time — which is why it reads as absent rather than broken. |
+
 ## Where we are against the compliance suites
 
 `JasperFx.Events.ComplianceTests` 2.43.0 ships **24 suites, 199 tests**. Fisher passes **all 199,
@@ -147,8 +163,12 @@ pins the default.
 none of it lands on the store's own public API. Most of the interface is default-implemented by
 JasperFx and left alone. Fisher overrides the two explorer reads it can answer out of `fi_streams`
 (`GetRecentStreamsAsync`, `GetStreamMetadataAsync`) and supplies `TryCreateUsage`; the required
-one required member it cannot honour — `OpenReadOnlyEventStore` — throws naming its milestone rather
-than returning an empty result a monitoring tool would render as "no data". That is now the only
+one required member it cannot honour — `OpenReadOnlyEventStore`
+([fisher#15](https://github.com/JasperFx/fisher/issues/15)) — throws naming its milestone rather
+than returning an empty result a monitoring tool would render as "no data". The 2.43.0 pass found
+that member's doc comment stale: it blamed a missing paged event query layer, and fisher#9 had
+already built one. `EventQuery` is a flat bag of exact-match filters plus paging, so what is actually
+left is the filter-to-SQL mapping, `limit`/`offset` and a `count(*)`. That is now the only
 throw of its kind left anywhere in Fisher. `BuildProjectionDaemonAsync` and `CompactStreamAsync`
 (fisher#10) were both on that list and are both real.
 

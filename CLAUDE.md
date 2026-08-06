@@ -844,9 +844,11 @@ Polecat does, so none of a tooling-only surface lands on the store's own public 
 Most of `IEventStore` is default-implemented by JasperFx and deliberately left alone. Fisher supplies
 the required members plus the three things `EventStoreExplorerCompliance` exercises:
 `GetRecentStreamsAsync`, `GetStreamMetadataAsync` and `TryCreateUsage`. The required members it
-cannot honour — now only `OpenReadOnlyEventStore` — throw naming their milestone rather than returning
-an empty result a monitoring tool would render as "no data". That is the last throw of its kind left
-in Fisher; `IEventStoreOperations` has none. `CompactStreamAsync` is live; see "Stream compacting". The generic half of the interface, and `BuildProjectionDaemonAsync`
+cannot honour — now only `OpenReadOnlyEventStore` (fisher#15) — throw naming their milestone rather
+than returning an empty result a monitoring tool would render as "no data". That is the last throw of
+its kind left in Fisher; `IEventStoreOperations` has none. **Its stated blocker is smaller than the
+old comment claimed**: `EventQuery` is flat exact-match filters plus paging, not an expression, and
+`EventOperations.QueryEventsAsync` (built for masking) already does the cross-stream read. `CompactStreamAsync` is live; see "Stream compacting". The generic half of the interface, and `BuildProjectionDaemonAsync`
 with it, lives in `DocumentStore.Daemon.cs` — see "The async daemon" below.
 
 Three SQLite-specific points:

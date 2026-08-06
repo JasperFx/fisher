@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **no open issues**, on JasperFx **2.43.0**.
+Status: **seven open issues** (#15-#21, all enhancements — nothing is broken), on JasperFx **2.43.0**.
 **All 24 compliance suites green.** 588 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
@@ -53,7 +53,7 @@ Test counts keep understating the suites that matter. `AsyncDaemonCompliance` is
 the whole daemon; `FlatTableProjectionCompliance` is eight that demand an upsert generator, a
 migration hook and rebuild teardown.
 
-Being green on all twenty-two is not the same as being feature-complete against Marten. The suites
+Being green on all twenty-four is not the same as being feature-complete against Marten. The suites
 cover what is portable across stores; the deliberate gaps listed in HANDOFF.md are still gaps.
 
 ## Filed follow-ups
@@ -75,6 +75,13 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | ~~[fisher#14](https://github.com/JasperFx/fisher/issues/14)~~ | **Closed.** Strong-typed identities — no new seam needed; `IIdentification` already reserved the three members, and `DocumentIdentity.FindIdMember`'s predicate overload was the entry point. |
 | ~~[fisher#11](https://github.com/JasperFx/fisher/issues/11)~~ | **Closed.** Document metadata member mapping — four of the five columns projected back onto members, by interface, attribute or DSL. `dotnet_type` is the fifth and has no member slot in Weasel's binder. |
 | ~~[fisher#10](https://github.com/JasperFx/fisher/issues/10)~~ | **Closed.** Stream compacting, at both levels — the untyped `IEventStore` entry point resolves the aggregate from `fi_streams` rather than throwing as Polecat's does. |
+| [fisher#15](https://github.com/JasperFx/fisher/issues/15) | **Open.** `OpenReadOnlyEventStore` — the last throwing member. Its stated blocker is stale: fisher#9 built the event query layer, and `EventQuery` turns out to be flat exact-match filters plus paging, not an expression. |
+| [fisher#16](https://github.com/JasperFx/fisher/issues/16) | **Open.** User-declared indexes over unduplicated members. Cheaper on SQLite than on the siblings — expression indexes mean no column is needed at all. |
+| [fisher#17](https://github.com/JasperFx/fisher/issues/17) | **Open.** Document hierarchies. `dotnet_type` is already the discriminator, so no schema change; everything missing is on the read side. |
+| [fisher#18](https://github.com/JasperFx/fisher/issues/18) | **Open.** Numeric revisions, as the readable alternative to `guid_version`. |
+| [fisher#19](https://github.com/JasperFx/fisher/issues/19) | **Open.** `CompositeProjection` — the one projection shape Fisher does not support. Possibly close to free, but nobody has tried it. |
+| [fisher#20](https://github.com/JasperFx/fisher/issues/20) | **Open.** `AddFisher(...)`. The largest gap between "Fisher works" and "Fisher is usable in an app without boilerplate". |
+| [fisher#21](https://github.com/JasperFx/fisher/issues/21) | **Open.** Subscriptions — `ISubscriptionRunner`. The natural companion to the deliberately-empty outbox seam. |
 
 Every deliberate gap gets an issue. A note in this file or in CLAUDE.md is context, not tracking —
 if something is deferred, it is in the list above.
@@ -197,8 +204,10 @@ closed) — all of it additive against the existing column shape exactly as pred
 duplicated columns being generated meant the write path did not change at all. **Metadata member
 mapping is done** ([fisher#11](https://github.com/JasperFx/fisher/issues/11), closed), and it too
 touched no write path — mapping only decides whether a column that was always written comes back out.
-What is left, roughly in value order: user-declared indexes over unduplicated members, hierarchies,
-numeric revisions.
+What is left, roughly in value order: user-declared indexes over unduplicated members
+([#16](https://github.com/JasperFx/fisher/issues/16)), hierarchies
+([#17](https://github.com/JasperFx/fisher/issues/17)), numeric revisions
+([#18](https://github.com/JasperFx/fisher/issues/18)).
 
 These are the first features no compliance suite asks for, which is the useful signal about what comes
 next: the shared suites are event-store suites, so everything remaining in document storage is pinned
@@ -214,15 +223,27 @@ generated columns, so the duplication costs index space but not row space and ca
 All three lifecycles work across all four projection shapes: self-aggregating snapshots,
 `EventProjection`s that store arbitrary documents, `MultiStreamProjection<TDoc, TId>` with
 `Identity`/`Identities`/`FanOut` grouping, and `FlatTableProjection` writing into a plain relational
-table. Still missing: composite projections. Delivery behind the side-effect seam is deliberately
-absent — see step 1.
+table. Still missing: composite projections
+([#19](https://github.com/JasperFx/fisher/issues/19)), which may be close to free — `ProjectionGraph`
+already discovers them and Fisher derives from it — but nobody has tried it. Delivery behind the
+side-effect seam is deliberately absent — see step 1.
 
 ### 4. DI registration and subscriptions
 
-`AddFisher` has no equivalent yet, so every consumer builds a `DocumentStore` by hand and hosts the
-daemon itself. `ISubscriptionRunner` is the other half — Polecat implements it beside its
+`AddFisher` has no equivalent yet ([#20](https://github.com/JasperFx/fisher/issues/20)), so every
+consumer builds a `DocumentStore` by hand and hosts the daemon itself. `ISubscriptionRunner` is the
+other half ([#21](https://github.com/JasperFx/fisher/issues/21)) — Polecat implements it beside its
 `IEventStore<,>`, and Fisher's projection batch is already the piece a subscription would commit
-through.
+through. The two are independently deliverable; #20 is worth strictly more on its own.
+
+### 5. `OpenReadOnlyEventStore`, the last throwing member
+
+Small, and smaller than its own doc comment claims
+([#15](https://github.com/JasperFx/fisher/issues/15)). That comment says the blocker is a paged event
+query layer Fisher does not have; fisher#9 built it. `EventQuery` is a flat bag of exact-match filters
+plus paging rather than an expression, and `EventOperations.QueryEventsAsync` already does the
+cross-stream read. Listed last because no suite and no application is waiting on it — CritterWatch's
+Event Explorer is.
 
 ## Enrollment status
 
