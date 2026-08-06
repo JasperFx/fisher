@@ -238,6 +238,11 @@ internal partial class FisherSession
     public Task<T?> LoadAsync<T>(long id, CancellationToken token = default) where T : class
         => LoadByIdAsync<T, long>(id, token);
 
+    /// <inheritdoc cref="IDocumentSession.LoadAsync{T,TId}" />
+    public Task<T?> LoadAsync<T, TId>(TId id, CancellationToken token = default)
+        where T : class where TId : notnull
+        => LoadByIdAsync<T, TId>(id, token);
+
     private Task<T?> LoadByIdAsync<T, TId>(TId id, CancellationToken token)
         where T : class where TId : notnull
         => ((Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>()).LoadAsync(id, this, token);

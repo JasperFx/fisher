@@ -3,8 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of **stream compacting** (fisher#10), on JasperFx **2.42.2**.
-**21 of the 22 compliance suites green**, the 22nd unenrolled (fisher#14). 545 tests green on net9.0
+Status as of **strong-typed identities** (fisher#14), on JasperFx **2.42.2**.
+**All 22 compliance suites green.** 565 tests green on net9.0
 and net10.0 (one intermittent — fisher#13), **167 of them shared cross-store compliance tests across
 21 suites**.
 
@@ -13,8 +13,7 @@ and net10.0 (one intermittent — fisher#13), **167 of them shared cross-store c
 **First round of JasperFx compliance tests passing — reached, and held through two package bumps
 that added four suites.** `JasperFx.Events.ComplianceTests` is the shared cross-store suite Marten and
 Polecat both enroll in; passing it is what makes Fisher a real Critter Stack event store rather than a
-lookalike. Twenty-one of the twenty-two are green; `StrongTypedIdentityCompliance`, which arrived in
-2.42.0, is the one Fisher cannot enroll (fisher#14):
+lookalike. All twenty-two are green, `StrongTypedIdentityCompliance` included:
 
 | Suite | Tests |
 |---|---|
@@ -39,6 +38,7 @@ lookalike. Twenty-one of the twenty-two are green; `StrongTypedIdentityComplianc
 | `EventProjectionEnrichmentCompliance` | 3 |
 | `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
+| `StrongTypedIdentityCompliance` | 11 |
 
 Two of the four new suites — `StringStreamIdentityCompliance` and `SnapshotLifecycleCompliance` — went
 green on the version bump alone, which is the useful signal: string stream identity and the
@@ -69,7 +69,7 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | ~~[fisher#9](https://github.com/JasperFx/fisher/issues/9)~~ | **Closed.** Event data masking — `Advanced.ApplyEventDataMaskingAsync`, over the rule registry ported from Polecat's `EventGraph` (the registry was never lifted into JasperFx, only the request shape). |
 | ~~[fisher#12](https://github.com/JasperFx/fisher/issues/12)~~ | **Closed.** A retried projection batch silently dropped its document writes and committed the progression row anyway. Found while investigating #13. |
 | [fisher#13](https://github.com/JasperFx/fisher/issues/13) | Open, not understood. `a_rebuild_reproduces_the_grouping` fails ~1 full-suite run in 5 on net9.0; predates the current work. 12 clean runs after the 2.42.2 bump, which is *not* evidence — instrumentation produced the same 12 without fixing anything. |
-| [fisher#14](https://github.com/JasperFx/fisher/issues/14) | Strong-typed identity. `StrongTypedIdentityCompliance` arrived in 2.42.0 and is the first suite Fisher does not enroll. |
+| ~~[fisher#14](https://github.com/JasperFx/fisher/issues/14)~~ | **Closed.** Strong-typed identities — no new seam needed; `IIdentification` already reserved the three members, and `DocumentIdentity.FindIdMember`'s predicate overload was the entry point. |
 | ~~[fisher#11](https://github.com/JasperFx/fisher/issues/11)~~ | **Closed.** Document metadata member mapping — four of the five columns projected back onto members, by interface, attribute or DSL. `dotnet_type` is the fifth and has no member slot in Weasel's binder. |
 | ~~[fisher#10](https://github.com/JasperFx/fisher/issues/10)~~ | **Closed.** Stream compacting, at both levels — the untyped `IEventStore` entry point resolves the aggregate from `fi_streams` rather than throwing as Polecat's does. |
 
@@ -111,6 +111,7 @@ if something is deferred, it is in the list above.
 | Metadata member mapping (fisher#11) | four columns projected back onto members, by interface, attribute or `Metadata(...)`; `IVersioned` now turns optimistic concurrency on |
 | Event rewriting | `Events/Protected/` — overwrite, replace and delete-by-sequence; `EventOperations.Unsupported.cs` is down to the DCB tag members |
 | Event data masking (fisher#9) | `Advanced.ApplyEventDataMaskingAsync`, masking rules on the event graph, and `QueryEventsAsync` for the predicate selector |
+| Strong-typed identities (fisher#14) | wrapper ids on aggregates and documents; `LoadAsync<T, TId>`; the last unenrolled compliance suite |
 | Stream compacting (fisher#10) | `CompactStreamAsync<T>` + the untyped `IEventStore` overload; reads back free, because JasperFx's aggregator fast-forwards a `Compacted<T>` |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
@@ -145,11 +146,11 @@ themselves and would go ambiguous. **Fisher never did**, so the bump needed no c
 default-implemented throw is the right behaviour here.
 
 The 2.42.2 bump cost exactly one line of Fisher: `IComplianceStoreRegistrar` gained
-`RegisterValueType<TValue>()` for the new `StrongTypedIdentityCompliance` suite, and Fisher's
-registrar throws rather than no-opping. The interface suggests a no-op, which is right for a store
-that discovers value types by itself — Polecat derives them from `ValueTypeInfo` when it builds the
-document mapping. Fisher discovers nothing, so a no-op would carry a suite to a confusing failure
-somewhere else instead of naming what is missing. See fisher#14.
+`RegisterValueType<TValue>()` for the new `StrongTypedIdentityCompliance` suite. It briefly threw,
+because Fisher discovered nothing to register; fisher#14 made it the **no-op** the interface intends,
+which is the right implementation for a store that resolves value types from their shape — Polecat
+derives the same information from `ValueTypeInfo` when it builds its document mapping, and Fisher now
+does too.
 
 ## Next, in order
 
@@ -238,13 +239,12 @@ any more.
 | `EventProjectionEnrichmentCompliance` | 3 | **green** |
 | `AsyncDaemonCompliance` | 2 | **green** |
 | `AutoDiscoveredAggregateCompliance` | 2 | **green** |
-| `StrongTypedIdentityCompliance` | 11 | **not enrolled** — fisher#14 |
+| `StrongTypedIdentityCompliance` | 11 | **green** |
 
-Twenty-one of the twenty-two are enrolled. `StrongTypedIdentityCompliance` arrived in 2.42.0 and is
-the first suite Fisher has ever left unsubclassed: it has no fixture capability flag to decline with,
-the way `SupportsFlatTableProjections` lets a store enroll ahead of the feature, so a store either
-passes it or leaves it out. It still compiles against Fisher, which is the property that makes a bump
-adding an unpassable suite a non-event.
+Every suite the package ships is enrolled, and `StrongTypedIdentityCompliance` — briefly the only one
+Fisher could not pass — went green in fisher#14. It has no capability flag to decline with, the way
+`SupportsFlatTableProjections` lets a store enroll ahead of the feature, so a store either passes it or
+leaves it out.
 
 New suites arriving in a JasperFx bump are the only way this table grows now.
 
@@ -259,8 +259,7 @@ New suites arriving in a JasperFx bump are the only way this table grows now.
 - **`Advanced` is a thin subset.** `Clean`, `ResetAllDataAsync` and `ResetHiloSequenceFloorAsync<T>`
   only. Marten and Polecat also carry bulk insert, `InitialData` and metadata helpers there.
 - **Not started at all:** multi-tenancy beyond a tenant id column, subscriptions, DI registration
-  (`AddFisher`), bulk insert, natural keys, strongly typed ids, user-declared indexes over
-  unduplicated members.
+  (`AddFisher`), bulk insert, natural keys, user-declared indexes over unduplicated members.
 - **`dotnet_type` cannot be mapped onto a member**, because Weasel's `DocumentDotNetTypeBinder` takes
   no member where every other document metadata binder does. Upstream gap, found while building
   fisher#11; worth a Weasel issue if anything ever needs to read it.

@@ -234,9 +234,23 @@ public class DocumentMapping
     ///     conversion would be written as a 16-byte BLOB that never matches the TEXT the column holds —
     ///     see <see cref="SqliteStorageDialect{T}.ToDatabaseValue" />.
     /// </remarks>
-    internal string IdColumnType => IdType == typeof(int) || IdType == typeof(long) ? "INTEGER" : "TEXT";
+    /// <summary>
+    ///     The identity type as the database sees it — a strong-typed id wrapper's inner type, or
+    ///     <see cref="IdType" /> itself.
+    /// </summary>
+    /// <remarks>
+    ///     Everything about the <em>column</em> derives from here rather than from <see cref="IdType" />,
+    ///     because the column holds the inner value; the wrapper exists only in .NET. Deriving the
+    ///     column type from the wrapper would give an int-backed id a TEXT column, and a Guid-backed one
+    ///     the wrong <see cref="StorageColumnType" /> — neither of which any compliance suite exercises,
+    ///     since both only use Guid- and string-backed wrappers where TEXT happens to be right.
+    /// </remarks>
+    internal Type StoredIdType => StrongTypedId.StoredTypeFor(IdType);
 
-    internal StorageColumnType IdStorageColumnType => IdType switch
+    internal string IdColumnType
+        => StoredIdType == typeof(int) || StoredIdType == typeof(long) ? "INTEGER" : "TEXT";
+
+    internal StorageColumnType IdStorageColumnType => StoredIdType switch
     {
         var t when t == typeof(Guid) => StorageColumnType.Guid,
         var t when t == typeof(string) => StorageColumnType.String,
@@ -295,7 +309,9 @@ public class DocumentMapping
             return new InvalidOperationException(
                 $"Document type '{documentType.FullName}' has an identity member '{anyIdMember.Name}' of " +
                 $"type '{TypeOf(anyIdMember).Name}', which Fisher cannot store. Supported identity types " +
-                $"are {supported}.");
+                $"are {supported}, or a strong-typed wrapper around one — a type with a single public " +
+                "gettable property and either a matching constructor or a static builder taking that " +
+                "property's type.");
         }
 
         return new InvalidOperationException(

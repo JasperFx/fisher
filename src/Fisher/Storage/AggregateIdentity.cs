@@ -34,8 +34,14 @@ internal static class AggregateIdentity
     /// <summary>
     ///     The identity member of an aggregate type, or null when it has none.
     /// </summary>
+    /// <remarks>
+    ///     The predicate overload, not the default one: <c>DocumentIdentity</c>'s default accepts only
+    ///     the four canonical scalars, and a strong-typed id is a wrapper around one. The overload
+    ///     exists so a store can widen exactly this — see <see cref="StrongTypedId.IsSupportedIdType" />.
+    /// </remarks>
     internal static MemberInfo? FindIdMember(Type aggregateType)
-        => IdMembers.GetOrAdd(aggregateType, static type => DocumentIdentity.FindIdMember(type));
+        => IdMembers.GetOrAdd(aggregateType,
+            static type => DocumentIdentity.FindIdMember(type, StrongTypedId.IsSupportedIdType));
 
     /// <summary>
     ///     The identity type to close <see cref="Projections.SingleStreamProjection{TDoc,TId}" /> over
@@ -66,10 +72,12 @@ internal static class AggregateIdentity
         var idType = MemberType(member);
         idType = Nullable.GetUnderlyingType(idType) ?? idType;
 
-        // Only the two primitives are checked. A strong-typed id wrapper is passed through untouched
-        // — JasperFx resolves its underlying shape itself, and second-guessing that here would mean
-        // duplicating ValueTypeInfo.
-        if ((idType == typeof(Guid) || idType == typeof(string)) && idType != streamIdType)
+        // A wrapper is checked through the type it wraps, so a Guid-backed id on a string-identity
+        // store fails here rather than at the first write. The wrapper itself is still what the
+        // projection closes over — the generated dispatcher is keyed on it.
+        var comparable = StrongTypedId.StoredTypeFor(idType);
+
+        if ((comparable == typeof(Guid) || comparable == typeof(string)) && comparable != streamIdType)
         {
             throw new InvalidOperationException(
                 $"Aggregate type '{aggregateType.FullName}' has an identity member '{member.Name}' of type " +

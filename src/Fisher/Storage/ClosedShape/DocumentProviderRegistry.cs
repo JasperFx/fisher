@@ -1,6 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
+using JasperFx.Core.Reflection;
 using Weasel.Core.Identity;
+using Weasel.Core.Sequences;
 using Weasel.Storage;
 
 namespace Fisher.Storage.ClosedShape;
@@ -64,14 +66,49 @@ internal class DocumentProviderRegistry : IProviderGraph
             var t when t == typeof(long) => Activator.CreateInstance(
                 typeof(HiloLongIdentification<>).MakeGenericType(mapping.DocumentType),
                 mapping.IdMember, mapping.DocumentType)!,
+            // A strong-typed id wrapper: the document keeps the wrapper, the column keeps the inner
+            // value, and StrongTypedIdentification is the only thing that knows the difference.
+            var t when StrongTypedId.TryResolve(t, out var info) => BuildStrongTyped(mapping, info),
             _ => throw new NotSupportedException(
                 $"Fisher cannot store '{mapping.DocumentType.FullName}' by its '{mapping.IdType.Name}' " +
                 $"identity. Supported identity types are " +
-                $"{string.Join(", ", DocumentMapping.SupportedIdTypes.Select(x => x.Name))}.")
+                $"{string.Join(", ", DocumentMapping.SupportedIdTypes.Select(x => x.Name))}, or a " +
+                "wrapper around one with a single gettable property and a matching constructor or " +
+                "static builder.")
         };
 
         return buildTyped.MakeGenericMethod(mapping.DocumentType, mapping.IdType)
             .Invoke(this, [mapping, identification])!;
+    }
+
+    /// <summary>
+    ///     Close <see cref="StrongTypedIdentification{TDoc,TId,TInner}" /> over the document, the
+    ///     wrapper and the type it wraps, with a generator matching the inner type.
+    /// </summary>
+    /// <remarks>
+    ///     The generators mirror the raw strategies exactly — version-7 Guid, or the document type's
+    ///     Hi-Lo sequence — so a wrapper gets the same ids its unwrapped counterpart would. A
+    ///     string-backed wrapper gets none, because <c>StringIdentification</c> generates none either:
+    ///     a string key is externally assigned.
+    /// </remarks>
+    private static object BuildStrongTyped(DocumentMapping mapping, ValueTypeInfo info)
+    {
+        var inner = info.SimpleType;
+        var documentType = mapping.DocumentType;
+
+        object? generate = inner switch
+        {
+            var t when t == typeof(Guid) => (Func<ISequenceSource, Guid>)(_ => Guid.CreateVersion7()),
+            var t when t == typeof(int) => (Func<ISequenceSource, int>)(s =>
+                s.SequenceFor(documentType).NextInt()),
+            var t when t == typeof(long) => (Func<ISequenceSource, long>)(s =>
+                s.SequenceFor(documentType).NextLong()),
+            _ => null
+        };
+
+        return Activator.CreateInstance(
+            typeof(StrongTypedIdentification<,,>).MakeGenericType(documentType, mapping.IdType, inner),
+            info, mapping.IdMember, generate)!;
     }
 
     private DocumentProvider<TDoc> BuildTypedProvider<TDoc, TId>(

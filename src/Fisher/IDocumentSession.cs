@@ -38,6 +38,18 @@ public interface IQuerySession : IAsyncDisposable
     Task<T?> LoadAsync<T>(long id, CancellationToken token = default) where T : class;
 
     /// <summary>
+    ///     Load a document by a strong-typed identity, or null when there is none.
+    /// </summary>
+    /// <remarks>
+    ///     Both type parameters are explicit, which is what keeps this from being ambiguous with the
+    ///     four single-parameter overloads above. Use it for a document whose identity is a wrapper —
+    ///     <c>LoadAsync&lt;Payment, PaymentId&gt;(id)</c>. The four canonical types are reachable
+    ///     through here too, and reach exactly the same code.
+    /// </remarks>
+    Task<T?> LoadAsync<T, TId>(TId id, CancellationToken token = default)
+        where T : class where TId : notnull;
+
+    /// <summary>
     ///     Load several documents by identity. Missing ids are absent from the result rather than
     ///     null entries, so it is not necessarily as long as the input.
     /// </summary>

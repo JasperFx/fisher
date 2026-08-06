@@ -126,9 +126,12 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
             string key => session.LoadAsync<T>(key, token),
             int number => session.LoadAsync<T>(number, token),
             long number => session.LoadAsync<T>(number, token),
-            _ => throw new NotSupportedException(
-                $"Fisher cannot load a document by an identity of type {id.GetType().FullName}. " +
-                "Strongly typed ids are not supported anywhere in Fisher yet.")
+            // A strong-typed id wrapper: close the two-parameter overload over it. Reflection because
+            // the suite hands the id over as object, and its runtime type is the only thing naming TId.
+            _ => (Task<T?>)typeof(IQuerySession)
+                .GetMethod(nameof(IQuerySession.LoadAsync), 2, [Type.MakeGenericMethodParameter(1), typeof(CancellationToken)])!
+                .MakeGenericMethod(typeof(T), id.GetType())
+                .Invoke(session, [id, token])!
         };
 
     public override void StoreDocument<T>(IDocumentSession session, T document) => session.Store(document);
@@ -318,10 +321,14 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         ///     strongly typed id. A silent no-op here would let a suite get as far as a confusing
         ///     failure somewhere else instead of saying what is missing.
         /// </remarks>
+        /// <summary>
+        ///     A no-op: Fisher discovers strong-typed identifiers from their shape rather than needing
+        ///     them registered, which is Polecat's model. Marten is the store that needs the call.
+        /// </summary>
+        /// <seealso cref="Fisher.Storage.StrongTypedId" />
         public void RegisterValueType<TValue>() where TValue : notnull
-            => throw new NotSupportedException(
-                $"Fisher cannot register the strong-typed identifier '{typeof(TValue).FullName}'. "
-                + "Strongly typed ids are not supported anywhere in Fisher yet.");
+        {
+        }
 
         public void Snapshot<TDoc>(SnapshotLifecycle lifecycle) where TDoc : notnull
             => _options.Projections.Snapshot<TDoc>(lifecycle);

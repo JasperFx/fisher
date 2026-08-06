@@ -77,3 +77,6 @@ public class multi_stream_projection_compliance
 
 public class flat_table_projection_compliance
     : FlatTableProjectionCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class strong_typed_identity_compliance
+    : StrongTypedIdentityCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

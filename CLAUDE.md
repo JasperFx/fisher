@@ -169,6 +169,8 @@ Working, with tests:
   generated column, so a predicate against that member is served by an index
 - **Document metadata member mapping** — `guid_version`, `last_modified`, `is_deleted` and
   `deleted_at` projected back onto members of the document, by interface, attribute or DSL
+- **Strong-typed identities** — a wrapper around any of the four id types, as an aggregate's identity
+  and as a document's
 - **Event rewriting** — `OverwriteEvent`, `CompletelyReplaceEvent`, event data masking through
   `Advanced.ApplyEventDataMaskingAsync`, and stream compacting via `CompactStreamAsync<T>`
 
@@ -680,6 +682,43 @@ upgrade that changes one fails there and names the column instead of presenting 
 quietly stopped being populated. All four hold as of Microsoft.Data.Sqlite 10.0.9, including a Guid in
 either casing.
 
+### Strong-typed identities
+
+`Storage/StrongTypedId.cs` and `Storage/ClosedShape/StrongTypedIdentification.cs` (fisher#14) — a
+wrapper struct or class standing in for one of the four canonical id types, as an aggregate's identity
+and as a document's. The shape is JasperFx's, described by `ValueTypeInfo.ForType`: one public gettable
+property, plus a matching constructor or a static builder.
+
+**This needed no new seam.** `IIdentification<TDoc, TId>` already reserved `ToRawSqlValue`,
+`RawSqlType` and `ReadIdFromReader` for exactly this, so a wrapper presents its inner value at the
+ADO.NET boundary while the document keeps the wrapper. Nothing downstream knows the id was wrapped —
+the table shape, the write SQL and the positional `?` contract are untouched.
+
+- **Fisher discovers wrappers rather than requiring registration**, which is Polecat's model rather
+  than Marten's, and is why the compliance seam's `RegisterValueType<T>` is a no-op here.
+- **`DocumentIdentity.FindIdMember`'s predicate overload is the whole entry point.** Its default
+  accepts only the canonical four; the overload exists so a store can widen it, and
+  `StrongTypedId.IsSupportedIdType` is Fisher's. Before this, every strong-typed aggregate failed with
+  "has no identity member", which was true only in the sense that the filter had rejected it.
+- **`ValueTypeInfo.ForType` throws for anything that is not a wrapper**, and it is asked about every
+  candidate identity member of every type. The answer is cached including the negative, and cheap
+  exclusions run first, or resolving an ordinary aggregate's identity would raise and swallow an
+  exception every call.
+- **Everything about the column derives from `DocumentMapping.StoredIdType`, not `IdType`.** The
+  column holds the inner value; the wrapper exists only in .NET. Deriving from the wrapper gives an
+  int-backed id a TEXT column and a Guid-backed one the wrong `StorageColumnType` — **and no
+  compliance suite catches either**, because the suite only uses Guid- and string-backed wrappers,
+  where TEXT happens to be right. `strong_typed_identities` pins it.
+- **A Guid-backed wrapper goes through the same lowercase-canonical conversion as a raw one.** That
+  conversion lives in the identity strategy rather than the dialect (`SqliteGuidIdentification`), so
+  the wrapper is exactly where it could have been quietly lost — and the compliance suite would not
+  have seen it, because it never reads the row.
+- **Generation mirrors the raw strategies**: version-7 Guid, or the document type's Hi-Lo sequence. A
+  string-backed wrapper generates nothing, because a raw string key is externally assigned too.
+
+`LoadAsync<T, TId>(id)` is the load-by-wrapper overload. Both type parameters are explicit, which is
+what keeps it unambiguous against the four single-parameter overloads.
+
 ### Hi-Lo sequences
 
 Numeric document identities go through `Storage/Sequences/`: `fi_hilo` (one row per sequence),
@@ -734,7 +773,7 @@ next `Store` would skip its migration and write to nothing.
   every message. That is the end state, not a gap — fisher#8 was closed wontfix. Delivery is a bus
   integration's job here as it is on both siblings.
 - Multi-tenancy beyond a tenant id column, subscriptions, DI registration.
-- Strong-typed identities — the only compliance suite Fisher does not enroll (fisher#14).
+- Natural keys, bulk insert, user-declared indexes over unduplicated members.
 
 ### The `IEventStoreOperations` surface
 
@@ -924,17 +963,16 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-`JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
-gate is gone. **21 of the 22 suites are live, 167 shared tests**, as of 2.42.2. The four that arrived
+**Fisher is enrolled, in full.** `JasperFx.Events.ComplianceTests` is referenced unconditionally —
+the old `$(EnableComplianceTests)` gate is gone. **All 22 suites are live**, as of 2.42.2. The four that arrived
 in 2.40.0/2.41.0 — `StringStreamIdentityCompliance`, `SnapshotLifecycleCompliance`,
 `MultiStreamProjectionCompliance`, `FlatTableProjectionCompliance` — went in on the same bump.
 
-The 22nd is `StrongTypedIdentityCompliance`, added in 2.42.0 and **the only suite Fisher does not
-enroll** (fisher#14). It has no capability flag to decline with, so a store either passes it or leaves
-it unsubclassed. Its arrival is also why
-`FisherComplianceFixture.FisherComplianceRegistrar.RegisterValueType<TValue>` throws: the interface
-suggests a no-op, which is correct for a store that discovers value types by itself, and Fisher
-discovers none.
+The 22nd, `StrongTypedIdentityCompliance`, arrived in 2.42.0 and went green in fisher#14. It has no
+capability flag to decline with, so a store either passes it or leaves it unsubclassed.
+`FisherComplianceFixture.FisherComplianceRegistrar.RegisterValueType<TValue>` is a **no-op**, which is
+the correct implementation for a store that discovers value types by itself — see "Strong-typed
+identities".
 
 The mechanics, because they are not what the package's name suggests:
 
