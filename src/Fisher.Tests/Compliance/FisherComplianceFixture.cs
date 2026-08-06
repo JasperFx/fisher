@@ -136,6 +136,19 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
 
     public override void StoreDocument<T>(IDocumentSession session, T document) => session.Store(document);
 
+    /// <summary>
+    ///     Run a batch data-masking operation against events already stored.
+    /// </summary>
+    /// <remarks>
+    ///     <see cref="JasperFx.Events.Protected.IEventDataMasking" /> is shared, but the entry point that
+    ///     hands one out is not — every store spells it on its own <c>Advanced</c> surface, and those
+    ///     share no interface. Fisher's is <see cref="AdvancedOperations.ApplyEventDataMaskingAsync" />,
+    ///     and the signature already matches the seam member one for one.
+    /// </remarks>
+    public override Task ApplyEventDataMaskingAsync(
+        Action<JasperFx.Events.Protected.IEventDataMasking> configure, CancellationToken token)
+        => Store.Advanced.ApplyEventDataMaskingAsync(configure, token);
+
     public override string? CorrelationIdFor(IDocumentSession session) => AsFisherSession(session).CorrelationId;
 
     public override string? CausationIdFor(IDocumentSession session) => AsFisherSession(session).CausationId;
@@ -310,18 +323,6 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         }
 
         /// <summary>
-        ///     Throws: Fisher has no strong-typed identity support anywhere, so there is nothing to
-        ///     register into.
-        /// </summary>
-        /// <remarks>
-        ///     A no-op is the right implementation only for a store that discovers value types by
-        ///     itself, which is why the interface suggests one. Fisher does not — <c>DocumentMapping</c>
-        ///     accepts the four canonical id types and nothing else, and
-        ///     <see cref="FisherComplianceFixture.LoadDocumentAsync{T}" /> already throws for a
-        ///     strongly typed id. A silent no-op here would let a suite get as far as a confusing
-        ///     failure somewhere else instead of saying what is missing.
-        /// </remarks>
-        /// <summary>
         ///     A no-op: Fisher discovers strong-typed identifiers from their shape rather than needing
         ///     them registered, which is Polecat's model. Marten is the store that needs the call.
         /// </summary>
@@ -329,6 +330,28 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         public void RegisterValueType<TValue>() where TValue : notnull
         {
         }
+
+        /// <summary>
+        ///     Register a mutating masking rule — the in-place form, for an event whose protected
+        ///     members are settable.
+        /// </summary>
+        /// <remarks>
+        ///     Every store spells this on its own event options rather than on a shared interface,
+        ///     which is why the seam carries it. Fisher's is
+        ///     <see cref="Fisher.Events.EventGraph.AddMaskingRuleForProtectedInformation{T}(Action{T})" />,
+        ///     and the two signatures match exactly — including the contravariant reach, which falls
+        ///     out of <c>IEvent&lt;out T&gt;</c> being covariant.
+        /// </remarks>
+        public void AddMaskingRule<TEvent>(Action<TEvent> rule) where TEvent : notnull
+            => _options.Events.AddMaskingRuleForProtectedInformation(rule);
+
+        /// <summary>
+        ///     Register a replacing masking rule — the functional form, which is what a <c>record</c>
+        ///     with init-only members needs.
+        /// </summary>
+        /// <inheritdoc cref="AddMaskingRule{TEvent}(Action{TEvent})" path="/remarks" />
+        public void AddMaskingRule<TEvent>(Func<TEvent, TEvent> rule) where TEvent : notnull
+            => _options.Events.AddMaskingRuleForProtectedInformation(rule);
 
         public void Snapshot<TDoc>(SnapshotLifecycle lifecycle) where TDoc : notnull
             => _options.Projections.Snapshot<TDoc>(lifecycle);

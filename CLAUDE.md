@@ -795,9 +795,11 @@ live aggregation (there is no snapshot to read instead), `WriteToAggregate` is f
 `SaveChangesAsync`, and `ProjectLatest` folds the session's pending events on top of the committed
 state.
 
-What throws lives in **`EventOperations.Unsupported.cs`**, one file on purpose — now only the DCB tag
-members, the two event-rewrite members having moved to `EventOperations.Rewriting.cs`. That file
-shrinking is the progress measure. `FetchForWriting<T, TId>` and `FetchLatest<T, TId>` are partial:
+**Nothing on `IEventStoreOperations` throws any more.** What did lived in
+`EventOperations.Unsupported.cs`, one file on purpose so that file shrinking was the progress
+measure; it reached zero members and was deleted. Reintroduce it, rather than scattering throws, if a
+future JasperFx release widens the interface past what Fisher implements.
+`FetchForWriting<T, TId>` and `FetchLatest<T, TId>` are partial:
 they accept an id that is already the stream identity type and throw for anything else, because in the
 siblings that overload is the natural-key and strong-typed-id entry point.
 
@@ -843,8 +845,8 @@ Most of `IEventStore` is default-implemented by JasperFx and deliberately left a
 the required members plus the three things `EventStoreExplorerCompliance` exercises:
 `GetRecentStreamsAsync`, `GetStreamMetadataAsync` and `TryCreateUsage`. The required members it
 cannot honour — now only `OpenReadOnlyEventStore` — throw naming their milestone rather than returning
-an empty result a monitoring tool would render as "no data". Same discipline as
-`EventOperations.Unsupported.cs`. `CompactStreamAsync` is live; see "Stream compacting". The generic half of the interface, and `BuildProjectionDaemonAsync`
+an empty result a monitoring tool would render as "no data". That is the last throw of its kind left
+in Fisher; `IEventStoreOperations` has none. `CompactStreamAsync` is live; see "Stream compacting". The generic half of the interface, and `BuildProjectionDaemonAsync`
 with it, lives in `DocumentStore.Daemon.cs` — see "The async daemon" below.
 
 Three SQLite-specific points:
@@ -973,15 +975,32 @@ coalescing on purpose. Do not present it as a performance feature.
 ### Compliance suites
 
 **Fisher is enrolled, in full.** `JasperFx.Events.ComplianceTests` is referenced unconditionally —
-the old `$(EnableComplianceTests)` gate is gone. **All 22 suites are live**, as of 2.42.2. The four that arrived
-in 2.40.0/2.41.0 — `StringStreamIdentityCompliance`, `SnapshotLifecycleCompliance`,
-`MultiStreamProjectionCompliance`, `FlatTableProjectionCompliance` — went in on the same bump.
+the old `$(EnableComplianceTests)` gate is gone. **All 24 suites, 199 tests, are live**, as of 2.43.0.
+The four that arrived in 2.40.0/2.41.0 — `StringStreamIdentityCompliance`,
+`SnapshotLifecycleCompliance`, `MultiStreamProjectionCompliance`, `FlatTableProjectionCompliance` —
+went in on the same bump.
 
-The 22nd, `StrongTypedIdentityCompliance`, arrived in 2.42.0 and went green in fisher#14. It has no
-capability flag to decline with, so a store either passes it or leaves it unsubclassed.
+`StrongTypedIdentityCompliance` arrived in 2.42.0 and went green in fisher#14. It has no capability
+flag to decline with, so a store either passes it or leaves it unsubclassed.
 `FisherComplianceFixture.FisherComplianceRegistrar.RegisterValueType<TValue>` is a **no-op**, which is
 the correct implementation for a store that discovers value types by itself — see "Strong-typed
 identities".
+
+`EventDataMaskingCompliance` and `StreamCompactingCompliance` arrived in 2.43.0 and **both went green
+on the bump alone** — 21 tests, no production change. That is the useful thing about them: fisher#9
+and fisher#10 were built from Polecat's shape months before a shared suite existed to check the shape
+was right, and the suites are what turns "ported faithfully" from a claim into a fact. Compacting
+needed nothing at all — `CompactStreamAsync<T>` was lifted onto `IEventStoreOperations` in 2.41.0, so
+the suite reaches it through the shared surface. Masking cost **three seam members and no more**,
+because `IEventDataMasking` is shared but the entry point that hands one out is not: every store spells
+it on its own `Advanced` surface, and those share no interface.
+
+- `FisherComplianceFixture.ApplyEventDataMaskingAsync` delegates to
+  `Store.Advanced.ApplyEventDataMaskingAsync` — the signatures already matched one for one.
+- The registrar's two `AddMaskingRule<TEvent>` overloads delegate to
+  `EventGraph.AddMaskingRuleForProtectedInformation<T>`. The `Action` / `Func` split the seam demands
+  is the same split Fisher already had, and for the same reason — see "Event data masking" for why
+  only the `Action` form reaches contravariantly.
 
 The mechanics, because they are not what the package's name suggests:
 
@@ -992,12 +1011,13 @@ The mechanics, because they are not what the package's name suggests:
 - Every suite now compiles. The two `EventProjection*` suites were once `<Compile Remove>`d because
   they call `IDocumentSession.Store` and `IQuerySession.LoadAsync`; document storage made them
   compile and they are enrolled.
-- **`FisherComplianceFixture` throws `NotSupportedException` naming the milestone** for each member
-  Fisher cannot honour. Only `LoadDocumentAsync` for a strongly typed id still does. Enrolling a
-  suite prematurely therefore fails loudly rather than passing on a stub.
-- `CleanEventDataAsync` now delegates to `Advanced.Clean.DeleteAllEventDataAsync`. It is called
-  before every test, so it cannot throw the way the unsupported members do — hence the null guard
-  rather than the `Store` accessor.
+- **Nothing in `FisherComplianceFixture` throws any more.** The standing discipline is that a member
+  Fisher cannot honour throws a `NotSupportedException` naming its milestone, so enrolling a suite
+  prematurely fails loudly rather than passing on a stub — but as of fisher#14 there is no such
+  member left. Keep the discipline for the next seam member that arrives ahead of the feature.
+- `CleanEventDataAsync` delegates to `Advanced.Clean.DeleteAllEventDataAsync`. It is called before
+  every test, so it must not throw the way an unsupported member would — hence the null guard rather
+  than the `Store` accessor.
 - **`QueryTableAsync` is the seam's only raw data access**, added in 2.41.0 for the flat-table suite —
   a table name in, every row out, deliberately predicate-free. Fisher's implementation does the
   schema fold and **converts a lowercase-canonical Guid string back to a `Guid`**. That conversion is

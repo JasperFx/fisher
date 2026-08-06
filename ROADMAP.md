@@ -3,16 +3,16 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of **fisher#13**, the last open issue, on JasperFx **2.42.2**.
-**All 22 compliance suites green.** 567 tests green on net9.0
+Status: **no open issues**, on JasperFx **2.43.0**.
+**All 24 compliance suites green.** 588 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
 ## The destination
 
-**First round of JasperFx compliance tests passing — reached, and held through two package bumps
-that added four suites.** `JasperFx.Events.ComplianceTests` is the shared cross-store suite Marten and
+**First round of JasperFx compliance tests passing — reached, and held through four package bumps
+that added six suites.** `JasperFx.Events.ComplianceTests` is the shared cross-store suite Marten and
 Polecat both enroll in; passing it is what makes Fisher a real Critter Stack event store rather than a
-lookalike. All twenty-two are green, `StrongTypedIdentityCompliance` included:
+lookalike. All twenty-four are green:
 
 | Suite | Tests |
 |---|---|
@@ -20,7 +20,10 @@ lookalike. All twenty-two are green, `StrongTypedIdentityCompliance` included:
 | `StringStreamIdentityCompliance` | 19 |
 | `FetchForWritingCompliance` | 13 |
 | `StreamReadCompliance` | 11 |
+| `StrongTypedIdentityCompliance` | 11 |
+| `StreamCompactingCompliance` | 11 |
 | `MultiStreamProjectionCompliance` | 10 |
+| `EventDataMaskingCompliance` | 10 |
 | `EventMetadataCompliance` | 9 |
 | `SelfAggregatingEvolveCompliance` | 8 |
 | `FlatTableProjectionCompliance` | 8 |
@@ -37,13 +40,14 @@ lookalike. All twenty-two are green, `StrongTypedIdentityCompliance` included:
 | `EventProjectionEnrichmentCompliance` | 3 |
 | `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
-| `StrongTypedIdentityCompliance` | 11 |
 
-Two of the four new suites — `StringStreamIdentityCompliance` and `SnapshotLifecycleCompliance` — went
-green on the version bump alone, which is the useful signal: string stream identity and the
-inline/async snapshot equivalence were already built to the shape the shared suite expects.
-`MultiStreamProjectionCompliance` cost one file. `FlatTableProjectionCompliance` cost a real feature,
-and is the only one that did.
+**Four of the six suites added since 2.39.5 went green on the version bump alone** —
+`StringStreamIdentityCompliance`, `SnapshotLifecycleCompliance`, `EventDataMaskingCompliance` and
+`StreamCompactingCompliance`. That is the useful signal, and it is a direct dividend of mirroring
+Polecat's internals: each of those features was built from the sibling's shape before a shared suite
+existed to check it, and the suite arriving green is what turns "ported faithfully" into a fact.
+`MultiStreamProjectionCompliance` cost one file; `FlatTableProjectionCompliance` and
+`StrongTypedIdentityCompliance` cost real features.
 
 Test counts keep understating the suites that matter. `AsyncDaemonCompliance` is two tests that demand
 the whole daemon; `FlatTableProjectionCompliance` is eight that demand an upsert generator, a
@@ -108,11 +112,12 @@ if something is deferred, it is in the list above.
 | Soft delete | `is_deleted` / `deleted_at`, `HardDelete`, the three `*Where` operations, and the four query operators |
 | Duplicated fields (fisher#2) | `Duplicate(x => x.Name)` as an indexed `VIRTUAL` generated column; `Schema.For<T>()` now returns a typed expression |
 | Metadata member mapping (fisher#11) | four columns projected back onto members, by interface, attribute or `Metadata(...)`; `IVersioned` now turns optimistic concurrency on |
-| Event rewriting | `Events/Protected/` — overwrite, replace and delete-by-sequence; `EventOperations.Unsupported.cs` is down to the DCB tag members |
+| Event rewriting | `Events/Protected/` — overwrite, replace and delete-by-sequence; emptied `EventOperations.Unsupported.cs`, which is now deleted |
 | Event data masking (fisher#9) | `Advanced.ApplyEventDataMaskingAsync`, masking rules on the event graph, and `QueryEventsAsync` for the predicate selector |
 | The rebuild flake (fisher#13) | the session's operation queue is guarded; an unsynchronised `List<T>.Add` was silently losing a projection slice's write |
 | Strong-typed identities (fisher#14) | wrapper ids on aggregates and documents; `LoadAsync<T, TId>`; the last unenrolled compliance suite |
 | Stream compacting (fisher#10) | `CompactStreamAsync<T>` + the untyped `IEventStore` overload; reads back free, because JasperFx's aggregator fast-forwards a `Compacted<T>` |
+| JasperFx 2.43.0 | `EventDataMaskingCompliance` and `StreamCompactingCompliance` enrolled, both green on the bump; three seam members, no production change; `EventOperations.Unsupported.cs` emptied and deleted |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -125,9 +130,9 @@ for the source-generator constraint that shapes all of it.
 
 `EventOperations` now declares the whole of `IEventStoreOperations`, which is what
 `EventStoreComplianceFixture.EventsFor(session)` must return — the single interface everything
-portable in the compliance suites runs through. What is not implemented is collected in
-`EventOperations.Unsupported.cs` (DCB tags, event rewriting) rather than scattered. Two open
-decisions came out of it:
+portable in the compliance suites runs through. What was not implemented was collected in
+`EventOperations.Unsupported.cs` (DCB tags, then event rewriting) rather than scattered, so the file
+shrinking measured progress; it reached zero and was deleted. Two open decisions came out of it:
 
 - **Exclusive appends are the optimistic ones.** SQLite has no row lock; documented in CLAUDE.md's
   divergence table with what revisiting it would cost. Still open.
@@ -138,12 +143,12 @@ decisions came out of it:
   earlier deferral was waiting for.
 
 The `FisherCommandBuilder` shim is gone: weasel#424 shipped in Weasel.Sqlite 9.23.2. JasperFx is on
-**2.42.2** and Weasel on 9.23.2, which is current. 2.40.0 and 2.41.0 are where four of the newest
+**2.43.0** and Weasel on 9.23.2, both current. 2.40.0 and 2.41.0 are where four of the newest
 compliance suites came from. 2.41.0 also lifted `CompactStreamAsync<T>` onto `IEventStoreOperations`
 and `IEventDataMasking` into `JasperFx.Events/Protected/`; the upstream note warns consumers that
 adopting the first is not optional, but that applies to Marten and Polecat, which declared the member
 themselves and would go ambiguous. **Fisher never did**, so the bump needed no change and the
-default-implemented throw is the right behaviour here.
+default-implemented throw was the right behaviour until fisher#10 made it real.
 
 The 2.42.2 bump cost exactly one line of Fisher: `IComplianceStoreRegistrar` gained
 `RegisterValueType<TValue>()` for the new `StrongTypedIdentityCompliance` suite. It briefly threw,
@@ -151,6 +156,16 @@ because Fisher discovered nothing to register; fisher#14 made it the **no-op** t
 which is the right implementation for a store that resolves value types from their shape — Polecat
 derives the same information from `ValueTypeInfo` when it builds its document mapping, and Fisher now
 does too.
+
+The 2.43.0 bump cost **three seam members and no production change at all**. It brought
+`EventDataMaskingCompliance` and `StreamCompactingCompliance`, and both went green immediately:
+compacting needed nothing, since 2.41.0's lift already put the member on the shared operations
+surface, and masking needed only `ApplyEventDataMaskingAsync` on the fixture plus the two
+`AddMaskingRule` overloads on the registrar — `IEventDataMasking` is shared, but the `Advanced`
+surface that hands one out is not, on any of the three stores. The core `JasperFx` and
+`JasperFx.Events` assemblies did not change; 2.43.0 is a compliance-tests release. The pass also
+emptied and removed `EventOperations.Unsupported.cs`, which had been down to a single unreferenced
+constant.
 
 ## Next, in order
 

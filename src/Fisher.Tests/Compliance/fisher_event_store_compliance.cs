@@ -8,11 +8,12 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them. All seventeen are now enrolled — the
- * async daemon was the last one, and AsyncDaemonCompliance closed it out.
+ * Suites were added one at a time as Fisher grew into them. All twenty-four that ship in
+ * JasperFx.Events.ComplianceTests 2.43.0 are enrolled; there is no suite Fisher declines.
  *
- * The fixture still throws a NotSupportedException naming the milestone for each member Fisher
- * cannot honour, so a future suite reaching for one fails loudly rather than passing on a stub.
+ * Nothing in the fixture throws any more, but the discipline stands for the next seam member that
+ * arrives ahead of the feature: a member Fisher cannot honour throws a NotSupportedException naming
+ * its milestone, so a suite reaching for one fails loudly rather than passing on a stub.
  */
 
 public class stream_read_compliance
@@ -80,3 +81,9 @@ public class flat_table_projection_compliance
 
 public class strong_typed_identity_compliance
     : StrongTypedIdentityCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class event_data_masking_compliance
+    : EventDataMaskingCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class stream_compacting_compliance
+    : StreamCompactingCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

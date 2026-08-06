@@ -1,9 +1,8 @@
 # Handoff
 
-State of Fisher after **soft delete and duplicated fields**, the first two items of ROADMAP step 2
-(finish document storage), built on top of the JasperFx 2.41.0 upgrade that brought four new compliance suites and with them
-multi-stream projections, flat-table projections, and the fix for fisher#1. Written for whoever picks
-this up next.
+State of Fisher after the **JasperFx 2.43.0 upgrade**, which brought the two compliance suites that
+close out event rewriting — `EventDataMaskingCompliance` and `StreamCompactingCompliance`. Written for
+whoever picks this up next.
 
 **Nothing is half-built.** Every milestone on disk builds, is tested, and was committed complete.
 [ROADMAP.md](ROADMAP.md) says what comes next and why in that order.
@@ -11,44 +10,66 @@ this up next.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**493 tests green on net9.0 and net10.0**, with one known intermittent failure — see below. 167 of them are shared cross-store compliance tests, and
-those ran clean repeatedly before this was written. No compliance suite covers soft delete or
-duplicated fields, so all 31 of the new tests are Fisher's own.
+**588 tests green on net9.0 and net10.0**, with no known intermittent failures. 199 of them are shared
+cross-store compliance tests.
 
-## One test is intermittently red, and it is not new
+## The 2.43.0 bump cost nothing but the seam
 
-[fisher#13](https://github.com/JasperFx/fisher/issues/13):
-`MultiStreamProjectionCompliance.a_rebuild_reproduces_the_grouping` fails roughly **1 full-suite run
-in 5 on net9.0**, never on net10.0, and never in isolation. After `RebuildProjectionAsync` returns
-without error and with a correct high-water mark, the projected document for one slice is absent.
+Both new suites went green **on the bump alone** — 21 tests, no production change. That is the point
+of them: fisher#9 (masking) and fisher#10 (compacting) were ported from Polecat's shape before a
+shared suite existed to check the shape was right, and this is what turns "ported faithfully" from a
+claim into a fact.
 
-It **predates soft delete and duplicated fields** — reproduced at `8e158c5` with everything since
-stashed, which is the commit that enrolled the suite. Earlier handoffs claiming consecutive clean
-runs were accurate about those runs and unlucky about the sample.
+`StreamCompactingCompliance` needed nothing at all. `CompactStreamAsync<T>` was lifted onto
+`IEventStoreOperations` as a default-implemented throw back in 2.41.0, so the suite reaches it through
+the shared operations surface — a store without compacting surfaces as a `NotSupportedException` from
+the DIM rather than a compile error, which is exactly the shape that lets a suite ship ahead of an
+implementation.
 
-fisher#12 was the leading hypothesis and is not the answer: it is fixed and pinned, and this still
-reproduces afterwards. The issue records the full evidence, including that it vanishes under
-instrumentation — so the next attempt wants an in-memory trace dumped on failure rather than file
-logging on the hot path.
+`EventDataMaskingCompliance` cost **three seam members and nothing else**. `IEventDataMasking` became
+shared in the same 2.41.0 lift, but the entry point that hands one out did not — every store spells it
+on its own `Advanced` surface and those share no interface. So:
+
+| Seam member | Fisher's |
+|---|---|
+| `FisherComplianceFixture.ApplyEventDataMaskingAsync` | `Store.Advanced.ApplyEventDataMaskingAsync` — signatures already matched one for one |
+| `FisherComplianceRegistrar.AddMaskingRule<T>(Action<T>)` | `EventGraph.AddMaskingRuleForProtectedInformation<T>(Action<T>)` |
+| `FisherComplianceRegistrar.AddMaskingRule<T>(Func<T,T>)` | `EventGraph.AddMaskingRuleForProtectedInformation<T>(Func<T,T>)` |
+
+The `Action` / `Func` split the seam demands is the split Fisher already had, and for the same reason
+the suite gives: only the mutating form reaches contravariantly, because `IEvent<out T>` is covariant
+while assigning a replacement back needs the closed `Event<T>`'s setter. See CLAUDE.md, "Event data
+masking".
+
+The core packages did not move — `JasperFx` and `JasperFx.Events` 2.43.0 are byte-identical in
+documented public API to 2.42.2. This was a compliance-tests release.
+
+**fisher#13's intermittent rebuild failure is gone**, fixed at `e3c9912` — the session's operation
+queue was not thread-safe. Earlier handoffs described it as the one known flake; it no longer is.
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.41.0 ships **21 suites, 167 tests**. Fisher passes **all 167,
-all 21 suites**. Every suite compiles; every one is also subclassed and running.
+`JasperFx.Events.ComplianceTests` 2.43.0 ships **24 suites, 199 tests**. Fisher passes **all 199,
+all 24 suites**. Every suite compiles; every one is also subclassed and running.
 
-The four that arrived in 2.40.0 and 2.41.0 divided cleanly into "already true" and "had to be built":
+The six suites added since 2.39.5 divided cleanly into "already true" and "had to be built", and the
+ratio is worth noticing — four of the six cost nothing, because they arrived after Fisher had already
+been built to the sibling's shape:
 
-| New suite | What it cost |
-|---|---|
-| `StringStreamIdentityCompliance` | Nothing. 19 tests green on the bump alone — `StreamIdentity.AsString` was already built to the shape the suite expects. |
-| `SnapshotLifecycleCompliance` | Nothing. 6 tests green on the bump alone; inline and async snapshots already agreed. |
-| `MultiStreamProjectionCompliance` | One file. `MultiStreamProjection<TDoc, TId>` closes JasperFx's shared base over Fisher's session pair, and all 10 tests passed first run — slicing, `Identities`, `FanOut`, inline and async. The document-storage work that let a projection key on a string paid for this. |
-| `FlatTableProjectionCompliance` | A real feature: `Projections/Flattened/`, ~700 lines. See CLAUDE.md. |
+| New suite | Arrived | What it cost |
+|---|---|---|
+| `StringStreamIdentityCompliance` | 2.40.0 | Nothing. 19 tests green on the bump alone — `StreamIdentity.AsString` was already built to the shape the suite expects. |
+| `SnapshotLifecycleCompliance` | 2.40.0 | Nothing. 6 tests green on the bump alone; inline and async snapshots already agreed. |
+| `MultiStreamProjectionCompliance` | 2.40.0 | One file. `MultiStreamProjection<TDoc, TId>` closes JasperFx's shared base over Fisher's session pair, and all 10 tests passed first run — slicing, `Identities`, `FanOut`, inline and async. The document-storage work that let a projection key on a string paid for this. |
+| `FlatTableProjectionCompliance` | 2.41.0 | A real feature: `Projections/Flattened/`, ~700 lines. See CLAUDE.md. |
+| `StrongTypedIdentityCompliance` | 2.42.0 | A real feature, fisher#14: `Storage/StrongTypedId.cs` and `StrongTypedIdentification`. No new seam was needed — `IIdentification<TDoc,TId>` had already reserved the three members for it. |
+| `EventDataMaskingCompliance` | 2.43.0 | Three seam members, no production change. 10 tests green on the bump. |
+| `StreamCompactingCompliance` | 2.43.0 | Nothing at all. 11 tests green on the bump; the member was already on the shared operations surface. |
 
-**Green on all twenty-one is not the same as feature-complete.** The suites cover what is portable
+**Green on all twenty-four is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 21 suites, 167 tests
+### Green — 24 suites, 199 tests
 
 | Suite | Tests |
 |---|---|
@@ -56,7 +77,10 @@ across stores; "Deliberate gaps" below is still the honest list of what Fisher d
 | `StringStreamIdentityCompliance` | 19 |
 | `FetchForWritingCompliance` | 13 |
 | `StreamReadCompliance` | 11 |
+| `StrongTypedIdentityCompliance` | 11 |
+| `StreamCompactingCompliance` | 11 |
 | `MultiStreamProjectionCompliance` | 10 |
+| `EventDataMaskingCompliance` | 10 |
 | `EventMetadataCompliance` | 9 |
 | `SelfAggregatingEvolveCompliance` | 8 |
 | `FlatTableProjectionCompliance` | 8 |
@@ -74,21 +98,16 @@ across stores; "Deliberate gaps" below is still the honest list of what Fisher d
 | `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-### What the 2.41.0 bump did *not* cost
+### Nothing in the fixture throws any more
 
-`CompactStreamAsync<T>` moved onto `IEventStoreOperations` (jasperfx#635). The upstream note warns that
-adoption is not optional, because Marten and Polecat both declared the member themselves and would go
-ambiguous on bumping. **Fisher never declared it**, so there was nothing to collapse and the
-default-implemented throw is exactly the right behaviour here. `IEventDataMasking` moved into
-`JasperFx.Events/Protected/` in the same release; Fisher implements none of it. Both are now tracked —
-fisher#10 and fisher#9.
+`FisherComplianceFixture` implements every member and none of them throws. `LoadDocumentAsync` for a
+strongly typed id was the last one, and fisher#14 closed it — it now closes the two-parameter
+`LoadAsync<T, TId>` over the wrapper's runtime type by reflection, because the suite hands the id over
+as `object` and its runtime type is the only thing naming `TId`.
 
-### What the fixture still throws
-
-`FisherComplianceFixture` implements every member and nothing in it throws any more except
-`LoadDocumentAsync` for a strongly typed id, which Fisher does not support anywhere. The discipline
-stands for the next suite that arrives: a member Fisher cannot honour throws naming its milestone, so
-enrolling prematurely fails loudly rather than passing on a stub.
+The discipline still stands for the next seam member that arrives ahead of the feature: a member
+Fisher cannot honour throws naming its milestone, so enrolling prematurely fails loudly rather than
+passing on a stub.
 
 `CreateBatch` went live with DCB tags, adapting Fisher's own `IBatchedQuery`. `EventStore` hands back
 the `DocumentStore`. `StartDaemonAsync` builds one daemon per fixture and keeps it, so disposal can
@@ -100,8 +119,13 @@ Guid string back to a `Guid`, because SQL Server has `uniqueidentifier` and Post
 SQLite has neither, so on Fisher *something* has to convert. See CLAUDE.md for why that is the honest
 answer rather than a fudge.
 
-`EventOperations.Unsupported.cs` is still **two members**, both event-rewrite
-(`OverwriteEvent`, `CompletelyReplaceEvent`). That file shrinking is the progress measure.
+`EventOperations.Unsupported.cs` is **gone**, and that is the milestone the file existed to mark. It
+collected every `IEventStoreOperations` member Fisher threw on, one file on purpose so that its
+shrinking was a visible progress measure; fisher#9 and fisher#10 took the last two (`OverwriteEvent`,
+`CompletelyReplaceEvent`) out to `EventOperations.Rewriting.cs`, and the 2.43.0 pass found the file
+holding nothing but an unreferenced `const string`. **Nothing on `IEventStoreOperations` throws any
+more.** If a future JasperFx release widens the interface past what Fisher implements, bring the file
+back rather than scattering throws through the partials.
 
 ### The rebuild concurrency cap
 
@@ -123,9 +147,10 @@ pins the default.
 none of it lands on the store's own public API. Most of the interface is default-implemented by
 JasperFx and left alone. Fisher overrides the two explorer reads it can answer out of `fi_streams`
 (`GetRecentStreamsAsync`, `GetStreamMetadataAsync`) and supplies `TryCreateUsage`; the required
-members it cannot honour — `OpenReadOnlyEventStore` and `CompactStreamAsync` (fisher#10) — throw
-naming their milestone, the same discipline as `EventOperations.Unsupported.cs`.
-`BuildProjectionDaemonAsync` used to be on that list and is now real.
+one required member it cannot honour — `OpenReadOnlyEventStore` — throws naming its milestone rather
+than returning an empty result a monitoring tool would render as "no data". That is now the only
+throw of its kind left anywhere in Fisher. `BuildProjectionDaemonAsync` and `CompactStreamAsync`
+(fisher#10) were both on that list and are both real.
 
 Two SQLite-specific things the shared suite does **not** cover, pinned by
 `src/Fisher.Tests/Events/event_store_explorer.cs` instead:
@@ -412,12 +437,16 @@ worth carrying separately:
 - **Undeleting is not a separate feature.** Storing a soft-deleted document brings it back, and that
   falls out of the upsert rather than being arranged: Weasel's soft-delete binders write the live
   values, and `do update set` assigns every column from `excluded.*`.
-- **`ISoftDeleted`'s own members stay empty.** The interface opts the type in and nothing more —
-  Fisher has no metadata member mapping for any column, so `guid_version` and `last_modified` are in
-  the same position. [fisher#11](https://github.com/JasperFx/fisher/issues/11) is the follow-up, and
-  it names the one real hazard in doing it: Weasel's `DocumentSoftDeletedAtBinder` reads its column
-  with `GetFieldValue<DateTimeOffset>`, which would be the only place Fisher leans on
-  Microsoft.Data.Sqlite's coercion of ISO-8601 TEXT instead of converting explicitly.
+- **`ISoftDeleted`'s own members are populated on read**, but only where a read can see a deleted row
+  at all. This was written up as a gap and closed by
+  [fisher#11](https://github.com/JasperFx/fisher/issues/11): the interface now maps `Deleted` /
+  `DeletedAt` onto the two columns, as it does `guid_version` and `last_modified` for `IVersioned`.
+  Every ordinary load filters deleted rows out, so `Deleted` is observably true only through a query
+  carrying `MaybeDeleted()` or `IsDeleted()`. The hazard fisher#11 named turned out to be real and is
+  now pinned rather than avoided: Weasel's `DocumentSoftDeletedAtBinder` reads its column with
+  `GetFieldValue<DateTimeOffset>`, which is the one place Fisher leans on Microsoft.Data.Sqlite's
+  coercion instead of converting explicitly, and `metadata_column_coercions` is what fails by name if
+  a provider upgrade changes it.
 - **`DeletedSince` / `DeletedBefore` need none of fisher#1's `strftime` machinery.** `deleted_at` is
   `SqliteTimestamp`'s fixed-width UTC format, so text order is instant order — the same reason
   `fi_events.timestamp` sorts as text. A document's own `DateTimeOffset` member is whatever
@@ -692,17 +721,19 @@ Each of these is a decision with a reason, not an oversight:
 - **No message bus.** The side-effect seam is real and both commit paths bracket their transaction,
   but the default `NulloMessageOutbox` drops every message, so nothing in the box delivers one —
   [fisher#8](https://github.com/JasperFx/fisher/issues/8). That is the sibling behaviour, not a stub.
-- **No event rewriting.** `OverwriteEvent` / `CompletelyReplaceEvent` throw, stream compacting throws
-  ([fisher#10](https://github.com/JasperFx/fisher/issues/10)), and `IEventDataMasking` — lifted into
-  JasperFx.Events in 2.41.0 — has no implementation at all
-  ([fisher#9](https://github.com/JasperFx/fisher/issues/9)). All three share a hazard: an async
-  projection that has already passed a rewritten event does not see the rewrite.
+- **Event rewriting does not reach anything derived from the events.** All of it is built —
+  `OverwriteEvent` / `CompletelyReplaceEvent`, masking (fisher#9) and stream compacting (fisher#10) —
+  and all of it shares one hazard, which is a documented property rather than a gap: the daemon's
+  high-water mark is a sequence and a rewrite does not move it, so an async projection that has
+  already passed the event keeps what it derived from the old body until it is rebuilt. Marten is the
+  same. This is why masking is a data-at-rest operation rather than a correction, and why compacting
+  is one-way.
 - **No hierarchies, numeric revisions or sub-classing.** All additive against the current column
   shape, as soft delete's two columns were.
-- **No document metadata is projected back onto the document.** `guid_version`, `last_modified` and
-  soft delete's two columns are all written and none is read onto a member, so implementing
-  `ISoftDeleted` opts a type in without populating its `Deleted` / `DeletedAt` —
-  [fisher#11](https://github.com/JasperFx/fisher/issues/11).
+- **`dotnet_type` is the one metadata column with nowhere to go.** The other four are projected back
+  onto document members (fisher#11); Weasel's `DocumentDotNetTypeBinder` takes no member where every
+  other binder does, so `DocumentMetadata` omits it rather than offering a mapping that would
+  silently do nothing. That is an upstream gap, not a Fisher decision.
 - **Multi-tenancy stops at a tenant id column.** No database-per-tenant, which is why every
   `IEventDatabase` parameter in `DocumentStore.Daemon.cs` is ignored.
 - **No DI registration.** There is no `AddFisher(...)`; a store is built with `DocumentStore.For`.
