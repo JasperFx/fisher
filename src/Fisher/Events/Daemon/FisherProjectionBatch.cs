@@ -74,6 +74,9 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
     /// </remarks>
     public ValueTask RecordProgress(EventRange range)
     {
+        Diagnostics.DaemonTrace.Record("batch.progress", range.ShardName.Identity,
+            range.SequenceFloor, range.SequenceCeiling);
+
         _progress.Enqueue(_events.UpdateProgressOperation(range.ShardName.Identity, range.SequenceCeiling,
             upsert: range.SequenceFloor == 0));
 
@@ -109,6 +112,9 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
         var pending = sessions
             .Select(session => (Session: session, Operations: session.TakePendingOperations()))
             .ToArray();
+
+        Diagnostics.DaemonTrace.Record("batch.taken", null,
+            pending.Sum(x => x.Operations.Count), _progress.Count, sessions.Length);
 
         await _store.Options.ResiliencePipeline.ExecuteAsync(async ct =>
         {

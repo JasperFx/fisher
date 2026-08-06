@@ -118,6 +118,10 @@ internal sealed class FisherEventLoader : IEventLoader
         }
 
         page.CalculateCeiling(request.BatchSize, request.HighWater, skipped);
+
+        Diagnostics.DaemonTrace.Record("loader.page", request.Name.Identity,
+            request.Floor, page.Ceiling, page.Count);
+
         return page;
     }
 }

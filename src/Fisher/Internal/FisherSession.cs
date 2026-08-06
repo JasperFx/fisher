@@ -28,6 +28,20 @@ namespace Fisher.Internal;
 internal partial class FisherSession : IDocumentSession, IStorageSession, IAsyncDisposable
 {
     private readonly List<Weasel.Storage.IStorageOperation> _operations = new();
+
+    /// <summary>
+    ///     Guards <see cref="_operations" />.
+    /// </summary>
+    /// <remarks>
+    ///     <b>fisher#13.</b> A session is normally driven by one caller, but the async daemon is not
+    ///     one caller: a multi-stream projection applies its slices concurrently onto the <em>same</em>
+    ///     session, so two slices can queue their document writes at the same moment. <c>List&lt;T&gt;.Add</c>
+    ///     is not thread-safe, and the way it fails here is silent — two concurrent adds can leave the
+    ///     count incremented once, so one slice's write simply never reaches the batch. The batch then
+    ///     commits the progression row for a range whose documents were only partly written, with no
+    ///     error anywhere. Exactly the shape of fisher#12, one layer up.
+    /// </remarks>
+    private readonly System.Threading.Lock _operationsLock = new();
     private List<IChangeTracker>? _changeTrackers;
     private SqliteConnection? _connection;
     private Dictionary<Type, object>? _itemMap;
@@ -62,14 +76,33 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     /// <summary>
     ///     Every operation queued for the next <see cref="SaveChangesAsync" />.
     /// </summary>
-    internal IReadOnlyList<Weasel.Storage.IStorageOperation> PendingOperations => _operations;
+    /// <remarks>
+    ///     A snapshot, not the live list — see <see cref="_operationsLock" />. Enumerating the list
+    ///     itself while a projection slice is still queueing would throw or skip.
+    /// </remarks>
+    internal IReadOnlyList<Weasel.Storage.IStorageOperation> PendingOperations
+    {
+        get
+        {
+            lock (_operationsLock)
+            {
+                return _operations.ToArray();
+            }
+        }
+    }
 
     /// <summary>
     ///     The event store operations for this session.
     /// </summary>
     public EventOperations Events { get; }
 
-    internal void QueueOperation(Weasel.Storage.IStorageOperation operation) => _operations.Add(operation);
+    internal void QueueOperation(Weasel.Storage.IStorageOperation operation)
+    {
+        lock (_operationsLock)
+        {
+            _operations.Add(operation);
+        }
+    }
 
     private List<(JasperFx.Events.Tags.EventTagQuery Query, long LastSeenSequence)>? _boundaries;
 
@@ -123,7 +156,7 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     {
         var streams = Events.PendingStreams.ToArray();
 
-        if (_operations.Count == 0 && streams.Length == 0)
+        if (PendingOperationCount == 0 && streams.Length == 0)
         {
             return;
         }
@@ -136,8 +169,7 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
             await ApplyInlineProjectionsAsync(streams, token).ConfigureAwait(false);
         }
 
-        var queued = _operations.ToArray();
-        _operations.Clear();
+        var queued = TakePendingOperations();
         Events.ClearPendingStreams();
 
         // A document type can be stored without ever having been registered, and a snapshot type is
@@ -325,10 +357,24 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     /// </remarks>
     internal IReadOnlyList<Weasel.Storage.IStorageOperation> TakePendingOperations()
     {
-        var queued = _operations.ToArray();
-        _operations.Clear();
+        lock (_operationsLock)
+        {
+            var queued = _operations.ToArray();
+            _operations.Clear();
 
-        return queued;
+            return queued;
+        }
+    }
+
+    private int PendingOperationCount
+    {
+        get
+        {
+            lock (_operationsLock)
+            {
+                return _operations.Count;
+            }
+        }
     }
 
     /// <summary>

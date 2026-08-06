@@ -195,8 +195,12 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
                 await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
 
+            Diagnostics.DaemonTrace.Record("teardown.commit", subscriptionName, tables.Count);
+
             await transaction.CommitAsync(ct).ConfigureAwait(false);
         }, token).ConfigureAwait(false);
+
+        Diagnostics.DaemonTrace.Record("teardown.done", subscriptionName);
     }
 
     /// <summary>

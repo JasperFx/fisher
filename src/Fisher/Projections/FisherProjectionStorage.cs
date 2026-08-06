@@ -107,6 +107,10 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
         var documents = await _storage.LoadManyAsync(identities, _session, cancellationToken)
             .ConfigureAwait(false);
 
+        Fisher.Diagnostics.DaemonTrace.Record("slice.loadmany",
+            $"{typeof(TDoc).Name} asked=[{string.Join(",", identities)}] got={documents.Count}",
+            identities.Length, documents.Count);
+
         return documents.ToDictionary(x => (TId)_storage.IdentityFor(x));
     }
 }

@@ -267,6 +267,15 @@ Five things that are decisions rather than mechanics:
   (`sqlite_sequence` is an ordinary table and rolls back with it). Committed sequences are contiguous,
   so `DetectInSafeZone` has no separate answer to give. **Do not reintroduce gap-skipping** — it would
   guard a state that cannot occur.
+- **The session's operation queue is guarded, because the daemon is not a single caller.** JasperFx's
+  `ExecutionStage` fans its executions out with `Task.WhenAll` and they all queue onto the *same*
+  Fisher session, so two projection slices can call `QueueOperation` at the same instant.
+  `List<T>.Add` is not thread-safe and fails silently here — two concurrent adds can leave the count
+  incremented once, so one slice's document write never reaches the batch, which then commits the
+  progression row for a range whose documents were only partly written. **That was fisher#13**, and it
+  presented as a multi-stream rebuild intermittently missing one slice's document. Note how closely it
+  rhymes with fisher#12: same silent outcome, one layer up. `concurrent_operation_queueing` pins both
+  the add and the take.
 - **The batch must stay atomic.** It commits the projection's document writes *and* the progression
   row in one transaction. Splitting them lets a crash between them either replay events already
   applied or skip events never applied, permanently and with nothing to signal it. Sessions are

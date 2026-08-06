@@ -3,10 +3,9 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of **strong-typed identities** (fisher#14), on JasperFx **2.42.2**.
-**All 22 compliance suites green.** 565 tests green on net9.0
-and net10.0 (one intermittent — fisher#13), **167 of them shared cross-store compliance tests across
-21 suites**.
+Status as of **fisher#13**, the last open issue, on JasperFx **2.42.2**.
+**All 22 compliance suites green.** 567 tests green on net9.0
+and net10.0, with **no known intermittents**.
 
 ## The destination
 
@@ -50,7 +49,7 @@ Test counts keep understating the suites that matter. `AsyncDaemonCompliance` is
 the whole daemon; `FlatTableProjectionCompliance` is eight that demand an upsert generator, a
 migration hook and rebuild teardown.
 
-Being green on all twenty-one is not the same as being feature-complete against Marten. The suites
+Being green on all twenty-two is not the same as being feature-complete against Marten. The suites
 cover what is portable across stores; the deliberate gaps listed in HANDOFF.md are still gaps.
 
 ## Filed follow-ups
@@ -68,7 +67,7 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | ~~[fisher#7](https://github.com/JasperFx/fisher/issues/7)~~ | **Closed.** `WaitForNonStaleProjectionDataAsync` threw `OperationCanceledException` instead of `TimeoutException` when the clock landed mid-query. |
 | ~~[fisher#9](https://github.com/JasperFx/fisher/issues/9)~~ | **Closed.** Event data masking — `Advanced.ApplyEventDataMaskingAsync`, over the rule registry ported from Polecat's `EventGraph` (the registry was never lifted into JasperFx, only the request shape). |
 | ~~[fisher#12](https://github.com/JasperFx/fisher/issues/12)~~ | **Closed.** A retried projection batch silently dropped its document writes and committed the progression row anyway. Found while investigating #13. |
-| [fisher#13](https://github.com/JasperFx/fisher/issues/13) | Open, not understood. `a_rebuild_reproduces_the_grouping` fails ~1 full-suite run in 5 on net9.0; predates the current work. 12 clean runs after the 2.42.2 bump, which is *not* evidence — instrumentation produced the same 12 without fixing anything. |
+| ~~[fisher#13](https://github.com/JasperFx/fisher/issues/13)~~ | **Closed.** The session's operation queue was an unguarded `List<T>`, and the daemon queues onto one session from several threads. One slice's write was silently lost. |
 | ~~[fisher#14](https://github.com/JasperFx/fisher/issues/14)~~ | **Closed.** Strong-typed identities — no new seam needed; `IIdentification` already reserved the three members, and `DocumentIdentity.FindIdMember`'s predicate overload was the entry point. |
 | ~~[fisher#11](https://github.com/JasperFx/fisher/issues/11)~~ | **Closed.** Document metadata member mapping — four of the five columns projected back onto members, by interface, attribute or DSL. `dotnet_type` is the fifth and has no member slot in Weasel's binder. |
 | ~~[fisher#10](https://github.com/JasperFx/fisher/issues/10)~~ | **Closed.** Stream compacting, at both levels — the untyped `IEventStore` entry point resolves the aggregate from `fi_streams` rather than throwing as Polecat's does. |
@@ -111,6 +110,7 @@ if something is deferred, it is in the list above.
 | Metadata member mapping (fisher#11) | four columns projected back onto members, by interface, attribute or `Metadata(...)`; `IVersioned` now turns optimistic concurrency on |
 | Event rewriting | `Events/Protected/` — overwrite, replace and delete-by-sequence; `EventOperations.Unsupported.cs` is down to the DCB tag members |
 | Event data masking (fisher#9) | `Advanced.ApplyEventDataMaskingAsync`, masking rules on the event graph, and `QueryEventsAsync` for the predicate selector |
+| The rebuild flake (fisher#13) | the session's operation queue is guarded; an unsynchronised `List<T>.Add` was silently losing a projection slice's write |
 | Strong-typed identities (fisher#14) | wrapper ids on aggregates and documents; `LoadAsync<T, TId>`; the last unenrolled compliance suite |
 | Stream compacting (fisher#10) | `CompactStreamAsync<T>` + the untyped `IEventStore` overload; reads back free, because JasperFx's aggregator fast-forwards a `Compacted<T>` |
 
