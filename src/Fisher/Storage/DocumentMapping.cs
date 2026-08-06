@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using Fisher.Attributes;
+using Fisher.Storage.Metadata;
 using JasperFx;
 using JasperFx.Metadata;
 using JasperFx.MultiTenancy;
@@ -63,6 +64,15 @@ public class DocumentMapping
         {
             DeleteStyle = DeleteStyle.SoftDelete;
         }
+
+        // IVersioned asks for a Guid version on the document, which is only meaningful if the column is
+        // written and read — so it turns optimistic concurrency on, as it does on both siblings. The
+        // reverse does not hold: UseOptimisticConcurrency() alone maps nothing, because there is no
+        // member to name.
+        if (Metadata.ApplyConventions(documentType))
+        {
+            UseOptimisticConcurrency = true;
+        }
     }
 
     /// <summary>The .NET type being stored.</summary>
@@ -73,6 +83,12 @@ public class DocumentMapping
 
     /// <summary>The identity member's type, with any <c>Nullable&lt;T&gt;</c> unwrapped.</summary>
     public Type IdType { get; }
+
+    /// <summary>
+    ///     Which of this type's members Fisher's metadata columns are projected onto when a document is
+    ///     read. Every column is written regardless; mapping decides whether the value comes back.
+    /// </summary>
+    public DocumentMetadata Metadata { get; } = new();
 
     internal StoreOptions StoreOptions { get; }
 

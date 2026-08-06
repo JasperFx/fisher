@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
+using Fisher.Storage.Metadata;
 
 namespace Fisher.Storage;
 
@@ -50,6 +51,23 @@ public class DocumentMappingExpression<T> where T : notnull
     public DocumentMappingExpression<T> UseOptimisticConcurrency(bool enabled = true)
     {
         Mapping.UseOptimisticConcurrency = enabled;
+        return this;
+    }
+
+    /// <summary>
+    ///     Project Fisher's metadata columns onto members of the document — <c>last_modified</c> onto a
+    ///     timestamp of your own, <c>deleted_at</c> onto something other than
+    ///     <see cref="JasperFx.Metadata.ISoftDeleted.DeletedAt" />, and so on.
+    /// </summary>
+    /// <remarks>
+    ///     Runs after the interface and attribute conventions and overrides them, because this is the
+    ///     one of the three that is unambiguously a decision rather than an inference.
+    /// </remarks>
+    public DocumentMappingExpression<T> Metadata(Action<DocumentMetadataExpression<T>> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        configure(new DocumentMetadataExpression<T>(Mapping.Metadata));
         return this;
     }
 

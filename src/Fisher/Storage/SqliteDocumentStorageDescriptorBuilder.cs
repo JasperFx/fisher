@@ -1,5 +1,6 @@
 using System.Text;
 using Fisher.Serialization;
+using Fisher.Storage.Metadata;
 using JasperFx;
 using Weasel.Core.Identity;
 using Weasel.Storage;
@@ -49,6 +50,7 @@ internal static class SqliteDocumentStorageDescriptorBuilder
         where TId : notnull
     {
         var dialect = SqliteStorageDialect<TId>.Instance;
+        var metadata = mapping.Metadata;
         var writeBinders = new List<IDocumentMetadataBinder<TDoc>>();
         var readBinders = new List<IDocumentMetadataBinder<TDoc>>();
 
@@ -60,43 +62,51 @@ internal static class SqliteDocumentStorageDescriptorBuilder
         // the value it loaded in order to guard the next write with it.
         if (mapping.UseOptimisticConcurrency)
         {
-            versionBinder = new DocumentVersionBinder<TDoc>("guid_version", dialect, versionMember: null);
+            versionBinder = new DocumentVersionBinder<TDoc>("guid_version", dialect, metadata.Version.Member);
             writeBinders.Add(versionBinder);
             versionReadIndex = readBinders.Count;
             readBinders.Add(versionBinder);
         }
 
-        // Written on every save, never selected. It is what a hierarchy discriminator would build on.
+        // Written on every save, never selected. It is what a hierarchy discriminator would build on,
+        // and the one metadata column that cannot be mapped onto a member: DocumentDotNetTypeBinder
+        // takes none, so DocumentMetadata does not offer it (fisher#11).
         writeBinders.Add(new DocumentDotNetTypeBinder<TDoc>("dotnet_type", dialect));
 
         // Server-side: contributes the timestamp expression rather than a parameter.
-        writeBinders.Add(new DocumentLastModifiedBinder<TDoc>(
-            "last_modified", lastModifiedMember: null, SqliteTimestamp.NowExpression));
+        var lastModifiedBinder = new DocumentLastModifiedBinder<TDoc>(
+            "last_modified", metadata.LastModified.Member, SqliteTimestamp.NowExpression);
 
-        // Soft delete's two columns are written by every save and never selected. Both binders write
-        // the *live* value — false and null — which is what makes storing a soft-deleted document
-        // undelete it, in the insert branch and (through excluded.*) in the update branch alike.
-        //
-        // Neither is given a member to project onto, matching guid_version and last_modified above:
-        // Fisher has no document metadata member mapping at all, so a document implementing
-        // ISoftDeleted is opted into the behaviour without having its Deleted/DeletedAt populated on
-        // read. Tracked as fisher#11.
+        writeBinders.Add(lastModifiedBinder);
+        AddIfMapped(readBinders, lastModifiedBinder, metadata.LastModified);
+
+        // Soft delete's two columns are written by every save. Both binders write the *live* value —
+        // false and null — which is what makes storing a soft-deleted document undelete it, in the
+        // insert branch and (through excluded.*) in the update branch alike.
         if (mapping.IsSoftDeleted)
         {
-            writeBinders.Add(new DocumentSoftDeletedBinder<TDoc>(
-                SoftDelete.IsDeletedColumn, dialect, member: null));
+            var isDeletedBinder = new DocumentSoftDeletedBinder<TDoc>(
+                SoftDelete.IsDeletedColumn, dialect, metadata.IsSoftDeleted.Member);
 
-            writeBinders.Add(new DocumentSoftDeletedAtBinder<TDoc>(
-                SoftDelete.DeletedAtColumn, dialect, member: null));
+            var deletedAtBinder = new DocumentSoftDeletedAtBinder<TDoc>(
+                SoftDelete.DeletedAtColumn, dialect, metadata.DeletedAt.Member);
+
+            writeBinders.Add(isDeletedBinder);
+            writeBinders.Add(deletedAtBinder);
+
+            AddIfMapped(readBinders, isDeletedBinder, metadata.IsSoftDeleted);
+            AddIfMapped(readBinders, deletedAtBinder, metadata.DeletedAt);
         }
 
         var writeArray = writeBinders.ToArray();
         var readArray = readBinders.ToArray();
         var clientSide = writeArray.Where(x => !x.IsServerSide).ToArray();
 
-        // QueryOnly never writes, so it has no use for a version it cannot act on — and no member to
-        // project it onto, since Fisher has no metadata member mapping yet.
-        var queryOnlyReadArray = versionReadIndex >= 0
+        // QueryOnly never writes, so it has no use for a version it cannot act on — unless the version
+        // is mapped onto a member, in which case it is being read for the document rather than for the
+        // session's version tracker, and dropping it would make a query-only load disagree with a
+        // lightweight one about what the document holds.
+        var queryOnlyReadArray = versionReadIndex >= 0 && metadata.Version.Member is null
             ? readArray.Where((_, i) => i != versionReadIndex).ToArray()
             : readArray;
 
@@ -122,6 +132,25 @@ internal static class SqliteDocumentStorageDescriptorBuilder
             resolveDocumentType: null,
             docTypeReadIndex: -1,
             tableName: mapping.TableName.QualifiedName);
+    }
+
+    /// <summary>
+    ///     Add a binder to the read set only when its column is projected onto a member.
+    /// </summary>
+    /// <remarks>
+    ///     An unmapped binder returns before touching the reader, so adding one would cost a column in
+    ///     every SELECT to accomplish nothing. It would also be free to be wrong: the read ordinals are
+    ///     <c>FirstMetadataColumn + index</c> into this array and the SELECT's column list is built from
+    ///     the same array in the same order, so the two only stay aligned while both are derived from
+    ///     it — which is the reason nothing here appends to one without the other.
+    /// </remarks>
+    private static void AddIfMapped<TDoc>(List<IDocumentMetadataBinder<TDoc>> readBinders,
+        IDocumentMetadataBinder<TDoc> binder, MetadataColumn column) where TDoc : notnull
+    {
+        if (column.Member is not null)
+        {
+            readBinders.Add(binder);
+        }
     }
 
     /// <summary>

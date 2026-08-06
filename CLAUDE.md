@@ -167,14 +167,15 @@ Working, with tests:
   operators
 - **Duplicated fields** — `Schema.For<T>().Duplicate(x => x.Name)`, as an indexed SQLite `VIRTUAL`
   generated column, so a predicate against that member is served by an index
+- **Document metadata member mapping** — `guid_version`, `last_modified`, `is_deleted` and
+  `deleted_at` projected back onto members of the document, by interface, attribute or DSL
 
 Not implemented yet — do not assume these work:
 
 - **Document storage** — `Store`/`Insert`/`Update`/`Delete`/`LoadAsync`/`LoadManyAsync`, soft delete,
-  duplicated fields and LINQ all work over Guid, string, int and long ids, in the same unit of work
-  and transaction as event appends. What is still missing: no hierarchies, no numeric revisions, and
-  no metadata member mapping — a document's own `ISoftDeleted` members are not populated on read
-  (fisher#11).
+  duplicated fields, metadata member mapping and LINQ all work over Guid, string, int and long ids,
+  in the same unit of work and transaction as event appends. What is still missing: no hierarchies
+  and no numeric revisions.
 - **Event rewriting** — `OverwriteEvent` / `CompletelyReplaceEvent` throw, stream compacting throws
   (fisher#10), and `IEventDataMasking` has no implementation at all (fisher#9).
 
@@ -442,10 +443,10 @@ Ported from Polecat, whose column names these are. What is worth knowing:
 - **A soft-delete operator against a type that is not soft-deleted throws**, in the query layer and in
   `UndoDeleteWhere` alike. There is no column to answer from, so `IsDeleted()` would come back empty
   and `MaybeDeleted()` complete — both of which look like real answers.
-- **Nothing is projected back onto the document.** `ISoftDeleted` declares `Deleted` and `DeletedAt`
-  and Fisher populates neither, because there is no metadata member mapping for any column —
-  `guid_version` and `last_modified` are bound with a null member for the same reason. fisher#11
-  tracks it; the interface is an opt-in marker and nothing more here.
+- **`ISoftDeleted`'s own members are populated on read**, through the metadata member mapping below
+  (fisher#11) — but only where a read can see a deleted row at all. Every ordinary load filters them
+  out, so `Deleted` is observably true only through a query carrying `MaybeDeleted()` or
+  `IsDeleted()`.
 
 `DocumentWhereOperation` is the criteria-based half — `DeleteWhere`, `HardDeleteWhere` and
 `UndoDeleteWhere` differ only in the SQL head they are handed and the guard they carry. The predicate
@@ -509,6 +510,53 @@ CREATE TABLE, long after the line that caused it.
 `Duplicate(x => x.Name)` cannot infer its document type from a lambda and the receiver has to carry
 it — the same reason Marten has `MartenRegistry.DocumentMappingExpression<T>`. The mapping is a
 property on it; only what needs the type parameter lives on the expression.
+
+### Document metadata member mapping
+
+`Storage/Metadata/` — which of a document's own members Fisher's metadata columns are projected onto
+when a row is read. Every column is written either way; mapping only decides whether the value comes
+back out, which is what makes `ISoftDeleted`'s `Deleted` / `DeletedAt` mean something rather than
+being an opt-in marker (fisher#11).
+
+Three ways to say it, each overriding the one before: the JasperFx metadata interfaces (`ISoftDeleted`,
+`IVersioned`), the `Fisher.Attributes` metadata attributes, then `Schema.For<T>().Metadata(...)`. The
+first two are conventions applied when the mapping is created; the DSL runs afterwards.
+
+- **Four columns of the five, because `dotnet_type` has nowhere to go.** Weasel's
+  `DocumentDotNetTypeBinder` takes no member where every other binder does, so `DocumentMetadata`
+  omits it rather than offering a mapping that would silently do nothing. That is an upstream gap, not
+  a Fisher decision.
+- **Adding a mapping widens the SELECT**, because a binder is added to `readBinders` only when its
+  column is mapped — an unmapped binder returns before touching the reader, so carrying it would cost
+  a column per row to accomplish nothing. The read ordinals are `FirstMetadataColumn + index` into
+  that array and `FisherDocumentStorage`'s select list is built from the same array in the same order,
+  so **the two stay aligned only while both are derived from it**. Nothing should ever append to one
+  without the other; `AddIfMapped` exists so there is one place that does both.
+- **`IVersioned` turns optimistic concurrency on**, as it does on both siblings. Not a liberty: with
+  it off the `guid_version` column is neither written nor read, so mapping a member onto it would mean
+  nothing. The converse does not hold — `UseOptimisticConcurrency()` alone maps nothing, because there
+  is no member named.
+- **A mapped version stays in the query-only projection.** It is normally dropped there, since a
+  query-only load has no version tracker to feed; once a member reads it, dropping it would make
+  `Query<T>()` and `LoadAsync` disagree about what the document holds.
+- **The interfaces are resolved through the interface map, not by name.** An explicitly implemented
+  `ISoftDeleted.Deleted` is a private member called `Fisher.…ISoftDeleted.Deleted`, which neither
+  `GetProperty("Deleted")` nor a scan of public members finds — and a document is free to have a
+  public `Deleted` of its own meaning something else.
+- **A bad mapping is refused at configuration time**, with the column named. `LambdaBuilder.Setter`
+  would otherwise throw when the document's storage is first built — on first use, a long way from the
+  line that caused it, and in a message about expression trees. Same discipline as
+  `DuplicatedField.AssertColumnNameIsAvailable`.
+
+The read path leans on Microsoft.Data.Sqlite's coercion rather than converting explicitly, which is
+the one place Fisher does — `DocumentVersionBinder` reads `GetFieldValue<Guid>` over lowercase
+canonical TEXT, `DocumentSoftDeletedBinder` reads `GetFieldValue<bool>` over INTEGER 0/1, and the two
+timestamp binders read `GetFieldValue<DateTimeOffset>` over `SqliteTimestamp`'s fixed-width UTC text.
+Those are Weasel's binders and Fisher does not own them. `metadata_column_coercions` pins all four
+against the exact shapes Fisher stores, without any of the mapping machinery in the way, so a provider
+upgrade that changes one fails there and names the column instead of presenting as a member that
+quietly stopped being populated. All four hold as of Microsoft.Data.Sqlite 10.0.9, including a Guid in
+either casing.
 
 ### Hi-Lo sequences
 
