@@ -3,16 +3,18 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of **metadata member mapping**, the third item of step 2 below. **All 21
-compliance suites green.** 514 tests green on net9.0 and net10.0 (one intermittent — fisher#13), **167 of them shared cross-store
-compliance tests across 21 suites**.
+Status as of **metadata member mapping**, the third item of step 2 below, on JasperFx **2.42.2**.
+**21 of the 22 compliance suites green**, the 22nd unenrolled (fisher#14). 514 tests green on net9.0
+and net10.0 (one intermittent — fisher#13), **167 of them shared cross-store compliance tests across
+21 suites**.
 
 ## The destination
 
 **First round of JasperFx compliance tests passing — reached, and held through two package bumps
 that added four suites.** `JasperFx.Events.ComplianceTests` is the shared cross-store suite Marten and
 Polecat both enroll in; passing it is what makes Fisher a real Critter Stack event store rather than a
-lookalike. All twenty-one suites are green:
+lookalike. Twenty-one of the twenty-two are green; `StrongTypedIdentityCompliance`, which arrived in
+2.42.0, is the one Fisher cannot enroll (fisher#14):
 
 | Suite | Tests |
 |---|---|
@@ -66,7 +68,8 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | ~~[fisher#7](https://github.com/JasperFx/fisher/issues/7)~~ | **Closed.** `WaitForNonStaleProjectionDataAsync` threw `OperationCanceledException` instead of `TimeoutException` when the clock landed mid-query. |
 | [fisher#9](https://github.com/JasperFx/fisher/issues/9) | Event data masking. `IEventDataMasking` was lifted into JasperFx.Events in 2.41.0; Fisher implements none of it. |
 | ~~[fisher#12](https://github.com/JasperFx/fisher/issues/12)~~ | **Closed.** A retried projection batch silently dropped its document writes and committed the progression row anyway. Found while investigating #13. |
-| [fisher#13](https://github.com/JasperFx/fisher/issues/13) | Open, not understood. `a_rebuild_reproduces_the_grouping` fails ~1 full-suite run in 5 on net9.0; predates the current work. |
+| [fisher#13](https://github.com/JasperFx/fisher/issues/13) | Open, not understood. `a_rebuild_reproduces_the_grouping` fails ~1 full-suite run in 5 on net9.0; predates the current work. 12 clean runs after the 2.42.2 bump, which is *not* evidence — instrumentation produced the same 12 without fixing anything. |
+| [fisher#14](https://github.com/JasperFx/fisher/issues/14) | Strong-typed identity. `StrongTypedIdentityCompliance` arrived in 2.42.0 and is the first suite Fisher does not enroll. |
 | ~~[fisher#11](https://github.com/JasperFx/fisher/issues/11)~~ | **Closed.** Document metadata member mapping — four of the five columns projected back onto members, by interface, attribute or DSL. `dotnet_type` is the fifth and has no member slot in Weasel's binder. |
 | [fisher#10](https://github.com/JasperFx/fisher/issues/10) | Stream compacting. `CompactStreamAsync` throws at both levels. |
 
@@ -131,12 +134,19 @@ decisions came out of it:
   earlier deferral was waiting for.
 
 The `FisherCommandBuilder` shim is gone: weasel#424 shipped in Weasel.Sqlite 9.23.2. JasperFx is on
-**2.41.0** and Weasel on 9.23.2, which is current. 2.40.0 and 2.41.0 are where the four newest
+**2.42.2** and Weasel on 9.23.2, which is current. 2.40.0 and 2.41.0 are where four of the newest
 compliance suites came from. 2.41.0 also lifted `CompactStreamAsync<T>` onto `IEventStoreOperations`
 and `IEventDataMasking` into `JasperFx.Events/Protected/`; the upstream note warns consumers that
 adopting the first is not optional, but that applies to Marten and Polecat, which declared the member
 themselves and would go ambiguous. **Fisher never did**, so the bump needed no change and the
 default-implemented throw is the right behaviour here.
+
+The 2.42.2 bump cost exactly one line of Fisher: `IComplianceStoreRegistrar` gained
+`RegisterValueType<TValue>()` for the new `StrongTypedIdentityCompliance` suite, and Fisher's
+registrar throws rather than no-opping. The interface suggests a no-op, which is right for a store
+that discovers value types by itself — Polecat derives them from `ValueTypeInfo` when it builds the
+document mapping. Fisher discovers nothing, so a no-op would carry a suite to a confusing failure
+somewhere else instead of naming what is missing. See fisher#14.
 
 ## Next, in order
 
@@ -222,10 +232,15 @@ any more.
 | `EventProjectionEnrichmentCompliance` | 3 | **green** |
 | `AsyncDaemonCompliance` | 2 | **green** |
 | `AutoDiscoveredAggregateCompliance` | 2 | **green** |
+| `StrongTypedIdentityCompliance` | 11 | **not enrolled** — fisher#14 |
 
-Every suite the package ships is enrolled. New suites arriving in a JasperFx bump are the only way
-this table grows now — and each one compiles against Fisher whether or not it is enrolled, so a bump
-that adds a suite Fisher cannot pass still builds.
+Twenty-one of the twenty-two are enrolled. `StrongTypedIdentityCompliance` arrived in 2.42.0 and is
+the first suite Fisher has ever left unsubclassed: it has no fixture capability flag to decline with,
+the way `SupportsFlatTableProjections` lets a store enroll ahead of the feature, so a store either
+passes it or leaves it out. It still compiles against Fisher, which is the property that makes a bump
+adding an unpassable suite a non-event.
+
+New suites arriving in a JasperFx bump are the only way this table grows now.
 
 ## Open items not on the critical path
 

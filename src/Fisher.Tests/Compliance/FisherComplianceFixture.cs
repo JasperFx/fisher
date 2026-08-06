@@ -306,6 +306,23 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         {
         }
 
+        /// <summary>
+        ///     Throws: Fisher has no strong-typed identity support anywhere, so there is nothing to
+        ///     register into.
+        /// </summary>
+        /// <remarks>
+        ///     A no-op is the right implementation only for a store that discovers value types by
+        ///     itself, which is why the interface suggests one. Fisher does not — <c>DocumentMapping</c>
+        ///     accepts the four canonical id types and nothing else, and
+        ///     <see cref="FisherComplianceFixture.LoadDocumentAsync{T}" /> already throws for a
+        ///     strongly typed id. A silent no-op here would let a suite get as far as a confusing
+        ///     failure somewhere else instead of saying what is missing.
+        /// </remarks>
+        public void RegisterValueType<TValue>() where TValue : notnull
+            => throw new NotSupportedException(
+                $"Fisher cannot register the strong-typed identifier '{typeof(TValue).FullName}'. "
+                + "Strongly typed ids are not supported anywhere in Fisher yet.");
+
         public void Snapshot<TDoc>(SnapshotLifecycle lifecycle) where TDoc : notnull
             => _options.Projections.Snapshot<TDoc>(lifecycle);
 

@@ -801,11 +801,17 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher is enrolled, in full.** `JasperFx.Events.ComplianceTests` is referenced unconditionally —
-the old `$(EnableComplianceTests)` gate is gone. **All 21 suites are live, 167 shared tests**, as of
-2.41.0. The four that arrived in 2.40.0/2.41.0 — `StringStreamIdentityCompliance`,
-`SnapshotLifecycleCompliance`, `MultiStreamProjectionCompliance`, `FlatTableProjectionCompliance` — went
-in on the same bump.
+`JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
+gate is gone. **21 of the 22 suites are live, 167 shared tests**, as of 2.42.2. The four that arrived
+in 2.40.0/2.41.0 — `StringStreamIdentityCompliance`, `SnapshotLifecycleCompliance`,
+`MultiStreamProjectionCompliance`, `FlatTableProjectionCompliance` — went in on the same bump.
+
+The 22nd is `StrongTypedIdentityCompliance`, added in 2.42.0 and **the only suite Fisher does not
+enroll** (fisher#14). It has no capability flag to decline with, so a store either passes it or leaves
+it unsubclassed. Its arrival is also why
+`FisherComplianceFixture.FisherComplianceRegistrar.RegisterValueType<TValue>` throws: the interface
+suggests a no-op, which is correct for a store that discovers value types by itself, and Fisher
+discovers none.
 
 The mechanics, because they are not what the package's name suggests:
 

@@ -7,13 +7,13 @@
         <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
              carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
              transitively. -->
-        <PackageVersion Include="JasperFx" Version="2.41.0" />
-        <PackageVersion Include="JasperFx.Events" Version="2.41.0" />
+        <PackageVersion Include="JasperFx" Version="2.42.2" />
+        <PackageVersion Include="JasperFx.Events" Version="2.42.2" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.41.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.41.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.42.2" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.42.2" />
 
         <!-- Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
              source. Weasel.Storage: the dialect-neutral closed-shape document + event storage
