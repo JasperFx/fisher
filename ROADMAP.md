@@ -3,8 +3,9 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of **metadata member mapping**, the third item of step 2 below, on JasperFx **2.42.2**.
-**21 of the 22 compliance suites green**, the 22nd unenrolled (fisher#14). 514 tests green on net9.0
+Status as of **the event-rewrite operations**, the foundation under fisher#9 and fisher#10, on
+JasperFx **2.42.2**.
+**21 of the 22 compliance suites green**, the 22nd unenrolled (fisher#14). 523 tests green on net9.0
 and net10.0 (one intermittent — fisher#13), **167 of them shared cross-store compliance tests across
 21 suites**.
 
@@ -109,6 +110,7 @@ if something is deferred, it is in the list above.
 | Soft delete | `is_deleted` / `deleted_at`, `HardDelete`, the three `*Where` operations, and the four query operators |
 | Duplicated fields (fisher#2) | `Duplicate(x => x.Name)` as an indexed `VIRTUAL` generated column; `Schema.For<T>()` now returns a typed expression |
 | Metadata member mapping (fisher#11) | four columns projected back onto members, by interface, attribute or `Metadata(...)`; `IVersioned` now turns optimistic concurrency on |
+| Event rewriting | `Events/Protected/` — overwrite, replace and delete-by-sequence; `EventOperations.Unsupported.cs` is down to the DCB tag members |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through

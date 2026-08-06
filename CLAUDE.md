@@ -176,8 +176,9 @@ Not implemented yet — do not assume these work:
   duplicated fields, metadata member mapping and LINQ all work over Guid, string, int and long ids,
   in the same unit of work and transaction as event appends. What is still missing: no hierarchies
   and no numeric revisions.
-- **Event rewriting** — `OverwriteEvent` / `CompletelyReplaceEvent` throw, stream compacting throws
-  (fisher#10), and `IEventDataMasking` has no implementation at all (fisher#9).
+- **Event rewriting** — `OverwriteEvent` / `CompletelyReplaceEvent` work; stream compacting still
+  throws (fisher#10) and `IEventDataMasking` has no implementation at all (fisher#9), though the
+  operations both of them need are now built.
 
 ### Inline projections
 
@@ -348,6 +349,48 @@ messaging is not dialect-specific and projection code should port between the st
 generic, so `MessagePublishing` closes it over the runtime message type and caches the compiled
 delegate per type. Polecat does the same via polecat#46, with `FastExpressionCompiler` where Fisher
 uses the BCL's `Expression.Compile` — not worth a dependency for one call site.
+
+### Event rewriting
+
+`Events/Protected/` — three operations that mutate events already committed, and the foundation both
+event data masking (fisher#9) and stream compacting (fisher#10) are clients of. Ported from Polecat's
+`Events/Protected/`, which is the same three.
+
+- `OverwriteEventOperation` rewrites what an event **says**: `data`, plus `headers` where the store
+  keeps them. Everything placing the row in the stream and in the global order is untouched.
+- `ReplaceEventOperation` rewrites what an event **is**: `data`, `type`, `dotnet_type` and a fresh
+  `id`, because it is no longer the event that was appended. Stream, version and sequence stay.
+- `DeleteEventsOperation` removes rows by sequence.
+
+All three queue onto the session, so a rewrite commits in the same transaction as everything else —
+which is what lets masking rewrite a batch atomically. Four decisions in them:
+
+- **The row is matched by `seq_id`, never by `id`.** The sequence is the primary key; `id` has no
+  index, so matching on it would turn every rewrite into a table scan.
+- **`ReplaceEventOperation` does not move the timestamp, where Polecat's does.** `fi_events.timestamp`
+  is what `FetchStreamAsync`'s timestamp bound and the daemon's timestamp floor read, and both assume
+  it rises with the sequence. Moving one row's timestamp forward puts the column out of order with
+  `seq_id`, and a bounded read then returns a set that is neither the old answer nor the new one.
+  Polecat can afford it because its timestamp column is not load-bearing in the same way.
+- **`DeleteEventsOperation` clears tag rows before events.** `fi_event_tag_*` has a real foreign key
+  to `fi_events(seq_id)` and Weasel's default profile enforces it, so the other order fails with
+  `FOREIGN KEY constraint failed` — the same ordering `DeleteAllEventDataAsync` learned in fisher#6.
+  `deleting_a_tagged_event_clears_its_tag_rows_first` fails with that exact error if the two are
+  swapped, which was verified by swapping them. Dead letters are deliberately left alone: they have no
+  foreign key precisely so they outlive the events they describe.
+- **Deleting is safe only because `seq_id` is `AUTOINCREMENT`.** A bare `INTEGER PRIMARY KEY` aliases
+  the rowid, which SQLite reuses after a delete, and a reused sequence below the daemon's high-water
+  mark is an event no async projection would ever see. This is the operation that would otherwise have
+  discovered that the hard way.
+
+**None of it reaches an async projection that has already run.** The high-water mark is a sequence and
+a rewrite does not move it, so a shard past the event never reads the new body and a projection
+holding state derived from the old one stays wrong until it is rebuilt. Marten behaves the same way,
+and it is why masking is a data-at-rest operation rather than a correction. Anything built on these
+has to say so rather than leave it implicit.
+
+`DeleteEvents` is internal: the safe uses of "delete these events" all go through a higher-level
+operation that decides what replaces them, so there is no public surface for it.
 
 ### Dead letters
 
@@ -611,7 +654,7 @@ next `Store` would skip its migration and write to nothing.
 - **A message bus.** The side-effect seam exists and the default outbox drops every message; nothing
   in the box delivers one — fisher#8.
 - Multi-tenancy beyond a tenant id column, subscriptions, DI registration.
-- The two event-rewrite members in `EventOperations.Unsupported.cs`.
+- Strong-typed identities — the only compliance suite Fisher does not enroll (fisher#14).
 
 ### The `IEventStoreOperations` surface
 
@@ -624,11 +667,11 @@ live aggregation (there is no snapshot to read instead), `WriteToAggregate` is f
 `SaveChangesAsync`, and `ProjectLatest` folds the session's pending events on top of the committed
 state.
 
-What throws lives in **`EventOperations.Unsupported.cs`**, one file on purpose — the DCB tag members
-and the two event-rewrite members. That file shrinking is the progress measure. `FetchForWriting<T,
-TId>` and `FetchLatest<T, TId>` are partial: they accept an id that is already the stream identity
-type and throw for anything else, because in the siblings that overload is the natural-key and
-strong-typed-id entry point.
+What throws lives in **`EventOperations.Unsupported.cs`**, one file on purpose — now only the DCB tag
+members, the two event-rewrite members having moved to `EventOperations.Rewriting.cs`. That file
+shrinking is the progress measure. `FetchForWriting<T, TId>` and `FetchLatest<T, TId>` are partial:
+they accept an id that is already the stream identity type and throw for anything else, because in the
+siblings that overload is the natural-key and strong-typed-id entry point.
 
 One Fisher-specific hazard in this area: pending streams are tracked in a **dictionary keyed by
 identity**, where Polecat uses a list. `FetchForWriting` must therefore reuse an already-tracked

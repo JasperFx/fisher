@@ -26,19 +26,4 @@ public partial class EventOperations
         "Tag tables, tagged appends, QueryByTagsAsync and EventsExistAsync work; aggregate routing " +
         "by tag does not.";
 
-    // ---- Event rewriting ----
-    //
-    // Both of these mutate events that are already committed, which Fisher has no operation for. The
-    // schema supports it — fi_events rows are updatable — so this is a missing operation rather than
-    // a missing capability.
-
-    private const string RewriteMessage =
-        "Fisher cannot rewrite committed events yet. There is no update operation for a persisted event row.";
-
-    /// <inheritdoc />
-    public void OverwriteEvent(IEvent e) => throw new NotImplementedException(RewriteMessage);
-
-    /// <inheritdoc />
-    public Guid CompletelyReplaceEvent<T>(long sequence, T eventBody) where T : class
-        => throw new NotImplementedException(RewriteMessage);
 }
