@@ -332,6 +332,12 @@ messaging is not dialect-specific and projection code should port between the st
 - **`AfterCommitAsync` runs outside the resilience pipeline** in the projection batch. A retried
   `SQLITE_BUSY` re-executes the whole delegate, so a post-commit publish inside it would fire twice
   for a transaction that had already committed.
+- **The same property bit the batch's own input, and that one was silent** (fisher#12). Everything
+  the retried delegate reads has to survive being read twice, so the session's operations are taken
+  *before* the pipeline (`TakePendingOperations`) and executed from that snapshot inside it. Draining
+  them inside — which is what `FlushOperationsAsync` used to do — left a retry with nothing to write
+  while the progression row still committed, advancing a projection past events whose documents were
+  never written, with no error anywhere.
 - Hook *order* is not the invariant — both hooks would fire in order even if both ran before the
   commit. What is pinned is what the rest of the database can see when each runs, probed over a
   separate connection: invisible at `BeforeCommit`, visible at `AfterCommit`. Verified by moving the

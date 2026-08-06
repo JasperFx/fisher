@@ -303,25 +303,32 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     ///     without that fragility.
     /// </remarks>
     /// <summary>
-    ///     Run this session's queued operations on someone else's connection and transaction, and clear
-    ///     the queue.
+    ///     Take this session's queued operations, clearing the queue.
     /// </summary>
     /// <remarks>
-    ///     For the async daemon's projection batch, which spans several tenant sessions but must commit
-    ///     them — and the progression write — in one transaction, so a crash cannot leave a projection
-    ///     ahead of or behind its recorded progress. Each session flushes its own operations because
-    ///     <c>ConfigureCommand</c> takes the session as its storage context, and that is what carries
-    ///     tenancy; executing one session's operations against another's would quietly mis-scope them.
+    ///     <para>
+    ///         For the async daemon's projection batch, which spans several tenant sessions but must
+    ///         commit them — and the progression write — in one transaction, so a crash cannot leave a
+    ///         projection ahead of or behind its recorded progress. Each session's operations are run
+    ///         back through <see cref="ExecuteOperationsAsync" /> on that session, because
+    ///         <c>ConfigureCommand</c> takes the session as its storage context and that is what
+    ///         carries tenancy; executing one session's operations against another's would quietly
+    ///         mis-scope them.
+    ///     </para>
+    ///     <para>
+    ///         <b>Draining and executing are separate on purpose</b> — see fisher#12. The projection
+    ///         batch runs its transaction inside the resilience pipeline, so a retried
+    ///         <c>SQLITE_BUSY</c> re-executes the whole delegate; a drain inside it would leave the
+    ///         retry with nothing to write while the progression row still committed, advancing a
+    ///         projection past events whose documents were never written.
+    ///     </para>
     /// </remarks>
-    internal Task FlushOperationsAsync(SqliteConnection connection, SqliteTransaction transaction,
-        CancellationToken token)
+    internal IReadOnlyList<Weasel.Storage.IStorageOperation> TakePendingOperations()
     {
         var queued = _operations.ToArray();
         _operations.Clear();
 
-        return queued.Length == 0
-            ? Task.CompletedTask
-            : ExecuteBatchAsync(connection, transaction, queued, token);
+        return queued;
     }
 
     /// <summary>

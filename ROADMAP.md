@@ -4,7 +4,7 @@ Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.
 architecture and the SQLite-specific decisions.
 
 Status as of **soft delete and duplicated fields**, the first two items of step 2 below. **All 21
-compliance suites green.** 492 tests green on net9.0 and net10.0, **167 of them shared cross-store
+compliance suites green.** 493 tests green on net9.0 and net10.0 (one intermittent — fisher#13), **167 of them shared cross-store
 compliance tests across 21 suites**.
 
 ## The destination
@@ -65,6 +65,8 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | ~~[fisher#6](https://github.com/JasperFx/fisher/issues/6)~~ | **Closed.** `DeleteAllEventDataAsync` violated the tag tables' foreign key. Found while building #5. |
 | ~~[fisher#7](https://github.com/JasperFx/fisher/issues/7)~~ | **Closed.** `WaitForNonStaleProjectionDataAsync` threw `OperationCanceledException` instead of `TimeoutException` when the clock landed mid-query. |
 | [fisher#9](https://github.com/JasperFx/fisher/issues/9) | Event data masking. `IEventDataMasking` was lifted into JasperFx.Events in 2.41.0; Fisher implements none of it. |
+| ~~[fisher#12](https://github.com/JasperFx/fisher/issues/12)~~ | **Closed.** A retried projection batch silently dropped its document writes and committed the progression row anyway. Found while investigating #13. |
+| [fisher#13](https://github.com/JasperFx/fisher/issues/13) | Open, not understood. `a_rebuild_reproduces_the_grouping` fails ~1 full-suite run in 5 on net9.0; predates the current work. |
 | [fisher#11](https://github.com/JasperFx/fisher/issues/11) | Document metadata member mapping. Five metadata columns are written and none is read back onto a member, so `ISoftDeleted`'s own `Deleted` / `DeletedAt` stay empty. Found while building soft delete. |
 | [fisher#10](https://github.com/JasperFx/fisher/issues/10) | Stream compacting. `CompactStreamAsync` throws at both levels. |
 

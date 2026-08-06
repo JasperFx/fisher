@@ -11,9 +11,25 @@ this up next.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**492 tests green on net9.0 and net10.0.** 167 of them are shared cross-store compliance tests, and
+**493 tests green on net9.0 and net10.0**, with one known intermittent failure — see below. 167 of them are shared cross-store compliance tests, and
 those ran clean repeatedly before this was written. No compliance suite covers soft delete or
 duplicated fields, so all 31 of the new tests are Fisher's own.
+
+## One test is intermittently red, and it is not new
+
+[fisher#13](https://github.com/JasperFx/fisher/issues/13):
+`MultiStreamProjectionCompliance.a_rebuild_reproduces_the_grouping` fails roughly **1 full-suite run
+in 5 on net9.0**, never on net10.0, and never in isolation. After `RebuildProjectionAsync` returns
+without error and with a correct high-water mark, the projected document for one slice is absent.
+
+It **predates soft delete and duplicated fields** — reproduced at `8e158c5` with everything since
+stashed, which is the commit that enrolled the suite. Earlier handoffs claiming consecutive clean
+runs were accurate about those runs and unlucky about the sample.
+
+fisher#12 was the leading hypothesis and is not the answer: it is fixed and pinned, and this still
+reproduces afterwards. The issue records the full evidence, including that it vanishes under
+instrumentation — so the next attempt wants an in-memory trace dumped on failure rather than file
+logging on the hot path.
 
 ## Where we are against the compliance suites
 
@@ -279,6 +295,16 @@ does not. Both commit paths have their own.
 A related trap already avoided: `AfterCommitAsync` runs *outside* the resilience pipeline in the
 projection batch. A retried `SQLITE_BUSY` re-executes the whole delegate, so a post-commit publish
 inside it would fire twice for a transaction that had already committed.
+
+The same property caught the batch's *input* too, and that one was silent —
+[fisher#12](https://github.com/JasperFx/fisher/issues/12). `FlushOperationsAsync` drained each
+session's queue as it executed, inside the retried delegate, so an attempt that failed after the
+flush left the retry with nothing to write while the progression row still committed: a projection
+advanced past events whose documents were never written, with no exception, no shard failure and no
+dead letter. Fixed by taking the operations once before the pipeline and executing that snapshot
+inside it. `a_retried_projection_batch_still_writes_its_documents` injects the failure through the
+outbox's `BeforeCommitAsync`, because the injection point has to be after the flush and inside the
+delegate — a competing writer fails the `BEGIN IMMEDIATE`, which is before it.
 
 ### Dead letters
 

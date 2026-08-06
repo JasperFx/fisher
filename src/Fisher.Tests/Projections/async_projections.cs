@@ -1,8 +1,11 @@
+using Fisher.Linq;
 using Fisher.Tests.Events;
 using JasperFx;
 using JasperFx.Events.Daemon;
 using JasperFx.Events.Projections;
 using Microsoft.Extensions.Logging;
+using Polly;
+using Polly.Retry;
 using Weasel.Sqlite;
 
 namespace Fisher.Tests.Projections;
@@ -112,6 +115,77 @@ public class async_projections : IAsyncLifetime
 
         progress.ShouldContain(x => x.ShardName.StartsWith("AsyncQuestTally", StringComparison.Ordinal)
                                     && x.Sequence == highest);
+    }
+
+    /// <summary>
+    ///     fisher#12 — a retried projection batch must still write its documents.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The batch runs its whole transaction inside <c>StoreOptions.ResiliencePipeline</c>, which
+    ///         exists to retry <c>SQLITE_BUSY</c>. Every input to that delegate therefore has to survive
+    ///         being read twice. <c>FlushOperationsAsync</c> did not: it drained the session's queue as
+    ///         it executed, so an attempt that failed after flushing left the retry with nothing to
+    ///         write — and the retry then committed the <em>progression row</em> for events whose
+    ///         documents were never written. No exception, no shard failure, and a projection
+    ///         permanently missing a slice.
+    ///     </para>
+    ///     <para>
+    ///         The failure is injected through the outbox rather than by contending for the write lock,
+    ///         because the injection point has to be <em>after</em> the flush and inside the delegate.
+    ///         A competing writer fails the <c>BEGIN IMMEDIATE</c> instead, which is before the flush
+    ///         and therefore retries cleanly with or without the bug.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_retried_projection_batch_still_writes_its_documents()
+    {
+        await using var database = TemporaryDatabase.Create("batch-retry");
+        var outbox = new FailOnceOutbox();
+
+        await using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = database.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Events.MessageOutbox = outbox;
+            options.Projections.Add(new AnnouncingProjection(), ProjectionLifecycle.Async);
+
+            options.ExtendPolly(builder => builder.AddRetry(new RetryStrategyOptions
+            {
+                ShouldHandle = new PredicateBuilder().Handle<TransientBatchFailure>(),
+                MaxRetryAttempts = 3,
+                Delay = TimeSpan.Zero
+            }));
+        });
+
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
+
+        await using (var session = store.LightweightSession())
+        {
+            session.Events.StartStream(Guid.NewGuid(), new QuestStarted("Destroy the ring"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        var daemon = await store.BuildProjectionDaemonAsync();
+        await daemon.StartAllAsync();
+
+        try
+        {
+            await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+
+            // The first attempt was thrown away; the retry has to have written the snapshot, not just
+            // the progression row that says it did.
+            outbox.Failures.ShouldBe(1);
+
+            await using var query = store.LightweightSession();
+            (await query.Query<AnnouncedQuest>().CountAsync(TestContext.Current.CancellationToken))
+                .ShouldBe(1);
+        }
+        finally
+        {
+            await daemon.StopAllAsync();
+            daemon.Dispose();
+        }
     }
 
     /// <summary>
@@ -237,3 +311,52 @@ public class AsyncQuestTally
 
     public void Apply(MonsterSlain slain) => MonstersSlain++;
 }
+
+/// <summary>
+///     Fails the first <c>BeforeCommitAsync</c> with a retryable exception, so the projection batch's
+///     transaction is thrown away and re-executed exactly once — fisher#12's condition, injected at a
+///     point inside the retried delegate and after the session flush.
+/// </summary>
+internal sealed class FailOnceOutbox : Fisher.Events.Messaging.IMessageOutbox
+{
+    private readonly FailOnceBatch _batch;
+
+    public FailOnceOutbox() => _batch = new FailOnceBatch(this);
+
+    public int Failures { get; private set; }
+
+    internal void RecordFailure() => Failures++;
+
+    public ValueTask<Fisher.Events.Messaging.IMessageBatch> CreateBatch(IDocumentSession session)
+        => new(_batch);
+}
+
+internal sealed class FailOnceBatch : Fisher.Events.Messaging.IMessageBatch
+{
+    private readonly FailOnceOutbox _outbox;
+    private bool _hasFailed;
+
+    internal FailOnceBatch(FailOnceOutbox outbox) => _outbox = outbox;
+
+    public ValueTask PublishAsync<T>(T message, string tenantId) => ValueTask.CompletedTask;
+
+    public ValueTask PublishAsync<T>(T message, JasperFx.Events.MessageMetadata metadata)
+        => ValueTask.CompletedTask;
+
+    public Task BeforeCommitAsync(CancellationToken token)
+    {
+        if (_hasFailed)
+        {
+            return Task.CompletedTask;
+        }
+
+        _hasFailed = true;
+        _outbox.RecordFailure();
+
+        throw new TransientBatchFailure();
+    }
+
+    public Task AfterCommitAsync(CancellationToken token) => Task.CompletedTask;
+}
+
+internal sealed class TransientBatchFailure : Exception;

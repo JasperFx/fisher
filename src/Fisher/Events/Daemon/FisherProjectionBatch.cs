@@ -101,15 +101,25 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
             }
         }
 
+        // Taken here, outside the pipeline, and *not* inside the delegate — fisher#12. A retried
+        // SQLITE_BUSY re-executes the whole delegate, so a drain in there would hand the retry an
+        // empty queue: the transaction would commit the progression row for events whose documents
+        // were never written, with no error anywhere. Every other piece of the delegate's input
+        // (_raisedStreams, _progress) is already copied rather than consumed, for the same reason.
+        var pending = sessions
+            .Select(session => (Session: session, Operations: session.TakePendingOperations()))
+            .ToArray();
+
         await _store.Options.ResiliencePipeline.ExecuteAsync(async ct =>
         {
             await using var connection = await _store.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var transaction = (SqliteTransaction)await connection
                 .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
 
-            foreach (var session in sessions)
+            foreach (var (session, operations) in pending)
             {
-                await session.FlushOperationsAsync(connection, transaction, ct).ConfigureAwait(false);
+                await session.ExecuteOperationsAsync(connection, transaction, operations, ct)
+                    .ConfigureAwait(false);
             }
 
             await AppendRaisedEventsAsync(connection, transaction, sessions, ct).ConfigureAwait(false);
