@@ -171,6 +171,38 @@ public class rewriting_events : IAsyncLifetime
         reread[0].Id.ShouldBe(returned);
     }
 
+    /// <summary>
+    ///     A tag describes the event that was appended, and a replacement is a different event — new
+    ///     id, new type, new body. Keeping the tag would let a tag query return the replacement as
+    ///     though it were the tagged event.
+    /// </summary>
+    [Fact]
+    public async Task replacing_an_event_drops_its_tag_rows()
+    {
+        var streamId = Guid.NewGuid();
+
+        await using (var session = _store.LightweightSession())
+        {
+            var @event = session.Events.BuildEvent(new RingBearerNamed("Frodo"));
+            @event.WithTag(_shire);
+            session.Events.StartStream(streamId, @event);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        (await TagRowCountAsync()).ShouldBe(1);
+
+        await using (var session = _store.LightweightSession())
+        {
+            var events = await session.Events.FetchStreamAsync(streamId,
+                token: TestContext.Current.CancellationToken);
+
+            session.Events.CompletelyReplaceEvent(events[0].Sequence, new RingBearerRedacted("erased"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        (await TagRowCountAsync()).ShouldBe(0);
+    }
+
     [Fact]
     public async Task replacing_at_a_sequence_that_cannot_exist_is_refused()
     {

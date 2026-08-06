@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.Metrics;
 using Fisher.Events.Internal;
 using Fisher.Storage;
@@ -226,9 +227,57 @@ public partial class DocumentStore : IEventStore
         => throw new NotSupportedException(
             "Fisher has no read-only event store session yet — it needs the paged event query surface.");
 
+    /// <summary>
+    ///     The tooling-facing compaction entry point, which has no aggregate type parameter and so has
+    ///     to resolve one from <c>fi_streams</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <b>Polecat throws here even though it implements the generic overload.</b> Fisher does not,
+    ///     because the type it needs is already on the row: a stream started with an aggregate type
+    ///     records it, and <c>StreamState.AggregateType</c> resolves it. A stream with none cannot be
+    ///     compacted through this door and says so, naming the generic overload — which is a real
+    ///     answer, unlike declining for every stream.
+    /// </remarks>
     Task IEventStore.CompactStreamAsync(Guid streamId, CancellationToken token)
-        => throw new NotSupportedException("Fisher has no stream compaction yet.");
+        => CompactByStreamStateAsync(streamId, token);
 
+    /// <inheritdoc cref="IEventStore.CompactStreamAsync(Guid, CancellationToken)" />
     Task IEventStore.CompactStreamAsync(string streamKey, CancellationToken token)
-        => throw new NotSupportedException("Fisher has no stream compaction yet.");
+        => CompactByStreamStateAsync(streamKey, token);
+
+    [UnconditionalSuppressMessage("Trimming", "IL2060:MakeGenericMethod",
+        Justification =
+            "Closes CompactStreamAsync over the aggregate type named by the stream row. Aggregate types are preserved by projection registration on the caller side per the AOT publishing guide.")]
+    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
+        Justification = "See the trimming justification above.")]
+    private async Task CompactByStreamStateAsync(object streamIdentity, CancellationToken token)
+    {
+        await using var session = LightweightSession();
+
+        var state = streamIdentity is Guid streamId
+            ? await session.Events.FetchStreamStateAsync(streamId, token).ConfigureAwait(false)
+            : await session.Events.FetchStreamStateAsync((string)streamIdentity, token).ConfigureAwait(false);
+
+        if (state is null)
+        {
+            throw new InvalidOperationException($"Stream '{streamIdentity}' does not exist.");
+        }
+
+        if (state.AggregateType is null)
+        {
+            throw new InvalidOperationException(
+                $"Stream '{streamIdentity}' records no aggregate type, so there is nothing to compact it "
+                + "into. Either the stream was started without one, or this deployment cannot resolve the "
+                + "type it names. Use the generic CompactStreamAsync<T> overload to say which aggregate "
+                + "to compact into.");
+        }
+
+        var method = typeof(Events.EventOperations)
+            .GetMethods()
+            .Single(x => x.Name == nameof(Events.EventOperations.CompactStreamAsync)
+                         && x.GetParameters()[0].ParameterType == streamIdentity.GetType())
+            .MakeGenericMethod(state.AggregateType);
+
+        await ((Task)method.Invoke(session.Events, [streamIdentity, null])!).ConfigureAwait(false);
+    }
 }

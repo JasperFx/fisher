@@ -3,8 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of **event data masking** (fisher#9), on JasperFx **2.42.2**.
-**21 of the 22 compliance suites green**, the 22nd unenrolled (fisher#14). 533 tests green on net9.0
+Status as of **stream compacting** (fisher#10), on JasperFx **2.42.2**.
+**21 of the 22 compliance suites green**, the 22nd unenrolled (fisher#14). 545 tests green on net9.0
 and net10.0 (one intermittent — fisher#13), **167 of them shared cross-store compliance tests across
 21 suites**.
 
@@ -71,7 +71,7 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | [fisher#13](https://github.com/JasperFx/fisher/issues/13) | Open, not understood. `a_rebuild_reproduces_the_grouping` fails ~1 full-suite run in 5 on net9.0; predates the current work. 12 clean runs after the 2.42.2 bump, which is *not* evidence — instrumentation produced the same 12 without fixing anything. |
 | [fisher#14](https://github.com/JasperFx/fisher/issues/14) | Strong-typed identity. `StrongTypedIdentityCompliance` arrived in 2.42.0 and is the first suite Fisher does not enroll. |
 | ~~[fisher#11](https://github.com/JasperFx/fisher/issues/11)~~ | **Closed.** Document metadata member mapping — four of the five columns projected back onto members, by interface, attribute or DSL. `dotnet_type` is the fifth and has no member slot in Weasel's binder. |
-| [fisher#10](https://github.com/JasperFx/fisher/issues/10) | Stream compacting. `CompactStreamAsync` throws at both levels. |
+| ~~[fisher#10](https://github.com/JasperFx/fisher/issues/10)~~ | **Closed.** Stream compacting, at both levels — the untyped `IEventStore` entry point resolves the aggregate from `fi_streams` rather than throwing as Polecat's does. |
 
 Every deliberate gap gets an issue. A note in this file or in CLAUDE.md is context, not tracking —
 if something is deferred, it is in the list above.
@@ -111,6 +111,7 @@ if something is deferred, it is in the list above.
 | Metadata member mapping (fisher#11) | four columns projected back onto members, by interface, attribute or `Metadata(...)`; `IVersioned` now turns optimistic concurrency on |
 | Event rewriting | `Events/Protected/` — overwrite, replace and delete-by-sequence; `EventOperations.Unsupported.cs` is down to the DCB tag members |
 | Event data masking (fisher#9) | `Advanced.ApplyEventDataMaskingAsync`, masking rules on the event graph, and `QueryEventsAsync` for the predicate selector |
+| Stream compacting (fisher#10) | `CompactStreamAsync<T>` + the untyped `IEventStore` overload; reads back free, because JasperFx's aggregator fast-forwards a `Compacted<T>` |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -256,8 +257,7 @@ New suites arriving in a JasperFx bump are the only way this table grows now.
   only. Marten and Polecat also carry bulk insert, `InitialData` and metadata helpers there.
 - **Not started at all:** multi-tenancy beyond a tenant id column, subscriptions, DI registration
   (`AddFisher`), bulk insert, natural keys, strongly typed ids, user-declared indexes over
-  unduplicated members, stream compacting
-  ([fisher#10](https://github.com/JasperFx/fisher/issues/10)).
+  unduplicated members.
 - **`dotnet_type` cannot be mapped onto a member**, because Weasel's `DocumentDotNetTypeBinder` takes
   no member where every other document metadata binder does. Upstream gap, found while building
   fisher#11; worth a Weasel issue if anything ever needs to read it.

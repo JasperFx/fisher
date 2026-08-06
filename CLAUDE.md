@@ -169,8 +169,8 @@ Working, with tests:
   generated column, so a predicate against that member is served by an index
 - **Document metadata member mapping** — `guid_version`, `last_modified`, `is_deleted` and
   `deleted_at` projected back onto members of the document, by interface, attribute or DSL
-- **Event rewriting** — `OverwriteEvent`, `CompletelyReplaceEvent`, and event data masking through
-  `Advanced.ApplyEventDataMaskingAsync`
+- **Event rewriting** — `OverwriteEvent`, `CompletelyReplaceEvent`, event data masking through
+  `Advanced.ApplyEventDataMaskingAsync`, and stream compacting via `CompactStreamAsync<T>`
 
 Not implemented yet — do not assume these work:
 
@@ -178,8 +178,8 @@ Not implemented yet — do not assume these work:
   duplicated fields, metadata member mapping and LINQ all work over Guid, string, int and long ids,
   in the same unit of work and transaction as event appends. What is still missing: no hierarchies
   and no numeric revisions.
-- **Event rewriting** — `OverwriteEvent` / `CompletelyReplaceEvent` and event data masking work;
-  stream compacting still throws (fisher#10), though the operations it needs are built.
+- **Event rewriting** — all of it works: `OverwriteEvent` / `CompletelyReplaceEvent`, event data
+  masking and stream compacting.
 
 ### Inline projections
 
@@ -360,7 +360,9 @@ event data masking (fisher#9) and stream compacting (fisher#10) are clients of. 
 - `OverwriteEventOperation` rewrites what an event **says**: `data`, plus `headers` where the store
   keeps them. Everything placing the row in the stream and in the global order is untouched.
 - `ReplaceEventOperation` rewrites what an event **is**: `data`, `type`, `dotnet_type` and a fresh
-  `id`, because it is no longer the event that was appended. Stream, version and sequence stay.
+  `id`, because it is no longer the event that was appended. Stream, version and sequence stay, and
+  the row's **tag rows are deleted** — a tag describes the event that was appended, so carrying it
+  over would let a tag query return the replacement as though it were the tagged event.
 - `DeleteEventsOperation` removes rows by sequence.
 
 All three queue onto the session, so a rewrite commits in the same transaction as everything else —
@@ -392,6 +394,40 @@ has to say so rather than leave it implicit.
 
 `DeleteEvents` is internal: the safe uses of "delete these events" all go through a higher-level
 operation that decides what replaces them, so there is no public surface for it.
+
+### Stream compacting
+
+`Events/Protected/StreamCompacting.cs` (fisher#10) — replaces a stream's events with a single
+`Compacted<T>` event carrying the aggregate state. Reached by `session.Events.CompactStreamAsync<T>`,
+and by `IEventStore.CompactStreamAsync` for tooling. Ported from Polecat's, which is the request
+shape's other consumer.
+
+**Reading it back needed nothing.** JasperFx's aggregator calls `Compacted<T>.MaybeFastForward` before
+folding, so a stream starting with a snapshot event starts from that state and applies only what
+follows — live aggregation, `FetchForWriting` and the daemon all inherit it.
+
+- **The snapshot takes the last event's row**, so the stream's version does not move and the next
+  append carries on from where it would have. The events below it are deleted.
+- **The fetch is outside the write transaction, and that is safe** — which is worth stating because
+  fisher#10 assumed the opposite. Compacting only touches events at or below a version it observed and
+  an append only adds above one, so the two cannot overlap; two concurrent compactions of the same
+  stream either write the same snapshot to the same row or find the target already gone and update
+  nothing. There is no lost update to prevent, so there is no version guard — adding one would be
+  theatre.
+- **An aggregate that folds to null leaves the stream alone.** A stream deleted by its own
+  `ShouldDelete` has no state to snapshot, and writing `Compacted<T>(null)` would be worse than doing
+  nothing.
+- **The tag rows of every compacted event go**, including the replaced one — see the replace operation
+  above. Keeping the last event's tag while deleting the rest is the one outcome that is neither "the
+  stream is still tagged" nor "the tagged events are gone".
+- **`IEventStore.CompactStreamAsync` resolves the aggregate type from `fi_streams`**, where Polecat
+  throws at that level despite implementing the generic overload. The type is on the row, so declining
+  for every stream would be a worse answer than declining for the streams that genuinely record none —
+  and that message names the generic overload.
+
+Compacting is **one-way**: a projection rebuilt afterwards rebuilds from the snapshot rather than from
+the history that produced it. `StreamCompactingRequest<T>.Archiver` is the hook for copying the events
+somewhere first, and it runs before anything destructive is queued.
 
 ### Event data masking
 
@@ -752,9 +788,9 @@ Polecat does, so none of a tooling-only surface lands on the store's own public 
 Most of `IEventStore` is default-implemented by JasperFx and deliberately left alone. Fisher supplies
 the required members plus the three things `EventStoreExplorerCompliance` exercises:
 `GetRecentStreamsAsync`, `GetStreamMetadataAsync` and `TryCreateUsage`. The required members it
-cannot honour — `OpenReadOnlyEventStore`, `CompactStreamAsync` — throw naming their milestone rather
-than returning an empty result a monitoring tool would render as "no data". Same discipline as
-`EventOperations.Unsupported.cs`. The generic half of the interface, and `BuildProjectionDaemonAsync`
+cannot honour — now only `OpenReadOnlyEventStore` — throw naming their milestone rather than returning
+an empty result a monitoring tool would render as "no data". Same discipline as
+`EventOperations.Unsupported.cs`. `CompactStreamAsync` is live; see "Stream compacting". The generic half of the interface, and `BuildProjectionDaemonAsync`
 with it, lives in `DocumentStore.Daemon.cs` — see "The async daemon" below.
 
 Three SQLite-specific points:

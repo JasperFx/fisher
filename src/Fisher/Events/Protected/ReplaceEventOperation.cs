@@ -65,6 +65,23 @@ internal sealed class ReplaceEventOperation : Weasel.Storage.IStorageOperation
     {
         var options = _graph.EventOptions;
 
+        // Tag rows describe the event that was appended, and this replaces it — new id, new type, new
+        // body. Carrying them over would leave a tag asserting something about an event that no longer
+        // exists, and a tag query would return the replacement as though it were the tagged event. That
+        // matters most under compaction, where the replacement is a Compacted<T> snapshot: keeping the
+        // last event's tag while every other compacted event's tag is deleted is the one outcome that
+        // is neither "the stream is still tagged" nor "the tagged events are gone".
+        //
+        // No foreign key problem either way — the row survives, so this is semantics, not integrity.
+        foreach (var registration in _graph.TagTypes)
+        {
+            builder.Append("delete from ");
+            builder.Append(_graph.TagTableName(registration));
+            builder.Append(" where seq_id = ");
+            Bind(builder, _sequence, StorageColumnType.Long);
+            builder.Append(";");
+        }
+
         builder.Append("update ");
         builder.Append(_graph.EventsTableName);
         builder.Append(" set data = ");
