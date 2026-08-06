@@ -26,7 +26,7 @@ namespace Fisher.Events;
 [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
     Justification =
         "Class-level: event-type registration uses Type.MakeGenericType. AOT consumers register concrete event types ahead of time.")]
-public class EventGraph : EventRegistry, IAggregationSourceFactory<IQuerySession>
+public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuerySession>
 {
     private readonly ConcurrentDictionary<string, Type> _aggregateTypes = new();
     private readonly ConcurrentDictionary<Type, FisherEventType> _eventTypes = new();

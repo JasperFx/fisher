@@ -1,3 +1,4 @@
+using JasperFx.Events.Protected;
 using Weasel.Core.Sequences;
 
 namespace Fisher;
@@ -32,6 +33,38 @@ public class AdvancedOperations
     {
         await Clean.DeleteAllDocumentsAsync(token).ConfigureAwait(false);
         await Clean.DeleteAllEventDataAsync(token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Rewrite protected information out of events that are already stored, applying the masking
+    ///     rules registered on the store's event options.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The whole batch commits in one transaction, so an erasure is either done or not done.
+    ///         An event is rewritten only when a rule actually matches it.
+    ///     </para>
+    ///     <para>
+    ///         <b>This does not reach anything derived from those events.</b> The daemon's high-water
+    ///         mark is a sequence and masking does not move it, so a projection that has already folded
+    ///         the unmasked body keeps what it derived — any snapshot, document or flat table holding
+    ///         the protected information still holds it until that projection is rebuilt. Marten
+    ///         behaves the same way. Masking is a data-at-rest operation.
+    ///     </para>
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    ///     The batch names no stream and no event filter. Masking every event in the store is not
+    ///     something this API can be asked for by accident.
+    /// </exception>
+    public Task ApplyEventDataMaskingAsync(Action<IEventDataMasking> configure,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var batch = new Events.Protected.EventDataMasking(_store);
+        configure(batch);
+
+        return batch.ApplyAsync(token);
     }
 
     /// <summary>

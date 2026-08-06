@@ -348,4 +348,12 @@ public class EventStoreOptions : IEventStoreInstrumentation
     /// <inheritdoc cref="RegisterTagType{TTag}(string)" />
     public ITagTypeRegistration RegisterTagType<TTag>() where TTag : notnull
         => EventGraph!.RegisterTagType<TTag>();
+
+    /// <inheritdoc cref="EventGraph.AddMaskingRuleForProtectedInformation{T}(Action{T})" />
+    public void AddMaskingRuleForProtectedInformation<T>(Action<T> masking) where T : notnull
+        => EventGraph!.AddMaskingRuleForProtectedInformation(masking);
+
+    /// <inheritdoc cref="EventGraph.AddMaskingRuleForProtectedInformation{T}(Func{T,T})" />
+    public void AddMaskingRuleForProtectedInformation<T>(Func<T, T> masking) where T : notnull
+        => EventGraph!.AddMaskingRuleForProtectedInformation(masking);
 }

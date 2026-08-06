@@ -3,9 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status as of **the event-rewrite operations**, the foundation under fisher#9 and fisher#10, on
-JasperFx **2.42.2**.
-**21 of the 22 compliance suites green**, the 22nd unenrolled (fisher#14). 523 tests green on net9.0
+Status as of **event data masking** (fisher#9), on JasperFx **2.42.2**.
+**21 of the 22 compliance suites green**, the 22nd unenrolled (fisher#14). 533 tests green on net9.0
 and net10.0 (one intermittent — fisher#13), **167 of them shared cross-store compliance tests across
 21 suites**.
 
@@ -67,7 +66,7 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | ~~[fisher#5](https://github.com/JasperFx/fisher/issues/5)~~ | **Closed.** Dead letter queue — `fi_dead_letters`, so `SkipApplyErrors` quarantines rather than stopping the shard. |
 | ~~[fisher#6](https://github.com/JasperFx/fisher/issues/6)~~ | **Closed.** `DeleteAllEventDataAsync` violated the tag tables' foreign key. Found while building #5. |
 | ~~[fisher#7](https://github.com/JasperFx/fisher/issues/7)~~ | **Closed.** `WaitForNonStaleProjectionDataAsync` threw `OperationCanceledException` instead of `TimeoutException` when the clock landed mid-query. |
-| [fisher#9](https://github.com/JasperFx/fisher/issues/9) | Event data masking. `IEventDataMasking` was lifted into JasperFx.Events in 2.41.0; Fisher implements none of it. |
+| ~~[fisher#9](https://github.com/JasperFx/fisher/issues/9)~~ | **Closed.** Event data masking — `Advanced.ApplyEventDataMaskingAsync`, over the rule registry ported from Polecat's `EventGraph` (the registry was never lifted into JasperFx, only the request shape). |
 | ~~[fisher#12](https://github.com/JasperFx/fisher/issues/12)~~ | **Closed.** A retried projection batch silently dropped its document writes and committed the progression row anyway. Found while investigating #13. |
 | [fisher#13](https://github.com/JasperFx/fisher/issues/13) | Open, not understood. `a_rebuild_reproduces_the_grouping` fails ~1 full-suite run in 5 on net9.0; predates the current work. 12 clean runs after the 2.42.2 bump, which is *not* evidence — instrumentation produced the same 12 without fixing anything. |
 | [fisher#14](https://github.com/JasperFx/fisher/issues/14) | Strong-typed identity. `StrongTypedIdentityCompliance` arrived in 2.42.0 and is the first suite Fisher does not enroll. |
@@ -111,6 +110,7 @@ if something is deferred, it is in the list above.
 | Duplicated fields (fisher#2) | `Duplicate(x => x.Name)` as an indexed `VIRTUAL` generated column; `Schema.For<T>()` now returns a typed expression |
 | Metadata member mapping (fisher#11) | four columns projected back onto members, by interface, attribute or `Metadata(...)`; `IVersioned` now turns optimistic concurrency on |
 | Event rewriting | `Events/Protected/` — overwrite, replace and delete-by-sequence; `EventOperations.Unsupported.cs` is down to the DCB tag members |
+| Event data masking (fisher#9) | `Advanced.ApplyEventDataMaskingAsync`, masking rules on the event graph, and `QueryEventsAsync` for the predicate selector |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -256,8 +256,7 @@ New suites arriving in a JasperFx bump are the only way this table grows now.
   only. Marten and Polecat also carry bulk insert, `InitialData` and metadata helpers there.
 - **Not started at all:** multi-tenancy beyond a tenant id column, subscriptions, DI registration
   (`AddFisher`), bulk insert, natural keys, strongly typed ids, user-declared indexes over
-  unduplicated members, event data masking
-  ([fisher#9](https://github.com/JasperFx/fisher/issues/9)), stream compacting
+  unduplicated members, stream compacting
   ([fisher#10](https://github.com/JasperFx/fisher/issues/10)).
 - **`dotnet_type` cannot be mapped onto a member**, because Weasel's `DocumentDotNetTypeBinder` takes
   no member where every other document metadata binder does. Upstream gap, found while building

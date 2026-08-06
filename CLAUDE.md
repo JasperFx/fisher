@@ -169,6 +169,8 @@ Working, with tests:
   generated column, so a predicate against that member is served by an index
 - **Document metadata member mapping** — `guid_version`, `last_modified`, `is_deleted` and
   `deleted_at` projected back onto members of the document, by interface, attribute or DSL
+- **Event rewriting** — `OverwriteEvent`, `CompletelyReplaceEvent`, and event data masking through
+  `Advanced.ApplyEventDataMaskingAsync`
 
 Not implemented yet — do not assume these work:
 
@@ -176,9 +178,8 @@ Not implemented yet — do not assume these work:
   duplicated fields, metadata member mapping and LINQ all work over Guid, string, int and long ids,
   in the same unit of work and transaction as event appends. What is still missing: no hierarchies
   and no numeric revisions.
-- **Event rewriting** — `OverwriteEvent` / `CompletelyReplaceEvent` work; stream compacting still
-  throws (fisher#10) and `IEventDataMasking` has no implementation at all (fisher#9), though the
-  operations both of them need are now built.
+- **Event rewriting** — `OverwriteEvent` / `CompletelyReplaceEvent` and event data masking work;
+  stream compacting still throws (fisher#10), though the operations it needs are built.
 
 ### Inline projections
 
@@ -391,6 +392,43 @@ has to say so rather than leave it implicit.
 
 `DeleteEvents` is internal: the safe uses of "delete these events" all go through a higher-level
 operation that decides what replaces them, so there is no public surface for it.
+
+### Event data masking
+
+`Advanced.ApplyEventDataMaskingAsync(...)` (fisher#9) — GDPR-style erasure, rewriting protected
+information out of events already stored. JasperFx 2.41.0 lifted the *request* shape
+(`IEventDataMasking`) because Marten's and Polecat's were identical; **the rule registry was not
+lifted**, so `EventGraph.Masking.cs` is a port of Polecat's rather than a use of something shared.
+
+The whole batch runs in one session, so an erasure is either done or not done — a partial one is a
+compliance answer that is neither.
+
+- **The two masking overloads do not have the same reach, and that falls out of the type system.**
+  `ActionMasker` tests `@event is IEvent<T>` and `IEvent<out T>` is covariant, so an `Action` rule
+  registered against an interface or base class reaches every event body implementing it. `FuncMasker`
+  has to *assign* the replacement back and only the closed `Event<T>` exposes a setter, so a `Func`
+  rule matches its exact type only. A `record` needs the `Func` overload (a `with` expression makes a
+  new instance); a hierarchy-wide rule therefore has to be the mutating one.
+- **`IncludeEvents` is the only selector translated to SQL.** The two `IncludeStream` filter overloads
+  take `Func<IEvent, bool>` and are applied in memory to an already-fetched stream; `IncludeEvents`
+  takes an `Expression`. That asymmetry is the interface's, not Fisher's — the parameter types say so.
+  It runs through `EventOperations.QueryEventsAsync`, which is the same `WhereClauseParser` +
+  `EventMemberFactory` pair `AssignTagWhere` uses. Marten spells that `QueryAllRawEvents()` and returns
+  an `IQueryable<IEvent>`; Fisher takes a predicate, because its LINQ provider is built over document
+  storage and an `IEvent` queryable would need a parallel provider to serve one caller.
+- **An event is rewritten only when a rule matched it**, and headers follow the same gate — so
+  `AddHeader` marks the events that were masked, not the events that were looked at.
+- **The same event reached by two sources is masked once**, deduplicated by sequence.
+  `an_event_reached_by_two_sources_is_masked_once` pins it with a deliberately non-idempotent rule,
+  because an idempotent one would agree either way.
+- **A batch naming no stream and no filter throws** rather than masking everything.
+
+**Masking does not reach anything derived from the events.** The daemon's high-water mark is a
+sequence and masking does not move it, so a projection that already folded the unmasked body keeps
+what it derived — a snapshot, document or flat table holding the protected information still holds it
+until that projection is rebuilt. Marten is the same, and this is why masking is a data-at-rest
+operation rather than a correction. `masking_does_not_reach_a_snapshot_already_written` pins it as
+documented behaviour rather than leaving it to be rediscovered as a bug.
 
 ### Dead letters
 
