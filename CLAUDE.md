@@ -325,10 +325,15 @@ paths bracket their transaction the same way — `FisherSession.SaveChangesAsync
 transaction and `AfterCommitAsync` after it commits. Type names match Polecat's exactly, because
 messaging is not dialect-specific and projection code should port between the stores unchanged.
 
-- **The default `NulloMessageOutbox` drops messages rather than throwing.** That is the sibling
-  behaviour: publishing means something only once a bus is wired in, and a store that threw would make
-  every projection that *might* publish untestable without one. fisher#8 tracks whether Fisher should
-  ship a real outbox rather than waiting on a bus integration.
+- **`NulloMessageOutbox` is the intended end state, not a placeholder** (fisher#8, closed wontfix).
+  It drops messages rather than throwing, which is the sibling behaviour: publishing means something
+  only once a bus is wired in, and a store that threw would make every projection that *might* publish
+  untestable without one. **Fisher will not ship a delivery mechanism of its own.** Marten and Polecat
+  both delegate to Wolverine and the seam is what a bus integration plugs into; a second answer here
+  would be a Fisher-only subsystem — retry policy, poison handling, drainer coordination — that
+  projection code could not port to the siblings. So "a published side effect goes nowhere until an
+  `IMessageOutbox` is supplied" is a stated contract, and should be documented as one rather than
+  filed as a gap.
 - **The batch is created lazily and never reused across units of work.** A session that publishes
   nothing never asks the outbox for one, so both hooks stay no-ops for the common case; and clearing
   it after commit is what stops a second `SaveChangesAsync` re-flushing the first one's messages.
@@ -725,8 +730,9 @@ arbitrary:
 "this document table already exists" cache would still claim tables that were just dropped, and the
 next `Store` would skip its migration and write to nothing.
 
-- **A message bus.** The side-effect seam exists and the default outbox drops every message; nothing
-  in the box delivers one — fisher#8.
+- **A message bus, and deliberately so.** The side-effect seam exists and the default outbox drops
+  every message. That is the end state, not a gap — fisher#8 was closed wontfix. Delivery is a bus
+  integration's job here as it is on both siblings.
 - Multi-tenancy beyond a tenant id column, subscriptions, DI registration.
 - Strong-typed identities — the only compliance suite Fisher does not enroll (fisher#14).
 

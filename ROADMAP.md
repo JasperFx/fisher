@@ -62,7 +62,7 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | [weasel#426](https://github.com/JasperFx/weasel/issues/426) | Upstream. `pragma_table_info` omits generated columns, so a Weasel.Sqlite table carrying one never converges. Fisher works around it in `DocumentTable`; the override goes when this ships. Found while building #2. |
 | ~~[fisher#3](https://github.com/JasperFx/fisher/issues/3)~~ | **Closed.** Event-emitting async projections — raised events are planned and appended inside the batch's transaction. |
 | ~~[fisher#4](https://github.com/JasperFx/fisher/issues/4)~~ | **Closed.** Projection side effects — `IMessageOutbox` / `IMessageBatch`, both commit paths bracketed. |
-| [fisher#8](https://github.com/JasperFx/fisher/issues/8) | No built-in outbox, so a published side effect has no durable delivery without a bus integration. Follow-on from #4; whether it is Fisher's job is the open question. |
+| ~~[fisher#8](https://github.com/JasperFx/fisher/issues/8)~~ | **Closed wontfix.** A built-in outbox is not Fisher's job — delivery is a bus integration's, as on both siblings. `NulloMessageOutbox` is the intended end state and is documented as one. |
 | ~~[fisher#5](https://github.com/JasperFx/fisher/issues/5)~~ | **Closed.** Dead letter queue — `fi_dead_letters`, so `SkipApplyErrors` quarantines rather than stopping the shard. |
 | ~~[fisher#6](https://github.com/JasperFx/fisher/issues/6)~~ | **Closed.** `DeleteAllEventDataAsync` violated the tag tables' foreign key. Found while building #5. |
 | ~~[fisher#7](https://github.com/JasperFx/fisher/issues/7)~~ | **Closed.** `WaitForNonStaleProjectionDataAsync` threw `OperationCanceledException` instead of `TimeoutException` when the clock landed mid-query. |
@@ -156,18 +156,21 @@ somewhere else instead of naming what is missing. See fisher#14.
 Nothing left is unblocking a compliance suite, so ordering is by what a real application would miss
 first rather than by test count.
 
-### 1. A durable outbox, or a decision not to have one
+### 1. Messaging — settled, nothing to build
 
 **Nothing in the daemon throws any more.** Event-emitting projections
 ([fisher#3](https://github.com/JasperFx/fisher/issues/3)), side effects
 ([fisher#4](https://github.com/JasperFx/fisher/issues/4)) and dead letters
 ([fisher#5](https://github.com/JasperFx/fisher/issues/5)) are all built.
 
-What #4 left open is [fisher#8](https://github.com/JasperFx/fisher/issues/8): the side-effect seam
-exists, but the default outbox drops every message and Fisher ships no delivery mechanism. Neither
-sibling ships one either — they delegate to Wolverine — so the first question is whether Fisher
-should differ, given that "add a broker" is a much bigger ask for an embedded single-file store.
-Settle that before building anything.
+[fisher#8](https://github.com/JasperFx/fisher/issues/8) asked whether Fisher should ship a delivery
+mechanism behind the side-effect seam, given that "add a broker" is a much bigger ask for an embedded
+single-file store than for a Marten or Polecat application that already runs a database server.
+**Closed wontfix.** Delivery is a bus integration's job here as it is on both siblings, and a
+Fisher-only outbox subsystem — drainer, retry policy, poison handling, concurrent-drainer
+coordination — would be a surface projection code could not port to the siblings. `NulloMessageOutbox`
+is the intended end state; "a published side effect goes nowhere until an `IMessageOutbox` is
+supplied" is a contract, documented in CLAUDE.md, rather than a gap.
 
 ### 2. Finish document storage
 
@@ -195,8 +198,8 @@ generated columns, so the duplication costs index space but not row space and ca
 All three lifecycles work across all four projection shapes: self-aggregating snapshots,
 `EventProjection`s that store arbitrary documents, `MultiStreamProjection<TDoc, TId>` with
 `Identity`/`Identities`/`FanOut` grouping, and `FlatTableProjection` writing into a plain relational
-table. Still missing: composite projections, and a real delivery mechanism behind the side-effect seam
-([fisher#8](https://github.com/JasperFx/fisher/issues/8)).
+table. Still missing: composite projections. Delivery behind the side-effect seam is deliberately
+absent — see step 1.
 
 ### 4. DI registration and subscriptions
 
