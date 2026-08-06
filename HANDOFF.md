@@ -1,7 +1,7 @@
 # Handoff
 
-State of Fisher after **soft delete**, the first item of ROADMAP step 2 (finish document storage),
-built on top of the JasperFx 2.41.0 upgrade that brought four new compliance suites and with them
+State of Fisher after **soft delete and duplicated fields**, the first two items of ROADMAP step 2
+(finish document storage), built on top of the JasperFx 2.41.0 upgrade that brought four new compliance suites and with them
 multi-stream projections, flat-table projections, and the fix for fisher#1. Written for whoever picks
 this up next.
 
@@ -11,9 +11,9 @@ this up next.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**479 tests green on net9.0 and net10.0.** 167 of them are shared cross-store compliance tests, and
-those ran clean repeatedly before this was written. No compliance suite covers soft delete, so all 18
-of the new tests are Fisher's own.
+**492 tests green on net9.0 and net10.0.** 167 of them are shared cross-store compliance tests, and
+those ran clean repeatedly before this was written. No compliance suite covers soft delete or
+duplicated fields, so all 31 of the new tests are Fisher's own.
 
 ## Where we are against the compliance suites
 
@@ -400,6 +400,49 @@ worth carrying separately:
   `a_deleted_document_is_invisible_to_load_and_load_many`; dropping the query layer's default filter
   fails three query tests; dropping the delete guard fails the deletion-time test above.
 
+## Duplicated fields — fisher#2, closed, as generated columns
+
+`Schema.For<T>().Duplicate(x => x.Name)` gives the member a column of its own and an index over it.
+**The divergence from both siblings is that the column is a SQLite `VIRTUAL` generated column rather
+than a written one**, which was the open question ROADMAP raised and is the reason the feature is
+small: nothing writes it, so the write path, the positional `?` contract and the unit of work are all
+untouched. It also cannot drift from `data`, and it needs no backfill — `duplicating_a_member_of_a_type_that_already_has_rows_needs_no_backfill`
+adds the registration to a store whose rows predate it and reads the column straight back.
+
+The tests worth knowing about, because two of them assert something SQLite decides rather than
+something Fisher writes:
+
+- **`the_planner_uses_the_index_for_a_duplicated_member` runs `EXPLAIN QUERY PLAN` over Fisher's own
+  translation of the predicate.** Asserting on SQL text would only prove Fisher emitted a column
+  name; this proves the planner reaches the index. `an_unduplicated_member_still_scans` is the
+  contrast that keeps it honest.
+- **`a_duplicated_timestamp_holds_the_normalised_form_and_orders_by_instant` is the fisher#1
+  payoff.** The generated expression is the member's own `TypedLocator`, so a duplicated timestamp
+  is `strftime(…)` — the column holds fixed-width UTC, sorts as text, and the index serves a range
+  query. That was the specific cost fisher#1 introduced, and it is now indexable.
+
+### The trap that nearly made this not work
+
+**`pragma_table_info` does not list generated columns — only `pragma_table_xinfo` does.** Weasel's
+delta detection uses the former, so a duplicated column reads as missing on every migration and the
+patch re-adds it. Fisher runs a migration on the first write of each document type per process, so
+the second one fails outright with `duplicate column name`. This is the normal path, not a corner.
+
+`DocumentTable` overrides `ConfigureQueryCommand` to query `table_xinfo`, whose first six columns are
+`table_info`'s in the same order, so Weasel's positional reader needs no change and the generated
+column comes back as an ordinary one that `TableColumn.Equals` matches. Verified by reverting: six of
+the thirteen tests fail with the real SQLite error. Reported upstream as
+[weasel#426](https://github.com/JasperFx/weasel/issues/426), and the override is meant to go when
+that ships — **do not delete it before then.**
+
+### `Schema.For<T>()` returns an expression now
+
+`DocumentMappingExpression<T>`, not `DocumentMapping`, because `Duplicate(x => x.Name)` cannot infer
+its document type from a lambda and the receiver has to carry it — the same reason Marten has one.
+`.Mapping` is the way back to the mapping, and `SoftDeleted()`, `UseOptimisticConcurrency()`,
+`MultiTenanted()` and `DocumentAlias()` are on the expression so ordinary configuration does not need
+it. Existing call sites took `.Mapping`; there were seven.
+
 ## The LINQ layer
 
 Ported from Polecat, which owns `Polecat.Linq.SqlGeneration` itself rather than taking it from
@@ -494,10 +537,11 @@ string-stored enum. Under `EnumStorage.AsString` the stored value is the member'
 declared order — quietly wrong, no signal. Both now refuse and name `EnumStorage` in the message.
 Fisher's default is `AsInteger`, which orders correctly and is unaffected.
 
-fisher#2 (duplicated fields) is still the performance follow-on and is now more clearly worth having:
-`strftime` over `json_extract` is computed per row and no index can serve it. A **generated column**
-may be the better shape than a written one — SQLite indexes `VIRTUAL` generated columns, so the
-duplication costs index space but not row space, and it cannot drift from `data`.
+The per-row cost this introduced — `strftime` over `json_extract`, which no index could serve — is
+what fisher#2 has now closed, and the prediction held: a **generated column** was the better shape
+than a written one. `Duplicate(x => x.When)` declares a `VIRTUAL` column whose expression is this very
+locator, so the duplication costs index space but not row space and cannot drift from `data`. See
+"Duplicated fields" above.
 
 This concerns documents only. The `fi_events` / `fi_streams` timestamp columns are
 `SqliteTimestamp`'s fixed-width UTC format precisely so they *do* sort as text.
@@ -633,8 +677,6 @@ Each of these is a decision with a reason, not an oversight:
   soft delete's two columns are all written and none is read onto a member, so implementing
   `ISoftDeleted` opts a type in without populating its `Deleted` / `DeletedAt` —
   [fisher#11](https://github.com/JasperFx/fisher/issues/11).
-- **No duplicated fields**, so no query can use an index —
-  [fisher#2](https://github.com/JasperFx/fisher/issues/2).
 - **Multi-tenancy stops at a tenant id column.** No database-per-tenant, which is why every
   `IEventDatabase` parameter in `DocumentStore.Daemon.cs` is ignored.
 - **No DI registration.** There is no `AddFisher(...)`; a store is built with `DocumentStore.For`.

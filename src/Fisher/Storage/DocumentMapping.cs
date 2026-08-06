@@ -130,6 +130,68 @@ public class DocumentMapping
     internal bool IsConjoined => TenancyStyle == TenancyStyle.Conjoined;
 
     /// <summary>
+    ///     Members lifted out of the JSON body into indexable columns of their own. Registered through
+    ///     <see cref="DocumentMappingExpression{T}.Duplicate{TValue}" />, which is where the member
+    ///     expression can be typed.
+    /// </summary>
+    internal List<DuplicatedField> DuplicatedFields { get; } = [];
+
+    /// <summary>
+    ///     Register a member as a duplicated field.
+    /// </summary>
+    /// <remarks>
+    ///     Duplicating the same member twice is idempotent rather than an error, so a configuration
+    ///     lambda that runs a registration helper more than once does not fail — but two <em>different</em>
+    ///     members landing on one column name is a real mistake and says so.
+    /// </remarks>
+    internal DuplicatedField Duplicate(MemberInfo[] members, string? columnName, string? columnType,
+        bool shouldIndex)
+    {
+        if (members.Length == 0)
+        {
+            throw new ArgumentException("A duplicated field needs at least one member.", nameof(members));
+        }
+
+        var name = columnName ?? DuplicatedField.DefaultColumnNameFor(members);
+        DuplicatedField.AssertColumnNameIsAvailable(name, DocumentType);
+
+        var existing = DuplicatedFields.FirstOrDefault(
+            x => string.Equals(x.ColumnName, name, StringComparison.OrdinalIgnoreCase));
+
+        if (existing is not null)
+        {
+            if (!existing.MemberNames.SequenceEqual(members.Select(x => x.Name), StringComparer.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"'{DocumentType.Name}' already duplicates {string.Join(".", existing.MemberNames)} "
+                    + $"into column '{name}'. Give one of the two an explicit column name.");
+            }
+
+            return existing;
+        }
+
+        var field = new DuplicatedField(members, name, columnType, shouldIndex);
+        DuplicatedFields.Add(field);
+
+        return field;
+    }
+
+    /// <summary>
+    ///     The duplicated field this member chain resolves to, or null when the member is only in the
+    ///     JSON body.
+    /// </summary>
+    internal DuplicatedField? DuplicateFor(MemberInfo[] chain)
+    {
+        if (DuplicatedFields.Count == 0)
+        {
+            return null;
+        }
+
+        return DuplicatedFields.FirstOrDefault(
+            x => x.MemberNames.SequenceEqual(chain.Select(m => m.Name), StringComparer.Ordinal));
+    }
+
+    /// <summary>
     ///     The concurrency mode the closed-shape storage runtime should use for this document.
     /// </summary>
     internal ConcurrencyMode ConcurrencyMode
@@ -265,7 +327,13 @@ public class DocumentSchema
     ///     Register (or reach) the mapping for a document type, so its table is created with the rest
     ///     of the schema and its storage can be configured.
     /// </summary>
-    public DocumentMapping For<T>() where T : notnull => MappingFor(typeof(T));
+    /// <remarks>
+    ///     Returns a typed expression rather than the mapping itself, because <c>Duplicate</c> takes a
+    ///     member lambda and C# cannot infer the document type from one. The mapping is a property on
+    ///     it; everything that does not need the type parameter still lives there.
+    /// </remarks>
+    public DocumentMappingExpression<T> For<T>() where T : notnull
+        => new(MappingFor(typeof(T)));
 
     /// <inheritdoc cref="For{T}" />
     public DocumentMapping MappingFor(Type documentType)

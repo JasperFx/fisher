@@ -48,7 +48,7 @@ public class member_locators
     {
         var options = new StoreOptions { ConnectionString = "Data Source=:memory:" };
         configure?.Invoke(options);
-        return new MemberFactory(options, options.Schema.For<T>());
+        return new MemberFactory(options, options.Schema.For<T>().Mapping);
     }
 
     private static IQueryableMember Resolve<T>(Expression<Func<Explorer, T>> expression,
@@ -256,7 +256,7 @@ public class member_locators_against_stored_documents : IAsyncLifetime
 
     private async Task<long> CountWhereAsync(string predicate, object value)
     {
-        var table = _store.Options.Schema.For<Explorer>().QuotedTableName;
+        var table = _store.Options.Schema.For<Explorer>().Mapping.QuotedTableName;
 
         await using var connection = await _store.Database.OpenConnectionAsync(TestContext.Current.CancellationToken);
         await using var command = connection.CreateCommand();
@@ -267,7 +267,7 @@ public class member_locators_against_stored_documents : IAsyncLifetime
     }
 
     private static IQueryableMember MemberFor<T>(DocumentStore store, Expression<Func<Explorer, T>> expression)
-        => new MemberFactory(store.Options, store.Options.Schema.For<Explorer>())
+        => new MemberFactory(store.Options, store.Options.Schema.For<Explorer>().Mapping)
             .ResolveMember((MemberExpression)expression.Body);
 
     [Theory]

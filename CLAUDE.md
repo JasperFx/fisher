@@ -84,6 +84,8 @@ Traps that have already bitten and are easy to reintroduce:
   primary code `SQLITE_CONSTRAINT` (19); only 1555 (PRIMARYKEY) / 2067 (UNIQUE) distinguish them.
 - Binding a `Guid` without conversion writes a 16-byte BLOB that never matches the TEXT the schema
   holds.
+- **`pragma_table_info` omits generated columns.** A table carrying one never converges through
+  Weasel's delta detection — see "Duplicated fields".
 - **A `Guid` bound as a TEXT parameter is written UPPERCASE.** Microsoft.Data.Sqlite emits the
   uppercase form for a raw `Guid`; `SqliteStorageDialect<T>.ToDatabaseValue` emits the lowercase
   canonical form. SQLite's default collation is case-sensitive, so mixing the two writes rows that
@@ -163,14 +165,16 @@ Working, with tests:
 - **Soft delete** — `is_deleted` / `deleted_at`, `HardDelete`, `DeleteWhere` / `HardDeleteWhere` /
   `UndoDeleteWhere`, and the `MaybeDeleted` / `IsDeleted` / `DeletedSince` / `DeletedBefore` query
   operators
+- **Duplicated fields** — `Schema.For<T>().Duplicate(x => x.Name)`, as an indexed SQLite `VIRTUAL`
+  generated column, so a predicate against that member is served by an index
 
 Not implemented yet — do not assume these work:
 
-- **Document storage** — `Store`/`Insert`/`Update`/`Delete`/`LoadAsync`/`LoadManyAsync`, soft delete
-  and LINQ all work over Guid, string, int and long ids, in the same unit of work and transaction as
-  event appends. What is still missing: no hierarchies, no duplicated fields (fisher#2), no numeric
-  revisions, and no metadata member mapping — a document's own `ISoftDeleted` members are not
-  populated on read (fisher#11).
+- **Document storage** — `Store`/`Insert`/`Update`/`Delete`/`LoadAsync`/`LoadManyAsync`, soft delete,
+  duplicated fields and LINQ all work over Guid, string, int and long ids, in the same unit of work
+  and transaction as event appends. What is still missing: no hierarchies, no numeric revisions, and
+  no metadata member mapping — a document's own `ISoftDeleted` members are not populated on read
+  (fisher#11).
 - **Event rewriting** — `OverwriteEvent` / `CompletelyReplaceEvent` throw, stream compacting throws
   (fisher#10), and `IEventDataMasking` has no implementation at all (fisher#9).
 
@@ -445,6 +449,60 @@ cannot swallow them.
 
 `TruncateDocumentStorageAsync` stays a real `delete from` — a rebuild's teardown clears rows rather
 than flagging them, or the replay would write onto rows it cannot see.
+
+### Duplicated fields
+
+`Schema.For<T>().Duplicate(x => x.Name)` lifts a member into a column of its own and indexes it, so a
+predicate against that member is a range scan rather than `json_extract` per row. **The column is a
+SQLite `VIRTUAL` generated column, which is the whole divergence** — Marten and Polecat write theirs
+on every upsert and refresh them in patch SQL. Three things follow, and they are why it was worth
+diverging:
+
+- **It cannot drift from `data`**, because nothing writes it. `Duplicate` can be added to a type that
+  already has rows and every one of them is correct at once; a written column would need a backfill.
+- **It costs index space, not row space.** `VIRTUAL` computes on read; only the index materialises.
+- **The write path is untouched.** No extra binder, no shift in the positional `?` contract
+  `SqliteDocumentStorageDescriptorBuilder` maintains. That is why this landed without touching
+  document writes at all.
+
+**The generated expression is the member's own `TypedLocator`, taken from `MemberFactory`** — not a
+hand-written `json_extract`. That is what makes a duplicated member mean exactly what an unduplicated
+one means, and it is what makes a duplicated timestamp work: the locator is the `strftime` wrapper
+fisher#1 introduced, so the column holds the normalised fixed-width UTC form, sorts as text and is
+indexable. `strftime` over a value (rather than `'now'`) is deterministic enough for a generated
+column — verified against 3.51, along with the query plan actually reading `SEARCH … USING INDEX`.
+
+`MemberFactory` swaps in a `DuplicatedMember` when a chain matches a registration, and that member
+delegates **everything except `TypedLocator`** to the underlying one. So a duplicated string-stored
+enum still refuses to be ordered, a duplicated bool still binds 1/0, and `RawLocator` stays on the
+JSON — a null test asks whether the member is present, which is not quite whether the column is null
+(an unparseable value yields a null column with the key present), and no index would serve it anyway.
+
+Two things that are easy to get wrong:
+
+- **`pragma_table_info` does not list generated columns; only `pragma_table_xinfo` does.** Weasel's
+  delta detection uses the former, so every duplicated column reads as missing and the migration
+  emits `ALTER TABLE … ADD COLUMN` for it *every time* — and since Fisher runs a migration on the
+  first write of each document type per process, the second one fails with `duplicate column name`.
+  `DocumentTable` overrides `ConfigureQueryCommand` to use `table_xinfo`, whose first six columns are
+  `table_info`'s in the same order, so Weasel's positional reader needs no change. Reported as
+  [weasel#426](https://github.com/JasperFx/weasel/issues/426); the override goes when that ships.
+  `applying_the_configuration_again_is_a_no_op` fails with the real SQLite error without it.
+- **The declared type is the column's comparison affinity**, so `SqliteTypeFor` is load-bearing
+  rather than decorative — declare a numeric member TEXT and it starts sorting as text. `decimal`
+  goes to REAL because `json_extract` hands back a REAL for any JSON number, and a column whose
+  affinity disagrees with its own expression is the one shape that cannot be right.
+
+The default column name is snake case — `LandedAt` becomes `landed_at`, `Water.Name` becomes
+`water_name` — where Marten simply lowercases. Every other column on a Fisher document table is snake
+case and a duplicated column sits among them. A name Fisher owns (`id`, `data`, `last_modified`, …)
+is refused at configuration time, because SQLite would otherwise report it as a duplicate column at
+CREATE TABLE, long after the line that caused it.
+
+`Schema.For<T>()` returns a `DocumentMappingExpression<T>` rather than the mapping, because
+`Duplicate(x => x.Name)` cannot infer its document type from a lambda and the receiver has to carry
+it — the same reason Marten has `MartenRegistry.DocumentMappingExpression<T>`. The mapping is a
+property on it; only what needs the type parameter lives on the expression.
 
 ### Hi-Lo sequences
 

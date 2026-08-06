@@ -27,7 +27,7 @@ internal class DocumentProviderRegistry : IProviderGraph
     }
 
     public DocumentProvider<T> StorageFor<T>() where T : notnull
-        => (DocumentProvider<T>)_providers.GetOrAdd(typeof(T), _ => BuildProviderFor(_options.Schema.For<T>()));
+        => (DocumentProvider<T>)_providers.GetOrAdd(typeof(T), _ => BuildProviderFor(_options.Schema.For<T>().Mapping));
 
     public void Append<T>(DocumentProvider<T> provider) where T : notnull => _providers[typeof(T)] = provider;
 

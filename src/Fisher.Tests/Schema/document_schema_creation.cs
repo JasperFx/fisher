@@ -164,7 +164,7 @@ public class document_schema_creation : IAsyncLifetime
     [Fact]
     public async Task optimistic_concurrency_adds_a_version_column()
     {
-        await using var database = DatabaseFor(x => x.Schema.For<DocUser>().UseOptimisticConcurrency = true);
+        await using var database = DatabaseFor(x => x.Schema.For<DocUser>().UseOptimisticConcurrency());
         await database.ApplyAllConfiguredChangesToDatabaseAsync(ct: TestContext.Current.CancellationToken);
 
         var columns = await ColumnsAsync("fi_doc_docuser");
@@ -175,7 +175,7 @@ public class document_schema_creation : IAsyncLifetime
     public async Task conjoined_tenancy_adds_a_tenant_id_column_to_the_primary_key()
     {
         await using var database = DatabaseFor(x =>
-            x.Schema.For<DocUser>().TenancyStyle = TenancyStyle.Conjoined);
+            x.Schema.For<DocUser>().MultiTenanted());
 
         await database.ApplyAllConfiguredChangesToDatabaseAsync(ct: TestContext.Current.CancellationToken);
 

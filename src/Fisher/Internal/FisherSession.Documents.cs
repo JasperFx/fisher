@@ -208,7 +208,7 @@ internal partial class FisherSession
     {
         ArgumentNullException.ThrowIfNull(predicate);
 
-        var mapping = Options.Schema.For<T>();
+        var mapping = Options.Schema.For<T>().Mapping;
 
         return new Linq.Parsing.WhereClauseParser(new Linq.Members.MemberFactory(Options, mapping))
             .Parse(predicate.Body);

@@ -169,7 +169,7 @@ public class FisherQueryProvider : IQueryProvider
 
     private (Statement Statement, ISelector<T> Selector) Build<T>(Expression expression) where T : notnull
     {
-        var mapping = _session.Options.Schema.For<T>();
+        var mapping = _session.Options.Schema.For<T>().Mapping;
         var storage = _session.FisherDatabase.Providers.StorageFor<T>().QueryOnly;
 
         if (storage is not ISelectClause selectClause)

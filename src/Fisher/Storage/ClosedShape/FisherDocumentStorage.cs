@@ -153,10 +153,10 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
     public bool IsConjoined => _mapping.IsConjoined;
 
     /// <summary>
-    ///     Empty — Fisher has no duplicated fields, so nothing is projected out of the JSON body into
-    ///     its own column.
+    ///     The members lifted into columns of their own. Read-only here in every sense: Fisher's
+    ///     duplicated columns are generated from <c>data</c>, so no write operation binds one.
     /// </summary>
-    public IReadOnlyList<IDuplicatedField> DuplicatedFields => Array.Empty<IDuplicatedField>();
+    public IReadOnlyList<IDuplicatedField> DuplicatedFields => _mapping.DuplicatedFields;
 
     // ---- select clause ----
 

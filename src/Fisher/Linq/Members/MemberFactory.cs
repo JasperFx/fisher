@@ -18,8 +18,9 @@ namespace Fisher.Linq.Members;
 ///         Polecat needs for <c>CAST</c>/<c>RETURNING</c> selection — <c>SqlTypeMap</c>,
 ///         <c>BuildTypedLocator</c>, <c>SupportsReturning</c>, the native-json-type switch — has no
 ///         analogue here, because <c>json_extract</c> returns a JSON number as INTEGER or REAL and a
-///         JSON string as TEXT without being asked. The index-aware locator rewriting is likewise
-///         absent: Fisher has no computed-column indexes to line a predicate up with yet.
+///         JSON string as TEXT without being asked. Index-aware locator rewriting <em>is</em> present,
+///         as the one line of <see cref="ResolveMember(MemberInfo[])" /> that swaps in a
+///         <see cref="DuplicatedMember" />.
 ///     </para>
 ///     <para>
 ///         The JSON path must be built with the <em>serializer's</em> naming policy, not the CLR member
@@ -65,9 +66,49 @@ internal class MemberFactory : IMemberResolver
             return new IdMember(_mapping.IdType);
         }
 
-        var jsonPath = BuildJsonPath(expression);
-        var memberType = GetMemberType(expression.Member);
-        return CreateMember(jsonPath, memberType);
+        return ResolveMember(ChainOf(expression));
+    }
+
+    /// <summary>
+    ///     Resolve a member chain that arrived as reflection rather than as an expression — the shape a
+    ///     duplicated field is registered in, and how the table definition asks for the expression its
+    ///     generated column is derived from.
+    /// </summary>
+    /// <remarks>
+    ///     Both entry points converge here so that a duplicated column's generated expression and the
+    ///     locator it replaces are produced by the same code. If they were built separately, a change to
+    ///     the JSON path or to a member type's wrapping would silently make the column hold something
+    ///     the query no longer looks for — and the query would simply return nothing.
+    /// </remarks>
+    public IQueryableMember ResolveMember(MemberInfo[] chain)
+    {
+        var member = CreateMember(BuildJsonPath(chain), GetMemberType(chain[^1]));
+        var duplicate = _mapping.DuplicateFor(chain);
+
+        return duplicate is null ? member : new DuplicatedMember(member, duplicate.ColumnName);
+    }
+
+    /// <summary>
+    ///     The member access walked back to the parameter, outermost member last.
+    /// </summary>
+    private static MemberInfo[] ChainOf(MemberExpression expression)
+    {
+        var chain = new List<MemberInfo>();
+        MemberExpression? current = expression;
+
+        while (current != null)
+        {
+            chain.Insert(0, current.Member);
+
+            if (current.Expression is ParameterExpression)
+            {
+                break;
+            }
+
+            current = current.Expression as MemberExpression;
+        }
+
+        return chain.ToArray();
     }
 
     private bool IsIdentityMember(MemberInfo member)
@@ -105,27 +146,10 @@ internal class MemberFactory : IMemberResolver
     }
 
     /// <summary>
-    ///     Walks a possibly-nested member access back to the parameter, producing <c>$.a.b.c</c>.
+    ///     A possibly-nested member chain rendered as <c>$.a.b.c</c>.
     /// </summary>
-    private string BuildJsonPath(MemberExpression expression)
-    {
-        var segments = new List<string>();
-        var current = expression;
-
-        while (current != null)
-        {
-            segments.Insert(0, GetJsonPropertyName(current.Member));
-
-            if (current.Expression is ParameterExpression)
-            {
-                break;
-            }
-
-            current = current.Expression as MemberExpression;
-        }
-
-        return "$." + string.Join(".", segments);
-    }
+    private string BuildJsonPath(MemberInfo[] chain)
+        => "$." + string.Join(".", chain.Select(GetJsonPropertyName));
 
     /// <summary>
     ///     The JSON key a member serializes to. An explicit <c>[JsonPropertyName]</c> wins verbatim —

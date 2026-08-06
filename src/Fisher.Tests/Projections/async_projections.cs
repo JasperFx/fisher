@@ -137,7 +137,7 @@ public class async_projections : IAsyncLifetime
     {
         var streamId = await AppendAsync(new MemberJoined("Frodo"), new MonsterSlain("Balrog"));
 
-        await DropTableAsync(_store.Options.Schema.For<AsyncQuestTally>().TableName.Name);
+        await DropTableAsync(_store.Options.Schema.For<AsyncQuestTally>().Mapping.TableName.Name);
 
         _daemon = await _store.BuildProjectionDaemonAsync();
         await _daemon.RebuildProjectionAsync<AsyncQuestTally>(TestContext.Current.CancellationToken);

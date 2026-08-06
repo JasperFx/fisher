@@ -64,7 +64,7 @@ public class where_clause_parsing : IAsyncLifetime
 
     private string SqlFor(Expression<Func<Explorer, bool>> predicate)
     {
-        var factory = new MemberFactory(_store.Options, _store.Options.Schema.For<Explorer>());
+        var factory = new MemberFactory(_store.Options, _store.Options.Schema.For<Explorer>().Mapping);
         var builder = new Weasel.Sqlite.CommandBuilder();
         new WhereClauseParser(factory).Parse(predicate.Body).Apply(builder);
         return builder.Compile().CommandText;
@@ -76,7 +76,7 @@ public class where_clause_parsing : IAsyncLifetime
     /// </summary>
     private async Task<List<string>> NamesMatchingAsync(Expression<Func<Explorer, bool>> predicate)
     {
-        var mapping = _store.Options.Schema.For<Explorer>();
+        var mapping = _store.Options.Schema.For<Explorer>().Mapping;
         var factory = new MemberFactory(_store.Options, mapping);
 
         var builder = new Weasel.Sqlite.CommandBuilder();
@@ -312,7 +312,7 @@ public class where_clause_parsing : IAsyncLifetime
         var options = new StoreOptions { ConnectionString = "Data Source=:memory:" };
         options.ConfigureSerialization(EnumStorage.AsString);
 
-        var factory = new MemberFactory(options, options.Schema.For<Explorer>());
+        var factory = new MemberFactory(options, options.Schema.For<Explorer>().Mapping);
         var grade = Grade.Pass;
 
         string Parse(Expression<Func<Explorer, bool>> predicate)
