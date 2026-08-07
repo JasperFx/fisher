@@ -14,7 +14,7 @@ namespace Fisher;
 ///     methods monitoring tools read — lives in <c>DocumentStore.EventStore.cs</c>, implemented
 ///     explicitly so it does not crowd the store's own API.
 /// </remarks>
-public partial class DocumentStore : IAsyncDisposable
+public partial class DocumentStore : IAsyncDisposable, IDisposable
 {
     public DocumentStore(StoreOptions options)
     {
@@ -104,5 +104,12 @@ public partial class DocumentStore : IAsyncDisposable
     {
         GC.SuppressFinalize(this);
         await Database.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <inheritdoc cref="Storage.FisherDatabase.Dispose" />
+    public void Dispose()
+    {
+        GC.SuppressFinalize(this);
+        Database.Dispose();
     }
 }

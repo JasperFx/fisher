@@ -6,7 +6,7 @@ namespace Fisher;
 /// <summary>
 ///     A read-only Fisher session.
 /// </summary>
-public interface IQuerySession : IAsyncDisposable
+public interface IQuerySession : IAsyncDisposable, IDisposable
 {
     /// <summary>
     ///     The tenant every operation in this session is scoped to.

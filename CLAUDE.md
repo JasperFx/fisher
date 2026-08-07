@@ -839,6 +839,35 @@ Three things worth knowing:
 Sequences are cached by sequence *name*, not by document type, so two types sharing a configured
 `SequenceName` share one allocation instead of each holding a private lo range over the same row.
 
+### DI registration
+
+`AddFisher(...)` (fisher#20) — `FisherServiceCollectionExtensions`, plus `ISessionFactory` and two
+hosted services. The store is a singleton, sessions are scoped, and the returned
+`FisherConfigurationExpression` carries the two opt-ins: `ApplyAllDatabaseChangesOnStartup()` and
+`AddAsyncDaemon(mode)`. Deliberately smaller than either sibling's — no multi-store
+`AddFisherStore<T>`, no `IConfigureFisher` chain, no initial-data seeding.
+
+- **`DaemonMode.HotCold` is refused, and it is a real limitation rather than an omission.** Hot-cold
+  failover means several nodes competing for one leadership lease through the database, and a Fisher
+  store is a file that SQLite does not make safe to share across nodes. Accepting the mode and running
+  Solo would give an application the opposite of the guarantee it asked for — every node projecting at
+  once. `Solo` starts the daemon; `Disabled` and `ExternallyManaged` register nothing.
+- **The WAL warning moved to where somebody sees it.** `BuildProjectionDaemonAsync` has warned about a
+  non-WAL journal since the daemon landed, but only a consumer building a daemon by hand ever saw it.
+  The hosted service puts it in the application log at startup. Still a warning rather than a refusal:
+  a non-WAL store projects correctly, just serialised against its writers.
+- **`AutoCreate.None` wins over `ApplyAllDatabaseChangesOnStartup()`.** The hosted service starts and
+  does nothing, rather than the registration being the thing that quietly overrides schema policy.
+
+**Everything Fisher hands a container now implements `IDisposable` as well as `IAsyncDisposable`** —
+`DocumentStore`, `FisherDatabase`, `FisherSession`, and `IQuerySession` with them. That is not a
+politeness: a `ServiceProvider` disposed synchronously **refuses outright** to dispose a service
+offering only `IAsyncDisposable`, with "type only implements IAsyncDisposable". Since `AddFisher`
+registers sessions scoped, the async-only shape made a scoped session unusable rather than merely less
+efficient — which is why this surfaced the moment there was a container at all. `SqliteConnection` and
+`DbDataSource` both supply the sync form, so nothing blocks. Marten's `IDocumentStore` and
+`IQuerySession` declare both for the same reason.
+
 ### `Advanced` and cleaning
 
 `DocumentStore.Advanced` carries `Clean` (`IDocumentCleaner`), `ResetAllDataAsync` and
@@ -862,7 +891,7 @@ next `Store` would skip its migration and write to nothing.
 - **A message bus, and deliberately so.** The side-effect seam exists and the default outbox drops
   every message. That is the end state, not a gap — fisher#8 was closed wontfix. Delivery is a bus
   integration's job here as it is on both siblings.
-- Multi-tenancy beyond a tenant id column, subscriptions, DI registration.
+- Multi-tenancy beyond a tenant id column, and subscriptions (fisher#21).
 - Natural keys and bulk insert.
 
 ### The `IEventStoreOperations` surface

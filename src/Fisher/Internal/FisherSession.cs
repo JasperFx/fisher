@@ -583,4 +583,23 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
             _connection = null;
         }
     }
+
+    /// <summary>
+    ///     Synchronous disposal, for a container scope that disposes synchronously.
+    /// </summary>
+    /// <remarks>
+    ///     Sessions are registered scoped by <c>AddFisher</c>, so this is the disposal path an
+    ///     ASP.NET Core request actually takes when the scope is disposed through
+    ///     <see cref="IDisposable" />. A container refuses outright to dispose a service offering only
+    ///     <see cref="IAsyncDisposable" />, so declaring only the async form would make a scoped session
+    ///     unusable rather than merely less efficient. <c>SqliteConnection</c> supplies both, so there
+    ///     is nothing to block on.
+    /// </remarks>
+    public void Dispose()
+    {
+        GC.SuppressFinalize(this);
+
+        _connection?.Dispose();
+        _connection = null;
+    }
 }

@@ -21,7 +21,7 @@ namespace Fisher.Storage;
 ///         the last connection closes.
 ///     </para>
 /// </remarks>
-public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDatabase, IAsyncDisposable
+public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDatabase, IAsyncDisposable, IDisposable
 {
     private readonly SqliteDataSource _dataSource;
     private readonly EventGraph _events;
@@ -163,5 +163,21 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
     {
         GC.SuppressFinalize(this);
         await _dataSource.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Synchronous disposal, for a container that disposes synchronously.
+    /// </summary>
+    /// <remarks>
+    ///     <see cref="DisposeAsync" /> is the one to prefer, but it cannot be the only one: a
+    ///     <c>ServiceProvider</c> disposed through <c>IDisposable</c> refuses outright to dispose a
+    ///     service that offers only <see cref="IAsyncDisposable" />, with "type only implements
+    ///     IAsyncDisposable". <c>DbDataSource</c> supplies both, so there is nothing to block on here.
+    ///     Marten's <c>IDocumentStore</c> declares both for the same reason.
+    /// </remarks>
+    public void Dispose()
+    {
+        GC.SuppressFinalize(this);
+        _dataSource.Dispose();
     }
 }
