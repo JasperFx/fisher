@@ -33,7 +33,8 @@ namespace Fisher;
 ///         database-per-tenant; a SQLite store is one file.
 ///     </para>
 /// </remarks>
-public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession>
+public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession>,
+    ISubscriptionRunner<Subscriptions.ISubscription>
 {
     // ---- configuration the daemon reads ----
 
@@ -329,6 +330,54 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
                 + "{JournalMode} rather than WAL. Without WAL, SQLite blocks readers while a writer holds the "
                 + "database, so the daemon and every application session will serialize against each other. "
                 + "Set StoreOptions.PragmaSettings.JournalMode to Wal.", journalMode);
+        }
+    }
+
+    /// <summary>
+    ///     Drive one subscription over one range of events (fisher#21).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Resolved by <c>SubscriptionExecution&lt;T&gt;</c> through a soft <c>storage as
+    ///         ISubscriptionRunner&lt;T&gt;</c> cast, which is why a store without this fails when a
+    ///         subscription is registered rather than at compile time — and why subscriptions read as
+    ///         absent rather than broken until now.
+    ///     </para>
+    ///     <para>
+    ///         <b>The subscription's session is the batch's, so its writes commit in the same
+    ///         transaction as the progression row.</b> That is what makes a subscription persisting
+    ///         through Fisher exactly-once: it cannot advance past a range whose writes were rolled
+    ///         back, and it cannot commit writes for a range it will replay. Work outside this
+    ///         database is at-least-once and nothing can change that.
+    ///     </para>
+    ///     <para>
+    ///         <b>The post-commit listener runs after <c>ExecuteAsync</c> returns, deliberately
+    ///         outside the resilience pipeline.</b> A retried <c>SQLITE_BUSY</c> re-executes the whole
+    ///         batch delegate, so a listener invoked inside it would fire twice for a transaction that
+    ///         had already committed — the same property fisher#4 established for the message outbox
+    ///         and fisher#12 for the batch's own input.
+    ///     </para>
+    /// </remarks>
+    async Task ISubscriptionRunner<Subscriptions.ISubscription>.ExecuteAsync(
+        Subscriptions.ISubscription subscription, IEventDatabase database, EventRange range,
+        ShardExecutionMode mode, CancellationToken token)
+    {
+        await using var batch = new FisherProjectionBatch(this, EventGraph);
+
+        await batch.RecordProgress(range).ConfigureAwait(false);
+
+        // SessionForTenant both opens the session and enrols it in the batch, so the subscription's
+        // own writes flush into the batch's transaction alongside the progression row.
+        var session = batch.SessionForTenant(JasperFx.StorageConstants.DefaultTenantId);
+
+        var listener = await subscription
+            .ProcessEventsAsync(range, range.Agent, session, token).ConfigureAwait(false);
+
+        await batch.ExecuteAsync(token).ConfigureAwait(false);
+
+        if (listener is not null and not NullDaemonChangeListener)
+        {
+            await listener.AfterCommitAsync(token).ConfigureAwait(false);
         }
     }
 }

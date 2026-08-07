@@ -160,6 +160,10 @@ Working, with tests:
   the batch's own transaction
 - **Multi-stream projections** — `MultiStreamProjection<TDoc, TId>`, with `Identity` / `Identities` /
   `FanOut` grouping, inline and async
+- **Subscriptions** — `Projections.Subscribe(...)`, a daemon shard driving arbitrary code over each
+  range of events, its writes committing in the batch's transaction
+- **DI registration** — `AddFisher(...)`, scoped sessions, and hosted services for schema application
+  and the async daemon
 - **Flat-table projections** — `FlatTableProjection`, projecting into a plain relational table
   through declarative column mappings rather than into a document
 - **Soft delete** — `is_deleted` / `deleted_at`, `HardDelete`, `DeleteWhere` / `HardDeleteWhere` /
@@ -328,6 +332,41 @@ instance to each call — reference identity is what dedupes them.
 
 **Polecat no-ops these three rather than throwing**, so an event-raising projection there drops its
 events with no signal. Do not copy that.
+
+### Subscriptions
+
+`Projections.Subscribe(subscription)` (fisher#21) — a daemon shard that hands each range of events to
+arbitrary user code rather than to a projection. `Subscriptions/ISubscription.cs` carries the
+interface, a `SubscriptionBase` closing JasperFx's `JasperFxSubscriptionBase` over Fisher's session
+pair, and the wrapper that presents a bare `ISubscription` as one; `DocumentStore.Daemon.cs`
+implements `ISubscriptionRunner<ISubscription>`.
+
+- **`SubscriptionExecution<T>` resolves the runner with a soft `storage as ISubscriptionRunner<T>`
+  cast.** Not implementing it is not a compile error — it throws when a subscription is registered,
+  which is why subscriptions read as *absent* rather than broken before this. The `storage` argument
+  is the **store**, not the database: JasperFx has two `BuildExecution` overloads and the one the
+  daemon reaches passes `_store`.
+- **The subscription's session is the batch's**, taken from `SessionForTenant`, which both opens it
+  and enrols it. So a subscription's own writes commit in the same transaction as the progression
+  row: it cannot advance past a range whose writes rolled back, nor commit writes for a range it will
+  replay. **That guarantee stops at Fisher's database** — an HTTP call or a bus publish is
+  at-least-once and nothing can make it atomic with a SQLite commit.
+- **The post-commit listener runs after `ExecuteAsync` returns, outside the resilience pipeline.** A
+  retried `SQLITE_BUSY` re-executes the whole batch delegate, so a listener invoked inside it fires
+  twice for a transaction that already committed — the property fisher#4 established for the outbox
+  and fisher#12 for the batch's own input.
+- **`IDaemonChangeListener` is JasperFx's, not a Fisher type.** It was lifted out of Polecat as the
+  canonical shape, so Polecat's local `IChangeListener` is the older spelling of the same thing; new
+  code should not copy it.
+- **There is no inline equivalent**, deliberately: "inline" would just be code in the caller's own
+  unit of work. A subscription needs the daemon running — `AddAsyncDaemon()` hosts it with everything
+  else.
+
+One test-shaped trap worth recording, because it presented as an intermittent: **`WaitForNonStale`
+does not imply the post-commit listener has run.** The progression row is written *inside* the batch's
+transaction, so non-stale is true the moment that commits — strictly before the listener. A test that
+waits on non-staleness and then asserts the listener fired fails roughly one full-suite run in
+several. Wait on the listener's own signal.
 
 ### Projection side effects
 
@@ -939,7 +978,7 @@ next `Store` would skip its migration and write to nothing.
 - **A message bus, and deliberately so.** The side-effect seam exists and the default outbox drops
   every message. That is the end state, not a gap — fisher#8 was closed wontfix. Delivery is a bus
   integration's job here as it is on both siblings.
-- Multi-tenancy beyond a tenant id column, and subscriptions (fisher#21).
+- Multi-tenancy beyond a tenant id column.
 - Natural keys and bulk insert.
 
 ### The `IEventStoreOperations` surface

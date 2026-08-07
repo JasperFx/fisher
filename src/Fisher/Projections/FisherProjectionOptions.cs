@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using Fisher.Events;
 using JasperFx.Core.Reflection;
 using JasperFx.Events.Projections;
+using JasperFx.Events.Subscriptions;
 
 namespace Fisher.Projections;
 
@@ -111,6 +112,42 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
 
         Add((IProjectionSource<IDocumentSession, IQuerySession>)projection, lifecycle);
     }
+
+    /// <summary>
+    ///     Register a subscription — arbitrary code the async daemon drives over each range of events,
+    ///     rather than a projection folding them into storage (fisher#21).
+    /// </summary>
+    /// <param name="subscription">The subscription. Deriving from <c>SubscriptionBase</c> is optional.</param>
+    /// <param name="configure">
+    ///     Its shard options — batch size, where to start from, event filtering. Only reached when the
+    ///     subscription carries them, which a bare <c>ISubscription</c> does once wrapped.
+    /// </param>
+    /// <remarks>
+    ///     A subscription is a daemon shard like a projection, so it needs the async daemon running to
+    ///     do anything at all — <c>AddAsyncDaemon()</c>, or <c>BuildProjectionDaemonAsync</c> by hand.
+    ///     There is no inline equivalent, because "inline" would just be code in the caller's own unit
+    ///     of work.
+    /// </remarks>
+    public void Subscribe(Subscriptions.ISubscription subscription,
+        Action<ISubscriptionOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(subscription);
+
+        var source = subscription as ISubscriptionSource<IDocumentSession, IQuerySession>
+                     ?? new Subscriptions.SubscriptionWrapper(subscription);
+
+        if (source is ISubscriptionOptions options)
+        {
+            configure?.Invoke(options);
+        }
+
+        registerSubscription(source);
+    }
+
+    /// <inheritdoc cref="Subscribe(Subscriptions.ISubscription, Action{ISubscriptionOptions})" />
+    public void Subscribe<T>(Action<ISubscriptionOptions>? configure = null)
+        where T : Subscriptions.ISubscription, new()
+        => Subscribe(new T(), configure);
 
     private IInlineProjection<IDocumentSession>[]? _inlineProjections;
 
