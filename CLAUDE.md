@@ -844,12 +844,36 @@ Polecat does, so none of a tooling-only surface lands on the store's own public 
 Most of `IEventStore` is default-implemented by JasperFx and deliberately left alone. Fisher supplies
 the required members plus the three things `EventStoreExplorerCompliance` exercises:
 `GetRecentStreamsAsync`, `GetStreamMetadataAsync` and `TryCreateUsage`. The required members it
-cannot honour — now only `OpenReadOnlyEventStore` (fisher#15) — throw naming their milestone rather
-than returning an empty result a monitoring tool would render as "no data". That is the last throw of
-its kind left in Fisher; `IEventStoreOperations` has none. **Its stated blocker is smaller than the
-old comment claimed**: `EventQuery` is flat exact-match filters plus paging, not an expression, and
-`EventOperations.QueryEventsAsync` (built for masking) already does the cross-stream read. `CompactStreamAsync` is live; see "Stream compacting". The generic half of the interface, and `BuildProjectionDaemonAsync`
+**Nothing on `IEventStore` throws any more** — `OpenReadOnlyEventStore` was the last one and fisher#15
+closed it. The standing discipline, for the next member that arrives ahead of the feature, is that one
+Fisher cannot honour throws naming its milestone rather than returning an empty result a monitoring
+tool would render as "no data". `CompactStreamAsync` is live; see "Stream compacting". The generic half of the interface, and `BuildProjectionDaemonAsync`
 with it, lives in `DocumentStore.Daemon.cs` — see "The async daemon" below.
+
+`OpenReadOnlyEventStore` returns `FisherReadOnlyEventStore`, which **owns session lifetime rather than
+capturing a session** — the one divergence from Polecat here, and it is dialect-forced. Polecat returns
+`QuerySession().Events` directly, and since `IReadOnlyEventStore` is not `IDisposable` nothing ever
+disposes that session. A `FisherSession` caches its `SqliteConnection` for its whole lifetime and
+releases it only in `DisposeAsync`, so the same shape would leak a pooled connection against a single
+database file on every call — to a method whose caller is a polling monitoring tool. Opening a session
+per read costs a pool checkout, which for an embedded database is a rounding error next to that.
+
+`EventOperations.QueryEventsAsync(EventQuery)` is the paging read behind it. Two things in it are
+load-bearing, and both were verified by removing them:
+
+- **A `StreamId` filter is parsed and re-rendered under Guid identity**, for the same reason
+  `GetStreamMetadataAsync` does it — `fi_events.stream_id` holds the lowercase canonical form and
+  SQLite's default collation is case-sensitive. Binding the caller's string directly makes an uppercase
+  Guid match nothing, so the Explorer renders an existing stream as empty. Without the parse,
+  `a_stream_id_filter_matches_regardless_of_guid_casing` returns 0 where it expects 3.
+- **The three metadata filters are gated on the options that create their columns.** `correlation_id`,
+  `causation_id` and `user_name` do not exist on `fi_events` unless the matching `Enable*` option is on,
+  so an ungated filter is not an empty result but `SQLite Error 1: no such column`. Ignoring the filter
+  is what `EventQuery` asks for and what Polecat does.
+
+The count is a second statement rather than `count(*) over ()`, because a window function returns no
+row at all for a page past the end — and "page 9 of a 3-page result" is exactly when a tool most needs
+the real total. `a_page_past_the_end_still_reports_the_total` pins it.
 
 Three SQLite-specific points:
 

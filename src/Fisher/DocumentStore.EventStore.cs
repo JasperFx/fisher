@@ -27,9 +27,12 @@ namespace Fisher;
 ///         alone here. What Fisher overrides is the pair of explorer reads it can answer from
 ///         <c>fi_streams</c> — <see cref="IEventStore.GetRecentStreamsAsync(int, CancellationToken)" />
 ///         and <see cref="IEventStore.GetStreamMetadataAsync(string, CancellationToken)" /> — plus the
-///         required members. The rest throw, naming the milestone they wait on, exactly as
-///         <c>EventOperations.Unsupported.cs</c> does: a tool that reaches for a capability Fisher does
-///         not have should be told so rather than handed an empty result that reads as "no data".
+///         required members.
+///     </para>
+///     <para>
+///         <b>Nothing here throws any more</b> (fisher#15). The standing discipline, for the next
+///         member that arrives ahead of the feature, is that one Fisher cannot honour throws naming its
+///         milestone rather than returning an empty result a monitoring tool would render as "no data".
 ///     </para>
 /// </remarks>
 public partial class DocumentStore : IEventStore
@@ -212,28 +215,16 @@ public partial class DocumentStore : IEventStore
         return Task.FromResult<EventStoreUsage?>(usage);
     }
 
-    // ---- not supported yet ----
-    //
-    // The one member left, naming the milestone it waits on. A monitoring tool that reaches for it
-    // gets told Fisher cannot do it, rather than an empty result it would render as "nothing here".
-    // This is the last throw of its kind in Fisher; EventOperations.Unsupported.cs, which held the
-    // rest, reached zero members and was deleted.
-
     /// <summary>
-    ///     Not implemented — <see href="https://github.com/JasperFx/fisher/issues/15">fisher#15</see>.
+    ///     The read-only event store slice, for monitoring tools.
     /// </summary>
     /// <remarks>
-    ///     Fisher answers four of <see cref="IReadOnlyEventStore" />'s five members through a session
-    ///     already; the gap is <c>QueryEventsAsync</c>. <b>That gap is smaller than it looks.</b>
-    ///     <c>EventQuery</c> is a flat bag of optional exact-match filters plus paging rather than an
-    ///     expression, every column it names is already on <c>fi_events</c>, and
-    ///     <see cref="Events.EventOperations.QueryEventsAsync" /> already does the cross-stream read
-    ///     this would page over. What is missing is the filter-to-SQL mapping, <c>limit</c>/<c>offset</c>
-    ///     and a <c>count(*)</c>.
+    ///     Returns a type that owns session lifetime rather than a captured session's
+    ///     <c>Events</c>, which is what Polecat hands back — see
+    ///     <see cref="Events.FisherReadOnlyEventStore" /> for why an embedded single-file store cannot
+    ///     afford that shape.
     /// </remarks>
-    IReadOnlyEventStore IEventStore.OpenReadOnlyEventStore()
-        => throw new NotSupportedException(
-            "Fisher has no read-only event store session yet — see fisher#15.");
+    IReadOnlyEventStore IEventStore.OpenReadOnlyEventStore() => new Events.FisherReadOnlyEventStore(this);
 
     /// <summary>
     ///     The tooling-facing compaction entry point, which has no aggregate type parameter and so has
