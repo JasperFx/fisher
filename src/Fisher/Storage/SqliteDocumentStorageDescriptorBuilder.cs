@@ -55,7 +55,10 @@ internal static class SqliteDocumentStorageDescriptorBuilder
         var readBinders = new List<IDocumentMetadataBinder<TDoc>>();
 
         DocumentVersionBinder<TDoc>? versionBinder = null;
+        DocumentRevisionBinder<TDoc>? revisionBinder = null;
         var versionReadIndex = -1;
+
+        mapping.AssertConcurrencyIsCoherent();
 
         // guid_version carries optimistic concurrency in its own column so a version check never has
         // to parse the JSON body. Read back as well as written: the session's version tracker needs
@@ -66,6 +69,20 @@ internal static class SqliteDocumentStorageDescriptorBuilder
             writeBinders.Add(versionBinder);
             versionReadIndex = readBinders.Count;
             readBinders.Add(versionBinder);
+        }
+        else if (mapping.UseNumericRevisions)
+        {
+            // The numeric alternative rides its own INTEGER column. Always read back, mapped member or
+            // not: unlike the Guid version, the revision the caller will guard the *next* write with is
+            // the one the database just computed, so a load that did not return it would leave every
+            // explicit Store(doc, revision) guessing. StorageColumnType.Int because IRevisioned's member
+            // is an int; a long-backed member would want Long, which is the width Weasel defaults to.
+            revisionBinder = new DocumentRevisionBinder<TDoc>(
+                NumericRevision.Column, dialect, metadata.Revision.Member, StorageColumnType.Int);
+
+            writeBinders.Add(revisionBinder);
+            versionReadIndex = readBinders.Count;
+            readBinders.Add(revisionBinder);
         }
 
         // Written on every save, never selected. It is what a hierarchy discriminator would build on,
@@ -106,11 +123,15 @@ internal static class SqliteDocumentStorageDescriptorBuilder
         // is mapped onto a member, in which case it is being read for the document rather than for the
         // session's version tracker, and dropping it would make a query-only load disagree with a
         // lightweight one about what the document holds.
+        // A numeric revision always stays, mapped or not — see the binder above for why a caller needs
+        // it back — so only the Guid version is ever dropped here.
         var queryOnlyReadArray = versionReadIndex >= 0 && metadata.Version.Member is null
+                                 && revisionBinder is null
             ? readArray.Where((_, i) => i != versionReadIndex).ToArray()
             : readArray;
 
-        var guarded = mapping.ConcurrencyMode == ConcurrencyMode.Optimistic;
+        var mode = mapping.ConcurrencyMode;
+        var guarded = mode == ConcurrencyMode.Optimistic;
 
         return new DocumentStorageDescriptor<TDoc, TId>(
             identification,
@@ -120,14 +141,15 @@ internal static class SqliteDocumentStorageDescriptorBuilder
             writeBinders: writeArray,
             readBinders: readArray,
             queryOnlyReadBinders: queryOnlyReadArray,
-            upsertSql: BuildUpsertSql(mapping, writeArray, guarded),
-            insertSql: BuildInsertSql(mapping, writeArray),
-            updateSql: BuildUpdateSql(mapping, writeArray, guarded),
-            overwriteSql: BuildUpsertSql(mapping, writeArray, guarded: false),
+            upsertSql: BuildUpsertSql(mapping, writeArray, revisionBinder, guarded),
+            insertSql: BuildInsertSql(mapping, writeArray, revisionBinder),
+            updateSql: BuildUpdateSql(mapping, writeArray, revisionBinder, guarded),
+            overwriteSql: BuildUpsertSql(mapping, writeArray, revisionBinder, guarded: false,
+                isOverwrite: true),
             isConjoined: mapping.IsConjoined,
-            concurrencyMode: mapping.ConcurrencyMode,
+            concurrencyMode: mode,
             versionBinder: versionBinder,
-            revisionBinder: null,
+            revisionBinder: revisionBinder,
             versionReadIndex: versionReadIndex,
             resolveDocumentType: null,
             docTypeReadIndex: -1,
@@ -158,9 +180,10 @@ internal static class SqliteDocumentStorageDescriptorBuilder
     ///     is the tenant/id pair under conjoined tenancy.
     /// </summary>
     private static string BuildUpsertSql<TDoc>(DocumentMapping mapping,
-        IDocumentMetadataBinder<TDoc>[] writeBinders, bool guarded) where TDoc : notnull
+        IDocumentMetadataBinder<TDoc>[] writeBinders, IDocumentMetadataBinder<TDoc>? revisionBinder,
+        bool guarded, bool isOverwrite = false) where TDoc : notnull
     {
-        var sql = new StringBuilder(BuildInsertBody(mapping, writeBinders));
+        var sql = new StringBuilder(BuildInsertBody(mapping, writeBinders, revisionBinder));
 
         sql.Append(" on conflict (");
         sql.Append(mapping.IsConjoined ? $"{StorageConstants.TenantIdColumn}, id" : "id");
@@ -168,10 +191,37 @@ internal static class SqliteDocumentStorageDescriptorBuilder
 
         foreach (var binder in writeBinders)
         {
+            if (ReferenceEquals(binder, revisionBinder))
+            {
+                // Not excluded.revision: that is the value the insert branch computed, and this branch
+                // is an increment of what is already stored. Two more slots, which the shared numeric
+                // operations bind immediately after the client-side ones.
+                sql.Append(", ").Append(NumericRevision.UpdateAssignmentSql(mapping.QuotedTableName));
+                continue;
+            }
+
             // excluded.* rather than repeating each binder's ValueSql: for a server-side expression
             // excluded already holds the value it computed for this statement, so one form covers
             // client-side and server-side columns alike and cannot drift from the insert branch.
             sql.Append(", ").Append(binder.ColumnName).Append(" = excluded.").Append(binder.ColumnName);
+        }
+
+        if (revisionBinder is not null)
+        {
+            // **The guard is not optional under Numeric, and this is the trap.** The shared
+            // NumericClosedShapeUpsertOperation binds four trailing slots unconditionally — two for the
+            // SET case, two for the guard — while NumericClosedShapeOverwriteOperation binds only the
+            // two SET slots. So which statement is being built decides the shape, and the `guarded`
+            // flag does not: it is false for Numeric (it means "Optimistic" to the caller), and
+            // reading it here produced a two-slot statement for a four-slot binder. That is an
+            // IndexOutOfRangeException from inside Weasel rather than anything Fisher could
+            // attribute, which is why the distinction is spelled out rather than inferred.
+            if (!isOverwrite)
+            {
+                sql.Append(" where ").Append(NumericRevision.GuardSql(mapping.QuotedTableName));
+            }
+
+            return sql.Append(" returning ").Append(NumericRevision.Column).ToString();
         }
 
         if (guarded)
@@ -186,15 +236,18 @@ internal static class SqliteDocumentStorageDescriptorBuilder
     }
 
     private static string BuildInsertSql<TDoc>(DocumentMapping mapping,
-        IDocumentMetadataBinder<TDoc>[] writeBinders) where TDoc : notnull
-        => BuildInsertBody(mapping, writeBinders) + " returning id";
+        IDocumentMetadataBinder<TDoc>[] writeBinders, IDocumentMetadataBinder<TDoc>? revisionBinder)
+        where TDoc : notnull
+        => BuildInsertBody(mapping, writeBinders, revisionBinder)
+           + (revisionBinder is null ? " returning id" : $" returning {NumericRevision.Column}");
 
     /// <summary>
     ///     The shared <c>insert into … values …</c> head. Parameter marks land in the operations'
     ///     binding order: <c>[tenant,] id, data</c>, then one per client-side binder.
     /// </summary>
     private static string BuildInsertBody<TDoc>(DocumentMapping mapping,
-        IDocumentMetadataBinder<TDoc>[] writeBinders) where TDoc : notnull
+        IDocumentMetadataBinder<TDoc>[] writeBinders, IDocumentMetadataBinder<TDoc>? revisionBinder)
+        where TDoc : notnull
     {
         var columns = new List<string>();
         var values = new List<string>();
@@ -214,7 +267,12 @@ internal static class SqliteDocumentStorageDescriptorBuilder
         foreach (var binder in writeBinders)
         {
             columns.Add(binder.ColumnName);
-            values.Add(binder.ValueSql);
+
+            // The revision binder occupies two slots rather than one, which is the count every shared
+            // numeric operation binds for it.
+            values.Add(ReferenceEquals(binder, revisionBinder)
+                ? NumericRevision.InsertValueSql
+                : binder.ValueSql);
         }
 
         return $"insert into {mapping.QuotedTableName} ({string.Join(", ", columns)}) " +
@@ -226,10 +284,14 @@ internal static class SqliteDocumentStorageDescriptorBuilder
     ///     see the class remarks.
     /// </summary>
     private static string BuildUpdateSql<TDoc>(DocumentMapping mapping,
-        IDocumentMetadataBinder<TDoc>[] writeBinders, bool guarded) where TDoc : notnull
+        IDocumentMetadataBinder<TDoc>[] writeBinders, IDocumentMetadataBinder<TDoc>? revisionBinder,
+        bool guarded) where TDoc : notnull
     {
         var assignments = new List<string> { "data = ?" };
-        assignments.AddRange(writeBinders.Select(x => $"{x.ColumnName} = {x.ValueSql}"));
+
+        assignments.AddRange(writeBinders.Select(x => ReferenceEquals(x, revisionBinder)
+            ? NumericRevision.UpdateAssignmentSql(mapping.QuotedTableName)
+            : $"{x.ColumnName} = {x.ValueSql}"));
 
         var sql = new StringBuilder("update ")
             .Append(mapping.QuotedTableName)
@@ -240,6 +302,16 @@ internal static class SqliteDocumentStorageDescriptorBuilder
         if (mapping.IsConjoined)
         {
             sql.Append(" and ").Append(StorageConstants.TenantIdColumn).Append(" = ?");
+        }
+
+        if (revisionBinder is not null)
+        {
+            // Always present, guarded or not: the shared numeric Update operation binds two trailing
+            // slots unconditionally. The id and tenant terms come first, matching the class remarks'
+            // note that the update statement moves the id to the back.
+            sql.Append(" and ").Append(NumericRevision.GuardSql(mapping.QuotedTableName));
+
+            return sql.Append(" returning ").Append(NumericRevision.Column).ToString();
         }
 
         if (guarded)

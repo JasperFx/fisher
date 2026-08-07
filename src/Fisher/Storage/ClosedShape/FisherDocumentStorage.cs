@@ -133,10 +133,7 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
 
     public bool UseOptimisticConcurrency => _descriptor.ConcurrencyMode == ConcurrencyMode.Optimistic;
 
-    /// <summary>
-    ///     Always false — numeric revisions are not implemented. See CLAUDE.md for the slice boundary.
-    /// </summary>
-    public bool UseNumericRevisions => false;
+    public bool UseNumericRevisions => _descriptor.ConcurrencyMode == ConcurrencyMode.Numeric;
 
     public TenancyStyle TenancyStyle => _mapping.TenancyStyle;
 

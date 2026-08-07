@@ -34,6 +34,18 @@ public class DocumentMetadata
     public MetadataColumn Version { get; } = new("guid_version", typeof(Guid));
 
     /// <summary>
+    ///     <c>revision</c> — the numeric concurrency revision, and the alternative to
+    ///     <see cref="Version" /> rather than a companion to it. Mapped by
+    ///     <see cref="JasperFx.IRevisioned" />, which also turns numeric revisions on.
+    /// </summary>
+    /// <remarks>
+    ///     A separate column from <see cref="Version" /> because the two carry different CLR types —
+    ///     a Guid and an int — and <see cref="MetadataColumn" /> refuses a member that cannot hold its
+    ///     value. Sharing one slot would mean either dropping that check or making it lie.
+    /// </remarks>
+    public MetadataColumn Revision { get; } = new(NumericRevision.Column, typeof(int));
+
+    /// <summary>
     ///     <c>last_modified</c> — when the row was last written, generated server-side. No JasperFx
     ///     interface declares it, so <see cref="LastModifiedMetadataAttribute" /> and the fluent DSL are
     ///     the only two ways to reach it.
@@ -58,6 +70,7 @@ public class DocumentMetadata
     public IEnumerable<MetadataColumn> AllColumns()
     {
         yield return Version;
+        yield return Revision;
         yield return LastModified;
         yield return IsSoftDeleted;
         yield return DeletedAt;
@@ -90,6 +103,15 @@ public class DocumentMetadata
         if (versioned)
         {
             MapInterfaceProperty(documentType, typeof(IVersioned), nameof(IVersioned.Version), Version);
+        }
+
+        // IRevisioned is the numeric alternative, and it shares the Version slot: a document type is
+        // versioned one way or the other, never both, so one MetadataColumn serves whichever column
+        // the mapping ends up with. DocumentMapping is what refuses the pair.
+        if (typeof(JasperFx.IRevisioned).IsAssignableFrom(documentType))
+        {
+            MapInterfaceProperty(documentType, typeof(JasperFx.IRevisioned),
+                nameof(JasperFx.IRevisioned.Version), Revision);
         }
 
         foreach (var member in documentType.GetMembers(BindingFlags.Public | BindingFlags.Instance))

@@ -214,6 +214,109 @@ internal sealed class UnversionedIdentityMapFisherStorage<TDoc, TId> : IdentityM
         => new FlatUnversionedClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor);
 }
 
+// ---- ConcurrencyMode.Numeric ----
+//
+// Mirrors the Optimistic pair below/above, with two differences that are the whole of the mode: the
+// tracker is RevisionsFor rather than ForType, and the operations carry a long revision instead of a
+// Guid version. The *Projected variants pass a null tracker for the same reason the Optimistic ones
+// do — a projection rebuild writes what the events say and has no prior read to guard against.
+
+internal sealed class NumericLightweightFisherStorage<TDoc, TId> : LightweightFisherStorage<TDoc, TId>
+    where TDoc : notnull
+    where TId : notnull
+{
+    public NumericLightweightFisherStorage(DocumentMapping mapping,
+        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
+    {
+    }
+
+    private static Dictionary<TId, long> Revisions(IStorageSession session)
+        => session.Versions.RevisionsFor<TDoc, TId>();
+
+    public override Weasel.Storage.IStorageOperation Insert(TDoc document, IStorageSession session, string tenantId)
+        => new NumericClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            Revisions(session));
+
+    public override Weasel.Storage.IStorageOperation Update(TDoc document, IStorageSession session, string tenantId)
+        => new NumericClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            Revisions(session));
+
+    public override Weasel.Storage.IStorageOperation Upsert(TDoc document, IStorageSession session, string tenantId)
+        => new NumericClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            OperationRole.Upsert, Revisions(session));
+
+    public override Weasel.Storage.IStorageOperation Overwrite(TDoc document, IStorageSession session, string tenantId)
+        => new NumericClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            Revisions(session));
+
+    public override Weasel.Storage.IStorageOperation OverwriteProjected(TDoc document, string tenantId)
+        => new NumericClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            null);
+
+    public override Weasel.Storage.IStorageOperation UpsertProjected(TDoc document, string tenantId)
+        => new NumericClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            OperationRole.Upsert, null);
+
+    public override Weasel.Storage.IStorageOperation InsertProjected(TDoc document, string tenantId)
+        => new NumericClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            null);
+
+    public override Weasel.Storage.IStorageOperation UpdateProjected(TDoc document, string tenantId)
+        => new NumericClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            null);
+
+    public override ISelector BuildSelector(IStorageSession session)
+        => new FlatNumericClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor);
+}
+
+internal sealed class NumericIdentityMapFisherStorage<TDoc, TId> : IdentityMapFisherStorage<TDoc, TId>
+    where TDoc : notnull
+    where TId : notnull
+{
+    public NumericIdentityMapFisherStorage(DocumentMapping mapping,
+        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
+    {
+    }
+
+    private static Dictionary<TId, long> Revisions(IStorageSession session)
+        => session.Versions.RevisionsFor<TDoc, TId>();
+
+    public override Weasel.Storage.IStorageOperation Insert(TDoc document, IStorageSession session, string tenantId)
+        => new NumericClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            Revisions(session));
+
+    public override Weasel.Storage.IStorageOperation Update(TDoc document, IStorageSession session, string tenantId)
+        => new NumericClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            Revisions(session));
+
+    public override Weasel.Storage.IStorageOperation Upsert(TDoc document, IStorageSession session, string tenantId)
+        => new NumericClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            OperationRole.Upsert, Revisions(session));
+
+    public override Weasel.Storage.IStorageOperation Overwrite(TDoc document, IStorageSession session, string tenantId)
+        => new NumericClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            Revisions(session));
+
+    public override Weasel.Storage.IStorageOperation OverwriteProjected(TDoc document, string tenantId)
+        => new NumericClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            null);
+
+    public override Weasel.Storage.IStorageOperation UpsertProjected(TDoc document, string tenantId)
+        => new NumericClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            OperationRole.Upsert, null);
+
+    public override Weasel.Storage.IStorageOperation InsertProjected(TDoc document, string tenantId)
+        => new NumericClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            null);
+
+    public override Weasel.Storage.IStorageOperation UpdateProjected(TDoc document, string tenantId)
+        => new NumericClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
+            null);
+
+    public override ISelector BuildSelector(IStorageSession session)
+        => new FlatNumericClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor);
+}
+
 // ---- ConcurrencyMode.Optimistic ----
 //
 // The *Projected variants pass a null version tracker on purpose: a projection rebuild writes what

@@ -36,7 +36,94 @@ internal partial class FisherSession
         var storage = StorageFor<T>();
         storage.Store(this, document);
 
-        QueueOperation(storage.Upsert(document, this, TenantId));
+        QueueOperation(CaptureExpectedRevision(storage.Upsert(document, this, TenantId), document));
+    }
+
+    /// <summary>
+    ///     Copy the revision the document carries onto the operation that is about to write it.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Under <c>ConcurrencyMode.Numeric</c> the revision is an <em>expectation</em>, and it
+    ///         travels on the document rather than as a parameter — which is why
+    ///         <see cref="Store{T}(T,int)" /> is just "set the member, then store". Zero means auto, so
+    ///         a document that carries no revision (a new one, or a type that does not implement
+    ///         <see cref="JasperFx.IRevisioned" />) is written unguarded.
+    ///     </para>
+    ///     <para>
+    ///         A no-op for every other concurrency mode: only the numeric operations implement
+    ///         <see cref="Weasel.Storage.IRevisionedOperation" />.
+    ///     </para>
+    /// </remarks>
+    private static Weasel.Storage.IStorageOperation CaptureExpectedRevision(
+        Weasel.Storage.IStorageOperation operation, object document)
+    {
+        if (operation is Weasel.Storage.IRevisionedOperation revisioned)
+        {
+            revisioned.Revision = document is JasperFx.IRevisioned carried ? carried.Version : 0;
+        }
+
+        return operation;
+    }
+
+    /// <summary>
+    ///     Store a document and require the stored row's revision to be below
+    ///     <paramref name="revision" /> — the readable alternative to a Guid version guard.
+    /// </summary>
+    /// <remarks>
+    ///     Fails the unit of work with a <c>ConcurrencyException</c> when the row has already moved to
+    ///     that revision or beyond. The document type has to be configured for numeric revisions, by
+    ///     implementing <see cref="JasperFx.IRevisioned" /> or through
+    ///     <c>Schema.For&lt;T&gt;().UseNumericRevisions()</c>; on any other type the revision is
+    ///     recorded on the document and then ignored, because there is no column to guard against.
+    /// </remarks>
+    public void Store<T>(T document, int revision) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        if (document is JasperFx.IRevisioned revisioned)
+        {
+            revisioned.Version = revision;
+        }
+
+        Store(document);
+    }
+
+    /// <summary>
+    ///     Store a document at an explicit revision. Marten spells the same operation this way.
+    /// </summary>
+    /// <inheritdoc cref="Store{T}(T,int)" path="/remarks" />
+    public void UpdateRevision<T>(T document, int revision) where T : notnull
+        => Store(document, revision);
+
+    /// <summary>
+    ///     Store a document at an explicit revision, ignoring a revision miss rather than failing the
+    ///     unit of work.
+    /// </summary>
+    /// <remarks>
+    ///     The "last writer loses quietly" variant: a stale write is dropped and everything else in the
+    ///     unit of work still commits. Marten's <c>TryUpdateRevision</c>.
+    /// </remarks>
+    public void TryUpdateRevision<T>(T document, int revision) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        if (document is JasperFx.IRevisioned revisioned)
+        {
+            revisioned.Version = revision;
+        }
+
+        var storage = StorageFor<T>();
+        storage.Store(this, document);
+
+        var operation = CaptureExpectedRevision(storage.Upsert(document, this, TenantId), document);
+
+        if (operation is Weasel.Storage.IRevisionedOperation revisionedOperation)
+        {
+            revisionedOperation.IgnoreConcurrencyViolation = true;
+        }
+
+        QueueOperation(operation);
     }
 
     private Linq.FisherQueryProvider? _queryProvider;
@@ -71,7 +158,7 @@ internal partial class FisherSession
         var storage = StorageFor<T>();
         storage.Store(this, document);
 
-        QueueOperation(storage.Insert(document, this, TenantId));
+        QueueOperation(CaptureExpectedRevision(storage.Insert(document, this, TenantId), document));
     }
 
     /// <summary>
@@ -85,7 +172,7 @@ internal partial class FisherSession
         var storage = StorageFor<T>();
         storage.Store(this, document);
 
-        QueueOperation(storage.Update(document, this, TenantId));
+        QueueOperation(CaptureExpectedRevision(storage.Update(document, this, TenantId), document));
     }
 
     /// <summary>

@@ -88,6 +88,27 @@ public interface IDocumentSession : IQuerySession, JasperFx.Events.IStorageOpera
     /// </summary>
     void Store<T>(T document) where T : notnull;
 
+    /// <summary>
+    ///     Queue a document to be written, requiring the stored row's revision to be below
+    ///     <paramref name="revision" />.
+    /// </summary>
+    /// <remarks>
+    ///     For a document type configured for numeric revisions — by implementing
+    ///     <see cref="JasperFx.IRevisioned" /> or through <c>Schema.For&lt;T&gt;().UseNumericRevisions()</c>.
+    ///     A miss fails the whole unit of work with a <c>ConcurrencyException</c>; use
+    ///     <see cref="TryUpdateRevision{T}" /> to drop the stale write instead.
+    /// </remarks>
+    void Store<T>(T document, int revision) where T : notnull;
+
+    /// <inheritdoc cref="Store{T}(T,int)" />
+    void UpdateRevision<T>(T document, int revision) where T : notnull;
+
+    /// <summary>
+    ///     Queue a document to be written at an explicit revision, dropping the write rather than
+    ///     failing the unit of work if the stored row has already moved past it.
+    /// </summary>
+    void TryUpdateRevision<T>(T document, int revision) where T : notnull;
+
     /// <inheritdoc cref="Store{T}(T)" />
     void Store<T>(params T[] documents) where T : notnull;
 

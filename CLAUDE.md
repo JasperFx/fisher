@@ -179,9 +179,9 @@ Working, with tests:
 Not implemented yet — do not assume these work:
 
 - **Document storage** — `Store`/`Insert`/`Update`/`Delete`/`LoadAsync`/`LoadManyAsync`, soft delete,
-  duplicated fields, metadata member mapping and LINQ all work over Guid, string, int and long ids,
-  in the same unit of work and transaction as event appends. What is still missing: no hierarchies
-  and no numeric revisions.
+  duplicated fields, user-declared indexes, numeric revisions, metadata member mapping and LINQ all
+  work over Guid, string, int and long ids, in the same unit of work and transaction as event appends.
+  What is still missing: no hierarchies (fisher#17).
 - **Event rewriting** — all of it works: `OverwriteEvent` / `CompletelyReplaceEvent`, event data
   masking and stream compacting.
 
@@ -682,6 +682,48 @@ This is what makes `Duplicate` and `Index` two different things rather than near
 
 Indexes go through Weasel's migration like every other schema object, so `AutoCreate.None` is honoured
 for free and the table is not created lazily on first write.
+
+### Numeric revisions
+
+`Schema.For<T>().UseNumericRevisions()`, or implementing `JasperFx.IRevisioned` (fisher#18) — an
+INTEGER `revision` column as the alternative to `guid_version`, with `Store(doc, revision)`,
+`UpdateRevision` and `TryUpdateRevision` on the session. The two concurrency styles are
+**alternatives**: a type carries one column or the other, and `AssertConcurrencyIsCoherent` refuses
+the pair rather than letting the descriptor pick one silently.
+
+Weasel.Storage already had the whole numeric path — the descriptor's `revisionBinder` slot was
+reserved and Fisher was passing null — so this is dialect SQL plus wiring, not new machinery.
+
+- **The semantics are Marten's, deliberately, and they have a sharp edge.** `Store` passes the
+  document's own `Version` as the expected revision (Marten's docs: "`Store()` is essentially
+  `UpdateRevision(entity, entity.Version)`"), and the guard requires the supplied revision to be
+  **strictly greater** than the stored one. So re-storing an instance that still carries the revision
+  it was written at is a `ConcurrencyException`, not an increment — `UpdateRevision(doc, Version + 1)`
+  or resetting `Version` to 0 (auto) is the way forward. Polecat diverged to an equality rule for its
+  bespoke pipeline's parity; following it here would mean writing SQL the shared operations do not
+  describe, and would silently disagree with Marten about what an explicit revision means.
+  `storing_an_instance_that_carries_its_current_revision_is_rejected` pins it, message and all.
+- **The trailing slot count is decided by which statement is being built, not by `guarded`.** This is
+  the trap, and it bit during development. `NumericClosedShapeUpsertOperation` binds **four** trailing
+  slots unconditionally (two for the SET case, two for the guard); `NumericClosedShapeOverwriteOperation`
+  binds **two**; the update binds two. `guarded` is false under Numeric — it means "Optimistic" to its
+  caller — so reading it produced a two-slot upsert for a four-slot binder, which surfaces as an
+  `IndexOutOfRangeException` from inside Weasel that names nothing of Fisher's. Hence the explicit
+  `isOverwrite` flag.
+- **The revision binder occupies two client-side slots**, not one, in every insert-shaped statement:
+  `case when ? = 0 then 1 else ? end`. Both get the same value.
+- **`revision` is a separate `MetadataColumn` from `Version`**, because the two carry different CLR
+  types — Guid and int — and `MetadataColumn` refuses a member that cannot hold its value. Sharing one
+  slot would mean either dropping that check or making it lie.
+- **A numeric revision is always read back, mapped member or not**, where a Guid version is dropped
+  from the query-only projection. Asymmetric on purpose: the revision a caller will guard the *next*
+  write with is the one the database just computed, so a read that withheld it would leave every
+  explicit store guessing.
+- **The column is INTEGER, and that is load-bearing.** A TEXT affinity would sort revision 10 below
+  revision 9 and turn the "must be greater" guard into nonsense.
+
+`0` means auto — increment whatever is stored — which is the sentinel the shared operations bind when
+no revision was named, and why every guard starts with `? = 0 or`.
 
 ### Document metadata member mapping
 

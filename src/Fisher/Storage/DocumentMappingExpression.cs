@@ -55,6 +55,29 @@ public class DocumentMappingExpression<T> where T : notnull
     }
 
     /// <summary>
+    ///     Guard writes of this type with a numeric revision instead of a Guid version.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The alternative to <see cref="UseOptimisticConcurrency" />, not an addition to it — a
+    ///         document type carries <c>guid_version</c> or <c>revision</c>, and asking for both is
+    ///         refused when the type's storage is built.
+    ///     </para>
+    ///     <para>
+    ///         What a revision buys over a Guid version is that it is readable: it can cross an API
+    ///         boundary, be shown to a user, and be named on the way back in through
+    ///         <c>Store(document, revision)</c> or <c>UpdateRevision(document, revision)</c>. Implementing
+    ///         <see cref="JasperFx.IRevisioned" /> turns this on and maps the revision onto the
+    ///         document's own <c>Version</c> member.
+    ///     </para>
+    /// </remarks>
+    public DocumentMappingExpression<T> UseNumericRevisions(bool enabled = true)
+    {
+        Mapping.UseNumericRevisions = enabled;
+        return this;
+    }
+
+    /// <summary>
     ///     Project Fisher's metadata columns onto members of the document — <c>last_modified</c> onto a
     ///     timestamp of your own, <c>deleted_at</c> onto something other than
     ///     <see cref="JasperFx.Metadata.ISoftDeleted.DeletedAt" />, and so on.

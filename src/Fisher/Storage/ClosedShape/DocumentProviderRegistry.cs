@@ -120,13 +120,19 @@ internal class DocumentProviderRegistry : IProviderGraph
 
         var queryOnly = new QueryOnlyFisherStorage<TDoc, TId>(mapping, descriptor);
 
-        FisherDocumentStorage<TDoc, TId> lightweight = descriptor.ConcurrencyMode == ConcurrencyMode.Optimistic
-            ? new OptimisticLightweightFisherStorage<TDoc, TId>(mapping, descriptor)
-            : new UnversionedLightweightFisherStorage<TDoc, TId>(mapping, descriptor);
+        FisherDocumentStorage<TDoc, TId> lightweight = descriptor.ConcurrencyMode switch
+        {
+            ConcurrencyMode.Optimistic => new OptimisticLightweightFisherStorage<TDoc, TId>(mapping, descriptor),
+            ConcurrencyMode.Numeric => new NumericLightweightFisherStorage<TDoc, TId>(mapping, descriptor),
+            _ => new UnversionedLightweightFisherStorage<TDoc, TId>(mapping, descriptor)
+        };
 
-        FisherDocumentStorage<TDoc, TId> identityMap = descriptor.ConcurrencyMode == ConcurrencyMode.Optimistic
-            ? new OptimisticIdentityMapFisherStorage<TDoc, TId>(mapping, descriptor)
-            : new UnversionedIdentityMapFisherStorage<TDoc, TId>(mapping, descriptor);
+        FisherDocumentStorage<TDoc, TId> identityMap = descriptor.ConcurrencyMode switch
+        {
+            ConcurrencyMode.Optimistic => new OptimisticIdentityMapFisherStorage<TDoc, TId>(mapping, descriptor),
+            ConcurrencyMode.Numeric => new NumericIdentityMapFisherStorage<TDoc, TId>(mapping, descriptor),
+            _ => new UnversionedIdentityMapFisherStorage<TDoc, TId>(mapping, descriptor)
+        };
 
         // Fisher has no dirty tracking, as Polecat has none: the identity-map storage takes that slot
         // because it is the closest tracking mode on offer.

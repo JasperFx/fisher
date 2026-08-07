@@ -47,6 +47,15 @@ internal class DocumentTable : Table
             AddColumn("guid_version", "TEXT").NotNull();
         }
 
+        // The numeric alternative, and mutually exclusive with the Guid one — DocumentMapping refuses
+        // the pair, so at most one of these two columns is ever created. INTEGER because the revision
+        // is compared and incremented as a number; a TEXT affinity here would make revision 10 sort
+        // below revision 9 and turn the "must be greater" guard into nonsense.
+        if (mapping.UseNumericRevisions)
+        {
+            AddColumn(NumericRevision.Column, "INTEGER").NotNull().DefaultValue(1);
+        }
+
         // The concrete .NET type the row was written as. Written on every save; not selected on the
         // read path today, but it is what a future hierarchy discriminator would build on.
         AddColumn("dotnet_type", "TEXT").AllowNulls();

@@ -18,9 +18,8 @@ namespace Fisher.Storage;
 /// <remarks>
 ///     <para>
 ///         Deliberately a subset of Marten's and Polecat's <c>DocumentMapping</c>. There is no
-///         hierarchy or sub-classing, no duplicated fields or user indexes, no foreign keys, and no
-///         numeric revisions — every one of those is a column-shape or SQL-generation concern that can
-///         be added later without disturbing what is here.
+///         hierarchy or sub-classing and no foreign keys — both are column-shape or SQL-generation
+///         concerns that can be added later without disturbing what is here.
 ///     </para>
 ///     <para>
 ///         Identity resolution goes through <see cref="AggregateIdentity" />, the same helper live
@@ -38,9 +37,8 @@ public class DocumentMapping
     ///     The identity types Fisher can store a document by.
     /// </summary>
     /// <remarks>
-    ///     The canonical four from <c>JasperFx.DocumentIdentity</c>. Strongly typed id wrappers are not
-    ///     supported yet — they need an identity strategy that unwraps them, and Fisher has no
-    ///     strong-typed-id support anywhere else either.
+    ///     The canonical four from <c>JasperFx.DocumentIdentity</c>. A strong-typed wrapper around any
+    ///     of them is supported too and resolved separately — see <see cref="StrongTypedId" />.
     /// </remarks>
     public static readonly Type[] SupportedIdTypes = [typeof(Guid), typeof(string), typeof(int), typeof(long)];
 
@@ -73,6 +71,13 @@ public class DocumentMapping
         {
             UseOptimisticConcurrency = true;
         }
+
+        // IRevisioned is the numeric counterpart, and turns on the mode it names for the same reason:
+        // the member is only meaningful if the column backing it is written and read.
+        if (typeof(JasperFx.IRevisioned).IsAssignableFrom(documentType))
+        {
+            UseNumericRevisions = true;
+        }
     }
 
     /// <summary>The .NET type being stored.</summary>
@@ -104,6 +109,25 @@ public class DocumentMapping
     ///     <c>guid_version</c> column.
     /// </summary>
     public bool UseOptimisticConcurrency { get; set; }
+
+    /// <summary>
+    ///     Whether writes to this document type carry a numeric revision check against the
+    ///     <c>revision</c> column, instead of the Guid one.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The two are alternatives, never both — a type carries <c>guid_version</c> or
+    ///         <c>revision</c>, and <see cref="AssertConcurrencyIsCoherent" /> refuses the pair rather
+    ///         than letting the descriptor pick one silently.
+    ///     </para>
+    ///     <para>
+    ///         A numeric revision answers a question a Guid version cannot: it is readable, so a caller
+    ///         can pass one over an API boundary, show it in a UI, or say "store this only if it is
+    ///         still revision 4". That is what <c>Store(doc, revision)</c> and <c>UpdateRevision</c>
+    ///         exist for, and neither has a <c>guid_version</c> equivalent.
+    ///     </para>
+    /// </remarks>
+    public bool UseNumericRevisions { get; set; }
 
     /// <summary>
     ///     Whether each row carries a tenant id. Follows the store's event tenancy style by default,
@@ -263,7 +287,31 @@ public class DocumentMapping
     ///     The concurrency mode the closed-shape storage runtime should use for this document.
     /// </summary>
     internal ConcurrencyMode ConcurrencyMode
-        => UseOptimisticConcurrency ? ConcurrencyMode.Optimistic : ConcurrencyMode.Off;
+        => UseNumericRevisions
+            ? ConcurrencyMode.Numeric
+            : UseOptimisticConcurrency
+                ? ConcurrencyMode.Optimistic
+                : ConcurrencyMode.Off;
+
+    /// <summary>
+    ///     Refuse a type configured for both concurrency styles at once.
+    /// </summary>
+    /// <remarks>
+    ///     Only one version column is created, so a type asking for both would silently get whichever
+    ///     the descriptor checked first — and the loser's <c>Store(doc, revision)</c> or version guard
+    ///     would then do nothing at all. Said at configuration time rather than discovered as a guard
+    ///     that never fires.
+    /// </remarks>
+    internal void AssertConcurrencyIsCoherent()
+    {
+        if (UseOptimisticConcurrency && UseNumericRevisions)
+        {
+            throw new InvalidOperationException(
+                $"'{DocumentType.Name}' asks for both Guid optimistic concurrency and numeric "
+                + "revisions. They are alternatives — a document type carries guid_version or "
+                + "revision, not both. Choose one.");
+        }
+    }
 
     /// <summary>
     ///     The table suffix, before <see cref="FisherTableNaming" /> folds in the schema prefix —
