@@ -1,8 +1,7 @@
 # Handoff
 
-State of Fisher after the **JasperFx 2.43.0 upgrade**, which brought the two compliance suites that
-close out event rewriting — `EventDataMaskingCompliance` and `StreamCompactingCompliance`. Written for
-whoever picks this up next.
+State of Fisher after the **JasperFx 2.43.0 upgrade** and the six features it uncovered — fisher#15
+through #21, all closed except composite projections. Written for whoever picks this up next.
 
 **Nothing is half-built.** Every milestone on disk builds, is tested, and was committed complete.
 [ROADMAP.md](ROADMAP.md) says what comes next and why in that order.
@@ -10,7 +9,7 @@ whoever picks this up next.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**588 tests green on net9.0 and net10.0**, with no known intermittent failures. 199 of them are shared
+**674 tests green on net9.0 and net10.0**, with no known intermittent failures. 199 of them are shared
 cross-store compliance tests.
 
 ## The 2.43.0 bump cost nothing but the seam
@@ -47,21 +46,34 @@ documented public API to 2.42.2. This was a compliance-tests release.
 **fisher#13's intermittent rebuild failure is gone**, fixed at `e3c9912` — the session's operation
 queue was not thread-safe. Earlier handoffs described it as the one known flake; it no longer is.
 
-## Seven issues filed, none of them a bug
+## Six of seven filed issues closed
 
 The tracker was empty when this pass started, while ROADMAP named five unbuilt features — against
-Fisher's own convention that a deferred gap lives in the tracker rather than in a doc. All seven are
-enhancements; nothing is broken.
+Fisher's own convention that a deferred gap lives in the tracker rather than in a doc. Seven were
+filed; six are done. **Only #19, composite projections, is still open.**
+
+Three of the six turned up a real defect or a wrong premise, which is the useful part:
+
+- **#18** — the difficulty was the *positional slot contract*, not the SQL. The shared upsert binds
+  four trailing slots unconditionally, overwrite two; Fisher's `guarded` flag is false under Numeric
+  because it means "Optimistic" to its caller, so reading it produced a two-slot statement for a
+  four-slot binder and an `IndexOutOfRangeException` from inside Weasel naming nothing of Fisher's.
+- **#20** — everything a container disposes was `IAsyncDisposable` only, and a `ServiceProvider`
+  disposed synchronously *refuses* such a service. Since sessions register scoped, that made a scoped
+  session unusable rather than merely less efficient.
+- **#17** — this issue's own premise was wrong. `dotnet_type` cannot be the discriminator: it holds an
+  assembly-qualified name and its binder takes no alias resolver. A separate `doc_type` column was
+  needed after all.
 
 | Issue | Why it is worth knowing |
 |---|---|
-| [#15](https://github.com/JasperFx/fisher/issues/15) `OpenReadOnlyEventStore` | **The one real finding.** Its doc comment blamed a missing paged event query layer; fisher#9 built one. `EventQuery` is flat exact-match filters plus paging, not an expression, and every column it names is on `fi_events`. Small, with a Polecat template. |
-| [#16](https://github.com/JasperFx/fisher/issues/16) indexes | `Duplicate` is currently the only way to get one. SQLite indexes expressions directly, so this is *cheaper* here than on the siblings — but the indexed expression must be built from `MemberFactory`'s `TypedLocator`, or it is created, never used, and reports nothing. |
-| [#17](https://github.com/JasperFx/fisher/issues/17) hierarchies | `dotnet_type` is already the discriminator, so no schema change. Decide whether it holds a short alias before anything writes rows. |
-| [#18](https://github.com/JasperFx/fisher/issues/18) numeric revisions | The one item on this list with no SQLite-specific answer needed, which is unusual enough to say. |
+| ~~[#15](https://github.com/JasperFx/fisher/issues/15)~~ `OpenReadOnlyEventStore` | **The one real finding.** Its doc comment blamed a missing paged event query layer; fisher#9 built one. `EventQuery` is flat exact-match filters plus paging, not an expression, and every column it names is on `fi_events`. Small, with a Polecat template. |
+| ~~[#16](https://github.com/JasperFx/fisher/issues/16)~~ indexes | `Duplicate` is currently the only way to get one. SQLite indexes expressions directly, so this is *cheaper* here than on the siblings — but the indexed expression must be built from `MemberFactory`'s `TypedLocator`, or it is created, never used, and reports nothing. |
+| ~~[#17](https://github.com/JasperFx/fisher/issues/17)~~ hierarchies | `dotnet_type` is already the discriminator, so no schema change. Decide whether it holds a short alias before anything writes rows. |
+| ~~[#18](https://github.com/JasperFx/fisher/issues/18)~~ numeric revisions | The one item on this list with no SQLite-specific answer needed, which is unusual enough to say. |
 | [#19](https://github.com/JasperFx/fisher/issues/19) composite projections | Possibly close to free — `ProjectionGraph` already discovers them. Also the most likely place to find whatever fisher#13 did not cover. |
-| [#20](https://github.com/JasperFx/fisher/issues/20) `AddFisher` | The largest gap between "works" and "usable without boilerplate". |
-| [#21](https://github.com/JasperFx/fisher/issues/21) subscriptions | `ISubscriptionRunner` is resolved by a soft `as` cast, so not implementing it fails at runtime rather than at compile time — which is why it reads as absent rather than broken. |
+| ~~[#20](https://github.com/JasperFx/fisher/issues/20)~~ `AddFisher` | The largest gap between "works" and "usable without boilerplate". |
+| ~~[#21](https://github.com/JasperFx/fisher/issues/21)~~ subscriptions | `ISubscriptionRunner` is resolved by a soft `as` cast, so not implementing it fails at runtime rather than at compile time — which is why it reads as absent rather than broken. |
 
 ## Where we are against the compliance suites
 
@@ -748,15 +760,22 @@ Each of these is a decision with a reason, not an oversight:
   already passed the event keeps what it derived from the old body until it is rebuilt. Marten is the
   same. This is why masking is a data-at-rest operation rather than a correction, and why compacting
   is one-way.
-- **No hierarchies, numeric revisions or sub-classing.** All additive against the current column
-  shape, as soft delete's two columns were.
+- **No composite projections** ([#19](https://github.com/JasperFx/fisher/issues/19)) — the one
+  projection shape Fisher does not support. Possibly close to free, since `ProjectionGraph` already
+  discovers them and `FisherProjectionOptions` derives from it, but nobody has tried it. Also the
+  likeliest place to find whatever fisher#13 did not cover, because a composite is more of exactly the
+  concurrent-queueing shape that bug lived in.
+- **No bulk insert and no natural keys.** Both additive against the current column shape, as soft
+  delete's two columns were.
 - **`dotnet_type` is the one metadata column with nowhere to go.** The other four are projected back
   onto document members (fisher#11); Weasel's `DocumentDotNetTypeBinder` takes no member where every
   other binder does, so `DocumentMetadata` omits it rather than offering a mapping that would
   silently do nothing. That is an upstream gap, not a Fisher decision.
 - **Multi-tenancy stops at a tenant id column.** No database-per-tenant, which is why every
   `IEventDatabase` parameter in `DocumentStore.Daemon.cs` is ignored.
-- **No DI registration.** There is no `AddFisher(...)`; a store is built with `DocumentStore.For`.
+- **No hot-cold daemon coordination**, and `AddAsyncDaemon(DaemonMode.HotCold)` refuses rather than
+  quietly running Solo. Failover means several nodes competing for a leadership lease through the
+  database, and a Fisher store is a file SQLite does not make safe to share across nodes.
 
 ## Traps that have already cost real time
 

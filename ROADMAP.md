@@ -3,8 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **seven open issues** (#15-#21, all enhancements — nothing is broken), on JasperFx **2.43.0**.
-**All 24 compliance suites green.** 588 tests green on net9.0
+Status: **one open issue** (#19, an enhancement — nothing is broken), on JasperFx **2.43.0**.
+**All 24 compliance suites green.** 674 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
 ## The destination
@@ -75,13 +75,13 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | ~~[fisher#14](https://github.com/JasperFx/fisher/issues/14)~~ | **Closed.** Strong-typed identities — no new seam needed; `IIdentification` already reserved the three members, and `DocumentIdentity.FindIdMember`'s predicate overload was the entry point. |
 | ~~[fisher#11](https://github.com/JasperFx/fisher/issues/11)~~ | **Closed.** Document metadata member mapping — four of the five columns projected back onto members, by interface, attribute or DSL. `dotnet_type` is the fifth and has no member slot in Weasel's binder. |
 | ~~[fisher#10](https://github.com/JasperFx/fisher/issues/10)~~ | **Closed.** Stream compacting, at both levels — the untyped `IEventStore` entry point resolves the aggregate from `fi_streams` rather than throwing as Polecat's does. |
-| [fisher#15](https://github.com/JasperFx/fisher/issues/15) | **Open.** `OpenReadOnlyEventStore` — the last throwing member. Its stated blocker is stale: fisher#9 built the event query layer, and `EventQuery` turns out to be flat exact-match filters plus paging, not an expression. |
-| [fisher#16](https://github.com/JasperFx/fisher/issues/16) | **Open.** User-declared indexes over unduplicated members. Cheaper on SQLite than on the siblings — expression indexes mean no column is needed at all. |
-| [fisher#17](https://github.com/JasperFx/fisher/issues/17) | **Open.** Document hierarchies. `dotnet_type` is already the discriminator, so no schema change; everything missing is on the read side. |
-| [fisher#18](https://github.com/JasperFx/fisher/issues/18) | **Open.** Numeric revisions, as the readable alternative to `guid_version`. |
+| ~~[fisher#15](https://github.com/JasperFx/fisher/issues/15)~~ | **Closed.** `OpenReadOnlyEventStore` — the stated blocker was stale; `EventQuery` is flat exact-match filters plus paging, so it cost a where clause, `limit`/`offset` and a `count(*)`. Nothing on `IEventStore` throws any more. |
+| ~~[fisher#16](https://github.com/JasperFx/fisher/issues/16)~~ | **Closed.** User-declared indexes, as SQLite expression indexes over the member's `TypedLocator` — no column materialised, so cheaper here than on either sibling. |
+| ~~[fisher#17](https://github.com/JasperFx/fisher/issues/17)~~ | **Closed.** Document hierarchies on a `doc_type` alias column. This issue's premise was wrong: `dotnet_type` cannot be the discriminator, so it needed a schema change after all. |
+| ~~[fisher#18](https://github.com/JasperFx/fisher/issues/18)~~ | **Closed.** Numeric revisions, following Marten's strictly-greater rule. The difficulty was the positional slot contract, not the SQL. |
 | [fisher#19](https://github.com/JasperFx/fisher/issues/19) | **Open.** `CompositeProjection` — the one projection shape Fisher does not support. Possibly close to free, but nobody has tried it. |
-| [fisher#20](https://github.com/JasperFx/fisher/issues/20) | **Open.** `AddFisher(...)`. The largest gap between "Fisher works" and "Fisher is usable in an app without boilerplate". |
-| [fisher#21](https://github.com/JasperFx/fisher/issues/21) | **Open.** Subscriptions — `ISubscriptionRunner`. The natural companion to the deliberately-empty outbox seam. |
+| ~~[fisher#20](https://github.com/JasperFx/fisher/issues/20)~~ | **Closed.** `AddFisher(...)`, scoped sessions, hosted services. Surfaced a real bug: everything a container disposes was `IAsyncDisposable` only, which made a scoped session unusable. |
+| ~~[fisher#21](https://github.com/JasperFx/fisher/issues/21)~~ | **Closed.** Subscriptions — `ISubscriptionRunner<ISubscription>`, the session taken from the batch so writes commit with the progression row. |
 
 Every deliberate gap gets an issue. A note in this file or in CLAUDE.md is context, not tracking —
 if something is deferred, it is in the list above.
@@ -294,7 +294,7 @@ New suites arriving in a JasperFx bump are the only way this table grows now.
   genuinely interleaved writers, not two sequential `SaveChangesAsync` calls.
 - **`Advanced` is a thin subset.** `Clean`, `ResetAllDataAsync` and `ResetHiloSequenceFloorAsync<T>`
   only. Marten and Polecat also carry bulk insert, `InitialData` and metadata helpers there.
-- **Not started at all:** multi-tenancy beyond a tenant id column, subscriptions, DI registration
+- **Not started at all:** multi-tenancy beyond a tenant id column, composite projections (#19)
   (`AddFisher`), bulk insert, natural keys, user-declared indexes over unduplicated members.
 - **`dotnet_type` cannot be mapped onto a member**, because Weasel's `DocumentDotNetTypeBinder` takes
   no member where every other document metadata binder does. Upstream gap, found while building
