@@ -209,6 +209,35 @@ public class DocumentMappingExpression<T> where T : notnull
         => Index(members, name, unique: true);
 
     /// <summary>
+    ///     Register a sub-class, so <typeparamref name="T" /> and its sub-classes share one table.
+    /// </summary>
+    /// <param name="alias">
+    ///     The value stored in <c>doc_type</c>. Defaults to the type name in snake case; name it
+    ///     explicitly if the type may be renamed, because the alias is what is stored.
+    /// </param>
+    /// <remarks>
+    ///     <c>Store(derived)</c> and <c>LoadAsync&lt;TBase&gt;(id)</c> then share a table,
+    ///     <c>Query&lt;TBase&gt;()</c> returns every sub-class as its own type, and
+    ///     <c>Query&lt;TDerived&gt;()</c> narrows to one. An abstract or interface base is a hierarchy
+    ///     whether or not anything is registered, so its table carries the discriminator from the first
+    ///     migration.
+    /// </remarks>
+    public DocumentMappingExpression<T> AddSubClass<TSub>(string? alias = null) where TSub : T
+    {
+        Mapping.AddSubClass(typeof(TSub), alias);
+        return this;
+    }
+
+    /// <inheritdoc cref="AddSubClass{TSub}" />
+    public DocumentMappingExpression<T> AddSubClass(Type subclassType, string? alias = null)
+    {
+        ArgumentNullException.ThrowIfNull(subclassType);
+
+        Mapping.AddSubClass(subclassType, alias);
+        return this;
+    }
+
+    /// <summary>
     ///     Walk a member-access lambda back to its parameter, outermost member last.
     /// </summary>
     /// <remarks>

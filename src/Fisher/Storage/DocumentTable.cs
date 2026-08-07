@@ -56,9 +56,18 @@ internal class DocumentTable : Table
             AddColumn(NumericRevision.Column, "INTEGER").NotNull().DefaultValue(1);
         }
 
-        // The concrete .NET type the row was written as. Written on every save; not selected on the
-        // read path today, but it is what a future hierarchy discriminator would build on.
+        // The concrete .NET type the row was written as, assembly-qualified. Written on every save and
+        // never selected — the hierarchy discriminator is doc_type below, deliberately a separate
+        // column holding a short alias. See SubClassMapping for why this one is not it.
         AddColumn("dotnet_type", "TEXT").AllowNulls();
+
+        // The hierarchy discriminator: a short alias, read on every load so a row can be deserialized
+        // as its own sub-class. Indexed, because narrowing a query to one sub-class is a predicate on
+        // this column and is most of the point of registering the hierarchy.
+        if (mapping.IsHierarchy)
+        {
+            AddColumn(DocumentHierarchy.DocTypeColumn, "TEXT").AllowNulls().AddIndex();
+        }
 
         // ISO-8601 UTC, same representation and the same parenthesized-expression trap as the event
         // tables: a non-literal DEFAULT must be wrapped in parentheses or CREATE TABLE will not parse.

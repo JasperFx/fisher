@@ -172,7 +172,9 @@ internal sealed class UnversionedLightweightFisherStorage<TDoc, TId> : Lightweig
         => new UnversionedClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
 
     public override ISelector BuildSelector(IStorageSession session)
-        => new FlatUnversionedClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor);
+        => _descriptor.ResolveDocumentType is not null
+            ? new HierarchicalUnversionedClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor)
+            : new FlatUnversionedClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor);
 }
 
 internal sealed class UnversionedIdentityMapFisherStorage<TDoc, TId> : IdentityMapFisherStorage<TDoc, TId>
@@ -211,7 +213,9 @@ internal sealed class UnversionedIdentityMapFisherStorage<TDoc, TId> : IdentityM
         => new UnversionedClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
 
     public override ISelector BuildSelector(IStorageSession session)
-        => new FlatUnversionedClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor);
+        => _descriptor.ResolveDocumentType is not null
+            ? new HierarchicalUnversionedClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor)
+            : new FlatUnversionedClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor);
 }
 
 // ---- ConcurrencyMode.Numeric ----
@@ -266,7 +270,9 @@ internal sealed class NumericLightweightFisherStorage<TDoc, TId> : LightweightFi
             null);
 
     public override ISelector BuildSelector(IStorageSession session)
-        => new FlatNumericClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor);
+        => _descriptor.ResolveDocumentType is not null
+            ? new HierarchicalNumericClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor)
+            : new FlatNumericClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor);
 }
 
 internal sealed class NumericIdentityMapFisherStorage<TDoc, TId> : IdentityMapFisherStorage<TDoc, TId>
@@ -314,7 +320,9 @@ internal sealed class NumericIdentityMapFisherStorage<TDoc, TId> : IdentityMapFi
             null);
 
     public override ISelector BuildSelector(IStorageSession session)
-        => new FlatNumericClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor);
+        => _descriptor.ResolveDocumentType is not null
+            ? new HierarchicalNumericClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor)
+            : new FlatNumericClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor);
 }
 
 // ---- ConcurrencyMode.Optimistic ----
@@ -366,7 +374,9 @@ internal sealed class OptimisticLightweightFisherStorage<TDoc, TId> : Lightweigh
             null);
 
     public override ISelector BuildSelector(IStorageSession session)
-        => new FlatOptimisticClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor);
+        => _descriptor.ResolveDocumentType is not null
+            ? new HierarchicalOptimisticClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor)
+            : new FlatOptimisticClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor);
 }
 
 internal sealed class OptimisticIdentityMapFisherStorage<TDoc, TId> : IdentityMapFisherStorage<TDoc, TId>
@@ -413,7 +423,9 @@ internal sealed class OptimisticIdentityMapFisherStorage<TDoc, TId> : IdentityMa
             null);
 
     public override ISelector BuildSelector(IStorageSession session)
-        => new FlatOptimisticClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor);
+        => _descriptor.ResolveDocumentType is not null
+            ? new HierarchicalOptimisticClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor)
+            : new FlatOptimisticClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor);
 }
 
 // ---- query only ----
@@ -436,7 +448,9 @@ internal sealed class QueryOnlyFisherStorage<TDoc, TId> : FisherDocumentStorage<
     protected override IDocumentMetadataBinder<TDoc>[] ReadBinders() => _descriptor.QueryOnlyReadBinders;
 
     public override ISelector BuildSelector(IStorageSession session)
-        => new FlatClosedShapeQueryOnlySelector<TDoc, TId>(session, _descriptor);
+        => _descriptor.ResolveDocumentType is not null
+            ? new HierarchicalClosedShapeQueryOnlySelector<TDoc, TId>(session, _descriptor)
+            : new FlatClosedShapeQueryOnlySelector<TDoc, TId>(session, _descriptor);
 
     public override Task<TDoc?> LoadAsync(TId id, IStorageSession session, CancellationToken token)
         => QueryOneAsync(id, session, token);

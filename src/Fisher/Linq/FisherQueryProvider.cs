@@ -198,9 +198,35 @@ public class FisherQueryProvider : IQueryProvider
             statement.Wheres.Add(storage.FilterDocuments(where, _session));
         }
 
+        ApplyHierarchyFilter(statement, mapping, typeof(T));
         ApplySoftDeleteFilters(statement, parser, storage, mapping);
 
         return (statement, (ISelector<T>)selectClause.BuildSelector(_session));
+    }
+
+    /// <summary>
+    ///     Narrow a hierarchy query to the sub-class being asked for.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Once per statement, and independent of everything else — which is the fix for two
+    ///         separate ways of getting this wrong. Composing it into <c>FilterDocuments</c> repeats it
+    ///         for every caller predicate and omits it from a query with none; hanging it off the
+    ///         soft-delete branch omits it for a type that is not soft-deleted, and for the
+    ///         <c>DeletedOnly</c> and <c>MaybeDeleted</c> scopes of one that is.
+    ///     </para>
+    ///     <para>
+    ///         Nothing to add when the queried type <em>is</em> the hierarchy's base: every row in the
+    ///         table is one.
+    ///     </para>
+    /// </remarks>
+    private static void ApplyHierarchyFilter(Statement statement, DocumentMapping mapping, Type queryType)
+    {
+        if (mapping.IsHierarchy && queryType != mapping.DocumentType)
+        {
+            statement.Wheres.Add(new LiteralSqlFragment(
+                DocumentHierarchy.FilterSqlFor(mapping, queryType)));
+        }
     }
 
     /// <summary>
@@ -231,9 +257,12 @@ public class FisherQueryProvider : IQueryProvider
         switch (parser.SoftDeleteScope)
         {
             case SoftDeleteScope.LiveOnly:
-                // From the storage rather than composed here, so the implicit filter has one source
-                // and the query path cannot drift from the load path.
-                statement.Wheres.Add(storage.DefaultWhereFragment()!);
+                // SoftDelete owns the SQL, which is the same place the storage's DefaultWhereFragment
+                // reads it from — so the query path and the load path still cannot drift. Taken from
+                // there rather than from the storage because for a hierarchy sub-class that fragment is
+                // a composite, and the discriminator half is added once per statement above rather than
+                // once per soft-delete scope.
+                statement.Wheres.Add(new LiteralSqlFragment(SoftDelete.NotDeletedSql));
                 break;
 
             case SoftDeleteScope.DeletedOnly:

@@ -181,7 +181,7 @@ Not implemented yet — do not assume these work:
 - **Document storage** — `Store`/`Insert`/`Update`/`Delete`/`LoadAsync`/`LoadManyAsync`, soft delete,
   duplicated fields, user-declared indexes, numeric revisions, metadata member mapping and LINQ all
   work over Guid, string, int and long ids, in the same unit of work and transaction as event appends.
-  What is still missing: no hierarchies (fisher#17).
+  Document hierarchies work too — one table per hierarchy, keyed on a `doc_type` alias.
 - **Event rewriting** — all of it works: `OverwriteEvent` / `CompletelyReplaceEvent`, event data
   masking and stream compacting.
 
@@ -682,6 +682,54 @@ This is what makes `Duplicate` and `Index` two different things rather than near
 
 Indexes go through Weasel's migration like every other schema object, so `AutoCreate.None` is honoured
 for free and the table is not created lazily on first write.
+
+### Document hierarchies
+
+`Schema.For<TBase>().AddSubClass<TDerived>()` (fisher#17) — a base type and its sub-classes share one
+table and one identity space. `Store(derived)` and `LoadAsync<TBase>(id)` share a table,
+`Query<TBase>()` returns every sub-class as its own type, `Query<TDerived>()` narrows to one.
+
+**The discriminator is a short alias in its own `doc_type` column, not `dotnet_type`.** Worth stating
+because `dotnet_type` is already on every row and looks like the obvious candidate — it is not. It
+holds an assembly-qualified name (long, not worth indexing, brittle across an assembly rename) and is
+written by Weasel's `DocumentDotNetTypeBinder`, which takes no alias resolver. The binder built for
+this job is `DocumentDocTypeBinder`, and it does. Both siblings keep the columns separate.
+
+Weasel.Storage already had the rest: `DocumentStorageDescriptor.ResolveDocumentType`,
+`docTypeReadIndex`, and a full set of `Hierarchical*ClosedShape*Selector` types. Fisher supplies the
+mapping, the column, and the sub-class storage.
+
+- **A sub-class must never acquire a mapping of its own**, and `DocumentSchema.BaseMappingFor` is what
+  stops it — checked *before* the mapping cache, not after. Without it `Store(derived)` reaches
+  `MappingFor(typeof(Derived))`, creates a mapping, and writes to `fi_doc_derived`: the sub-class is
+  registered, carries an alias, and still lands in the wrong table. Verified by removing it — all
+  three sub-classes get tables of their own.
+- **`SubClassFisherStorage` wraps the base's storage rather than being built from the mapping.** The
+  descriptor's selectors materialise a row as whatever its discriminator says, which only type-checks
+  against the base; the wrapper downcasts through `CastingSelector`.
+- **Writes delegate untouched.** `DocumentDocTypeBinder` resolves the alias from `document.GetType()`,
+  so the base's write operations already stamp a derived instance with its own alias.
+- **The two narrowing paths are different on purpose.** A query is narrowed in SQL; a load by id is
+  narrowed in memory, by testing what came back. A load names one row and the id is unique across the
+  hierarchy, so a discriminator predicate would only turn "that id is a different sub-class" into the
+  same answer as "no such id".
+- **The query filter is added once per statement, not inside `FilterDocuments`.** Two ways to get this
+  wrong, and both were hit: composing it into `FilterDocuments` repeats it per caller predicate *and*
+  omits it entirely from a query with none; hanging it off the soft-delete branch omits it for a type
+  that is not soft-deleted and for the `DeletedOnly` / `MaybeDeleted` scopes of one that is. It is an
+  `in` over the aliases at or below the queried type rather than an equality, because a sub-class may
+  have sub-classes — Polecat emits a bare equality, correct only two levels deep.
+- **A sub-class's default alias follows `DocumentMapping.Alias`'s convention, not snake case.** The
+  base type's discriminator alias *is* its `Alias` — the one the table is named from — so a sub-class
+  spelled differently would put two conventions in one column.
+- **An unknown alias throws rather than falling back to the base.** A row written by a deployment that
+  knew a sub-class this one does not is a real configuration gap; deserializing it as the base hands
+  back an object quietly missing whatever the sub-class added. Deliberately the opposite of the event
+  reads' policy, which skip an unresolvable `dotnet_type` — an event store must stay readable by a
+  deployment that does not know every event, where a document load has one right answer.
+- **An abstract or interface base is a hierarchy with nothing registered**, so its table carries the
+  column from the first migration. Adding it later would leave the rows already written with no
+  discriminator to read.
 
 ### Numeric revisions
 

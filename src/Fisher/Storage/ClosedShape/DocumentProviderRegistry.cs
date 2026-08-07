@@ -29,7 +29,47 @@ internal class DocumentProviderRegistry : IProviderGraph
     }
 
     public DocumentProvider<T> StorageFor<T>() where T : notnull
-        => (DocumentProvider<T>)_providers.GetOrAdd(typeof(T), _ => BuildProviderFor(_options.Schema.For<T>().Mapping));
+        => (DocumentProvider<T>)_providers.GetOrAdd(typeof(T), _ =>
+        {
+            var mapping = _options.Schema.MappingFor(typeof(T));
+
+            // A registered sub-class resolves to its hierarchy's mapping, which is how the whole
+            // hierarchy shares one table. Its storage wraps the base's rather than being built from the
+            // mapping directly: the descriptor's selectors materialise each row as whatever its
+            // discriminator says, which only type-checks against the base.
+            return mapping.DocumentType != typeof(T)
+                ? BuildSubClassProviderFor<T>(mapping)
+                : BuildProviderFor(mapping);
+        });
+
+    /// <summary>
+    ///     Wrap the hierarchy base's provider so every flavor narrows to one sub-class.
+    /// </summary>
+    /// <remarks>
+    ///     Reflection because the base type and the identity type are both runtime values here — the
+    ///     caller named only the sub-class. Once per sub-class per store; the result is cached by the
+    ///     dictionary this is called from.
+    /// </remarks>
+    private object BuildSubClassProviderFor<T>(DocumentMapping mapping) where T : notnull
+        => typeof(DocumentProviderRegistry)
+            .GetMethod(nameof(BuildTypedSubClassProvider), BindingFlags.NonPublic | BindingFlags.Instance)!
+            .MakeGenericMethod(typeof(T), mapping.DocumentType, mapping.StoredIdType)
+            .Invoke(this, [mapping])!;
+
+    private DocumentProvider<TDoc> BuildTypedSubClassProvider<TDoc, TBase, TId>(DocumentMapping mapping)
+        where TDoc : notnull, TBase
+        where TBase : notnull
+        where TId : notnull
+    {
+        var parent = StorageFor<TBase>();
+
+        SubClassFisherStorage<TDoc, TBase, TId> Wrap(IDocumentStorage<TBase> storage)
+            => new((IDocumentStorage<TBase, TId>)storage, mapping);
+
+        return new DocumentProvider<TDoc>(
+            Wrap(parent.QueryOnly), Wrap(parent.Lightweight), Wrap(parent.IdentityMap),
+            Wrap(parent.DirtyTracking));
+    }
 
     public void Append<T>(DocumentProvider<T> provider) where T : notnull => _providers[typeof(T)] = provider;
 

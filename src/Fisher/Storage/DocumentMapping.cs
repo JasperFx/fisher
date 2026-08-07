@@ -183,6 +183,94 @@ public class DocumentMapping
     internal List<DocumentIndex> Indexes { get; } = [];
 
     /// <summary>
+    ///     Sub-classes registered against this type, making it a hierarchy.
+    /// </summary>
+    internal List<SubClassMapping> SubClasses { get; } = [];
+
+    /// <summary>
+    ///     Whether rows of this type carry a <c>doc_type</c> discriminator.
+    /// </summary>
+    /// <remarks>
+    ///     An abstract or interface document type counts even with nothing registered yet: it can never
+    ///     be the concrete type of a row, so the column has to be there from the first migration —
+    ///     adding it later would leave the rows already written with no discriminator to read.
+    /// </remarks>
+    internal bool IsHierarchy
+        => SubClasses.Count > 0 || DocumentType.IsAbstract || DocumentType.IsInterface;
+
+    /// <summary>The discriminator alias standing for a runtime type.</summary>
+    internal string AliasFor(Type subclassType)
+    {
+        if (subclassType == DocumentType)
+        {
+            return Alias;
+        }
+
+        var sub = SubClasses.FirstOrDefault(x => x.DocumentType == subclassType);
+
+        return sub?.Alias ?? throw new ArgumentOutOfRangeException(nameof(subclassType),
+            $"'{subclassType.Name}' is not a registered subclass of '{DocumentType.Name}'. Register it "
+            + $"with Schema.For<{DocumentType.Name}>().AddSubClass<{subclassType.Name}>().");
+    }
+
+    /// <summary>The runtime type a stored discriminator alias stands for.</summary>
+    /// <remarks>
+    ///     Throws rather than falling back to the base type for an unknown alias. A row written by a
+    ///     deployment that knew a sub-class this one does not is a real gap in configuration, and
+    ///     deserializing it as the base would hand back an object quietly missing whatever the sub-class
+    ///     added. Deliberately the opposite of the event reads' policy, which skip an unresolvable
+    ///     <c>dotnet_type</c> so a deployment stays able to read events it does not know — an event
+    ///     store must remain readable, where a document load has one right answer and either has it or
+    ///     does not.
+    /// </remarks>
+    internal Type TypeFor(string alias)
+    {
+        if (string.Equals(alias, Alias, StringComparison.OrdinalIgnoreCase))
+        {
+            return DocumentType;
+        }
+
+        var sub = SubClasses.FirstOrDefault(
+            x => string.Equals(x.Alias, alias, StringComparison.OrdinalIgnoreCase));
+
+        return sub?.DocumentType ?? throw new ArgumentOutOfRangeException(nameof(alias),
+            $"Unknown doc_type alias '{alias}' on a row of '{DocumentType.Name}'. It was written by a "
+            + "deployment that had a subclass registered which this one does not.");
+    }
+
+    /// <summary>Register a sub-class, making this type a hierarchy.</summary>
+    internal SubClassMapping AddSubClass(Type subclassType, string? alias = null)
+    {
+        if (!DocumentType.IsAssignableFrom(subclassType))
+        {
+            throw new ArgumentException(
+                $"'{subclassType.Name}' does not inherit from '{DocumentType.Name}'.", nameof(subclassType));
+        }
+
+        var existing = SubClasses.FirstOrDefault(x => x.DocumentType == subclassType);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var name = alias ?? SubClassMapping.DefaultAliasFor(subclassType);
+
+        if (string.Equals(name, Alias, StringComparison.OrdinalIgnoreCase)
+            || SubClasses.Any(x => string.Equals(x.Alias, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException(
+                $"'{DocumentType.Name}' already uses the doc_type alias '{name}'. Give one of the two "
+                + "an explicit alias — the alias is what is stored, so a collision would make two types "
+                + "indistinguishable coming back out.");
+        }
+
+        var mapping = new SubClassMapping(subclassType, name);
+        SubClasses.Add(mapping);
+
+        return mapping;
+    }
+
+    /// <summary>
     ///     Register an index over one or more member chains.
     /// </summary>
     /// <remarks>
@@ -422,7 +510,7 @@ public class DocumentMapping
     /// <summary>
     ///     <c>User</c> becomes <c>user</c>; <c>Wrapper&lt;User&gt;</c> becomes <c>wrapper_of_user</c>.
     /// </summary>
-    private static string DefaultAliasFor(Type documentType)
+    internal static string DefaultAliasFor(Type documentType)
     {
         if (!documentType.IsGenericType)
         {
@@ -469,7 +557,30 @@ public class DocumentSchema
 
     /// <inheritdoc cref="For{T}" />
     public DocumentMapping MappingFor(Type documentType)
-        => _mappings.GetOrAdd(documentType, type => new DocumentMapping(type, _options));
+        => BaseMappingFor(documentType)
+           ?? _mappings.GetOrAdd(documentType, type => new DocumentMapping(type, _options));
+
+    /// <summary>
+    ///     The hierarchy mapping a type is a registered sub-class of, or null when it is not one.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         This is what makes a hierarchy share one table. Without it <c>Store(derived)</c> would
+    ///         reach <c>MappingFor(typeof(Derived))</c>, create a mapping of its own, and write to
+    ///         <c>fi_doc_derived</c> — so the sub-class would be registered, carry an alias, and still
+    ///         land in the wrong table. It is checked before the cache rather than after, because a
+    ///         sub-class must never acquire a mapping of its own.
+    ///     </para>
+    ///     <para>
+    ///         Deliberately a scan rather than a second index. Hierarchies are few and this runs once
+    ///         per type per store — <c>DocumentProviderRegistry</c> caches the provider it builds from
+    ///         the answer.
+    ///     </para>
+    /// </remarks>
+    internal DocumentMapping? BaseMappingFor(Type documentType)
+        => _mappings.Values.FirstOrDefault(mapping =>
+            mapping.DocumentType != documentType
+            && mapping.SubClasses.Any(sub => sub.DocumentType == documentType));
 
     /// <summary>
     ///     Every document mapping registered so far.

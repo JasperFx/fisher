@@ -57,8 +57,25 @@ internal static class SqliteDocumentStorageDescriptorBuilder
         DocumentVersionBinder<TDoc>? versionBinder = null;
         DocumentRevisionBinder<TDoc>? revisionBinder = null;
         var versionReadIndex = -1;
+        var docTypeReadIndex = -1;
+        Func<string, Type>? resolveDocumentType = null;
 
         mapping.AssertConcurrencyIsCoherent();
+
+        // The hierarchy discriminator, written on every save and read so a selector can materialise the
+        // row as its own sub-class. Added FIRST among the metadata binders because the hierarchical
+        // selectors dispatch on it before reading anything else.
+        if (mapping.IsHierarchy)
+        {
+            resolveDocumentType = mapping.TypeFor;
+
+            var docTypeBinder = new DocumentDocTypeBinder<TDoc>(
+                DocumentHierarchy.DocTypeColumn, dialect, mapping.AliasFor);
+
+            writeBinders.Add(docTypeBinder);
+            docTypeReadIndex = readBinders.Count;
+            readBinders.Add(docTypeBinder);
+        }
 
         // guid_version carries optimistic concurrency in its own column so a version check never has
         // to parse the JSON body. Read back as well as written: the session's version tracker needs
@@ -151,8 +168,8 @@ internal static class SqliteDocumentStorageDescriptorBuilder
             versionBinder: versionBinder,
             revisionBinder: revisionBinder,
             versionReadIndex: versionReadIndex,
-            resolveDocumentType: null,
-            docTypeReadIndex: -1,
+            resolveDocumentType: resolveDocumentType,
+            docTypeReadIndex: docTypeReadIndex,
             tableName: mapping.TableName.QualifiedName);
     }
 
