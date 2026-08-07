@@ -68,7 +68,61 @@ internal class DocumentTable : Table
         }
 
         AddDuplicatedFields(mapping);
+        AddDeclaredIndexes(mapping);
     }
+
+    /// <summary>
+    ///     One SQLite expression index per user-declared index.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The indexed expression is the member's <c>TypedLocator</c>, from the same
+    ///         <see cref="Linq.Members.MemberFactory" /> a query goes through — see
+    ///         <see cref="DocumentIndex" /> for why building it here instead is the classic way to get an
+    ///         index that is created, never used, and never wrong enough to notice.
+    ///     </para>
+    ///     <para>
+    ///         A member that is also duplicated resolves to a <c>DuplicatedMember</c> whose
+    ///         <c>TypedLocator</c> is the generated column's name, so the index lands on the column. That
+    ///         is correct rather than special-cased: the locator is what the query emits either way.
+    ///     </para>
+    /// </remarks>
+    private void AddDeclaredIndexes(DocumentMapping mapping)
+    {
+        if (mapping.Indexes.Count == 0)
+        {
+            return;
+        }
+
+        var members = new Linq.Members.MemberFactory(mapping.StoreOptions, mapping);
+
+        foreach (var declared in mapping.Indexes)
+        {
+            var expressions = declared.MemberChains
+                .Select(chain => members.ResolveMember(chain).TypedLocator);
+
+            // Several expressions render as one comma-separated list, which Weasel wraps in the
+            // parentheses a composite index needs.
+            Indexes.Add(new Weasel.Sqlite.Tables.IndexDefinition(
+                declared.Name ?? DefaultIndexName(declared.DefaultNameSuffix()))
+            {
+                Expression = string.Join(", ", expressions),
+                IsUnique = declared.IsUnique
+            });
+        }
+    }
+
+    /// <summary>
+    ///     <c>idx_&lt;table&gt;_&lt;members&gt;</c>, which is the shape Weasel gives the index it creates
+    ///     for a duplicated column.
+    /// </summary>
+    /// <remarks>
+    ///     Weasel.Sqlite's <c>DbObjectName.ToIndexName</c> is <see langword="internal" />, so the formula
+    ///     is repeated rather than called. It is repeated on purpose: a user-declared index and a
+    ///     duplicated-field index should be indistinguishable in <c>sqlite_master</c>, because which
+    ///     mechanism created one is Fisher's business and not the reader's.
+    /// </remarks>
+    private string DefaultIndexName(string suffix) => $"idx_{Identifier.Name}_{suffix}";
 
     /// <summary>
     ///     A <c>VIRTUAL</c> generated column per duplicated field, and an index over it unless the

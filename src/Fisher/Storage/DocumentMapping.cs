@@ -153,6 +153,58 @@ public class DocumentMapping
     internal List<DuplicatedField> DuplicatedFields { get; } = [];
 
     /// <summary>
+    ///     User-declared indexes over members that were <em>not</em> duplicated. Registered through
+    ///     <see cref="DocumentMappingExpression{T}.Index{TValue}" />.
+    /// </summary>
+    internal List<DocumentIndex> Indexes { get; } = [];
+
+    /// <summary>
+    ///     Register an index over one or more member chains.
+    /// </summary>
+    /// <remarks>
+    ///     Registering the same index twice is idempotent rather than an error, so a configuration
+    ///     lambda that runs a registration helper more than once does not fail — the same discipline
+    ///     <see cref="Duplicate" /> follows. Two <em>different</em> member sets landing on one index
+    ///     name is a real mistake and says so.
+    /// </remarks>
+    internal DocumentIndex Index(MemberInfo[][] memberChains, string? name, bool isUnique)
+    {
+        if (memberChains.Length == 0)
+        {
+            throw new ArgumentException("An index needs at least one member.", nameof(memberChains));
+        }
+
+        if (Array.Exists(memberChains, chain => chain.Length == 0))
+        {
+            throw new ArgumentException("An indexed member chain cannot be empty.", nameof(memberChains));
+        }
+
+        var index = new DocumentIndex(memberChains, name, isUnique);
+
+        var existing = Indexes.FirstOrDefault(x =>
+            string.Equals(x.Name ?? x.DefaultNameSuffix(), index.Name ?? index.DefaultNameSuffix(),
+                StringComparison.OrdinalIgnoreCase));
+
+        if (existing is not null)
+        {
+            if (!existing.MemberNames.SequenceEqual(index.MemberNames, StringComparer.Ordinal)
+                || existing.IsUnique != index.IsUnique)
+            {
+                throw new InvalidOperationException(
+                    $"'{DocumentType.Name}' already declares an index named "
+                    + $"'{existing.Name ?? existing.DefaultNameSuffix()}' over "
+                    + $"{string.Join(", ", existing.MemberNames)}. Give one of the two an explicit name.");
+            }
+
+            return existing;
+        }
+
+        Indexes.Add(index);
+
+        return index;
+    }
+
+    /// <summary>
     ///     Register a member as a duplicated field.
     /// </summary>
     /// <remarks>

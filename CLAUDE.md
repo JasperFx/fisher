@@ -167,6 +167,8 @@ Working, with tests:
   operators
 - **Duplicated fields** — `Schema.For<T>().Duplicate(x => x.Name)`, as an indexed SQLite `VIRTUAL`
   generated column, so a predicate against that member is served by an index
+- **User-declared indexes** — `Schema.For<T>().Index(x => x.Name)` / `.UniqueIndex(...)`, as SQLite
+  expression indexes that add no column at all
 - **Document metadata member mapping** — `guid_version`, `last_modified`, `is_deleted` and
   `deleted_at` projected back onto members of the document, by interface, attribute or DSL
 - **Strong-typed identities** — a wrapper around any of the four id types, as an aggregate's identity
@@ -644,6 +646,43 @@ CREATE TABLE, long after the line that caused it.
 it — the same reason Marten has `MartenRegistry.DocumentMappingExpression<T>`. The mapping is a
 property on it; only what needs the type parameter lives on the expression.
 
+### User-declared indexes
+
+`Schema.For<T>().Index(x => x.Name)` / `.UniqueIndex(...)` (fisher#16) — an index over a member,
+created as a **SQLite expression index** rather than as an index over a column. That is the whole
+divergence, and it makes the feature cheaper on Fisher than on either sibling: Marten needs a computed
+index and Polecat a `JSON_VALUE` index, both of which materialise something first, while SQLite has
+indexed expressions (since 3.9, restricted to deterministic ones — `json_extract` qualifies). So the
+member is indexed where it lives and the table's shape does not change.
+
+This is what makes `Duplicate` and `Index` two different things rather than near-duplicates:
+
+- `Duplicate` materialises a `VIRTUAL` generated column **and** indexes it — for when the member
+  should also be a column something else can name.
+- `Index` indexes the expression only. No column, no affinity to declare, nothing added to the table.
+
+- **The indexed expression is the member's `TypedLocator`, from the same `MemberFactory` a query goes
+  through.** SQLite's planner uses an expression index only when the query's expression matches the
+  index's, so an index built from a hand-written `json_extract` is created without error, never used,
+  and reports nothing. A timestamp is the case that proves it: its locator is fisher#1's `strftime`
+  wrapper, so a bare `json_extract` index would not serve the range predicates a timestamp index
+  exists for. Verified by swapping `TypedLocator` for `RawLocator` — the index is still created and
+  `the_planner_uses_a_declared_index_for_a_timestamp_range` fails.
+- **Indexing a member that is also duplicated indexes the generated column**, because a
+  `DuplicatedMember`'s `TypedLocator` *is* the column name. Not special-cased; it falls out of reading
+  the locator. The same swap makes this one regress to `json_extract` too, which
+  `indexing_a_duplicated_member_indexes_the_column` catches.
+- **The index name mirrors Weasel's own formula** — `idx_<table>_<members>` — repeated rather than
+  called, because `DbObjectName.ToIndexName` is internal to Weasel.Sqlite. Deliberately
+  indistinguishable from a duplicated field's index in `sqlite_master`: which mechanism created one is
+  Fisher's business, not the reader's.
+- **A `UNIQUE` index does not constrain documents missing the member.** `json_extract` yields SQL NULL
+  for an absent key and SQLite treats NULLs in a unique index as distinct. Same as both siblings, and
+  pinned because it is the kind of thing a reader assumes the opposite of.
+
+Indexes go through Weasel's migration like every other schema object, so `AutoCreate.None` is honoured
+for free and the table is not created lazily on first write.
+
 ### Document metadata member mapping
 
 `Storage/Metadata/` — which of a document's own members Fisher's metadata columns are projected onto
@@ -782,7 +821,7 @@ next `Store` would skip its migration and write to nothing.
   every message. That is the end state, not a gap — fisher#8 was closed wontfix. Delivery is a bus
   integration's job here as it is on both siblings.
 - Multi-tenancy beyond a tenant id column, subscriptions, DI registration.
-- Natural keys, bulk insert, user-declared indexes over unduplicated members.
+- Natural keys and bulk insert.
 
 ### The `IEventStoreOperations` surface
 

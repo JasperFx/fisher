@@ -119,6 +119,73 @@ public class DocumentMappingExpression<T> where T : notnull
     }
 
     /// <summary>
+    ///     Index a member where it lives, without lifting it into a column.
+    /// </summary>
+    /// <param name="member">The member, e.g. <c>x =&gt; x.Name</c> or <c>x =&gt; x.Address.City</c>.</param>
+    /// <param name="name">An explicit index name. Defaults to one derived from the member chain.</param>
+    /// <param name="unique">Whether to create a <c>UNIQUE</c> index.</param>
+    /// <remarks>
+    ///     <para>
+    ///         A SQLite expression index over the member's <c>json_extract</c> locator — so unlike
+    ///         <see cref="Duplicate{TValue}" /> this adds no column and does not change the table's
+    ///         shape. Prefer it when all you want is the index; prefer <c>Duplicate</c> when the member
+    ///         should also be a column something else can name.
+    ///     </para>
+    ///     <para>
+    ///         Indexing a member that is <em>also</em> duplicated indexes the generated column rather
+    ///         than the expression, because that is what a query against it emits — but a duplicated
+    ///         field is indexed by default already, so saying both is usually redundant.
+    ///     </para>
+    /// </remarks>
+    public DocumentMappingExpression<T> Index<TValue>(Expression<Func<T, TValue>> member,
+        string? name = null, bool unique = false)
+    {
+        ArgumentNullException.ThrowIfNull(member);
+
+        Mapping.Index([ChainOf(member)], name, unique);
+        return this;
+    }
+
+    /// <summary>
+    ///     Index several members together, as one composite index in the order given.
+    /// </summary>
+    /// <remarks>
+    ///     Order matters exactly as it does for any B-tree index: SQLite can use a leading subset of the
+    ///     indexed expressions and not a trailing one.
+    /// </remarks>
+    public DocumentMappingExpression<T> Index(Expression<Func<T, object?>>[] members,
+        string? name = null, bool unique = false)
+    {
+        ArgumentNullException.ThrowIfNull(members);
+
+        if (members.Length == 0)
+        {
+            throw new ArgumentException("An index needs at least one member.", nameof(members));
+        }
+
+        Mapping.Index(Array.ConvertAll(members, ChainOf), name, unique);
+        return this;
+    }
+
+    /// <summary>
+    ///     Index a member and require its values to be distinct.
+    /// </summary>
+    /// <remarks>
+    ///     A <c>UNIQUE</c> index over a member that is absent from some documents does not constrain
+    ///     those: <c>json_extract</c> yields SQL NULL for a missing key, and SQLite treats NULLs as
+    ///     distinct from one another in a unique index. So this constrains the documents that have the
+    ///     member, which is what the equivalent does on both siblings.
+    /// </remarks>
+    public DocumentMappingExpression<T> UniqueIndex<TValue>(Expression<Func<T, TValue>> member,
+        string? name = null)
+        => Index(member, name, unique: true);
+
+    /// <inheritdoc cref="UniqueIndex{TValue}(Expression{Func{T, TValue}}, string?)" />
+    public DocumentMappingExpression<T> UniqueIndex(Expression<Func<T, object?>>[] members,
+        string? name = null)
+        => Index(members, name, unique: true);
+
+    /// <summary>
     ///     Walk a member-access lambda back to its parameter, outermost member last.
     /// </summary>
     /// <remarks>
