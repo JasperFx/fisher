@@ -635,6 +635,48 @@ Three restrictions, each refused by name:
 One `Select` per query; a second would have to project members of the first's result, which is not a
 document and has no locators.
 
+**A NULL column becomes the target type's default, not a null.** `json_extract` yields SQL NULL for an
+absent key and an aggregate over an empty group yields NULL too, and the compiled projection *unboxes*
+each value to its declared type — so a null reaching a non-nullable value type is a
+`NullReferenceException` thrown from generated code, with nothing in the message to say which column
+or why. Defaulting matches what deserializing the document would have produced for an absent key, and
+what the aggregate terminals already return over no rows. Found while building fisher#24, and it
+affected both projection paths; pinned by `a_null_column_becomes_the_default_rather_than_throwing` in
+both test classes.
+
+### LINQ grouping
+
+`GroupBy`, a `Select` over the group, and `HAVING` (fisher#24). `GroupProjection` uses the same
+compiled rewrite as `SelectProjection`; what differs is what counts as a column — over a group there is
+no document parameter, only `g.Key` and aggregates over the group. `GroupingTranslator` turns those
+into SQL and is shared with the HAVING parser, so the two cannot disagree about what `g.Count()` means.
+`RowProjection` is the common shape both projections reduce to, so the provider has one projected read
+path rather than two that would drift.
+
+**The trap this feature was expected to have does not exist.** SQLite permits a bare non-aggregated
+column in a `GROUP BY` select and picks an arbitrary row for it, where T-SQL rejects the query — so a
+query that errors on Polecat would silently return arbitrary data here, and the plan was to validate
+it in the parser. It is unreachable through this API: the `Select`'s parameter is the *grouping*, so
+there is no ungrouped member in scope to select. The type system does the validation for free, and
+that is worth knowing before someone adds a validator for a case that cannot arise.
+
+- **Where a `Where` sits decides what it filters.** Before the `GroupBy` it is a `WHERE` over rows;
+  after it, a `HAVING` over groups. The chain is walked source-outward, so which one it is falls out of
+  whether the key has been seen yet — no lookahead.
+- **The HAVING parser is deliberately narrower than `WhereClauseParser`**: a comparison between a
+  grouping expression and a constant, composed with `&&`/`||`/`!`, with reversed operands flipped
+  (`1 < g.Count()` is `count(*) > 1`). Widening it would mean answering questions about individual
+  rows from a clause that runs after they have been collapsed.
+- **Aggregates over a group reuse fisher#22's two guards**, for the same reasons — `sum()` over text
+  returns 0 rather than failing, and a string-stored enum does not order.
+- **Ordering a grouped query is by the key or an aggregate**, which is the reason grouping is usually
+  reached for (`OrderByDescending(g => g.Count())`). It must come *before* the `Select` in the chain,
+  because after it the element is the projected type; after a single-value grouped `Select`,
+  `OrderBy(x => x)` works the same way it does for an ordinary projection.
+- **`GroupBy` without a `Select` is refused**, rather than handing back `IGrouping` instances — that
+  would mean reading every row of every group, which is the opposite of what grouping in SQL is for.
+  The element- and result-selector overloads are refused for the same reason.
+
 ### LINQ aggregates and `Last`
 
 `SumAsync` / `MinAsync` / `MaxAsync` / `AverageAsync`, `LastAsync` / `LastOrDefaultAsync`, and the

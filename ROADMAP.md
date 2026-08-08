@@ -3,8 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **twenty-six open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
-**All 28 compliance suites green.** 776 tests green on net9.0
+Status: **twenty-five open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
+**All 28 compliance suites green.** 792 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
 Twenty-eight of those twenty-nine came out of a file-by-file comparison against Polecat on 2026-08-08,
@@ -14,8 +14,9 @@ which filed [#22](https://github.com/JasperFx/fisher/issues/22) through
 never will. It is context; the issues are the tracking.
 [#45](https://github.com/JasperFx/fisher/issues/45),
 [#34](https://github.com/JasperFx/fisher/issues/34),
-[#22](https://github.com/JasperFx/fisher/issues/22) and
-[#23](https://github.com/JasperFx/fisher/issues/23) are closed; the rest are being worked one at a time.
+[#22](https://github.com/JasperFx/fisher/issues/22),
+[#23](https://github.com/JasperFx/fisher/issues/23) and
+[#24](https://github.com/JasperFx/fisher/issues/24) are closed; the rest are being worked one at a time.
 
 ## The destination
 
@@ -147,6 +148,7 @@ if something is deferred, it is in the list above.
 | Raw SQL (fisher#34) | `QueueSqlCommand` in the unit of work, `session.AdvancedSql` for typed reads, and the three parameter conversions SQLite needs |
 | LINQ aggregates (fisher#22) | `Sum`/`Min`/`Max`/`Average`, `Last`, and the predicate overloads; no parser change, and three explicit result conversions `Convert.ChangeType` cannot do |
 | LINQ projections (fisher#23) | `Select` as a compiled rewrite, `Distinct` over a projection, `DistinctBy` over documents through `row_number()`; the provider now splits source type from result type |
+| LINQ grouping (fisher#24) | `GroupBy`, a `Select` over the group, `HAVING` from a `Where` after it, and ordering by an aggregate; the expected lax-GROUP-BY hazard is unreachable through the API |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -308,7 +310,9 @@ rather than by size. Full rationale per issue; [polecat-gaps.md](polecat-gaps.md
 (**done**; it needed no parser change at all, because the terminal extensions take the selector as an
 argument and it never reaches the expression tree), then
 ~~[#23](https://github.com/JasperFx/fisher/issues/23) `Select` projections~~ (**done**), then
-[#24](https://github.com/JasperFx/fisher/issues/24) `GroupBy` on top of both.
+~~[#24](https://github.com/JasperFx/fisher/issues/24) `GroupBy`~~ (**done**; the lax-GROUP-BY hazard
+this file predicted turned out to be unreachable, because a grouped `Select`'s parameter is the
+grouping rather than the document).
 [#26](https://github.com/JasperFx/fisher/issues/26)'s marker operators are independent and mostly
 small. [#25](https://github.com/JasperFx/fisher/issues/25) joins and
 [#27](https://github.com/JasperFx/fisher/issues/27) cursor paging are the two places SQLite is the

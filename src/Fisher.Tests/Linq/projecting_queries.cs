@@ -287,6 +287,23 @@ public class projecting_queries : IAsyncLifetime
         exception.Message.ShouldContain("one Select");
     }
 
+    /// <summary>
+    ///     <c>json_extract</c> yields SQL NULL for an absent key, and the compiled projection unboxes
+    ///     each value to its declared type — so without a default for a non-nullable value type this is
+    ///     a <see cref="NullReferenceException" /> from inside generated code, naming nothing.
+    /// </summary>
+    [Fact]
+    public async Task a_null_column_becomes_the_default_rather_than_throwing()
+    {
+        await using var session = Session();
+
+        (await session.Query<Catch>().Where(x => x.Angler == "Sam")
+            .Select(x => x.Absent).ToListAsync(Token)).ShouldBe([0]);
+
+        (await session.Query<Catch>().Where(x => x.Angler == "Sam")
+            .Select(x => new { x.Angler, x.Absent }).ToListAsync(Token))[0].Absent.ShouldBe(0);
+    }
+
     [Fact]
     public async Task a_projection_of_constants_only_is_refused()
     {
@@ -318,6 +335,10 @@ public class projecting_queries : IAsyncLifetime
         public Rating Rating { get; set; }
         public DateTimeOffset LandedAt { get; set; }
         public Water Water { get; set; } = new();
+
+        /// <summary>Never serialized, so <c>json_extract</c> yields SQL NULL for it.</summary>
+        [System.Text.Json.Serialization.JsonIgnore]
+        public int Absent { get; set; }
     }
 
     public record Summary(string Angler, int Weight);

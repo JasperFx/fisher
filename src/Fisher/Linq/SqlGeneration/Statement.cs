@@ -92,6 +92,15 @@ internal class Statement
     /// </remarks>
     public bool IsDistinct { get; set; }
 
+    /// <summary>The <c>GROUP BY</c> key expression, or null.</summary>
+    public string? GroupBy { get; set; }
+
+    /// <summary>
+    ///     <c>HAVING</c> terms, ANDed. Separate from <see cref="Wheres" /> because they run after the
+    ///     rows have been collapsed, which is the whole distinction.
+    /// </summary>
+    public List<ISqlFragment> Havings { get; } = [];
+
     private void ApplyInner(ICommandBuilder builder)
     {
         builder.Append("select ");
@@ -116,6 +125,27 @@ internal class Statement
         }
 
         AppendWheres(builder);
+
+        if (GroupBy is not null)
+        {
+            builder.Append(" group by ");
+            builder.Append(GroupBy);
+        }
+
+        if (Havings.Count > 0)
+        {
+            builder.Append(" having ");
+
+            for (var i = 0; i < Havings.Count; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append(" and ");
+                }
+
+                Havings[i].Apply(builder);
+            }
+        }
 
         if (OrderBys.Count > 0)
         {

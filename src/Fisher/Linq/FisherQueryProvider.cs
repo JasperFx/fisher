@@ -88,21 +88,21 @@ public class FisherQueryProvider : IQueryProvider
     }
 
     private async Task<IReadOnlyList<T>> ProjectListAsync<T>(
-        (Statement Statement, SelectProjection Projection) projected, CancellationToken token)
+        (Statement Statement, RowProjection Projection) projected, CancellationToken token)
         where T : notnull
     {
         var results = new List<T>();
 
         await using var reader = await ExecuteReaderAsync(projected.Statement, token).ConfigureAwait(false);
 
-        var values = new object?[projected.Projection.Locators.Length];
+        var values = new object?[projected.Projection.Columns.Length];
 
         while (await reader.ReadAsync(token).ConfigureAwait(false))
         {
             for (var i = 0; i < values.Length; i++)
             {
                 values[i] = reader.IsDBNull(i)
-                    ? null
+                    ? DefaultFor(projected.Projection.ColumnTypes[i])
                     : CoerceTo(reader.GetValue(i), projected.Projection.ColumnTypes[i]);
             }
 
@@ -176,7 +176,7 @@ public class FisherQueryProvider : IQueryProvider
         // point of the count — so the projection becomes a subquery rather than having its select
         // list replaced. `select count(*) from (select distinct …)` is the only shape that answers
         // "how many distinct values" correctly.
-        if (parser.Projection is not null)
+        if (RowProjection.For(parser) is not null)
         {
             return Convert.ToInt64(await ExecuteScalarAsync(
                 new Statement { Subquery = statement, SelectColumns = "count(*)" }, token)
@@ -263,7 +263,7 @@ public class FisherQueryProvider : IQueryProvider
     }
 
     private async Task<T?> LastProjectedAsync<T>(
-        (Statement Statement, SelectProjection Projection) projected, bool required, CancellationToken token)
+        (Statement Statement, RowProjection Projection) projected, bool required, CancellationToken token)
         where T : notnull
     {
         if (projected.Statement.OrderBys.Count == 0)
@@ -464,6 +464,29 @@ public class FisherQueryProvider : IQueryProvider
     }
 
     /// <summary>
+    ///     What a NULL column becomes for a projection's target type.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         A projected column is NULL more often than it looks: <c>json_extract</c> yields NULL for
+    ///         an absent key, and <c>sum</c>/<c>min</c>/<c>max</c>/<c>avg</c> over an empty group yield
+    ///         NULL too. The projection's compiled body unboxes each value to the member's declared
+    ///         type, and unboxing a null to a non-nullable value type is a
+    ///         <see cref="NullReferenceException" /> from inside generated code — with nothing in the
+    ///         message to say which column or why.
+    ///     </para>
+    ///     <para>
+    ///         So a value type gets its default, which is also what deserializing the document would
+    ///         have produced for an absent key, and what the aggregate terminals already return over no
+    ///         rows. A reference type stays null.
+    ///     </para>
+    /// </remarks>
+    private static object? DefaultFor(Type type)
+        => type.IsValueType && Nullable.GetUnderlyingType(type) is null
+            ? Activator.CreateInstance(type)
+            : null;
+
+    /// <summary>
     ///     The same conversions, for a column type only known at runtime — what a
     ///     <see cref="SelectProjection" /> reads each of its columns through.
     /// </summary>
@@ -557,18 +580,18 @@ public class FisherQueryProvider : IQueryProvider
     ///     The statement and the projection for a projected query, or null when the query returns
     ///     documents.
     /// </summary>
-    private (Statement Statement, SelectProjection Projection)? ProjectionFor(Expression expression)
+    private (Statement Statement, RowProjection Projection)? ProjectionFor(Expression expression)
     {
         var (statement, parser, _) = BuildStatement(SourceTypeFor(expression), expression);
 
-        return parser.Projection is null ? null : (statement, parser.Projection);
+        return RowProjection.For(parser) is { } projection ? (statement, projection) : null;
     }
 
     private (Statement Statement, ISelector<T> Selector) Build<T>(Expression expression) where T : notnull
     {
         var (statement, parser, selectClause) = BuildStatement(typeof(T), expression);
 
-        if (parser.Projection is not null)
+        if (RowProjection.For(parser) is not null)
         {
             throw new BadLinqExpressionException(
                 $"This query projects with Select, so it does not return {typeof(T).Name} documents.");
@@ -604,9 +627,10 @@ public class FisherQueryProvider : IQueryProvider
         var statement = new Statement
         {
             FromTable = selectClause.FromObject,
-            SelectColumns = parser.Projection is null
-                ? string.Join(", ", selectClause.SelectFields())
-                : string.Join(", ", parser.Projection.Locators),
+            SelectColumns = RowProjection.For(parser) is { } projection
+                ? string.Join(", ", projection.Columns)
+                : string.Join(", ", selectClause.SelectFields()),
+            GroupBy = parser.GroupByLocator,
             Limit = parser.Limit,
             Offset = parser.Offset
         };
@@ -619,6 +643,8 @@ public class FisherQueryProvider : IQueryProvider
         {
             statement.Wheres.Add(storage.FilterDocuments(where, _session));
         }
+
+        statement.Havings.AddRange(parser.Havings);
 
         ApplyHierarchyFilter(statement, mapping, sourceType);
         ApplySoftDeleteFilters(statement, parser, storage, mapping);
@@ -649,7 +675,7 @@ public class FisherQueryProvider : IQueryProvider
     {
         if (parser.IsDistinct)
         {
-            if (parser.Projection is null)
+            if (RowProjection.For(parser) is null)
             {
                 throw new BadLinqExpressionException(
                     "Distinct() requires a Select. Over whole documents it would compare serialized JSON "

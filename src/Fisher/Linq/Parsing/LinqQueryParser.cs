@@ -85,6 +85,17 @@ internal class LinqQueryParser
     /// <summary>Set by <c>Distinct()</c>.</summary>
     public bool IsDistinct { get; private set; }
 
+    /// <summary>The <c>GROUP BY</c> key locator, or null when the query does not group.</summary>
+    public string? GroupByLocator { get; private set; }
+
+    /// <summary>The <c>Select</c> over the grouping — required once <c>GroupBy</c> is used.</summary>
+    public GroupProjection? GroupProjection { get; private set; }
+
+    /// <summary>The <c>HAVING</c> fragments, from any <c>Where</c> after the <c>GroupBy</c>.</summary>
+    public List<ISqlFragment> Havings { get; } = [];
+
+    private GroupingTranslator? _grouping;
+
     /// <summary>The key <c>DistinctBy</c> deduplicates on, or null.</summary>
     public string? DistinctByLocator { get; private set; }
 
@@ -110,8 +121,18 @@ internal class LinqQueryParser
     {
         switch (call.Method.Name)
         {
+            // A Where before the GroupBy filters rows; one after it filters groups. The chain is
+            // walked source-outward, so which it is falls out of whether the key has been seen yet.
+            case "Where" when _grouping is not null:
+                Havings.Add(_grouping.ParseHaving(UnwrapLambda(call).Body, UnwrapLambda(call).Parameters[0]));
+                break;
+
             case "Where":
                 Wheres.Add(_whereParser.Parse(UnwrapLambda(call).Body));
+                break;
+
+            case "GroupBy":
+                ApplyGroupBy(call);
                 break;
 
             case "OrderBy":
@@ -208,8 +229,41 @@ internal class LinqQueryParser
     ///     result, which is not a document and has no locators. Refused by name rather than producing a
     ///     confusing "no such member" from the member factory.
     /// </remarks>
+    /// <summary>
+    ///     One grouping key, resolved through the same member factory everything else uses.
+    /// </summary>
+    /// <remarks>
+    ///     Only the single-key-selector overload. <c>GroupBy(key, element)</c> and the result-selector
+    ///     overloads are refused because their element projections would have to be applied per row
+    ///     inside a group, which is the one thing a <c>GROUP BY</c> has already collapsed.
+    /// </remarks>
+    private void ApplyGroupBy(MethodCallExpression call)
+    {
+        if (call.Arguments.Count != 2)
+        {
+            throw new BadLinqExpressionException(
+                "Fisher supports GroupBy with a single key selector. The element- and result-selector "
+                + "overloads would need the individual rows of a group, which GROUP BY has collapsed.");
+        }
+
+        GroupByLocator = LocatorFor(call);
+        _grouping = new GroupingTranslator(_memberFactory, GroupByLocator);
+    }
+
     private void ApplySelect(MethodCallExpression call)
     {
+        if (_grouping is not null)
+        {
+            if (GroupProjection is not null)
+            {
+                throw new BadLinqExpressionException("Fisher supports one Select per query.");
+            }
+
+            var lambda = UnwrapLambda(call);
+            GroupProjection = GroupProjection.For(lambda, _grouping);
+            return;
+        }
+
         if (Projection is not null)
         {
             throw new BadLinqExpressionException(
@@ -259,12 +313,27 @@ internal class LinqQueryParser
     /// </remarks>
     private string OrderingLocatorFor(MethodCallExpression call)
     {
-        if (Projection is null)
+        var lambda = UnwrapLambda(call);
+
+        // Still over the grouping — the Select has not been applied yet. The ordering key is the
+        // group's key or an aggregate over it, and `OrderByDescending(g => g.Count())` is the reason
+        // grouping is usually reached for at all.
+        if (_grouping is not null && GroupProjection is null)
+        {
+            return _grouping.TryTranslate(lambda.Body, lambda.Parameters[0], out var sql)
+                ? sql
+                : throw new BadLinqExpressionException(
+                    $"Cannot order a grouped query by '{lambda.Body}'. Order by the group's key or by "
+                    + "an aggregate over it.");
+        }
+
+        var columns = GroupProjection?.Columns ?? Projection?.Locators;
+
+        if (columns is null)
         {
             return LocatorFor(call);
         }
 
-        var lambda = UnwrapLambda(call);
         var body = lambda.Body;
 
         while (body is UnaryExpression { NodeType: ExpressionType.Convert } unary)
@@ -272,15 +341,15 @@ internal class LinqQueryParser
             body = unary.Operand;
         }
 
-        if (body == lambda.Parameters[0] && Projection.Locators.Length == 1)
+        if (body == lambda.Parameters[0] && columns.Length == 1)
         {
-            return Projection.Locators[0];
+            return columns[0];
         }
 
         throw new BadLinqExpressionException(
             $"Fisher cannot order by '{lambda.Body}' after a Select. Only OrderBy(x => x) over a "
             + "single-value projection is supported; order before the Select to sort by a document "
-            + "member.");
+            + "member, or by the group's key or an aggregate.");
     }
 
     /// <summary>
