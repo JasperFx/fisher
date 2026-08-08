@@ -295,6 +295,19 @@ public class FisherQueryProvider : IQueryProvider
         return new Pagination.CursorPage<T>(items, next);
     }
 
+    /// <summary>
+    ///     The SQL this query would run, with parameter names rather than values.
+    /// </summary>
+    internal string ToSql<T>(Expression expression) where T : notnull
+    {
+        var (statement, _, _) = BuildStatement(SourceTypeFor(expression), expression);
+
+        var builder = new Weasel.Sqlite.CommandBuilder();
+        statement.Apply(builder);
+
+        return builder.Compile().CommandText;
+    }
+
     internal async Task<bool> AnyAsync<T>(Expression expression, CancellationToken token)
         where T : notnull
     {

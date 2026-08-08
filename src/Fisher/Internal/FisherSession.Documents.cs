@@ -372,4 +372,59 @@ internal partial class FisherSession
     private Task<IReadOnlyList<T>> LoadManyByIdAsync<T, TId>(TId[] ids, CancellationToken token)
         where T : class where TId : notnull
         => ((Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>()).LoadManyAsync(ids, this, token);
+
+    // ---- existence, plans and diagnostics (fisher#37) ----
+
+    public Task<bool> CheckExistsAsync<T>(Guid id, CancellationToken token = default) where T : class
+        => CheckExistsAsync<T, Guid>(id, token);
+
+    public Task<bool> CheckExistsAsync<T>(string id, CancellationToken token = default) where T : class
+        => CheckExistsAsync<T, string>(id, token);
+
+    public Task<bool> CheckExistsAsync<T>(int id, CancellationToken token = default) where T : class
+        => CheckExistsAsync<T, int>(id, token);
+
+    public Task<bool> CheckExistsAsync<T>(long id, CancellationToken token = default) where T : class
+        => CheckExistsAsync<T, long>(id, token);
+
+    /// <remarks>
+    ///     Routed through the same LINQ path <c>Query&lt;T&gt;()</c> uses rather than through a
+    ///     hand-written <c>select 1 from … where id = ?</c>. That is what makes it carry the tenant
+    ///     filter, the soft-delete filter and a hierarchy discriminator without any of them being
+    ///     restated here — the three implicit filters fisher#51 established have to be applied in one
+    ///     place, and this is a fourth caller that would otherwise have to remember all of them.
+    /// </remarks>
+    private Task<bool> CheckExistsAsync<T, TId>(TId id, CancellationToken token)
+        where T : class where TId : notnull
+    {
+        var mapping = Options.Schema.MappingFor(typeof(T));
+        var idMember = System.Linq.Expressions.Expression.PropertyOrField(
+            System.Linq.Expressions.Expression.Parameter(typeof(T), "x"), mapping.IdMember.Name);
+
+        var parameter = (System.Linq.Expressions.ParameterExpression)idMember.Expression!;
+
+        var predicate = System.Linq.Expressions.Expression.Lambda<Func<T, bool>>(
+            System.Linq.Expressions.Expression.Equal(idMember,
+                System.Linq.Expressions.Expression.Constant(id, idMember.Type)),
+            parameter);
+
+        return Linq.QueryableExtensions.AnyAsync(Query<T>().Where(predicate), token);
+    }
+
+    public Task<T> QueryByPlanAsync<T>(Batching.IQueryPlan<T> plan, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+
+        return plan.Fetch(this, token);
+    }
+
+    public string ToSql<T>(IQueryable<T> queryable) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(queryable);
+
+        return queryable.Provider is Linq.FisherQueryProvider provider
+            ? provider.ToSql<T>(queryable.Expression)
+            : throw new InvalidOperationException(
+                "ToSql only works on a query created by this session's Query<T>().");
+    }
 }

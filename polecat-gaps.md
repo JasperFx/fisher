@@ -34,7 +34,7 @@ The single largest area. Fisher's `LinqQueryParser` handles `Where`, the four or
 | ~~`AnyTenant` / `TenantIsOneOf`, `ModifiedSince` / `ModifiedBefore`, `QueryForNonStaleData`, `IsOneOf` / `In` / `IsEmpty` / `object.Equals`~~ (`CreatedSince`/`CreatedBefore` wait on [#29](https://github.com/JasperFx/fisher/issues/29)) | [#26](https://github.com/JasperFx/fisher/issues/26) **done** |
 | ~~`IPagedList` / `ToPagedListAsync`, and keyset (cursor) pagination~~ | [#27](https://github.com/JasperFx/fisher/issues/27) **done** |
 | `LoadJsonAsync`, `ToJsonArrayAsync`, `ToJsonFirstWithVersionAsync`, `StreamPagedJsonArray` | [#28](https://github.com/JasperFx/fisher/issues/28) |
-| Batched document queries, `IQueryPlan`, `CheckExistsAsync`, `ToSql` | [#37](https://github.com/JasperFx/fisher/issues/37) |
+| ~~Batched document queries, `IQueryPlan`, `CheckExistsAsync`, `ToSql`~~ | [#37](https://github.com/JasperFx/fisher/issues/37) **done** |
 
 Two of these are *cheaper* on SQLite than on either sibling and the issues say why. `GroupJoin`
 ([#25](https://github.com/JasperFx/fisher/issues/25)) is a plain join between two tables with no

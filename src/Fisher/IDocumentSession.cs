@@ -60,6 +60,41 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
     IAdvancedSql AdvancedSql { get; }
 
     /// <summary>
+    ///     Whether a document with this identity exists, without materializing it.
+    /// </summary>
+    /// <remarks>
+    ///     <c>select 1 … limit 1</c> through the storage, so it carries the same tenant, soft-delete
+    ///     and hierarchy filters <see cref="LoadAsync{T}(Guid,CancellationToken)" /> does. The
+    ///     alternative — <c>LoadAsync(id) is not null</c> — reads and deserializes a whole document to
+    ///     learn a boolean.
+    /// </remarks>
+    Task<bool> CheckExistsAsync<T>(Guid id, CancellationToken token = default) where T : class;
+
+    /// <inheritdoc cref="CheckExistsAsync{T}(Guid,CancellationToken)" />
+    Task<bool> CheckExistsAsync<T>(string id, CancellationToken token = default) where T : class;
+
+    /// <inheritdoc cref="CheckExistsAsync{T}(Guid,CancellationToken)" />
+    Task<bool> CheckExistsAsync<T>(int id, CancellationToken token = default) where T : class;
+
+    /// <inheritdoc cref="CheckExistsAsync{T}(Guid,CancellationToken)" />
+    Task<bool> CheckExistsAsync<T>(long id, CancellationToken token = default) where T : class;
+
+    /// <summary>
+    ///     Run a query plan against this session.
+    /// </summary>
+    Task<T> QueryByPlanAsync<T>(Batching.IQueryPlan<T> plan, CancellationToken token = default);
+
+    /// <summary>
+    ///     The SQL a query would run, for diagnostics.
+    /// </summary>
+    /// <remarks>
+    ///     Parameter values are not inlined — the text carries the parameter names the command would
+    ///     bind, so it is readable rather than executable. Useful in a test to assert that an index is
+    ///     reachable, or that a filter Fisher adds implicitly is actually there.
+    /// </remarks>
+    string ToSql<T>(IQueryable<T> queryable) where T : notnull;
+
+    /// <summary>
     ///     Load several documents by identity. Missing ids are absent from the result rather than
     ///     null entries, so it is not necessarily as long as the input.
     /// </summary>

@@ -1470,6 +1470,31 @@ The provider takes both the column list and the materializer from the **query-on
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,
 which is what keeps the query path's read layout aligned with `LoadAsync`'s.
 
+### Batched queries, query plans, `CheckExistsAsync` and `ToSql`
+
+fisher#37 widened the DCB-only batch into a general one and moved it from `Fisher.Events.Tags` to
+`Fisher.Batching`, since it is no longer tag-specific. **The framing in its doc comment still stands
+and should not be softened**: a batch elsewhere collapses network round trips, SQLite is embedded, and
+there are none to collapse. It exists so DCB and document code ports between the stores unchanged. The
+one property that does hold is ordering — the reads run back to back on one connection with nothing
+interleaved.
+
+- **A failing item neither stops the batch nor vanishes.** Every item runs, each task is completed or
+  faulted, and `Execute` then throws for what failed. Both halves are load-bearing: stopping at the
+  first failure leaves later items' tasks uncompleted, so a caller awaiting one *hangs* rather than
+  seeing an error; faulting only the item's task lets a caller who never awaits that particular item
+  conclude the batch succeeded. One failure rethrows as itself, several become an
+  `AggregateException` — the same rule the session's batch executor follows.
+- **`CheckExistsAsync` routes through the LINQ path**, not through a hand-written
+  `select 1 from … where id = ?`. That is what makes it carry the tenant filter, the soft-delete filter
+  and a hierarchy discriminator without restating any of them — it is a fourth caller that would
+  otherwise have to remember all three, which is exactly how fisher#51 happened.
+- **`ToSql` renders parameter names, not values**, so the text is readable rather than executable. It
+  is the cheapest way to assert that an implicit filter is actually present, which is what
+  `to_sql_shows_the_filters_fisher_adds` uses it for.
+- `QueryListPlan<T>` implements both `IQueryPlan` and `IBatchQueryPlan` from one `Query` method, which
+  is what keeps the batched and unbatched paths from drifting into two different queries with one name.
+
 ### DCB tags
 
 One `fi_event_tag_<suffix>` table per registered tag type, composite primary key leading with

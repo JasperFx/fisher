@@ -1,6 +1,7 @@
 using JasperFx.Events.Tags;
+using Fisher.Events;
 
-namespace Fisher.Events.Tags;
+namespace Fisher.Batching;
 
 /// <summary>
 ///     A set of DCB reads declared up front and run together by <see cref="Execute" />.
@@ -28,6 +29,36 @@ namespace Fisher.Events.Tags;
 /// </remarks>
 public interface IBatchedQuery
 {
+    /// <summary>Load a document by identity.</summary>
+    Task<T?> Load<T>(Guid id) where T : class;
+
+    /// <inheritdoc cref="Load{T}(Guid)" />
+    Task<T?> Load<T>(string id) where T : class;
+
+    /// <inheritdoc cref="Load{T}(Guid)" />
+    Task<T?> Load<T>(int id) where T : class;
+
+    /// <inheritdoc cref="Load{T}(Guid)" />
+    Task<T?> Load<T>(long id) where T : class;
+
+    /// <summary>Load several documents by identity.</summary>
+    Task<IReadOnlyList<T>> LoadMany<T>(params Guid[] ids) where T : class;
+
+    /// <inheritdoc cref="LoadMany{T}(Guid[])" />
+    Task<IReadOnlyList<T>> LoadMany<T>(params string[] ids) where T : class;
+
+    /// <summary>Whether a document with this identity exists.</summary>
+    Task<bool> CheckExists<T>(Guid id) where T : class;
+
+    /// <inheritdoc cref="CheckExists{T}(Guid)" />
+    Task<bool> CheckExists<T>(string id) where T : class;
+
+    /// <summary>Run a LINQ query as part of the batch.</summary>
+    Task<IReadOnlyList<T>> Query<T>(Func<IQuerySession, IQueryable<T>> query) where T : notnull;
+
+    /// <summary>Run a query plan as part of the batch.</summary>
+    Task<T> QueryByPlan<T>(IQueryPlan<T> plan);
+
     /// <summary>
     ///     Whether any event matches the tag query.
     /// </summary>

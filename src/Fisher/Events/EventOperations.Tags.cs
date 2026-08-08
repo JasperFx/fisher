@@ -19,10 +19,10 @@ public partial class EventOperations
     ///     Start a batch of DCB reads to be run together.
     /// </summary>
     /// <remarks>
-    ///     See <see cref="Tags.IBatchedQuery" /> for why this exists on an embedded database, where the
+    ///     See <see cref="Batching.IBatchedQuery" /> for why this exists on an embedded database, where the
     ///     round-trip argument the siblings make does not apply.
     /// </remarks>
-    public Tags.IBatchedQuery CreateBatchQuery() => new Tags.FisherBatchedQuery(this);
+    public Batching.IBatchedQuery CreateBatchQuery() => new Batching.FisherBatchedQuery(this, _session);
 
     /// <summary>
     ///     Fold every event matching the tag query into an aggregate, or null when none match.

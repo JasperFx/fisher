@@ -103,7 +103,7 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override IEventStore EventStore => Store;
 
     /// <summary>
-    ///     Adapts Fisher's own <see cref="Fisher.Events.Tags.IBatchedQuery" /> to the shared shape. The
+    ///     Adapts Fisher's own <see cref="Fisher.Batching.IBatchedQuery" /> to the shared shape. The
     ///     methods already match one for one — only the accessor path differs between stores, which is
     ///     what <see cref="IComplianceBatch" /> exists to bridge.
     /// </summary>
@@ -112,9 +112,9 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
 
     private sealed class FisherComplianceBatch : IComplianceBatch
     {
-        private readonly Fisher.Events.Tags.IBatchedQuery _batch;
+        private readonly Fisher.Batching.IBatchedQuery _batch;
 
-        internal FisherComplianceBatch(Fisher.Events.Tags.IBatchedQuery batch) => _batch = batch;
+        internal FisherComplianceBatch(Fisher.Batching.IBatchedQuery batch) => _batch = batch;
 
         public Task<bool> EventsExist(EventTagQuery query) => _batch.EventsExist(query);
 
