@@ -1,17 +1,42 @@
 # Handoff
 
-State of Fisher after the **JasperFx 2.45.0 upgrade**, and the six features the 2.43.0 pass before it
-uncovered — fisher#15 through #21, all closed except composite projections. Written for whoever picks
-this up next.
+State of Fisher after the **Polecat comparison** — a file-by-file sweep of both source trees that filed
+[#22–#50](https://github.com/JasperFx/fisher/issues/22) and has been working through them since.
+Written for whoever picks this up next.
 
 **Nothing is half-built.** Every milestone on disk builds, is tested, and was committed complete.
-[ROADMAP.md](ROADMAP.md) says what comes next and why in that order.
+[ROADMAP.md](ROADMAP.md) says what comes next and why in that order;
+[polecat-gaps.md](polecat-gaps.md) indexes the comparison backlog and records what SQLite has no
+equivalent for and never will.
 
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**705 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
+**888 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
 cross-store compliance tests — which as of 2.45.0 is every event sourcing suite the shared library has.
+
+## Closed since the comparison
+
+`IDocumentStore` (#45) · raw SQL, `QueueSqlCommand` and `IAdvancedSql` (#34) · LINQ aggregates and
+`Last` (#22) · `Select` projections, `Distinct`, `DistinctBy` (#23) · `GroupBy` and `HAVING` (#24) ·
+**a cross-tenant read (#51)** · the marker operators (#26) · offset and keyset paging (#27) · batching,
+query plans, `CheckExistsAsync`, `ToSql` (#37) · JSON-returning reads (#28) · `Advanced` parity (#42) ·
+patching (#35) · bulk insert (#36) · composite projections (#19) · event body queries (#41).
+
+**#51 is the one to read.** It was a genuine cross-tenant data leak — a conjoined `Query<T>()` with no
+`Where` returned every tenant's rows, because the tenant filter was applied by wrapping each caller
+predicate and a query with no predicates got none. It is the same mistake `ApplyHierarchyFilter`
+already documents, which fisher#17 fixed for `doc_type` and nobody revisited for tenancy. All three
+implicit filters are now one statement-level pass each. Nothing caught it because the conjoined
+compliance suite covers the *event* store and Fisher's document tests were single-tenant.
+
+Two follow-ups were filed rather than shipped half-done: `Insert`-at-an-array-index
+([#52](https://github.com/JasperFx/fisher/issues/52), because `json_insert` is a silent no-op at an
+occupied path) and `BulkInsertMode.IgnoreDuplicates`
+([#53](https://github.com/JasperFx/fisher/issues/53), because `insert or ignore` is a fifth statement
+in the descriptor rather than a flag). **`GroupJoin` ([#25](https://github.com/JasperFx/fisher/issues/25))
+is the one LINQ issue deliberately left open** — it needs every locator and all three implicit filters
+qualified for two tables, which is a materially bigger piece than the rest of the tier combined.
 
 ## The 2.45.0 bump, and the first suite to check something nothing else did
 
