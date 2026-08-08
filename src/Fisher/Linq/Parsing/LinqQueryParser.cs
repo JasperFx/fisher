@@ -54,6 +54,18 @@ internal class LinqQueryParser
 
     public List<(string Locator, bool Descending)> OrderBys { get; } = [];
 
+    /// <summary>
+    ///     The member behind each entry of <see cref="OrderBys" />, or null where there is none — an
+    ///     ordering over a projection or a group aggregate resolves to an expression, not a member.
+    /// </summary>
+    /// <remarks>
+    ///     Kept parallel rather than folded into <see cref="OrderBys" /> because only keyset paging
+    ///     needs it: a cursor's values have to be typed by the member's CLR type on decode, and the
+    ///     terminal key has to be checked for being the identity. Everything else wants the locator and
+    ///     nothing more.
+    /// </remarks>
+    public List<IQueryableMember?> OrderByMembers { get; } = [];
+
     public int? Limit { get; private set; }
 
     public int? Offset { get; private set; }
@@ -151,19 +163,19 @@ internal class LinqQueryParser
                 break;
 
             case "OrderBy":
-                OrderBys.Add((OrderingLocatorFor(call), false));
+                AddOrdering(call, descending: false);
                 break;
 
             case "OrderByDescending":
-                OrderBys.Add((OrderingLocatorFor(call), true));
+                AddOrdering(call, descending: true);
                 break;
 
             case "ThenBy":
-                OrderBys.Add((OrderingLocatorFor(call), false));
+                AddOrdering(call, descending: false);
                 break;
 
             case "ThenByDescending":
-                OrderBys.Add((OrderingLocatorFor(call), true));
+                AddOrdering(call, descending: true);
                 break;
 
             case "Select":
@@ -352,8 +364,18 @@ internal class LinqQueryParser
     ///         <c>Select</c> always works and reads no worse.
     ///     </para>
     /// </remarks>
+    private void AddOrdering(MethodCallExpression call, bool descending)
+    {
+        OrderBys.Add((OrderingLocatorFor(call), descending));
+        OrderByMembers.Add(_lastOrderingMember);
+    }
+
+    private IQueryableMember? _lastOrderingMember;
+
     private string OrderingLocatorFor(MethodCallExpression call)
     {
+        _lastOrderingMember = null;
+
         var lambda = UnwrapLambda(call);
 
         // Still over the grouping — the Select has not been applied yet. The ordering key is the
@@ -413,6 +435,7 @@ internal class LinqQueryParser
         }
 
         var member = _memberFactory.ResolveMember(memberExpression);
+        _lastOrderingMember = member;
 
         if (!member.AllowsRangeComparison)
         {

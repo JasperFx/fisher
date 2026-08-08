@@ -196,6 +196,69 @@ public static class QueryableExtensions
         Expression<Func<T, double>> selector, CancellationToken token = default) where T : notnull
         => Aggregate<T, double>(queryable, AggregateFunction.Average, selector, token);
 
+    // ---- offset paging ----
+
+    /// <summary>
+    ///     One page of results, with the total needed to render a pager.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Two statements against the session's one connection: the page, and a <c>count(*)</c> over
+    ///         the same predicates with the paging stripped. The count deliberately ignores
+    ///         <c>Take</c>/<c>Skip</c> already on the query — a total that counted the page would say
+    ///         nothing — so any paging the caller applied is replaced rather than composed with.
+    ///     </para>
+    ///     <para>
+    ///         A page past the end still reports the real total, which is exactly when a pager needs it
+    ///         most. That is the same property <c>a_page_past_the_end_still_reports_the_total</c> pins
+    ///         for the event store explorer's paging, and it is why the count is a second statement
+    ///         rather than a window function — <c>count(*) over ()</c> returns no row at all when the
+    ///         page is empty.
+    ///     </para>
+    /// </remarks>
+    public static async Task<Pagination.IPagedList<T>> ToPagedListAsync<T>(this IQueryable<T> queryable,
+        int pageNumber, int pageSize, CancellationToken token = default) where T : notnull
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(pageNumber, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(pageSize, 1);
+
+        var provider = ProviderFor(queryable);
+
+        var total = await provider.CountIgnoringPagingAsync<T>(queryable.Expression, token)
+            .ConfigureAwait(false);
+
+        var items = await queryable.Skip((pageNumber - 1) * pageSize).Take(pageSize)
+            .ToListAsync(token).ConfigureAwait(false);
+
+        return new Pagination.PagedList<T>(items, total, pageNumber, pageSize);
+    }
+
+    // ---- keyset paging ----
+
+    /// <summary>
+    ///     One keyset (seek) page, and the cursor for the next.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Requires an <c>OrderBy</c> whose terminal key is the document identity, so the ordering
+    ///         is a total order. Without that, rows tied on the sort key have no defined order between
+    ///         them and a seek boundary lands mid-tie — skipping some and repeating others, silently,
+    ///         and only when there are ties. Refused rather than answered.
+    ///     </para>
+    ///     <para>
+    ///         Unlike <see cref="ToPagedListAsync{T}" /> this cannot jump to an arbitrary page and does
+    ///         not report a total. What it gets in exchange is stability under concurrent writes and a
+    ///         cost that does not grow with how far in you are.
+    ///     </para>
+    /// </remarks>
+    public static Task<Pagination.CursorPage<T>> ToCursorPageAsync<T>(this IQueryable<T> queryable,
+        int pageSize, string? cursor = null, CancellationToken token = default) where T : notnull
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(pageSize, 1);
+
+        return ProviderFor(queryable).CursorPageAsync<T>(queryable.Expression, pageSize, cursor, token);
+    }
+
     private static async Task<TResult> Aggregate<T, TResult>(IQueryable<T> queryable,
         AggregateFunction function, LambdaExpression selector, CancellationToken token) where T : notnull
         => (await ProviderFor(queryable)

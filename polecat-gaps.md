@@ -31,8 +31,8 @@ The single largest area. Fisher's `LinqQueryParser` handles `Where`, the four or
 | ~~`Select` projections (scalar, anonymous, constructor), `Distinct`, `DistinctBy`~~ | [#23](https://github.com/JasperFx/fisher/issues/23) **done** |
 | ~~`GroupBy`, with `Where`-after-group as `HAVING`~~ | [#24](https://github.com/JasperFx/fisher/issues/24) **done** |
 | `GroupJoin(...).SelectMany(...)` | [#25](https://github.com/JasperFx/fisher/issues/25) |
-| `AnyTenant` / `TenantIsOneOf`, `ModifiedSince` / `ModifiedBefore`, `CreatedSince` / `CreatedBefore`, `QueryForNonStaleData`, `IsOneOf` / `In` / `IsEmpty` / `object.Equals` | [#26](https://github.com/JasperFx/fisher/issues/26) |
-| `IPagedList` / `ToPagedListAsync`, and keyset (cursor) pagination | [#27](https://github.com/JasperFx/fisher/issues/27) |
+| ~~`AnyTenant` / `TenantIsOneOf`, `ModifiedSince` / `ModifiedBefore`, `QueryForNonStaleData`, `IsOneOf` / `In` / `IsEmpty` / `object.Equals`~~ (`CreatedSince`/`CreatedBefore` wait on [#29](https://github.com/JasperFx/fisher/issues/29)) | [#26](https://github.com/JasperFx/fisher/issues/26) **done** |
+| ~~`IPagedList` / `ToPagedListAsync`, and keyset (cursor) pagination~~ | [#27](https://github.com/JasperFx/fisher/issues/27) **done** |
 | `LoadJsonAsync`, `ToJsonArrayAsync`, `ToJsonFirstWithVersionAsync`, `StreamPagedJsonArray` | [#28](https://github.com/JasperFx/fisher/issues/28) |
 | Batched document queries, `IQueryPlan`, `CheckExistsAsync`, `ToSql` | [#37](https://github.com/JasperFx/fisher/issues/37) |
 

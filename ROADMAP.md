@@ -3,8 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **twenty-five open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
-**All 28 compliance suites green.** 792 tests green on net9.0
+Status: **twenty-three open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
+**All 28 compliance suites green.** 827 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
 Twenty-eight of those twenty-nine came out of a file-by-file comparison against Polecat on 2026-08-08,
@@ -148,6 +148,9 @@ if something is deferred, it is in the list above.
 | Raw SQL (fisher#34) | `QueueSqlCommand` in the unit of work, `session.AdvancedSql` for typed reads, and the three parameter conversions SQLite needs |
 | LINQ aggregates (fisher#22) | `Sum`/`Min`/`Max`/`Average`, `Last`, and the predicate overloads; no parser change, and three explicit result conversions `Convert.ChangeType` cannot do |
 | LINQ projections (fisher#23) | `Select` as a compiled rewrite, `Distinct` over a projection, `DistinctBy` over documents through `row_number()`; the provider now splits source type from result type |
+| Tenant scoping fix (fisher#51) | a conjoined `Query<T>()` with no `Where` returned every tenant's rows; the filter is now one statement-level pass, like the hierarchy and soft-delete ones |
+| LINQ marker operators (fisher#26) | `AnyTenant`/`TenantIsOneOf`, `IsOneOf`/`In`, `IsEmpty`, `object.Equals`, `ModifiedSince`/`Before`, `QueryForNonStaleData` |
+| LINQ paging (fisher#27) | `ToPagedListAsync` with a real total, and keyset paging with a Polecat-compatible cursor |
 | LINQ grouping (fisher#24) | `GroupBy`, a `Select` over the group, `HAVING` from a `Where` after it, and ordering by an aggregate; the expected lax-GROUP-BY hazard is unreachable through the API |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on

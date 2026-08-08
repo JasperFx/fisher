@@ -694,6 +694,42 @@ what the aggregate terminals already return over no rows. Found while building f
 affected both projection paths; pinned by `a_null_column_becomes_the_default_rather_than_throwing` in
 both test classes.
 
+### LINQ paging
+
+Two operators answering different questions, both carried for the reason Polecat and Marten carry both
+(fisher#27). `ToPagedListAsync` can jump to an arbitrary page and reports a total; `ToCursorPageAsync`
+can do neither, but is stable under concurrent writes and does not degrade as the offset grows.
+
+- **The page's total is a second statement, not `count(*) over ()`.** A window function returns *no
+  row at all* when the page is past the end — which is exactly when a pager most needs the real total.
+  Same reasoning as `a_page_past_the_end_still_reports_the_total` in the event-store explorer's paging,
+  and pinned the same way here.
+- **`CountIgnoringPagingAsync` is deliberately distinct from `CountAsync`.** The latter counts the
+  *page* when the query is paged (`Take(5).CountAsync()` is 5); the former discards `Take`/`Skip`
+  because a total that counted the page would say nothing. Both are right for their caller; conflating
+  them would make one silently wrong.
+- **Keyset pagination requires a terminal identity key**, and this is the guard that makes the rest
+  honest. Without a total order, rows tied on the sort key have no defined order between them and a
+  seek boundary lands mid-tie — skipping some and repeating others, silently, and only when there are
+  ties. Verified by removing the check and walking a fully-tied key: the walk loses rows.
+- **The seek is the expanded OR-of-ANDs, not SQLite's row-value comparison.** Row values (available
+  since 3.15) would be one comparison the planner could serve from a composite index, but they only
+  express a seek when every key runs the same direction — and mixed direction is the common case
+  (`OrderByDescending(x => x.Landed).ThenBy(x => x.Id)`). Special-casing uniform orderings is an
+  optimisation, not a correctness matter.
+- **Cursor values are typed on decode by the query's ordering members, never by the cursor.** The
+  payload carries no type information, so a hand-edited cursor can change values but not what they are
+  read as. Every value then binds as a parameter. The `v1:` base64-JSON format is byte-identical to
+  Polecat's so a cursor is portable between the stores.
+- **`CursorPage<T>` is typed where Polecat's `CursorPageResult` is pre-rendered JSON.** Polecat's shape
+  exists to feed a `StreamPagedByCursor` HTTP result in its ASP.NET Core package; Fisher has neither
+  that package (fisher#49) nor JSON-returning reads (fisher#28), so a JSON result would be a shape with
+  no consumer. The JSON variant belongs with fisher#49, built on this.
+- Ordering keys are read **off the row**, not off the materialized document — a key can be any locator,
+  including one no member of the result exposes. They are appended to the select list *after* the
+  document's own columns, which is safe because the storage selector resolves from fixed positions
+  starting at 0.
+
 ### LINQ grouping
 
 `GroupBy`, a `Select` over the group, and `HAVING` (fisher#24). `GroupProjection` uses the same

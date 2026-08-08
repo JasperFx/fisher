@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using Fisher.Internal;
 using Fisher.Linq.Members;
+using Fisher.Linq.CursorPaging;
 using Fisher.Linq.Parsing;
 using Fisher.Linq.SqlGeneration;
 using Fisher.Storage;
@@ -197,6 +198,101 @@ public class FisherQueryProvider : IQueryProvider
 
         statement.OrderBys.Clear();
         return Convert.ToInt64(await ExecuteScalarAsync(statement, token).ConfigureAwait(false));
+    }
+
+    /// <summary>
+    ///     <c>count(*)</c> over the query's predicates with any paging discarded — what
+    ///     <c>ToPagedListAsync</c> reports as the total.
+    /// </summary>
+    /// <remarks>
+    ///     Distinct from <see cref="CountAsync{T}" />, which counts the page when the query is paged.
+    ///     Both are right for their caller; conflating them would make one of the two silently wrong.
+    /// </remarks>
+    internal async Task<long> CountIgnoringPagingAsync<T>(Expression expression, CancellationToken token)
+        where T : notnull
+    {
+        var (statement, parser, _) = BuildStatement(SourceTypeFor(expression), expression);
+
+        statement.Limit = null;
+        statement.Offset = null;
+
+        if (RowProjection.For(parser) is not null)
+        {
+            return Convert.ToInt64(await ExecuteScalarAsync(
+                new Statement { Subquery = statement, SelectColumns = "count(*)" }, token)
+                .ConfigureAwait(false));
+        }
+
+        statement.SelectColumns = "count(*)";
+        statement.OrderBys.Clear();
+
+        return Convert.ToInt64(await ExecuteScalarAsync(statement, token).ConfigureAwait(false));
+    }
+
+    /// <summary>
+    ///     One keyset page, plus the cursor that fetches the next.
+    /// </summary>
+    /// <remarks>
+    ///     The ordering key values for the cursor are read off the row, not off the materialized
+    ///     document: a key can be any locator, including one no member of the result object exposes
+    ///     directly. They are appended to the select list <em>after</em> the document's own columns,
+    ///     which is safe because the storage selector resolves from fixed positions starting at 0.
+    /// </remarks>
+    internal async Task<Pagination.CursorPage<T>> CursorPageAsync<T>(Expression expression,
+        int pageSize, string? cursor, CancellationToken token) where T : notnull
+    {
+        var (statement, parser, selectClause) = BuildStatement(SourceTypeFor(expression), expression);
+
+        if (RowProjection.For(parser) is not null)
+        {
+            throw new BadLinqExpressionException(
+                "Keyset pagination returns documents, so it cannot follow a Select. Project the page's "
+                + "items after it comes back.");
+        }
+
+        CursorPagination.ValidateOrdering(parser.OrderByMembers);
+
+        if (cursor is not null)
+        {
+            statement.Wheres.Add(CursorPagination.BuildSeekPredicate(
+                parser.OrderBys, CursorPagination.Decode(cursor, parser.OrderByMembers)));
+        }
+
+        var fields = selectClause.SelectFields();
+        var keys = parser.OrderBys.Select(x => x.Locator).ToArray();
+
+        statement.SelectColumns = string.Join(", ", fields.Concat(keys));
+        statement.Limit = pageSize;
+        statement.Offset = null;
+
+        var selector = (ISelector<T>)selectClause.BuildSelector(_session);
+        var items = new List<T>();
+        object?[]? lastKeys = null;
+
+        await using (var reader = await ExecuteReaderAsync(statement, token).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                items.Add(await selector.ResolveAsync(reader, token).ConfigureAwait(false));
+
+                lastKeys = new object?[keys.Length];
+                for (var i = 0; i < keys.Length; i++)
+                {
+                    var ordinal = fields.Length + i;
+                    lastKeys[i] = reader.IsDBNull(ordinal)
+                        ? null
+                        : CoerceTo(reader.GetValue(ordinal), parser.OrderByMembers[i]!.MemberType);
+                }
+            }
+        }
+
+        // A short page is the last page. A full one may or may not be, and issuing a cursor for an
+        // empty next page is cheaper than the extra row-read it would take to know.
+        var next = items.Count == pageSize && lastKeys is not null
+            ? CursorPagination.Encode(lastKeys)
+            : null;
+
+        return new Pagination.CursorPage<T>(items, next);
     }
 
     internal async Task<bool> AnyAsync<T>(Expression expression, CancellationToken token)
