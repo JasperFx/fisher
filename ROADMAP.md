@@ -3,8 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **twenty-eight open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
-**All 28 compliance suites green.** 743 tests green on net9.0
+Status: **twenty-seven open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
+**All 28 compliance suites green.** 758 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
 Twenty-eight of those twenty-nine came out of a file-by-file comparison against Polecat on 2026-08-08,
@@ -12,8 +12,9 @@ which filed [#22](https://github.com/JasperFx/fisher/issues/22) through
 [#50](https://github.com/JasperFx/fisher/issues/50) and is indexed in
 [polecat-gaps.md](polecat-gaps.md) — that document also records what SQLite has no equivalent for and
 never will. It is context; the issues are the tracking.
-[#45](https://github.com/JasperFx/fisher/issues/45) and
-[#34](https://github.com/JasperFx/fisher/issues/34) are closed; the rest are being worked one at a time.
+[#45](https://github.com/JasperFx/fisher/issues/45),
+[#34](https://github.com/JasperFx/fisher/issues/34) and
+[#22](https://github.com/JasperFx/fisher/issues/22) are closed; the rest are being worked one at a time.
 
 ## The destination
 
@@ -143,6 +144,7 @@ if something is deferred, it is in the list above.
 | JasperFx 2.45.0 | `ConjoinedEventTenancyCompliance` and `SubscriptionCompliance` enrolled, both green on the bump; two seam members and one partial, **no production change**. Empties the upstream ES compliance backlog |
 | `IDocumentStore` (fisher#45) | the store's own API as an interface; tooling surfaces stay explicit, and the surface is reflection-pinned in both directions |
 | Raw SQL (fisher#34) | `QueueSqlCommand` in the unit of work, `session.AdvancedSql` for typed reads, and the three parameter conversions SQLite needs |
+| LINQ aggregates (fisher#22) | `Sum`/`Min`/`Max`/`Average`, `Last`, and the predicate overloads; no parser change, and three explicit result conversions `Convert.ChangeType` cannot do |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -300,8 +302,9 @@ rather than by size. Full rationale per issue; [polecat-gaps.md](polecat-gaps.md
 | ~~[#34](https://github.com/JasperFx/fisher/issues/34) `QueueSqlCommand`~~ | **Done**, with `IAdvancedSql` alongside it. The port was the small half; the work was `SqliteParameterValue`, which has no sibling to port from — raw SQL is the one path with no conversion between the caller's value and what Fisher stored, and Guid, timestamp and decimal each bind to something that matches nothing. |
 | ~~[#45](https://github.com/JasperFx/fisher/issues/45) `IDocumentStore`~~ | **Done.** Eight public members, extracted and pinned by reflection in both directions. [#46](https://github.com/JasperFx/fisher/issues/46) and [#49](https://github.com/JasperFx/fisher/issues/49) are unblocked. |
 
-**Then LINQ**, in dependency order — [#22](https://github.com/JasperFx/fisher/issues/22) aggregates
-(no new SQL shape; `CountAsync` already proves the pattern), then
+**Then LINQ**, in dependency order — ~~[#22](https://github.com/JasperFx/fisher/issues/22) aggregates~~
+(**done**; it needed no parser change at all, because the terminal extensions take the selector as an
+argument and it never reaches the expression tree), then
 [#23](https://github.com/JasperFx/fisher/issues/23) `Select` projections, then
 [#24](https://github.com/JasperFx/fisher/issues/24) `GroupBy` on top of both.
 [#26](https://github.com/JasperFx/fisher/issues/26)'s marker operators are independent and mostly

@@ -149,6 +149,253 @@ public class FisherQueryProvider : IQueryProvider
     }
 
     /// <summary>
+    ///     The last row of the query — <c>First</c> against the reverse ordering.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         SQLite has no <c>LAST</c>, so "last" only means anything relative to an <c>ORDER BY</c>.
+    ///         An unordered query is refused rather than answered from whatever order the table
+    ///         happened to yield, which is neither stable nor the same across two runs.
+    ///     </para>
+    ///     <para>
+    ///         <b>A paged query needs the ordering inverted <em>outside</em> the page, not inside it.</b>
+    ///         <c>OrderBy(x =&gt; x.Name).Take(3).LastAsync()</c> means the last of those three, so
+    ///         inverting in place would answer about the whole table instead — the paged query becomes a
+    ///         subquery and the inversion sits on the outer statement. The outer locators still read
+    ///         <c>json_extract(data, …)</c>, which works because the subquery selects the document's own
+    ///         columns.
+    ///     </para>
+    /// </remarks>
+    internal async Task<T?> LastAsync<T>(Expression expression, bool required, CancellationToken token)
+        where T : notnull
+    {
+        var (statement, selector) = Build<T>(expression);
+
+        if (statement.OrderBys.Count == 0)
+        {
+            throw new BadLinqExpressionException(
+                "LastAsync requires an OrderBy: SQLite has no LAST, so 'last' is only meaningful "
+                + "relative to an ordering. Add an OrderBy, or use FirstAsync against the reverse "
+                + "ordering.");
+        }
+
+        statement = statement.Limit.HasValue || statement.Offset.HasValue
+            ? ReverseOverPage(statement)
+            : ReverseInPlace(statement);
+
+        await using var reader = await ExecuteReaderAsync(statement, token).ConfigureAwait(false);
+
+        if (!await reader.ReadAsync(token).ConfigureAwait(false))
+        {
+            return required
+                ? throw new InvalidOperationException($"The query returned no {typeof(T).Name}.")
+                : default;
+        }
+
+        return await selector.ResolveAsync(reader, token).ConfigureAwait(false);
+    }
+
+    private static Statement ReverseInPlace(Statement statement)
+    {
+        var reversed = statement.OrderBys.Select(x => (x.Locator, !x.Descending)).ToArray();
+        statement.OrderBys.Clear();
+        statement.OrderBys.AddRange(reversed);
+        statement.Limit = 1;
+
+        return statement;
+    }
+
+    private static Statement ReverseOverPage(Statement statement)
+    {
+        var outer = new Statement { Subquery = statement, SelectColumns = statement.SelectColumns, Limit = 1 };
+        outer.OrderBys.AddRange(statement.OrderBys.Select(x => (x.Locator, !x.Descending)));
+
+        return outer;
+    }
+
+    /// <summary>
+    ///     A scalar aggregate — <c>sum</c>, <c>min</c>, <c>max</c> or <c>avg</c> over one member.
+    /// </summary>
+    /// <remarks>
+    ///     The same shape as <see cref="CountAsync{T}" />: swap the select list for the aggregate and
+    ///     read one scalar. Paging gets the same treatment for the same reason — <c>Take(5).SumAsync()</c>
+    ///     sums the page, not the table — except that the subquery has to project the member rather than
+    ///     a literal, so it is aliased and the outer aggregates the alias.
+    /// </remarks>
+    internal async Task<TResult?> AggregateAsync<T, TResult>(Expression expression,
+        AggregateFunction function, LambdaExpression selector, CancellationToken token)
+        where T : notnull
+    {
+        var (statement, _) = Build<T>(expression);
+        var locator = AggregateLocatorFor<T>(function, selector);
+
+        if (statement.Limit.HasValue || statement.Offset.HasValue)
+        {
+            statement = AggregateOverPage(statement, function, locator);
+        }
+        else
+        {
+            // An aggregate's value cannot depend on ordering, and keeping the ORDER BY would make
+            // SQLite sort rows it is about to collapse.
+            statement.OrderBys.Clear();
+            statement.SelectColumns = $"{function.Sql()}({locator})";
+        }
+
+        return Coerce<TResult>(await ExecuteScalarAsync(statement, token).ConfigureAwait(false));
+    }
+
+    private static Statement AggregateOverPage(Statement statement, AggregateFunction function,
+        string locator)
+    {
+        var inner = new Statement
+        {
+            FromTable = statement.FromTable,
+            SelectColumns = $"{locator} as agg_value",
+            Limit = statement.Limit,
+            Offset = statement.Offset
+        };
+        inner.Wheres.AddRange(statement.Wheres);
+        inner.OrderBys.AddRange(statement.OrderBys);
+
+        return new Statement { Subquery = inner, SelectColumns = $"{function.Sql()}(agg_value)" };
+    }
+
+    /// <summary>
+    ///     Resolve the aggregated member, refusing one whose stored form makes the aggregate
+    ///     meaningless.
+    /// </summary>
+    /// <remarks>
+    ///     Two different guards, which is why <see cref="AggregateFunction" /> is an enum rather than a
+    ///     SQL string. <c>Min</c>/<c>Max</c> need only that the member orders — a string minimum is a
+    ///     real answer — so they reuse the same <c>AllowsRangeComparison</c> check <c>OrderBy</c>
+    ///     applies. <c>Sum</c>/<c>Average</c> need an actual number: SQLite's <c>sum</c> over text
+    ///     quietly returns 0 rather than failing, so a string-stored enum would report a plausible total
+    ///     for a column that has none.
+    /// </remarks>
+    private string AggregateLocatorFor<T>(AggregateFunction function, LambdaExpression selector)
+        where T : notnull
+    {
+        var body = selector.Body;
+
+        while (body is UnaryExpression { NodeType: ExpressionType.Convert } unary)
+        {
+            body = unary.Operand;
+        }
+
+        if (body is not MemberExpression memberExpression)
+        {
+            throw new BadLinqExpressionException(
+                $"{function}Async is only supported over a document member.");
+        }
+
+        var member = MemberFactoryFor<T>().ResolveMember(memberExpression);
+
+        if (function.RequiresANumber() && !IsNumeric(member.MemberType))
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot {function.Sql()} the {member.MemberType.Name} member '{memberExpression.Member.Name}': "
+                + "it is not a number. SQLite's sum() and avg() return 0 over non-numeric values rather "
+                + "than failing, so this would report a plausible total for a column that has none.");
+        }
+
+        if (!function.RequiresANumber() && !member.AllowsRangeComparison)
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot take the {function.Sql()} of the {member.MemberType.Name} member "
+                + $"'{memberExpression.Member.Name}' in SQLite: its stored form is not order-preserving, "
+                + "so the answer would be plausible but wrong. For an enum, storing it as an integer "
+                + "(StoreOptions.Serializer.EnumStorage) makes ordering meaningful.");
+        }
+
+        return member.TypedLocator;
+    }
+
+    private static bool IsNumeric(Type type)
+    {
+        var inner = Nullable.GetUnderlyingType(type) ?? type;
+
+        // Enums are excluded on purpose even when stored as integers: their numeric value is an
+        // identifier, so a total of it is arithmetic on labels.
+        return !inner.IsEnum && Type.GetTypeCode(inner) is TypeCode.Byte or TypeCode.SByte
+            or TypeCode.Int16 or TypeCode.UInt16 or TypeCode.Int32 or TypeCode.UInt32
+            or TypeCode.Int64 or TypeCode.UInt64 or TypeCode.Single or TypeCode.Double
+            or TypeCode.Decimal;
+    }
+
+    /// <summary>
+    ///     Turn the scalar SQLite handed back into <typeparamref name="TResult" />.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Empty first.</b> <c>sum</c>, <c>min</c>, <c>max</c> and <c>avg</c> all return NULL over
+    ///         no rows where <c>count</c> returns 0, so an empty result becomes <c>default</c> rather
+    ///         than being cast. (<c>total()</c> would return 0.0 for an empty <c>sum</c>, but it is
+    ///         always REAL and so is the wrong tool for the int and decimal overloads.)
+    ///     </para>
+    ///     <para>
+    ///         <b>Then the three types <c>Convert.ChangeType</c> cannot do</b>, which are exactly the
+    ///         ones Fisher encodes rather than storing natively — so a naive cast is broken precisely
+    ///         where this store differs from its siblings, and nowhere else:
+    ///     </para>
+    ///     <list type="bullet">
+    ///         <item>
+    ///             <description>
+    ///                 <b>An enum comes back as INTEGER</b> and needs <see cref="Enum.ToObject(Type,long)" />;
+    ///                 <c>Convert.ChangeType(long, someEnum)</c> throws <see cref="InvalidCastException" />.
+    ///             </description>
+    ///         </item>
+    ///         <item>
+    ///             <description>
+    ///                 <b>A timestamp comes back as TEXT</b>, in the <c>strftime</c> form
+    ///                 <see cref="Members.TimestampMember" />'s locator produces — fixed width, UTC,
+    ///                 and with no <c>Z</c> suffix — so it is parsed by
+    ///                 <see cref="Storage.SqliteTimestamp.FromDatabaseValue" />, whose
+    ///                 <c>AssumeUniversal</c> is what makes the missing suffix correct rather than
+    ///                 local. <see cref="DateTimeOffset" /> is not <see cref="IConvertible" /> at all.
+    ///             </description>
+    ///         </item>
+    ///         <item>
+    ///             <description>
+    ///                 <b>A Guid comes back as TEXT</b>, and <see cref="Guid" /> is not
+    ///                 <see cref="IConvertible" /> either.
+    ///             </description>
+    ///         </item>
+    ///     </list>
+    /// </remarks>
+    private static TResult? Coerce<TResult>(object? raw)
+    {
+        if (raw is null or DBNull)
+        {
+            return default;
+        }
+
+        var target = Nullable.GetUnderlyingType(typeof(TResult)) ?? typeof(TResult);
+
+        if (target.IsEnum)
+        {
+            return (TResult)Enum.ToObject(target, Convert.ToInt64(raw,
+                System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        if (target == typeof(DateTimeOffset))
+        {
+            return (TResult)(object)Storage.SqliteTimestamp.FromDatabaseValue((string)raw);
+        }
+
+        if (target == typeof(DateTime))
+        {
+            return (TResult)(object)Storage.SqliteTimestamp.FromDatabaseValue((string)raw).UtcDateTime;
+        }
+
+        if (target == typeof(Guid))
+        {
+            return (TResult)(object)Guid.Parse((string)raw);
+        }
+
+        return (TResult)Convert.ChangeType(raw, target, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
     ///     Rebuilds a paged statement as <c>select count(*) from (…) </c> so the count applies to the
     ///     page.
     /// </summary>
@@ -166,6 +413,9 @@ public class FisherQueryProvider : IQueryProvider
 
         return new Statement { Subquery = inner, SelectColumns = "count(*)" };
     }
+
+    private MemberFactory MemberFactoryFor<T>() where T : notnull
+        => new(_session.Options, _session.Options.Schema.For<T>().Mapping);
 
     private (Statement Statement, ISelector<T> Selector) Build<T>(Expression expression) where T : notnull
     {

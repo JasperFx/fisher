@@ -12,8 +12,9 @@ here.
 
 The scoreboard: 29 issues, [#22](https://github.com/JasperFx/fisher/issues/22) through
 [#50](https://github.com/JasperFx/fisher/issues/50), filed together after a file-by-file comparison of
-both source trees. Closed so far — [#45](https://github.com/JasperFx/fisher/issues/45) and
-[#34](https://github.com/JasperFx/fisher/issues/34).
+both source trees. Closed so far — [#45](https://github.com/JasperFx/fisher/issues/45),
+[#34](https://github.com/JasperFx/fisher/issues/34) and
+[#22](https://github.com/JasperFx/fisher/issues/22).
 
 ---
 
@@ -24,7 +25,7 @@ The single largest area. Fisher's `LinqQueryParser` handles `Where`, the four or
 
 | Feature | Issue |
 |---|---|
-| `SumAsync` / `MinAsync` / `MaxAsync` / `AverageAsync`, `LastAsync`, predicate overloads of `CountAsync`/`AnyAsync` | [#22](https://github.com/JasperFx/fisher/issues/22) |
+| ~~`SumAsync` / `MinAsync` / `MaxAsync` / `AverageAsync`, `LastAsync`, predicate overloads of `CountAsync`/`AnyAsync`~~ | [#22](https://github.com/JasperFx/fisher/issues/22) **done** |
 | `Select` projections (scalar, anonymous, constructor), `Distinct`, `DistinctBy` | [#23](https://github.com/JasperFx/fisher/issues/23) |
 | `GroupBy`, with `Where`-after-group as `HAVING` | [#24](https://github.com/JasperFx/fisher/issues/24) |
 | `GroupJoin(...).SelectMany(...)` | [#25](https://github.com/JasperFx/fisher/issues/25) |

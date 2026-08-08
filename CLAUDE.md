@@ -584,6 +584,49 @@ untouched — which is exactly what the Optimistic operation's postprocessing re
 failure. The `DO UPDATE SET` clause assigns from `excluded.*` for every column rather than repeating
 each binder's `ValueSql`, so the update branch cannot drift from the insert branch.
 
+### LINQ aggregates and `Last`
+
+`SumAsync` / `MinAsync` / `MaxAsync` / `AverageAsync`, `LastAsync` / `LastOrDefaultAsync`, and the
+predicate overloads of the existing terminals (fisher#22).
+
+**They never enter the expression tree.** Polecat builds a synthetic `MethodCallExpression` carrying
+the selector and parses it back out; Fisher's terminal extensions take the selector as an argument, so
+`LinqQueryParser` needed no change at all and stays what its doc comment says it is — a description of
+the operator *chain*. The predicate overloads are `queryable.Where(predicate).XAsync()`, so they
+compose rather than duplicating anything.
+
+Four things are decisions rather than mechanics:
+
+- **The empty result is the case that matters.** `sum`, `min`, `max` and `avg` all return NULL over no
+  rows where `count` returns 0, so `Coerce` maps null to `default` before casting. An unguarded cast
+  fails *only* on an empty result, which is how it would ship. `total()` would give 0.0 for an empty
+  `sum` but is always REAL, so it is the wrong tool for the int and decimal overloads.
+- **`Coerce` needs three explicit conversions, and they are exactly the types Fisher encodes rather
+  than stores natively** — so `Convert.ChangeType` is broken precisely where this store differs from
+  its siblings and nowhere else. An enum comes back INTEGER and needs `Enum.ToObject`; a timestamp
+  comes back as `TimestampMember`'s `strftime` text, which has **no `Z` suffix**, so it goes through
+  `SqliteTimestamp.FromDatabaseValue` whose `AssumeUniversal` is what makes that correct rather than
+  local; a Guid comes back TEXT. Neither `DateTimeOffset` nor `Guid` is `IConvertible` at all — both
+  throw `InvalidCastException` from inside `Convert.ChangeType`. All three were found by tests failing,
+  not by inspection.
+- **Two guards, which is why `AggregateFunction` is an enum and not a SQL string.** `Min`/`Max` need
+  only that the member orders — a string minimum and a timestamp minimum are real answers — so they
+  reuse `AllowsRangeComparison`, the same check `OrderBy` applies. `Sum`/`Average` need an actual
+  number, because **SQLite's `sum()` over text returns 0 rather than failing**: summing a string-stored
+  enum would report a plausible total for a column that has none. Enums are excluded from `Sum` even
+  under `AsInteger`, since their numeric value is an identifier.
+- **Paging wraps, for both.** `Take(5).SumAsync(...)` sums the page, so the paged query becomes a
+  subquery projecting the member under an alias and the aggregate wraps it — the same trap
+  `CountAsync` already documents. `Last` needs the *inverse*: `OrderBy(x).Take(3).LastAsync()` is the
+  last of those three, so the reversal goes on the **outer** statement, not in place. Inverting in
+  place answers about the whole table. Both verified by reverting them.
+
+One consequence worth stating because it looks like a bug: **`MinAsync(x => x.Id)` over a Guid orders
+by text, which is not .NET's `Guid` ordering.** `Guid.CompareTo` compares the first group as a *signed*
+int, so the two disagree whenever the set straddles `0x80000000`. A test comparing against
+`Enumerable.Min` would be a genuine intermittent; `min_and_max_over_members_that_are_not_numbers`
+builds its expectation with `StringComparer.Ordinal` instead.
+
 ### Raw SQL
 
 `IDocumentSession.QueueSqlCommand` (write, enrolled in the unit of work) and `session.AdvancedSql`
