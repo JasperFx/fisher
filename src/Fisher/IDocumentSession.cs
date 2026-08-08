@@ -80,6 +80,25 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
     Task<bool> CheckExistsAsync<T>(long id, CancellationToken token = default) where T : class;
 
     /// <summary>
+    ///     A document's stored JSON, exactly as it was written, or null when there is none.
+    /// </summary>
+    /// <remarks>
+    ///     Byte-exact: <c>data</c> is TEXT holding what System.Text.Json produced, so nothing
+    ///     normalises whitespace or key order on the way out. Carries the same tenant, soft-delete and
+    ///     hierarchy filters the typed load does.
+    /// </remarks>
+    Task<string?> LoadJsonAsync<T>(Guid id, CancellationToken token = default) where T : class;
+
+    /// <inheritdoc cref="LoadJsonAsync{T}(Guid,CancellationToken)" />
+    Task<string?> LoadJsonAsync<T>(string id, CancellationToken token = default) where T : class;
+
+    /// <inheritdoc cref="LoadJsonAsync{T}(Guid,CancellationToken)" />
+    Task<string?> LoadJsonAsync<T>(int id, CancellationToken token = default) where T : class;
+
+    /// <inheritdoc cref="LoadJsonAsync{T}(Guid,CancellationToken)" />
+    Task<string?> LoadJsonAsync<T>(long id, CancellationToken token = default) where T : class;
+
+    /// <summary>
     ///     Run a query plan against this session.
     /// </summary>
     Task<T> QueryByPlanAsync<T>(Batching.IQueryPlan<T> plan, CancellationToken token = default);

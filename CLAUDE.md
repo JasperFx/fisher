@@ -1470,6 +1470,35 @@ The provider takes both the column list and the materializer from the **query-on
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,
 which is what keeps the query path's read layout aligned with `LoadAsync`'s.
 
+### JSON-returning reads
+
+`LoadJsonAsync`, `ToJsonArrayAsync`, `ToJsonFirstWithVersionAsync` and `StreamJsonArrayAsync`
+(fisher#28). They skip the deserialize-then-reserialize round trip when the caller is going to write
+the document to a response anyway.
+
+**The saving is larger here than on either sibling**, and the reason is structural: on Marten and
+Polecat it saves CPU for data that already crossed a network from a database server; in Fisher the
+database *is* the caller's process, so the round trip is the whole cost rather than a fraction.
+
+- **`data` is TEXT holding exactly what System.Text.Json wrote**, so the read is byte-exact.
+  PostgreSQL's `jsonb` normalises whitespace and key order and SQL Server's `nvarchar` needs an
+  encoding decision — neither sibling can promise this, and `load_json_is_byte_exact_against_what_the_serializer_wrote`
+  pins it against the serializer's own output rather than a hand-written literal.
+- **Concatenated in .NET, not with `json_group_array`.** That function re-parses and re-renders every
+  document — discarding the whole saving and reordering object keys on the way.
+- **Every one goes through the ordinary statement path**, so the tenant, soft-delete and hierarchy
+  filters apply without being restated. A JSON read composing its own `select data from …` would be
+  one more caller having to remember all three, which is how fisher#51 happened.
+- **`ToJsonFirstWithVersionAsync` asks for `guid_version` explicitly** — a query-only read normally
+  drops it, having no version tracker to feed — and is refused for a type without optimistic
+  concurrency, since the column does not exist. Named plainly rather than surfacing as
+  `no such column`.
+- **`StreamJsonArrayAsync` materializes before writing, deliberately.** A retried `SQLITE_BUSY`
+  re-executes the whole delegate, so streaming a live reader to the caller's stream would resume
+  against a disposed reader *and* a half-written response body. This is the one place the retry
+  semantics and the streaming goal genuinely conflict; buffering is the resolution, because the saving
+  being chased is the serializer round trip rather than the buffer.
+
 ### Batched queries, query plans, `CheckExistsAsync` and `ToSql`
 
 fisher#37 widened the DCB-only batch into a general one and moved it from `Fisher.Events.Tags` to

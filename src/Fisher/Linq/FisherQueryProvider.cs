@@ -308,6 +308,62 @@ public class FisherQueryProvider : IQueryProvider
         return builder.Compile().CommandText;
     }
 
+    /// <summary>
+    ///     The stored JSON of each matching row, untouched (fisher#28).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <c>data</c> is TEXT holding exactly what System.Text.Json wrote, so this is a byte-exact
+    ///         read — a stronger guarantee than either sibling can make, since <c>jsonb</c> normalises
+    ///         whitespace and key order and <c>nvarchar</c> needs an encoding decision.
+    ///     </para>
+    ///     <para>
+    ///         Built through the ordinary statement path, so the tenant, soft-delete and hierarchy
+    ///         filters all apply — a JSON read that composed its own <c>select data from …</c> would be
+    ///         yet another caller having to remember all three.
+    ///     </para>
+    /// </remarks>
+    internal async Task<IReadOnlyList<string>> JsonRowsAsync<T>(Expression expression, string columns,
+        int? limit, CancellationToken token) where T : notnull
+    {
+        var (statement, parser, _) = BuildStatement(SourceTypeFor(expression), expression);
+
+        if (RowProjection.For(parser) is not null)
+        {
+            throw new BadLinqExpressionException(
+                "A JSON read returns stored documents, so it cannot follow a Select or a GroupBy.");
+        }
+
+        statement.SelectColumns = columns;
+
+        if (limit.HasValue)
+        {
+            statement.Limit = limit;
+        }
+
+        var rows = new List<string>();
+
+        await using var reader = await ExecuteReaderAsync(statement, token).ConfigureAwait(false);
+
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
+        {
+            rows.Add(reader.IsDBNull(0) ? "null" : reader.GetString(0));
+
+            for (var i = 1; i < reader.FieldCount; i++)
+            {
+                rows.Add(reader.IsDBNull(i) ? "" : reader.GetString(i));
+            }
+        }
+
+        return rows;
+    }
+
+    /// <summary>
+    ///     Whether the queried type carries a <c>guid_version</c> column to read back.
+    /// </summary>
+    internal bool HasVersionColumn<T>() where T : notnull
+        => _session.Options.Schema.MappingFor(typeof(T)).UseOptimisticConcurrency;
+
     internal async Task<bool> AnyAsync<T>(Expression expression, CancellationToken token)
         where T : notnull
     {

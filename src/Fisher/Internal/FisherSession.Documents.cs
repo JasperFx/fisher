@@ -396,19 +396,48 @@ internal partial class FisherSession
     /// </remarks>
     private Task<bool> CheckExistsAsync<T, TId>(TId id, CancellationToken token)
         where T : class where TId : notnull
+        => Linq.QueryableExtensions.AnyAsync(Query<T>().Where(ByIdPredicate<T, TId>(id)), token);
+
+    /// <summary>
+    ///     <c>x =&gt; x.Id == id</c>, built for whichever member the mapping calls the identity.
+    /// </summary>
+    private System.Linq.Expressions.Expression<Func<T, bool>> ByIdPredicate<T, TId>(TId id)
+        where T : class where TId : notnull
     {
         var mapping = Options.Schema.MappingFor(typeof(T));
-        var idMember = System.Linq.Expressions.Expression.PropertyOrField(
-            System.Linq.Expressions.Expression.Parameter(typeof(T), "x"), mapping.IdMember.Name);
+        var parameter = System.Linq.Expressions.Expression.Parameter(typeof(T), "x");
+        var idMember = System.Linq.Expressions.Expression.PropertyOrField(parameter, mapping.IdMember.Name);
 
-        var parameter = (System.Linq.Expressions.ParameterExpression)idMember.Expression!;
-
-        var predicate = System.Linq.Expressions.Expression.Lambda<Func<T, bool>>(
+        return System.Linq.Expressions.Expression.Lambda<Func<T, bool>>(
             System.Linq.Expressions.Expression.Equal(idMember,
                 System.Linq.Expressions.Expression.Constant(id, idMember.Type)),
             parameter);
+    }
 
-        return Linq.QueryableExtensions.AnyAsync(Query<T>().Where(predicate), token);
+    public Task<string?> LoadJsonAsync<T>(Guid id, CancellationToken token = default) where T : class
+        => LoadJsonAsync<T, Guid>(id, token);
+
+    public Task<string?> LoadJsonAsync<T>(string id, CancellationToken token = default) where T : class
+        => LoadJsonAsync<T, string>(id, token);
+
+    public Task<string?> LoadJsonAsync<T>(int id, CancellationToken token = default) where T : class
+        => LoadJsonAsync<T, int>(id, token);
+
+    public Task<string?> LoadJsonAsync<T>(long id, CancellationToken token = default) where T : class
+        => LoadJsonAsync<T, long>(id, token);
+
+    /// <remarks>
+    ///     Through the LINQ path for the same reason <see cref="CheckExistsAsync{T,TId}" /> is: it
+    ///     inherits the tenant, soft-delete and hierarchy filters rather than restating them.
+    /// </remarks>
+    private async Task<string?> LoadJsonAsync<T, TId>(TId id, CancellationToken token)
+        where T : class where TId : notnull
+    {
+        var rows = await ((Linq.FisherQueryProvider)Query<T>().Provider)
+            .JsonRowsAsync<T>(Query<T>().Where(ByIdPredicate<T, TId>(id)).Expression, "data", 1, token)
+            .ConfigureAwait(false);
+
+        return rows.Count == 0 ? null : rows[0];
     }
 
     public Task<T> QueryByPlanAsync<T>(Batching.IQueryPlan<T> plan, CancellationToken token = default)
