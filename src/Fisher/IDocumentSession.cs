@@ -50,6 +50,16 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
         where T : class where TId : notnull;
 
     /// <summary>
+    ///     Run your own SQL through this session and get typed results back.
+    /// </summary>
+    /// <remarks>
+    ///     On the session's own connection, so it sees the session's uncommitted writes and joins an
+    ///     open transaction. The write counterpart is
+    ///     <see cref="IDocumentSession.QueueSqlCommand(string,object?[])" />.
+    /// </remarks>
+    IAdvancedSql AdvancedSql { get; }
+
+    /// <summary>
     ///     Load several documents by identity. Missing ids are absent from the result rather than
     ///     null entries, so it is not necessarily as long as the input.
     /// </summary>

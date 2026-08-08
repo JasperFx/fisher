@@ -584,6 +584,74 @@ untouched — which is exactly what the Optimistic operation's postprocessing re
 failure. The `DO UPDATE SET` clause assigns from `excluded.*` for every column rather than repeating
 each binder's `ValueSql`, so the update branch cannot drift from the insert branch.
 
+### Raw SQL
+
+`IDocumentSession.QueueSqlCommand` (write, enrolled in the unit of work) and `session.AdvancedSql`
+(read, typed results) — fisher#34. Ported from Polecat's `ExecuteSqlStorageOperation`,
+`IAdvancedSql` and `AdvancedSqlResultReader`.
+
+**This is worth more here than the same pair is on either sibling**, and for a structural reason: an
+application using Fisher keeps its own tables in the *same file*, and SQLite permits one writer per
+file. Without `QueueSqlCommand` its statements and Fisher's are two transactions on one file, so
+"my rows and Fisher's, or neither" means taking the write lock twice and contending with yourself.
+On Postgres or SQL Server the same method is a convenience.
+
+**`SqliteParameterValue` is the piece with no sibling to port from.** Raw SQL is the one path where a
+caller's value reaches a parameter with no conversion in between — every other write path converts
+explicitly. Three CLR types bind to something Fisher never wrote, silently. Verified against
+Microsoft.Data.Sqlite 10.0.9 and each arm verified load-bearing by removing it:
+
+- **`Guid` binds UPPERCASE.** The recurring trap; matches zero rows.
+- **`DateTimeOffset` binds as `2026-08-08 18:45:30.123+00:00`** — space-separated, original offset —
+  against `SqliteTimestamp.Format`'s `2026-08-08T18:45:30.123Z`. Worth knowing precisely how this
+  fails, because **a one-sided range test does not catch it**: at index 10 the stored form has `T`
+  (0x54) and the raw binding a space (0x20), so the stored value sorts after *any* same-date raw bound
+  whatever time it names. `a_timestamp_parameter_matches_fishers_stored_form` was written as a `>`
+  against an earlier bound first, and passed with the conversion removed. It now asserts equality and
+  a bound an hour *after* the event, which without the conversion wrongly includes it.
+- **`decimal` binds as text**, which `json_extract`'s REAL never equals. Column affinity rescues the
+  comparison against a *declared* column and there is no affinity inside `json_extract` — and that is
+  how every undeclared document member is read, so it is the likely case rather than the exotic one.
+
+Everything else is already right and is passed through: bool → INTEGER 1/0, enum → its integer value,
+and the rest are what Fisher stores. **A declared `SqliteType` does not coerce the value** — the
+provider binds by the CLR type of `Value` regardless — so Weasel's `AppendWithDbParameters` stamping
+every placeholder TEXT is harmless rather than a fourth problem. `raw_sql_parameter_binding` pins that
+too, because it is provider behaviour Fisher does not own.
+
+Two divergences in the read half, both verified by reverting them:
+
+- **A scalar is read with `GetFieldValue<T>`, not `GetValue` + `Convert.ChangeType`.** Polecat can use
+  the latter because SQL Server hands back the CLR type; Fisher stores a Guid as text, and
+  `Convert.ChangeType(string, typeof(Guid))` throws `InvalidCastException` outright — `Guid` is not
+  `IConvertible`. This is the one Fisher read path that leans on provider coercion *by choice*, where
+  `FisherEventsRowReader` converts explicitly. The row readers do so for round-trip symmetry, which
+  raw SQL has nothing to protect: the caller names arbitrary columns, including ones Fisher never
+  wrote.
+- **A document is materialized by its storage's own selector, not by deserializing `data`.** Polecat's
+  reader hand-deserializes at an offset and try/catches metadata columns. On Fisher that would be
+  silently wrong for a hierarchy: the selectors resolve `doc_type` to the real sub-class, so
+  deserializing to the declared type returns the base for every row, missing whatever the sub-class
+  added. Swapping the selector for a `FromJson` makes
+  `a_hierarchy_comes_back_as_its_real_subclasses` fail.
+
+  The price is that `ISelector<T>.Resolve` reads from fixed positions starting at column 0, so **a
+  document can only be the first result type of a query.** Anywhere else throws naming the
+  restriction, rather than producing the cast error a misaligned read would.
+  `IAdvancedSql.SelectFieldsFor<T>()` exists so a caller does not have to guess which columns to
+  select.
+
+**`StreamAsync` runs outside `StoreOptions.ResiliencePipeline`, deliberately.** A retried
+`SQLITE_BUSY` re-executes the whole delegate, so a live reader yielded to a caller would resume
+against a disposed connection — the property `GetRecentStreamsAsync` documents. Materialising first
+would not be streaming, so the trade is that a busy database surfaces to the caller here alone.
+`QueryAsync` stays inside the pipeline.
+
+One trap that is SQLite's rather than Fisher's: **a bare `?` that Fisher does not treat as a
+placeholder is still SQLite's own anonymous parameter marker**, so it fails with "must add values for
+the following parameters" rather than passing through as text. Only a `?` inside a string literal is
+safe. That is what the alternate-placeholder overloads are for.
+
 ### Soft delete
 
 A document type marked with `[SoftDeleted]`, implementing `JasperFx.Metadata.ISoftDeleted`, or
