@@ -36,11 +36,36 @@ internal class MemberFactory : IMemberResolver
     private readonly JsonNamingPolicy? _namingPolicy;
     private readonly JsonSerializerOptions _serializerOptions;
     private readonly EnumStorage _enumStorage;
-    private readonly DocumentMapping _mapping;
+    private readonly DocumentMapping? _mapping;
+    private readonly bool _hasIdentityColumn;
 
-    public MemberFactory(StoreOptions options, DocumentMapping mapping)
+    public MemberFactory(StoreOptions options, DocumentMapping mapping) : this(options, mapping, true)
+    {
+    }
+
+    /// <summary>
+    ///     A factory with no document mapping behind it — for JSON that is not a document.
+    /// </summary>
+    /// <remarks>
+    ///     <b>An event body is the case (fisher#41).</b> It is a JSON document in a column called
+    ///     <c>data</c>, so every locator applies verbatim, but it has no mapping: no identity member
+    ///     (most event types have none, and <c>DocumentMapping</c> refuses a type without one) and no
+    ///     duplicated fields. Both of those are the only things the mapping is consulted for, so
+    ///     leaving it out is the whole difference.
+    ///     <para>
+    ///         Not having an identity is load-bearing rather than incidental: <c>fi_events.id</c> is the
+    ///         <em>event's</em> identity, so resolving a body member called <c>Id</c> to it would compare
+    ///         against the wrong column and return rows rather than an error.
+    ///     </para>
+    /// </remarks>
+    public MemberFactory(StoreOptions options) : this(options, null, false)
+    {
+    }
+
+    private MemberFactory(StoreOptions options, DocumentMapping? mapping, bool hasIdentityColumn)
     {
         _mapping = mapping;
+        _hasIdentityColumn = hasIdentityColumn;
         _enumStorage = options.Serializer.EnumStorage;
 
         if (options.Serializer is Serializer serializer)
@@ -63,7 +88,7 @@ internal class MemberFactory : IMemberResolver
         // The identity lives in its own column, not in the JSON body.
         if (expression.Expression is ParameterExpression && IsIdentityMember(expression.Member))
         {
-            return new IdMember(_mapping.IdType);
+            return new IdMember(_mapping!.IdType);
         }
 
         return ResolveMember(ChainOf(expression));
@@ -83,7 +108,7 @@ internal class MemberFactory : IMemberResolver
     public IQueryableMember ResolveMember(MemberInfo[] chain)
     {
         var member = CreateMember(BuildJsonPath(chain), GetMemberType(chain[^1]));
-        var duplicate = _mapping.DuplicateFor(chain);
+        var duplicate = _mapping?.DuplicateFor(chain);
 
         return duplicate is null ? member : new DuplicatedMember(member, duplicate.ColumnName);
     }
@@ -112,7 +137,7 @@ internal class MemberFactory : IMemberResolver
     }
 
     private bool IsIdentityMember(MemberInfo member)
-        => member.Name == _mapping.IdMember.Name;
+        => _hasIdentityColumn && member.Name == _mapping!.IdMember.Name;
 
     private IQueryableMember CreateMember(string jsonPath, Type memberType)
     {

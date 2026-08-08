@@ -89,7 +89,7 @@ row inside one transaction is already the fast path.
 | Feature | Issue |
 |---|---|
 | Natural keys — and with them the last partial member on `IEventStoreOperations` | [#40](https://github.com/JasperFx/fisher/issues/40) |
-| `QueryRawEventDataOnly<T>()` — LINQ over the event **body**, where Fisher can only query metadata | [#41](https://github.com/JasperFx/fisher/issues/41) |
+| ~~`QueryRawEventDataOnly<T>()` — LINQ over the event **body**~~ | [#41](https://github.com/JasperFx/fisher/issues/41) **done** |
 | ~~`FetchEventStoreStatistics`, `ToDatabaseScript` / `WriteCreationScriptToFileAsync`, `CleanAsync<T>`, `EventProjectionScenario`~~ | [#42](https://github.com/JasperFx/fisher/issues/42) **done** |
 | Binary event serialization (`[BinaryEvent]`, `IEventBinarySerializer`) | [#43](https://github.com/JasperFx/fisher/issues/43) |
 | `IDocumentStoreDiagnostics`, `IDocumentStoreUsageSource`, projection replay | [#44](https://github.com/JasperFx/fisher/issues/44) |

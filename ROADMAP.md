@@ -3,8 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **twenty open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
-**All 28 compliance suites green.** 881 tests green on net9.0
+Status: **nineteen open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
+**All 28 compliance suites green.** 888 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
 Twenty-eight of those twenty-nine came out of a file-by-file comparison against Polecat on 2026-08-08,
@@ -150,6 +150,7 @@ if something is deferred, it is in the list above.
 | LINQ projections (fisher#23) | `Select` as a compiled rewrite, `Distinct` over a projection, `DistinctBy` over documents through `row_number()`; the provider now splits source type from result type |
 | Tenant scoping fix (fisher#51) | a conjoined `Query<T>()` with no `Where` returned every tenant's rows; the filter is now one statement-level pass, like the hierarchy and soft-delete ones |
 | LINQ marker operators (fisher#26) | `AnyTenant`/`TenantIsOneOf`, `IsOneOf`/`In`, `IsEmpty`, `object.Equals`, `ModifiedSince`/`Before`, `QueryForNonStaleData` |
+| Event body queries (fisher#41) | `QueryEventDataAsync<T>`; no new SQL machinery, because an event body is a JSON document in a column called `data` |
 | Composite projections (fisher#19) | ordered stages under one shard, rebuilt in one pass; close to free as predicted, and the cross-stage semantics are the aggregate cache rather than a database read |
 | Bulk insert (fisher#36) | one transaction per batch through the ordinary statements; no bulk-copy protocol needed, and none exists |
 | Patching (fisher#35) | `Patch<T>` by id or predicate; every operation one json1 function, chains nesting into one statement, and a duplicated column following it with nothing to refresh |

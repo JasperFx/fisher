@@ -269,4 +269,80 @@ public partial class EventOperations
             Clause("tenant_id", _session.TenantId);
         }
     }
+
+    /// <summary>
+    ///     The bodies of every event of one type matching a predicate over the body itself (fisher#41).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The counterpart to <see cref="QueryEventsAsync(Expression{Func{IEvent,bool}},CancellationToken)" />,
+    ///         which queries an event's <em>metadata</em>. That method's doc comment says a body member
+    ///         is unreachable because "the body is JSON of a type the row only names" — true of
+    ///         <see cref="IEvent" /> in general, and false once the caller names the type, which is what
+    ///         this overload does.
+    ///     </para>
+    ///     <para>
+    ///         <b>It needed no new SQL machinery.</b> An event body is a JSON document in a TEXT column
+    ///         called <c>data</c> — structurally identical to a document — so <c>MemberFactory</c>'s
+    ///         locators apply verbatim against <c>fi_events</c>. There is no <c>DocumentMapping</c>
+    ///         involved at all — most event types have no identity member, and asking for a mapping
+    ///         would register the event type as a document and give it a table.
+    ///     </para>
+    ///     <para>
+    ///         <b>This is a scan.</b> There is no index over <c>fi_events.data</c>, which is honest for a
+    ///         diagnostic or reporting query. fisher#16's expression indexes are the mechanism if one
+    ///         ever needs to be fast, and they would apply here unchanged.
+    ///     </para>
+    /// </remarks>
+    public async Task<IReadOnlyList<T>> QueryEventDataAsync<T>(Expression<Func<T, bool>> filter,
+        CancellationToken token = default) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+
+        // No DocumentMapping at all: most event types have no identity member and DocumentMapping
+        // refuses a type without one — and asking for a mapping would register the event type as a
+        // document, giving it a table in the next migration.
+        var members = new Linq.Members.MemberFactory(_session.Options);
+        var predicate = new WhereClauseParser(members).Parse(filter.Body);
+
+        var builder = new Weasel.Sqlite.CommandBuilder();
+        builder.Append("select data from ");
+        builder.Append(Graph.EventsTableName);
+
+        // The type filter is the alias, not dotnet_type: the alias is short and stable where
+        // dotnet_type is assembly-qualified and brittle across a rename. Same reasoning as fisher#17's
+        // doc_type discriminator.
+        builder.Append(" where type = ");
+        builder.AppendParameter(Graph.EventMappingFor(typeof(T)).EventTypeName);
+        builder.Append(" and ");
+
+        predicate.Apply(builder);
+
+        if (IsConjoined)
+        {
+            builder.Append(" and tenant_id = ");
+            builder.AppendParameter(_session.TenantId);
+        }
+
+        builder.Append(" order by seq_id");
+
+        var command = builder.Compile();
+        command.Connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
+        command.CommandTimeout = _session.Options.CommandTimeout;
+
+        var results = new List<T>();
+
+        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
+        {
+            var body = _session.FisherSerializer.FromJson<T>(reader.GetString(0));
+
+            if (body is not null)
+            {
+                results.Add(body);
+            }
+        }
+
+        return results;
+    }
 }

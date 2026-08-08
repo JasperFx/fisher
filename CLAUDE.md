@@ -1650,6 +1650,30 @@ interleaved.
 - `QueryListPlan<T>` implements both `IQueryPlan` and `IBatchQueryPlan` from one `Query` method, which
   is what keeps the batched and unbatched paths from drifting into two different queries with one name.
 
+### Querying event bodies
+
+`EventOperations.QueryEventDataAsync<T>(predicate)` (fisher#41) — the counterpart to
+`QueryEventsAsync`, which queries an event's *metadata*. That method's doc comment says a body member
+is unreachable "because the body is JSON of a type the row only names". **That is true of `IEvent` in
+general and false once the caller names the type**, which is the whole of this feature.
+
+**It needed no new SQL machinery.** An event body is a JSON document in a TEXT column called `data` —
+structurally identical to a document — so `MemberFactory`'s locators apply verbatim against
+`fi_events`, including fisher#1's `strftime` wrapper for a timestamp inside a body.
+
+- **There is no `DocumentMapping` involved, and that is not laziness.** Most event types have no
+  identity member and `DocumentMapping` refuses a type without one; and asking for a mapping would
+  *register* the event type as a document, giving it a table in the next migration.
+  `MemberFactory` therefore has a mapping-free constructor — the mapping is only ever consulted for
+  the identity member and for duplicated fields, and an event body has neither.
+- **A body member called `Id` must not resolve to `fi_events.id`.** That column is the *event's*
+  identity, so resolving to it would compare against the wrong column and return rows rather than an
+  error. `a_body_member_called_id_is_not_the_events_own_id` pins it.
+- **The type filter is `type`, the alias — not `dotnet_type`.** Short and stable where the other is
+  assembly-qualified and brittle across a rename; the same reasoning as fisher#17's `doc_type`.
+- **It is a scan**, and honestly so: there is no index over `fi_events.data`. fisher#16's expression
+  indexes are the mechanism if one ever needs to be fast, and they would apply here unchanged.
+
 ### DCB tags
 
 One `fi_event_tag_<suffix>` table per registered tag type, composite primary key leading with
