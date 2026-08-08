@@ -97,6 +97,40 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     }
 
     /// <summary>
+    ///     Register several projections as one composite, running in ordered stages.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Always asynchronous — see <see cref="FisherCompositeProjection" /> for why a stage
+    ///         boundary only means something inside a daemon batch.
+    ///     </para>
+    ///     <para>
+    ///         The child projections' event types are registered on the event graph here rather than by
+    ///         each child, because a child inside a composite is never registered on its own and would
+    ///         otherwise contribute nothing to what the store knows how to deserialize.
+    ///     </para>
+    /// </remarks>
+    public void CompositeProjectionFor(string name, Action<FisherCompositeProjection> configure)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var composite = new FisherCompositeProjection(name, _events.Options);
+        configure(composite);
+        composite.AssembleAndAssertValidity();
+
+        foreach (var child in composite.AllProjections().OfType<ProjectionBase>())
+        {
+            foreach (var eventType in child.IncludedEventTypes)
+            {
+                _events.AddEventType(eventType);
+            }
+        }
+
+        All.Add(composite);
+    }
+
+    /// <summary>
     ///     Register an already-built projection.
     /// </summary>
     public void Add(ProjectionBase projection, ProjectionLifecycle lifecycle)

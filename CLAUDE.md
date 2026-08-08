@@ -333,6 +333,34 @@ instance to each call — reference identity is what dedupes them.
 **Polecat no-ops these three rather than throwing**, so an event-raising projection there drops its
 events with no signal. Do not copy that.
 
+### Composite projections
+
+`Projections.CompositeProjectionFor(name, composite => …)` (fisher#19) — several projections as ordered
+stages under one shard, rebuilt together in one pass. The issue guessed this would be close to free and
+it nearly was: `FisherCompositeProjection` closes JasperFx's `CompositeProjection<,>` over Fisher's
+session pair, and `CompositeIProjectionSource` (ported from Polecat) presents a bare `IProjection` as
+something a stage can hold.
+
+**What a composite buys, precisely: ordered execution in one batch and one rebuild pass.** It does
+*not* let a later stage read an earlier stage's writes with `LoadAsync` — the whole composite commits
+as one batch, so nothing an earlier stage queued is in the database yet. JasperFx's mechanism for
+sharing across stages is the **aggregate cache** (`CompactCachesAsync` runs once at the composite
+boundary rather than per stage, precisely so downstream stages can read upstream in-flight entities),
+which aggregation projections participate in and a bare `IProjection` does not. A first version of
+`composite_projections` assumed the database-read model and failed; the test now says so explicitly, so
+the next reader does not have to rediscover it.
+
+- **Composites are always asynchronous.** A stage boundary only means something inside a daemon batch;
+  an inline composite would be a boundary with nothing on either side of it.
+- **The child projections' event types are registered on the event graph by
+  `CompositeProjectionFor`**, not by each child — a child inside a composite is never registered on its
+  own and would otherwise contribute nothing to what the store knows how to deserialize.
+- **`CompositeIProjectionSource`'s execution does not dispose the batch it is handed.** Every stage
+  writes into one batch so the composite commits together; a stage disposing it would commit the
+  earlier stages and leave the later ones writing into a disposed session.
+- A document a bare `IProjection` stores still needs a registered mapping, since Fisher only creates
+  tables for types the schema has mapped. That is the ordinary on-demand rule, not a composite quirk.
+
 ### Subscriptions
 
 `Projections.Subscribe(subscription)` (fisher#21) — a daemon shard that hands each range of events to

@@ -93,7 +93,7 @@ row inside one transaction is already the fast path.
 | ~~`FetchEventStoreStatistics`, `ToDatabaseScript` / `WriteCreationScriptToFileAsync`, `CleanAsync<T>`, `EventProjectionScenario`~~ | [#42](https://github.com/JasperFx/fisher/issues/42) **done** |
 | Binary event serialization (`[BinaryEvent]`, `IEventBinarySerializer`) | [#43](https://github.com/JasperFx/fisher/issues/43) |
 | `IDocumentStoreDiagnostics`, `IDocumentStoreUsageSource`, projection replay | [#44](https://github.com/JasperFx/fisher/issues/44) |
-| `CompositeProjection` | [#19](https://github.com/JasperFx/fisher/issues/19) |
+| ~~`CompositeProjection`~~ | [#19](https://github.com/JasperFx/fisher/issues/19) **done** |
 
 [#40](https://github.com/JasperFx/fisher/issues/40) is the one that closes a stated partial:
 `FetchForWriting<T, TId>` and `FetchLatest<T, TId>` accept only an id that is already the stream
