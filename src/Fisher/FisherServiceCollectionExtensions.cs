@@ -68,6 +68,11 @@ public static class FisherServiceCollectionExtensions
 
         services.AddSingleton(sp => new DocumentStore(sp.GetRequiredService<StoreOptions>()));
 
+        // Both the concrete type and the interface resolve to the one singleton. The interface is what
+        // application code should depend on (fisher#45); the concrete registration stays so that code
+        // written before it — and every test in this repo — keeps resolving.
+        services.AddSingleton<IDocumentStore>(sp => sp.GetRequiredService<DocumentStore>());
+
         // The bridge monitoring tools discover a store through — CritterWatch and Wolverine both read
         // GetServices<IEventStore>(). Without it a registered Fisher store is invisible to them even
         // though DocumentStore implements the interface, because it does so explicitly.
@@ -77,7 +82,7 @@ public static class FisherServiceCollectionExtensions
         // TryAdd so an application that registers its own factory — to scope sessions to a tenant read
         // off the request, say — keeps it whichever side of AddFisher the registration lands.
         services.TryAddSingleton<ISessionFactory>(
-            sp => new DefaultSessionFactory(sp.GetRequiredService<DocumentStore>()));
+            sp => new DefaultSessionFactory(sp.GetRequiredService<IDocumentStore>()));
 
         services.AddScoped(sp => sp.GetRequiredService<ISessionFactory>().OpenSession());
         services.AddScoped(sp => sp.GetRequiredService<ISessionFactory>().QuerySession());
@@ -167,9 +172,9 @@ public sealed class FisherConfigurationExpression
 /// </summary>
 internal sealed class FisherSchemaActivator : IHostedService
 {
-    private readonly DocumentStore _store;
+    private readonly IDocumentStore _store;
 
-    public FisherSchemaActivator(DocumentStore store) => _store = store;
+    public FisherSchemaActivator(IDocumentStore store) => _store = store;
 
     public Task StartAsync(CancellationToken cancellationToken)
         => _store.Options.AutoCreateSchemaObjects == AutoCreate.None
@@ -200,11 +205,11 @@ internal sealed class FisherSchemaActivator : IHostedService
 /// </remarks>
 internal sealed class FisherDaemonHostedService : IHostedService, IDisposable
 {
-    private readonly DocumentStore _store;
+    private readonly IDocumentStore _store;
     private readonly ILogger<FisherDaemonHostedService> _logger;
     private IProjectionDaemon? _daemon;
 
-    public FisherDaemonHostedService(DocumentStore store, ILogger<FisherDaemonHostedService>? logger = null)
+    public FisherDaemonHostedService(IDocumentStore store, ILogger<FisherDaemonHostedService>? logger = null)
     {
         _store = store;
         _logger = logger ?? NullLogger<FisherDaemonHostedService>.Instance;

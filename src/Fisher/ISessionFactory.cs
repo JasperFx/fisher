@@ -23,9 +23,9 @@ public interface ISessionFactory
 /// </summary>
 internal sealed class DefaultSessionFactory : ISessionFactory
 {
-    private readonly DocumentStore _store;
+    private readonly IDocumentStore _store;
 
-    public DefaultSessionFactory(DocumentStore store) => _store = store;
+    public DefaultSessionFactory(IDocumentStore store) => _store = store;
 
     public IDocumentSession OpenSession() => _store.LightweightSession();
 

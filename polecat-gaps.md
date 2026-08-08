@@ -12,7 +12,7 @@ here.
 
 The scoreboard: 29 issues, [#22](https://github.com/JasperFx/fisher/issues/22) through
 [#50](https://github.com/JasperFx/fisher/issues/50), filed together after a file-by-file comparison of
-both source trees.
+both source trees. One closed so far — [#45](https://github.com/JasperFx/fisher/issues/45).
 
 ---
 
@@ -43,7 +43,7 @@ where T-SQL needs the expanded OR-of-ANDs form the planner cannot index.
 
 | Feature | Issue |
 |---|---|
-| `QuerySession()` — there is **no read-only session factory at all** — and `SessionOptions` (tenant, isolation, timeout, listeners, **connection/transaction enlistment**) | [#30](https://github.com/JasperFx/fisher/issues/30) |
+| `QuerySession()` on the store (it exists on `ISessionFactory` but not on `DocumentStore`), and `SessionOptions` (tenant, isolation, timeout, listeners, **connection/transaction enlistment**) | [#30](https://github.com/JasperFx/fisher/issues/30) |
 | `IdentitySession()`, `DocumentTracking`, dirty tracking, `Eject` / `EjectAllOfType` / `EjectAllPendingChanges` | [#31](https://github.com/JasperFx/fisher/issues/31) |
 | `IDocumentSessionListener` and `IChangeSet` | [#32](https://github.com/JasperFx/fisher/issues/32) |
 | `ForTenant(...)` / `ITenantOperations` — writing for several tenants in one unit of work | [#33](https://github.com/JasperFx/fisher/issues/33) |
@@ -99,17 +99,18 @@ is the application's.
 
 | Feature | Issue |
 |---|---|
-| `IDocumentStore` — the store is a concrete class with no interface | [#45](https://github.com/JasperFx/fisher/issues/45) |
+| ~~`IDocumentStore` — the store is a concrete class with no interface~~ | [#45](https://github.com/JasperFx/fisher/issues/45) **done** |
 | `AddFisherStore<T>`, `IConfigureFisher` — several stores in one application | [#46](https://github.com/JasperFx/fisher/issues/46) |
 | Database-per-tenant / `ITenancy` / master-table tenancy | [#47](https://github.com/JasperFx/fisher/issues/47) |
 | OpenTelemetry spans for session work | [#48](https://github.com/JasperFx/fisher/issues/48) |
 | `Fisher.AspNetCore` — streaming JSON results, ETags, daemon health check | [#49](https://github.com/JasperFx/fisher/issues/49) |
 | `Fisher.EntityFrameworkCore` — transaction participation and EF-backed projections | [#50](https://github.com/JasperFx/fisher/issues/50) |
 
-[#45](https://github.com/JasperFx/fisher/issues/45) is the cheapest it will ever be — the store's
-public surface is seven members today, and half the issues in this backlog widen it.
-[#46](https://github.com/JasperFx/fisher/issues/46) and
-[#47](https://github.com/JasperFx/fisher/issues/47) both depend on it.
+[#45](https://github.com/JasperFx/fisher/issues/45) is **done** — eight public members extracted, with
+the tooling surfaces (`IEventStore` and friends) deliberately left as explicit implementations so a
+monitoring-only API does not land on the store's own, and the boundary pinned by reflection in both
+directions. [#46](https://github.com/JasperFx/fisher/issues/46) and
+[#49](https://github.com/JasperFx/fisher/issues/49) are unblocked by it.
 
 **[#47](https://github.com/JasperFx/fisher/issues/47) is the one where SQLite's constraint becomes the
 feature.** A tenant is a file: creating one is a `File.Create` plus a migration, deleting one is

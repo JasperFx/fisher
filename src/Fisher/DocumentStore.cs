@@ -12,9 +12,10 @@ namespace Fisher;
 /// <remarks>
 ///     Partial: the <see cref="JasperFx.Events.IEventStore" /> surface — the explorer and diagnostic
 ///     methods monitoring tools read — lives in <c>DocumentStore.EventStore.cs</c>, implemented
-///     explicitly so it does not crowd the store's own API.
+///     explicitly so it does not crowd the store's own API. The store's <em>own</em> API is
+///     <see cref="IDocumentStore" />, which this class implements implicitly.
 /// </remarks>
-public partial class DocumentStore : IAsyncDisposable, IDisposable
+public partial class DocumentStore : IDocumentStore
 {
     public DocumentStore(StoreOptions options)
     {

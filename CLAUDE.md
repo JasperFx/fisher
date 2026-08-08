@@ -955,6 +955,30 @@ efficient — which is why this surfaced the moment there was a container at all
 `DbDataSource` both supply the sync form, so nothing blocks. Marten's `IDocumentStore` and
 `IQuerySession` declare both for the same reason.
 
+### `IDocumentStore`
+
+`DocumentStore`'s own public API, extracted as an interface (fisher#45) so application code depends on
+the abstraction and `AddFisher` can register both. It declares `IDisposable` **and**
+`IAsyncDisposable` for exactly the reason above — an interface declaring only the async form would
+reintroduce fisher#20's bug one level up, where it is harder to see.
+
+- **The tooling surfaces are deliberately not on it.** `IEventStore`, `IEventStore<,>` and
+  `ISubscriptionRunner<>` are implemented **explicitly**, so they are private members and a consumer
+  casts to reach them. That is the whole point of implementing them explicitly, and re-exposing one
+  through `IDocumentStore` would undo it. `the_tooling_interfaces_are_not_re_exposed` pins it, because
+  "add it to `IDocumentStore` too" is the natural-looking fix for a cast somebody finds awkward.
+- **`DocumentStore.For(...)` stays static on the concrete class and keeps returning `DocumentStore`**,
+  mirroring Marten. `AddFisher` registers the concrete type *and* the interface against one singleton;
+  the concrete registration stays so existing code keeps resolving.
+- **The surface is pinned by reflection in both directions.**
+  `every_public_instance_member_of_the_store_is_on_the_interface` fails, naming the member, when a
+  public member is added to one and not the other — verified by adding one. Its filter is
+  `BindingFlags.Public`, which is correct rather than merely convenient: an explicit implementation is
+  a private member, so the tooling surfaces are excluded by the same rule that makes them explicit.
+  `the_store_implements_every_interface_member_implicitly` checks the other direction through the
+  interface map, so a member satisfied explicitly — compiling fine and then unreachable from the
+  concrete type — is caught too.
+
 ### `Advanced` and cleaning
 
 `DocumentStore.Advanced` carries `Clean` (`IDocumentCleaner`), `ResetAllDataAsync` and

@@ -3,14 +3,16 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **thirty open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
-**All 28 compliance suites green.** 705 tests green on net9.0
+Status: **twenty-nine open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
+**All 28 compliance suites green.** 712 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
-Twenty-nine of those thirty ([#22](https://github.com/JasperFx/fisher/issues/22) through
-[#50](https://github.com/JasperFx/fisher/issues/50)) came out of a file-by-file comparison against
-Polecat on 2026-08-08 and are indexed in [polecat-gaps.md](polecat-gaps.md), which also records what
-SQLite has no equivalent for and never will. That document is context; the issues are the tracking.
+Twenty-eight of those twenty-nine came out of a file-by-file comparison against Polecat on 2026-08-08,
+which filed [#22](https://github.com/JasperFx/fisher/issues/22) through
+[#50](https://github.com/JasperFx/fisher/issues/50) and is indexed in
+[polecat-gaps.md](polecat-gaps.md) — that document also records what SQLite has no equivalent for and
+never will. It is context; the issues are the tracking.
+[#45](https://github.com/JasperFx/fisher/issues/45) is closed; the rest are being worked one at a time.
 
 ## The destination
 
@@ -90,7 +92,7 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | ~~[fisher#17](https://github.com/JasperFx/fisher/issues/17)~~ | **Closed.** Document hierarchies on a `doc_type` alias column. This issue's premise was wrong: `dotnet_type` cannot be the discriminator, so it needed a schema change after all. |
 | ~~[fisher#18](https://github.com/JasperFx/fisher/issues/18)~~ | **Closed.** Numeric revisions, following Marten's strictly-greater rule. The difficulty was the positional slot contract, not the SQL. |
 | [fisher#19](https://github.com/JasperFx/fisher/issues/19) | **Open.** `CompositeProjection` — the one projection shape Fisher does not support. Possibly close to free, but nobody has tried it. |
-| [#22–#50](https://github.com/JasperFx/fisher/issues/22) | **Open.** The Polecat comparison backlog — LINQ, sessions, document storage, the event store's remaining surface, and two satellite packages. Indexed with rationale in [polecat-gaps.md](polecat-gaps.md); listed individually below rather than repeated here. |
+| [#22–#50](https://github.com/JasperFx/fisher/issues/22) | **In progress**, #45 closed. The Polecat comparison backlog — LINQ, sessions, document storage, the event store's remaining surface, and two satellite packages. Indexed with rationale in [polecat-gaps.md](polecat-gaps.md); listed individually below rather than repeated here. |
 | ~~[fisher#20](https://github.com/JasperFx/fisher/issues/20)~~ | **Closed.** `AddFisher(...)`, scoped sessions, hosted services. Surfaced a real bug: everything a container disposes was `IAsyncDisposable` only, which made a scoped session unusable. |
 | ~~[fisher#21](https://github.com/JasperFx/fisher/issues/21)~~ | **Closed.** Subscriptions — `ISubscriptionRunner<ISubscription>`, the session taken from the batch so writes commit with the progression row. |
 
@@ -138,6 +140,7 @@ if something is deferred, it is in the list above.
 | JasperFx 2.43.0 | `EventDataMaskingCompliance` and `StreamCompactingCompliance` enrolled, both green on the bump; three seam members, no production change; `EventOperations.Unsupported.cs` emptied and deleted |
 | JasperFx 2.44.0 | `RebuildAndCatchUpCompliance` and `DeadLetterCompliance` enrolled, both green on the bump; **no seam members and no production change** |
 | JasperFx 2.45.0 | `ConjoinedEventTenancyCompliance` and `SubscriptionCompliance` enrolled, both green on the bump; two seam members and one partial, **no production change**. Empties the upstream ES compliance backlog |
+| `IDocumentStore` (fisher#45) | the store's own API as an interface; tooling surfaces stay explicit, and the surface is reflection-pinned in both directions |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -291,9 +294,9 @@ rather than by size. Full rationale per issue; [polecat-gaps.md](polecat-gaps.md
 
 | | Why first |
 |---|---|
-| [#30](https://github.com/JasperFx/fisher/issues/30) sessions and `SessionOptions` | There is **no read-only session factory at all**, and `AddFisher` resolves scoped `IQuerySession` to a full writable session because there is nothing else to resolve to. The enlistment half is the sharper problem: one writer per file means an application writing its own tables and Fisher's in the same file cannot do both atomically today. |
+| [#30](https://github.com/JasperFx/fisher/issues/30) sessions and `SessionOptions` | The enlistment half: one writer per file means an application writing its own tables and Fisher's in the same file cannot do both atomically today. `QuerySession()` on the store is a one-liner alongside it. |
 | [#34](https://github.com/JasperFx/fisher/issues/34) `QueueSqlCommand` | The cheapest possible answer to that same problem — one more operation in a queue that already exists. |
-| [#45](https://github.com/JasperFx/fisher/issues/45) `IDocumentStore` | Cheapest it will ever be: seven public members today, and half this backlog widens it. [#46](https://github.com/JasperFx/fisher/issues/46) and [#49](https://github.com/JasperFx/fisher/issues/49) both need it. |
+| ~~[#45](https://github.com/JasperFx/fisher/issues/45) `IDocumentStore`~~ | **Done.** Eight public members, extracted and pinned by reflection in both directions. [#46](https://github.com/JasperFx/fisher/issues/46) and [#49](https://github.com/JasperFx/fisher/issues/49) are unblocked. |
 
 **Then LINQ**, in dependency order — [#22](https://github.com/JasperFx/fisher/issues/22) aggregates
 (no new SQL shape; `CountAsync` already proves the pattern), then
