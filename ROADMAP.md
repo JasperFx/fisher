@@ -3,9 +3,14 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **one open issue** (#19, an enhancement — nothing is broken), on JasperFx **2.45.0**.
+Status: **thirty open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
 **All 28 compliance suites green.** 705 tests green on net9.0
 and net10.0, with **no known intermittents**.
+
+Twenty-nine of those thirty ([#22](https://github.com/JasperFx/fisher/issues/22) through
+[#50](https://github.com/JasperFx/fisher/issues/50)) came out of a file-by-file comparison against
+Polecat on 2026-08-08 and are indexed in [polecat-gaps.md](polecat-gaps.md), which also records what
+SQLite has no equivalent for and never will. That document is context; the issues are the tracking.
 
 ## The destination
 
@@ -85,6 +90,7 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | ~~[fisher#17](https://github.com/JasperFx/fisher/issues/17)~~ | **Closed.** Document hierarchies on a `doc_type` alias column. This issue's premise was wrong: `dotnet_type` cannot be the discriminator, so it needed a schema change after all. |
 | ~~[fisher#18](https://github.com/JasperFx/fisher/issues/18)~~ | **Closed.** Numeric revisions, following Marten's strictly-greater rule. The difficulty was the positional slot contract, not the SQL. |
 | [fisher#19](https://github.com/JasperFx/fisher/issues/19) | **Open.** `CompositeProjection` — the one projection shape Fisher does not support. Possibly close to free, but nobody has tried it. |
+| [#22–#50](https://github.com/JasperFx/fisher/issues/22) | **Open.** The Polecat comparison backlog — LINQ, sessions, document storage, the event store's remaining surface, and two satellite packages. Indexed with rationale in [polecat-gaps.md](polecat-gaps.md); listed individually below rather than repeated here. |
 | ~~[fisher#20](https://github.com/JasperFx/fisher/issues/20)~~ | **Closed.** `AddFisher(...)`, scoped sessions, hosted services. Surfaced a real bug: everything a container disposes was `IAsyncDisposable` only, which made a scoped session unusable. |
 | ~~[fisher#21](https://github.com/JasperFx/fisher/issues/21)~~ | **Closed.** Subscriptions — `ISubscriptionRunner<ISubscription>`, the session taken from the batch so writes commit with the progression row. |
 
@@ -276,6 +282,55 @@ plus paging rather than an expression, and `EventOperations.QueryEventsAsync` al
 cross-stream read. Listed last because no suite and no application is waiting on it — CritterWatch's
 Event Explorer is.
 
+### 6. The Polecat comparison backlog (#22–#50)
+
+Steps 1–5 are done. This is what replaces them, and the ordering is by what an application hits first
+rather than by size. Full rationale per issue; [polecat-gaps.md](polecat-gaps.md) is the index.
+
+**First — the surfaces whose absence is a hard stop rather than an inconvenience.**
+
+| | Why first |
+|---|---|
+| [#30](https://github.com/JasperFx/fisher/issues/30) sessions and `SessionOptions` | There is **no read-only session factory at all**, and `AddFisher` resolves scoped `IQuerySession` to a full writable session because there is nothing else to resolve to. The enlistment half is the sharper problem: one writer per file means an application writing its own tables and Fisher's in the same file cannot do both atomically today. |
+| [#34](https://github.com/JasperFx/fisher/issues/34) `QueueSqlCommand` | The cheapest possible answer to that same problem — one more operation in a queue that already exists. |
+| [#45](https://github.com/JasperFx/fisher/issues/45) `IDocumentStore` | Cheapest it will ever be: seven public members today, and half this backlog widens it. [#46](https://github.com/JasperFx/fisher/issues/46) and [#49](https://github.com/JasperFx/fisher/issues/49) both need it. |
+
+**Then LINQ**, in dependency order — [#22](https://github.com/JasperFx/fisher/issues/22) aggregates
+(no new SQL shape; `CountAsync` already proves the pattern), then
+[#23](https://github.com/JasperFx/fisher/issues/23) `Select` projections, then
+[#24](https://github.com/JasperFx/fisher/issues/24) `GroupBy` on top of both.
+[#26](https://github.com/JasperFx/fisher/issues/26)'s marker operators are independent and mostly
+small. [#25](https://github.com/JasperFx/fisher/issues/25) joins and
+[#27](https://github.com/JasperFx/fisher/issues/27) cursor paging are the two places SQLite is the
+*easiest* of the three dialects, which is unusual enough to be worth spending on.
+
+**Then the document features with the best ratio.**
+[#35](https://github.com/JasperFx/fisher/issues/35) patching is the strongest single case in the whole
+backlog — every operation is one json1 function in one statement, with no server function to install,
+and duplicated fields follow a patch for free because fisher#2 made them generated columns.
+[#29](https://github.com/JasperFx/fisher/issues/29) metadata is the document-side counterpart of
+something the event store already does (correlation and causation reach events with no application
+code; documents in the same transaction get none of it).
+[#36](https://github.com/JasperFx/fisher/issues/36) bulk insert needs no bulk-copy protocol.
+
+**Then the event store's remainder** — [#40](https://github.com/JasperFx/fisher/issues/40) natural
+keys, which closes the last stated partial on `IEventStoreOperations`, and
+[#41](https://github.com/JasperFx/fisher/issues/41), whose stated blocker ("nothing to resolve a path
+against") holds for `IEvent` and not for a query that names the event type.
+
+**[#47](https://github.com/JasperFx/fisher/issues/47), database-per-tenant, is the biggest and is
+deliberately not last.** A tenant is a file, so provisioning is `File.Create` and deletion is deleting
+a file — and tenants get separate write locks, which is the only way a multi-tenant Fisher application
+scales writes. It is staged in three parts inside the issue; stage 1 is most of the work and is
+mechanical.
+
+**Last, and honestly optional:** [#43](https://github.com/JasperFx/fisher/issues/43) binary events,
+[#48](https://github.com/JasperFx/fisher/issues/48) OpenTelemetry (though the retry-event half of it
+answers a question nothing else can — a slow request that spent its time waiting for the write lock
+looks like a slow request), and the two satellite packages
+([#49](https://github.com/JasperFx/fisher/issues/49),
+[#50](https://github.com/JasperFx/fisher/issues/50)).
+
 ## Enrollment status
 
 Enrolling is one empty subclass per suite in `Compliance/fisher_event_store_compliance.cs`. Every
@@ -324,10 +379,12 @@ New suites arriving in a JasperFx bump are the only way this table grows now.
   test that would fail if `Serializable` stopped producing `BEGIN IMMEDIATE` — that needs two
   genuinely interleaved writers, not two sequential `SaveChangesAsync` calls.
 - **`Advanced` is a thin subset.** `Clean`, `ResetAllDataAsync` and `ResetHiloSequenceFloorAsync<T>`
-  only. Marten and Polecat also carry bulk insert, `InitialData` and metadata helpers there.
-- **Not started at all:** tenancy beyond the conjoined style — that one works and is now suite-pinned;
-  what is absent is database-per-tenant — composite projections (#19)
-  (`AddFisher`), bulk insert, natural keys, user-declared indexes over unduplicated members.
+  only. Now filed: bulk insert ([#36](https://github.com/JasperFx/fisher/issues/36)), `InitialData`
+  ([#39](https://github.com/JasperFx/fisher/issues/39)), and the rest of the surface
+  ([#42](https://github.com/JasperFx/fisher/issues/42)).
+- **Tenancy beyond the conjoined style.** Conjoined works and is suite-pinned; database-per-tenant is
+  [#47](https://github.com/JasperFx/fisher/issues/47), and it is the item where SQLite's single-writer
+  constraint turns into the argument *for* the feature rather than against it.
 - **`dotnet_type` cannot be mapped onto a member**, because Weasel's `DocumentDotNetTypeBinder` takes
   no member where every other document metadata binder does. Upstream gap, found while building
   fisher#11; worth a Weasel issue if anything ever needs to read it.

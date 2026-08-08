@@ -1,0 +1,143 @@
+# Polecat Features Not Yet in Fisher
+
+Everything [Polecat](https://github.com/JasperFx/polecat) (SQL Server) has that Fisher (SQLite) does
+not, as of 2026-08-08, on JasperFx 2.45.0. Polecat is the comparison rather than Marten because
+Fisher mirrors Polecat's internals by design — CLAUDE.md's rule is "mirror Marten's public API surface
+where it costs nothing; mirror Polecat's internals where the concern is not dialect-specific" — so a
+divergence from Polecat is either a deliberate SQLite decision or a gap.
+
+**This file is an index, not the tracking.** Every row below is a filed issue; see ROADMAP.md's rule
+that a note in a document is context rather than tracking. Nothing here is a to-do that exists only
+here.
+
+The scoreboard: 29 issues, [#22](https://github.com/JasperFx/fisher/issues/22) through
+[#50](https://github.com/JasperFx/fisher/issues/50), filed together after a file-by-file comparison of
+both source trees.
+
+---
+
+## LINQ
+
+The single largest area. Fisher's `LinqQueryParser` handles `Where`, the four ordering operators,
+`Take` and `Skip`, and refuses everything else by name; Polecat's handles twenty-odd operators.
+
+| Feature | Issue |
+|---|---|
+| `SumAsync` / `MinAsync` / `MaxAsync` / `AverageAsync`, `LastAsync`, predicate overloads of `CountAsync`/`AnyAsync` | [#22](https://github.com/JasperFx/fisher/issues/22) |
+| `Select` projections (scalar, anonymous, constructor), `Distinct`, `DistinctBy` | [#23](https://github.com/JasperFx/fisher/issues/23) |
+| `GroupBy`, with `Where`-after-group as `HAVING` | [#24](https://github.com/JasperFx/fisher/issues/24) |
+| `GroupJoin(...).SelectMany(...)` | [#25](https://github.com/JasperFx/fisher/issues/25) |
+| `AnyTenant` / `TenantIsOneOf`, `ModifiedSince` / `ModifiedBefore`, `CreatedSince` / `CreatedBefore`, `QueryForNonStaleData`, `IsOneOf` / `In` / `IsEmpty` / `object.Equals` | [#26](https://github.com/JasperFx/fisher/issues/26) |
+| `IPagedList` / `ToPagedListAsync`, and keyset (cursor) pagination | [#27](https://github.com/JasperFx/fisher/issues/27) |
+| `LoadJsonAsync`, `ToJsonArrayAsync`, `ToJsonFirstWithVersionAsync`, `StreamPagedJsonArray` | [#28](https://github.com/JasperFx/fisher/issues/28) |
+| Batched document queries, `IQueryPlan`, `CheckExistsAsync`, `ToSql` | [#37](https://github.com/JasperFx/fisher/issues/37) |
+
+Two of these are *cheaper* on SQLite than on either sibling and the issues say why. `GroupJoin`
+([#25](https://github.com/JasperFx/fisher/issues/25)) is a plain join between two tables with no
+`OPENJSON` and no round trip to amortise — and the usual "a round trip is cheaper than a join"
+argument inverts for an in-process store. Keyset pagination
+([#27](https://github.com/JasperFx/fisher/issues/27)) can use SQLite's native row-value comparison,
+where T-SQL needs the expanded OR-of-ANDs form the planner cannot index.
+
+## Sessions and the unit of work
+
+| Feature | Issue |
+|---|---|
+| `QuerySession()` — there is **no read-only session factory at all** — and `SessionOptions` (tenant, isolation, timeout, listeners, **connection/transaction enlistment**) | [#30](https://github.com/JasperFx/fisher/issues/30) |
+| `IdentitySession()`, `DocumentTracking`, dirty tracking, `Eject` / `EjectAllOfType` / `EjectAllPendingChanges` | [#31](https://github.com/JasperFx/fisher/issues/31) |
+| `IDocumentSessionListener` and `IChangeSet` | [#32](https://github.com/JasperFx/fisher/issues/32) |
+| `ForTenant(...)` / `ITenantOperations` — writing for several tenants in one unit of work | [#33](https://github.com/JasperFx/fisher/issues/33) |
+| `QueueSqlCommand` and `IAdvancedSql` | [#34](https://github.com/JasperFx/fisher/issues/34) |
+| `ITransactionParticipant` | [#50](https://github.com/JasperFx/fisher/issues/50) |
+
+`SessionOptions`' enlistment half and `ITransactionParticipant` are the two answers to the same
+problem from opposite ownership directions, and it is a **sharper problem here than on either
+sibling**: one writer per file means an application that writes its own tables and Fisher's in the
+same file cannot do both atomically today, and contends with itself trying.
+
+## Document storage
+
+| Feature | Issue |
+|---|---|
+| Metadata columns `created_at`, `correlation_id`, `causation_id`, `last_modified_by`, `headers`; `MetadataForAsync` | [#29](https://github.com/JasperFx/fisher/issues/29) |
+| Patching — `Set` / `Increment` / `Append` / `Insert` / `Remove` / `Rename` / `Delete`, by id or predicate | [#35](https://github.com/JasperFx/fisher/issues/35) |
+| Bulk insert, with `InsertsOnly` / `IgnoreDuplicates` / `OverwriteExisting` | [#36](https://github.com/JasperFx/fisher/issues/36) |
+| Document foreign keys | [#38](https://github.com/JasperFx/fisher/issues/38) |
+| `[Index]` / `[UniqueIndex]` / `[HiloSequence]` attributes, `AddSubClassHierarchy()`, `StorePolicies`, `IInitialData` | [#39](https://github.com/JasperFx/fisher/issues/39) |
+
+Patching ([#35](https://github.com/JasperFx/fisher/issues/35)) is the strongest single case in this
+list. Every operation maps to one json1 function in one `update` statement — no server function to
+install, unlike Marten's PL/pgSQL patch function — and a Fisher duplicated field, being a `VIRTUAL`
+generated column, follows a patch with nothing to refresh, where both siblings must update their
+duplicated columns inside the patch SQL. That is fisher#2's generated-column decision paying off.
+
+Bulk insert ([#36](https://github.com/JasperFx/fisher/issues/36)) has no `SqlBulkCopy` analogue and
+does not need one: on SQLite the transaction dominates the cost, so a prepared statement rebound per
+row inside one transaction is already the fast path.
+
+## Event store
+
+| Feature | Issue |
+|---|---|
+| Natural keys — and with them the last partial member on `IEventStoreOperations` | [#40](https://github.com/JasperFx/fisher/issues/40) |
+| `QueryRawEventDataOnly<T>()` — LINQ over the event **body**, where Fisher can only query metadata | [#41](https://github.com/JasperFx/fisher/issues/41) |
+| `FetchEventStoreStatistics`, `ToDatabaseScript` / `WriteCreationScriptToFileAsync`, `CleanAsync<T>`, `EventProjectionScenario` | [#42](https://github.com/JasperFx/fisher/issues/42) |
+| Binary event serialization (`[BinaryEvent]`, `IEventBinarySerializer`) | [#43](https://github.com/JasperFx/fisher/issues/43) |
+| `IDocumentStoreDiagnostics`, `IDocumentStoreUsageSource`, projection replay | [#44](https://github.com/JasperFx/fisher/issues/44) |
+| `CompositeProjection` | [#19](https://github.com/JasperFx/fisher/issues/19) |
+
+[#40](https://github.com/JasperFx/fisher/issues/40) is the one that closes a stated partial:
+`FetchForWriting<T, TId>` and `FetchLatest<T, TId>` accept only an id that is already the stream
+identity type, because in the siblings that overload is the natural-key **and** strong-typed-id entry
+point. fisher#14 closed the strong-typed half; this is the other.
+
+[#43](https://github.com/JasperFx/fisher/issues/43) matters more here than it looks: SQLite has no
+`jsonb`, so Fisher stores the literal JSON text of every event forever, and the store's disk footprint
+is the application's.
+
+## Store and infrastructure
+
+| Feature | Issue |
+|---|---|
+| `IDocumentStore` — the store is a concrete class with no interface | [#45](https://github.com/JasperFx/fisher/issues/45) |
+| `AddFisherStore<T>`, `IConfigureFisher` — several stores in one application | [#46](https://github.com/JasperFx/fisher/issues/46) |
+| Database-per-tenant / `ITenancy` / master-table tenancy | [#47](https://github.com/JasperFx/fisher/issues/47) |
+| OpenTelemetry spans for session work | [#48](https://github.com/JasperFx/fisher/issues/48) |
+| `Fisher.AspNetCore` — streaming JSON results, ETags, daemon health check | [#49](https://github.com/JasperFx/fisher/issues/49) |
+| `Fisher.EntityFrameworkCore` — transaction participation and EF-backed projections | [#50](https://github.com/JasperFx/fisher/issues/50) |
+
+[#45](https://github.com/JasperFx/fisher/issues/45) is the cheapest it will ever be — the store's
+public surface is seven members today, and half the issues in this backlog widen it.
+[#46](https://github.com/JasperFx/fisher/issues/46) and
+[#47](https://github.com/JasperFx/fisher/issues/47) both depend on it.
+
+**[#47](https://github.com/JasperFx/fisher/issues/47) is the one where SQLite's constraint becomes the
+feature.** A tenant is a file: creating one is a `File.Create` plus a migration, deleting one is
+deleting a file, and — the part that matters — tenants get **separate write locks**, which is the only
+way a multi-tenant Fisher application scales writes at all. It is a performance feature here and an
+isolation feature on both siblings. It is also what would finally make the `IEventDatabase` parameters
+that `DocumentStore.Daemon.cs` ignores throughout start carrying an answer.
+
+---
+
+## Not gaps — SQLite has no equivalent and never will
+
+Recorded so they are not rediscovered as omissions. None of these has an issue.
+
+| Polecat feature | Why not |
+|---|---|
+| `DocumentPartitioning`, `RollingPartitions`, `AllDocumentsAreMultiTenantedWithPartitioning()`, `AddPolecatManagedTenantsAsync`, `TablePartitionStatus` | SQLite has no table partitioning at all — no partition functions, no schemes, no per-partition storage. Separate tables under a `UNION ALL` view is a different feature and carries none of the operational properties (partition switching, aged-partition drop) that make Polecat's worth having. |
+| `DaemonMode.HotCold`, `Events/Daemon/Coordination/` | Hot-cold failover means several nodes competing for a leadership lease through the database, and SQLite does not make a file safe to share across nodes. `AddFisher` refuses the mode rather than silently running Solo — see the DI notes in CLAUDE.md. |
+| `JsonIndex` | Polecat needs a `JSON_VALUE` computed index to index into JSON. SQLite indexes the expression directly, which is what fisher#16 built — cheaper, and already done. |
+| `TenantEventSequenceRegistry`, `TenantPartitionOrdinalRegistry` | Mechanics of SQL Server sequences and partition ordinals. Fisher's sequence is `INTEGER PRIMARY KEY AUTOINCREMENT`. |
+| `SqlBulkCopy` | No wire protocol to bulk-load over — but see [#36](https://github.com/JasperFx/fisher/issues/36) for what replaces it, which is not slower. |
+| Row-locking `FetchForExclusiveWriting` semantics | Already documented in CLAUDE.md's divergence table: SQLite has no row lock, so the loser of an exclusive append **fails** rather than **waits**. The safety property is unchanged. |
+
+## Also not gaps — deliberate, already decided
+
+| Feature | Decision |
+|---|---|
+| A message bus / durable outbox | [fisher#8](https://github.com/JasperFx/fisher/issues/8), closed wontfix. `NulloMessageOutbox` is the intended end state; delivery is a bus integration's job here as on both siblings. |
+| `IChangeListener` (Polecat's local spelling) | Fisher uses JasperFx's lifted `IDaemonChangeListener`. Polecat's is the older spelling of the same thing; new code should not copy it. |
+| An inline equivalent of subscriptions | "Inline" would be code in the caller's own unit of work. A subscription needs the daemon. |
+| Compiled queries | Polecat declines them too. |
