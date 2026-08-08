@@ -70,6 +70,11 @@ public class FisherQueryProvider : IQueryProvider
     internal async Task<IReadOnlyList<T>> ToListAsync<T>(Expression expression, CancellationToken token)
         where T : notnull
     {
+        if (ProjectionFor(expression) is { } projected)
+        {
+            return await ProjectListAsync<T>(projected, token).ConfigureAwait(false);
+        }
+
         var (statement, selector) = Build<T>(expression);
 
         var results = new List<T>();
@@ -77,6 +82,31 @@ public class FisherQueryProvider : IQueryProvider
         while (await reader.ReadAsync(token).ConfigureAwait(false))
         {
             results.Add(await selector.ResolveAsync(reader, token).ConfigureAwait(false));
+        }
+
+        return results;
+    }
+
+    private async Task<IReadOnlyList<T>> ProjectListAsync<T>(
+        (Statement Statement, SelectProjection Projection) projected, CancellationToken token)
+        where T : notnull
+    {
+        var results = new List<T>();
+
+        await using var reader = await ExecuteReaderAsync(projected.Statement, token).ConfigureAwait(false);
+
+        var values = new object?[projected.Projection.Locators.Length];
+
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
+        {
+            for (var i = 0; i < values.Length; i++)
+            {
+                values[i] = reader.IsDBNull(i)
+                    ? null
+                    : CoerceTo(reader.GetValue(i), projected.Projection.ColumnTypes[i]);
+            }
+
+            results.Add((T)projected.Projection.Build(values)!);
         }
 
         return results;
@@ -97,6 +127,24 @@ public class FisherQueryProvider : IQueryProvider
         CancellationToken token)
         where T : notnull
     {
+        if (ProjectionFor(expression) is { } projected)
+        {
+            projected.Statement.Limit = enforceSingle ? 2 : 1;
+
+            var rows = await ProjectListAsync<T>(projected, token).ConfigureAwait(false);
+
+            if (rows.Count == 0)
+            {
+                return required
+                    ? throw new InvalidOperationException($"The query returned no {typeof(T).Name}.")
+                    : default;
+            }
+
+            return enforceSingle && rows.Count > 1
+                ? throw new InvalidOperationException($"The query returned more than one {typeof(T).Name}.")
+                : rows[0];
+        }
+
         var (statement, selector) = Build<T>(expression);
         statement.Limit = enforceSingle ? 2 : 1;
 
@@ -122,7 +170,19 @@ public class FisherQueryProvider : IQueryProvider
     internal async Task<long> CountAsync<T>(Expression expression, CancellationToken token)
         where T : notnull
     {
-        var (statement, _) = Build<T>(expression);
+        var (statement, parser, _) = BuildStatement(SourceTypeFor(expression), expression);
+
+        // A projected count has to count the projected rows, and under Distinct that is the whole
+        // point of the count — so the projection becomes a subquery rather than having its select
+        // list replaced. `select count(*) from (select distinct …)` is the only shape that answers
+        // "how many distinct values" correctly.
+        if (parser.Projection is not null)
+        {
+            return Convert.ToInt64(await ExecuteScalarAsync(
+                new Statement { Subquery = statement, SelectColumns = "count(*)" }, token)
+                .ConfigureAwait(false));
+        }
+
         statement.SelectColumns = "count(*)";
 
         // A count over a paged query has to count the page, not the table, so the paging moves into a
@@ -140,7 +200,9 @@ public class FisherQueryProvider : IQueryProvider
     internal async Task<bool> AnyAsync<T>(Expression expression, CancellationToken token)
         where T : notnull
     {
-        var (statement, _) = Build<T>(expression);
+        // Built non-generically so it answers a projected query too — whether any row exists does not
+        // depend on what the rows are shaped into.
+        var (statement, _, _) = BuildStatement(SourceTypeFor(expression), expression);
         statement.SelectColumns = "1";
         statement.OrderBys.Clear();
         statement.IsExistsWrapper = true;
@@ -169,6 +231,11 @@ public class FisherQueryProvider : IQueryProvider
     internal async Task<T?> LastAsync<T>(Expression expression, bool required, CancellationToken token)
         where T : notnull
     {
+        if (ProjectionFor(expression) is { } projected)
+        {
+            return await LastProjectedAsync<T>(projected, required, token).ConfigureAwait(false);
+        }
+
         var (statement, selector) = Build<T>(expression);
 
         if (statement.OrderBys.Count == 0)
@@ -193,6 +260,30 @@ public class FisherQueryProvider : IQueryProvider
         }
 
         return await selector.ResolveAsync(reader, token).ConfigureAwait(false);
+    }
+
+    private async Task<T?> LastProjectedAsync<T>(
+        (Statement Statement, SelectProjection Projection) projected, bool required, CancellationToken token)
+        where T : notnull
+    {
+        if (projected.Statement.OrderBys.Count == 0)
+        {
+            throw new BadLinqExpressionException(
+                "LastAsync requires an OrderBy: SQLite has no LAST, so 'last' is only meaningful "
+                + "relative to an ordering.");
+        }
+
+        var statement = projected.Statement.Limit.HasValue || projected.Statement.Offset.HasValue
+            ? ReverseOverPage(projected.Statement)
+            : ReverseInPlace(projected.Statement);
+
+        var rows = await ProjectListAsync<T>((statement, projected.Projection), token).ConfigureAwait(false);
+
+        return rows.Count > 0
+            ? rows[0]
+            : required
+                ? throw new InvalidOperationException($"The query returned no {typeof(T).Name}.")
+                : default;
     }
 
     private static Statement ReverseInPlace(Statement statement)
@@ -369,30 +460,49 @@ public class FisherQueryProvider : IQueryProvider
             return default;
         }
 
-        var target = Nullable.GetUnderlyingType(typeof(TResult)) ?? typeof(TResult);
+        return (TResult)CoerceTo(raw, typeof(TResult))!;
+    }
+
+    /// <summary>
+    ///     The same conversions, for a column type only known at runtime — what a
+    ///     <see cref="SelectProjection" /> reads each of its columns through.
+    /// </summary>
+    private static object? CoerceTo(object? raw, Type type)
+    {
+        if (raw is null or DBNull)
+        {
+            return null;
+        }
+
+        var target = Nullable.GetUnderlyingType(type) ?? type;
+
+        if (target.IsInstanceOfType(raw))
+        {
+            return raw;
+        }
 
         if (target.IsEnum)
         {
-            return (TResult)Enum.ToObject(target, Convert.ToInt64(raw,
-                System.Globalization.CultureInfo.InvariantCulture));
+            return Enum.ToObject(target,
+                Convert.ToInt64(raw, System.Globalization.CultureInfo.InvariantCulture));
         }
 
         if (target == typeof(DateTimeOffset))
         {
-            return (TResult)(object)Storage.SqliteTimestamp.FromDatabaseValue((string)raw);
+            return Storage.SqliteTimestamp.FromDatabaseValue((string)raw);
         }
 
         if (target == typeof(DateTime))
         {
-            return (TResult)(object)Storage.SqliteTimestamp.FromDatabaseValue((string)raw).UtcDateTime;
+            return Storage.SqliteTimestamp.FromDatabaseValue((string)raw).UtcDateTime;
         }
 
         if (target == typeof(Guid))
         {
-            return (TResult)(object)Guid.Parse((string)raw);
+            return Guid.Parse((string)raw);
         }
 
-        return (TResult)Convert.ChangeType(raw, target, System.Globalization.CultureInfo.InvariantCulture);
+        return Convert.ChangeType(raw, target, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>
@@ -417,15 +527,75 @@ public class FisherQueryProvider : IQueryProvider
     private MemberFactory MemberFactoryFor<T>() where T : notnull
         => new(_session.Options, _session.Options.Schema.For<T>().Mapping);
 
+    /// <summary>
+    ///     The document type the chain started from.
+    /// </summary>
+    /// <remarks>
+    ///     A projection makes the queryable's element type diverge from the document's —
+    ///     <c>Query&lt;Catch&gt;().Select(x =&gt; x.Species)</c> is an <c>IQueryable&lt;string&gt;</c> —
+    ///     so the terminal operators can no longer take the document type from their own type
+    ///     parameter. The root of every Fisher chain is a <c>ConstantExpression</c> holding the
+    ///     original <see cref="FisherQueryable{T}" />, which is where the answer lives.
+    /// </remarks>
+    private static Type SourceTypeFor(Expression expression)
+    {
+        var current = expression;
+
+        while (current is MethodCallExpression call && call.Arguments.Count > 0)
+        {
+            current = call.Arguments[0];
+        }
+
+        return current is ConstantExpression { Value: IQueryable queryable }
+            ? queryable.ElementType
+            : throw new BadLinqExpressionException(
+                "This query did not start from session.Query<T>(), so Fisher cannot tell which document "
+                + "type it is over.");
+    }
+
+    /// <summary>
+    ///     The statement and the projection for a projected query, or null when the query returns
+    ///     documents.
+    /// </summary>
+    private (Statement Statement, SelectProjection Projection)? ProjectionFor(Expression expression)
+    {
+        var (statement, parser, _) = BuildStatement(SourceTypeFor(expression), expression);
+
+        return parser.Projection is null ? null : (statement, parser.Projection);
+    }
+
     private (Statement Statement, ISelector<T> Selector) Build<T>(Expression expression) where T : notnull
     {
-        var mapping = _session.Options.Schema.For<T>().Mapping;
-        var storage = _session.FisherDatabase.Providers.StorageFor<T>().QueryOnly;
+        var (statement, parser, selectClause) = BuildStatement(typeof(T), expression);
+
+        if (parser.Projection is not null)
+        {
+            throw new BadLinqExpressionException(
+                $"This query projects with Select, so it does not return {typeof(T).Name} documents.");
+        }
+
+        return (statement, (ISelector<T>)selectClause.BuildSelector(_session));
+    }
+
+    /// <summary>
+    ///     Everything about a query that does not depend on the <em>result</em> type — which is
+    ///     everything except materialization.
+    /// </summary>
+    /// <remarks>
+    ///     Non-generic on purpose. A projection's result type is not the document type, so the generic
+    ///     <see cref="Build{T}" /> cannot serve both; splitting here is what avoids reflecting over a
+    ///     runtime type to build a statement.
+    /// </remarks>
+    private (Statement Statement, LinqQueryParser Parser, ISelectClause SelectClause) BuildStatement(
+        Type sourceType, Expression expression)
+    {
+        var mapping = _session.Options.Schema.MappingFor(sourceType);
+        var storage = ((IStorageSession)_session).StorageFor(sourceType);
 
         if (storage is not ISelectClause selectClause)
         {
             throw new BadLinqExpressionException(
-                $"The storage for '{typeof(T).Name}' cannot produce a select clause.");
+                $"The storage for '{sourceType.Name}' cannot produce a select clause.");
         }
 
         var parser = new LinqQueryParser(new MemberFactory(_session.Options, mapping));
@@ -434,7 +604,9 @@ public class FisherQueryProvider : IQueryProvider
         var statement = new Statement
         {
             FromTable = selectClause.FromObject,
-            SelectColumns = string.Join(", ", selectClause.SelectFields()),
+            SelectColumns = parser.Projection is null
+                ? string.Join(", ", selectClause.SelectFields())
+                : string.Join(", ", parser.Projection.Locators),
             Limit = parser.Limit,
             Offset = parser.Offset
         };
@@ -448,10 +620,75 @@ public class FisherQueryProvider : IQueryProvider
             statement.Wheres.Add(storage.FilterDocuments(where, _session));
         }
 
-        ApplyHierarchyFilter(statement, mapping, typeof(T));
+        ApplyHierarchyFilter(statement, mapping, sourceType);
         ApplySoftDeleteFilters(statement, parser, storage, mapping);
 
-        return (statement, (ISelector<T>)selectClause.BuildSelector(_session));
+        return (ApplyDistinct(statement, parser, selectClause), parser, selectClause);
+    }
+
+    /// <summary>
+    ///     <c>Distinct</c> and <c>DistinctBy</c>, which are different enough to be separate operators
+    ///     rather than overloads.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b><c>Distinct()</c> is refused on an unprojected query</b>, and that is not
+    ///         conservatism. DISTINCT over a document's own columns compares whole serialized JSON
+    ///         strings byte for byte — so two documents equal in every member but written by different
+    ///         serializer settings, or with members in a different order, count as distinct. It would
+    ///         look right on small test data and be wrong in production.
+    ///     </para>
+    ///     <para>
+    ///         <b><c>DistinctBy</c> is the operator for documents</b>, and it needs a window function
+    ///         rather than a DISTINCT: one row per key, keeping the whole document. SQLite has had
+    ///         <c>row_number()</c> since 3.25, so Polecat's shape ports directly.
+    ///     </para>
+    /// </remarks>
+    private static Statement ApplyDistinct(Statement statement, LinqQueryParser parser,
+        ISelectClause selectClause)
+    {
+        if (parser.IsDistinct)
+        {
+            if (parser.Projection is null)
+            {
+                throw new BadLinqExpressionException(
+                    "Distinct() requires a Select. Over whole documents it would compare serialized JSON "
+                    + "strings byte for byte rather than comparing documents, which is almost never what "
+                    + "was meant — use DistinctBy(x => x.Key) to deduplicate documents by a member.");
+            }
+
+            statement.IsDistinct = true;
+        }
+
+        if (parser.DistinctByLocator is null)
+        {
+            return statement;
+        }
+
+        var fields = string.Join(", ", selectClause.SelectFields());
+
+        var inner = new Statement
+        {
+            FromTable = statement.FromTable,
+            SelectColumns =
+                $"{fields}, row_number() over (partition by {parser.DistinctByLocator} "
+                + $"order by {parser.DistinctByLocator}) as fi_rn"
+        };
+        inner.Wheres.AddRange(statement.Wheres);
+
+        // Ordering and paging belong outside: they apply to the deduplicated rows, not to the
+        // partitioned ones.
+        var outer = new Statement
+        {
+            Subquery = inner,
+            SelectColumns = fields,
+            Limit = statement.Limit,
+            Offset = statement.Offset
+        };
+        outer.Wheres.Add(new LiteralSqlFragment("fi_rn = 1"));
+        outer.OrderBys.AddRange(statement.OrderBys);
+
+        return outer;
     }
 
     /// <summary>

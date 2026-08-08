@@ -77,6 +77,17 @@ internal class LinqQueryParser
     /// </summary>
     public bool UsedSoftDeleteOperator { get; private set; }
 
+    /// <summary>
+    ///     The <c>Select</c> the chain ended with, or null when the query returns documents.
+    /// </summary>
+    public SelectProjection? Projection { get; private set; }
+
+    /// <summary>Set by <c>Distinct()</c>.</summary>
+    public bool IsDistinct { get; private set; }
+
+    /// <summary>The key <c>DistinctBy</c> deduplicates on, or null.</summary>
+    public string? DistinctByLocator { get; private set; }
+
     public void Parse(Expression expression)
     {
         var calls = new List<MethodCallExpression>();
@@ -104,19 +115,36 @@ internal class LinqQueryParser
                 break;
 
             case "OrderBy":
-                OrderBys.Add((LocatorFor(call), false));
+                OrderBys.Add((OrderingLocatorFor(call), false));
                 break;
 
             case "OrderByDescending":
-                OrderBys.Add((LocatorFor(call), true));
+                OrderBys.Add((OrderingLocatorFor(call), true));
                 break;
 
             case "ThenBy":
-                OrderBys.Add((LocatorFor(call), false));
+                OrderBys.Add((OrderingLocatorFor(call), false));
                 break;
 
             case "ThenByDescending":
-                OrderBys.Add((LocatorFor(call), true));
+                OrderBys.Add((OrderingLocatorFor(call), true));
+                break;
+
+            case "Select":
+                ApplySelect(call);
+                break;
+
+            case "Distinct":
+                IsDistinct = true;
+                break;
+
+            case "DistinctBy" when Projection is not null:
+                throw new BadLinqExpressionException(
+                    "DistinctBy is for deduplicating documents by a member. After a Select, use "
+                    + "Distinct().");
+
+            case "DistinctBy":
+                DistinctByLocator = LocatorFor(call);
                 break;
 
             case "Take":
@@ -166,8 +194,30 @@ internal class LinqQueryParser
             default:
                 throw new BadLinqExpressionException(
                     $"Fisher cannot translate '{call.Method.Name}' to SQL yet. Supported operators are "
-                    + "Where, OrderBy, OrderByDescending, ThenBy, ThenByDescending, Take and Skip.");
+                    + "Where, Select, Distinct, DistinctBy, OrderBy, OrderByDescending, ThenBy, "
+                    + "ThenByDescending, Take and Skip.");
         }
+    }
+
+    /// <summary>
+    ///     A projection ends the chain as far as document members are concerned, so only one is
+    ///     allowed and nothing may follow it that needs to resolve one.
+    /// </summary>
+    /// <remarks>
+    ///     A second <c>Select</c> would have to resolve members of the <em>first</em> projection's
+    ///     result, which is not a document and has no locators. Refused by name rather than producing a
+    ///     confusing "no such member" from the member factory.
+    /// </remarks>
+    private void ApplySelect(MethodCallExpression call)
+    {
+        if (Projection is not null)
+        {
+            throw new BadLinqExpressionException(
+                "Fisher supports one Select per query. A second one would have to project members of "
+                + "the first projection's result, which is not a document and has no columns.");
+        }
+
+        Projection = SelectProjection.For(UnwrapLambda(call), _memberFactory);
     }
 
     private void MarkSoftDelete(SoftDeleteScope scope)
@@ -186,6 +236,51 @@ internal class LinqQueryParser
         {
             Wheres.Add(_whereParser.Parse(UnwrapLambda(call).Body));
         }
+    }
+
+    /// <summary>
+    ///     An ordering key, which after a <c>Select</c> is a key over the <em>projection</em> rather
+    ///     than over the document.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Only the identity — <c>OrderBy(x =&gt; x)</c> over a single-column projection — is
+    ///         supported, because that is the idiom
+    ///         <c>Select(x =&gt; x.Species).Distinct().OrderBy(x =&gt; x)</c> and it maps to the one
+    ///         column the statement already selects.
+    ///     </para>
+    ///     <para>
+    ///         Ordering by a member of a <em>shaped</em> projection is refused, and deliberately so
+    ///         rather than for want of effort: the mapping back from an anonymous type's member to a
+    ///         locator only exists while the projection is a plain member-for-member copy, and
+    ///         <c>SelectProjection</c>'s whole point is that it does not have to be. Ordering before the
+    ///         <c>Select</c> always works and reads no worse.
+    ///     </para>
+    /// </remarks>
+    private string OrderingLocatorFor(MethodCallExpression call)
+    {
+        if (Projection is null)
+        {
+            return LocatorFor(call);
+        }
+
+        var lambda = UnwrapLambda(call);
+        var body = lambda.Body;
+
+        while (body is UnaryExpression { NodeType: ExpressionType.Convert } unary)
+        {
+            body = unary.Operand;
+        }
+
+        if (body == lambda.Parameters[0] && Projection.Locators.Length == 1)
+        {
+            return Projection.Locators[0];
+        }
+
+        throw new BadLinqExpressionException(
+            $"Fisher cannot order by '{lambda.Body}' after a Select. Only OrderBy(x => x) over a "
+            + "single-value projection is supported; order before the Select to sort by a document "
+            + "member.");
     }
 
     /// <summary>

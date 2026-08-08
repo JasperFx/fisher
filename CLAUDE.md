@@ -584,6 +584,57 @@ untouched — which is exactly what the Optimistic operation's postprocessing re
 failure. The `DO UPDATE SET` clause assigns from `excluded.*` for every column rather than repeating
 each binder's `ValueSql`, so the update branch cannot drift from the insert branch.
 
+### LINQ projections
+
+`Select`, `Distinct` and `DistinctBy` (fisher#23). Before this every query materialised the whole
+`data` column and deserialized it, so `Select(x => x.Name)` over a table of large documents was the
+difference between reading one JSON scalar per row and reading every document — and Fisher refused it
+rather than answering it expensively, which left the caller with only the expensive shape.
+
+**`SelectProjection` rewrites rather than interprets.** Every document member reachable in the lambda
+body is collected and replaced by an indexer into an `object?[]` of values read from the row; the
+rewritten body is compiled once. So the *shape* of the projection — anonymous type, constructor,
+object initialiser, interpolation, arithmetic — is whatever C# already allowed and none of it needs
+translating.
+
+- **Only member accesses become columns; everything around them runs in .NET, per row.** That is the
+  boundary, and it is deliberate: `Select(x => x.First + " " + x.Last)` reads two columns and
+  concatenates client-side. Marten's answer is the same, and it keeps the surface honest — there is no
+  set of expressions that silently falls back to reading whole documents.
+- Members are deduplicated by locator, so `new { A = x.N, B = x.N * 2 }` selects `n` once.
+  `repeated_members_are_selected_once` asserts on the analyzer directly, because the *result* is
+  identical either way — two columns holding the same value compute the same answer while reading
+  twice as much.
+- **Projected values go through the same `CoerceTo` as an aggregate's**, so an enum, a timestamp and a
+  Guid convert the way fisher#22 established rather than through `Convert.ChangeType`.
+
+**The provider had to split source type from result type.** A projection makes the queryable's element
+type diverge from the document's — `Query<Catch>().Select(x => x.Species)` is an `IQueryable<string>` —
+so the terminals can no longer take the document type from their own type parameter. `SourceTypeFor`
+walks to the root `ConstantExpression`, which holds the original `FisherQueryable<T>`, and
+`BuildStatement` is non-generic so one path serves both. `ToListAsync`, `FirstAsync`, `LastAsync`,
+`CountAsync` and `AnyAsync` all handle a projected query; a projected `CountAsync` wraps rather than
+replacing the select list, because `count(*)` over `select distinct …` is the only shape that answers
+"how many distinct values".
+
+Three restrictions, each refused by name:
+
+- **`Distinct()` requires a `Select`.** Over whole documents DISTINCT compares serialized JSON byte
+  for byte, so two documents equal in every member but written with different serializer settings, or
+  with members in a different order, count as distinct. It would look right on small test data.
+  `DistinctBy` is the operator for documents.
+- **`DistinctBy` is refused after a `Select`** — use `Distinct()`. It emits
+  `row_number() over (partition by …)` filtered to 1, because keeping one *whole document* per key is
+  not something DISTINCT can express. SQLite has had window functions since 3.25.
+- **Ordering after a `Select` is only `OrderBy(x => x)` over a single-value projection**, which is the
+  `Select(...).Distinct().OrderBy(x => x)` idiom. Ordering by a member of a *shaped* projection is
+  refused rather than unimplemented: the mapping back from an anonymous member to a locator exists
+  only while the projection is a plain member-for-member copy, and the whole point of the rewrite is
+  that it need not be. Ordering before the `Select` always works.
+
+One `Select` per query; a second would have to project members of the first's result, which is not a
+document and has no locators.
+
 ### LINQ aggregates and `Last`
 
 `SumAsync` / `MinAsync` / `MaxAsync` / `AverageAsync`, `LastAsync` / `LastOrDefaultAsync`, and the

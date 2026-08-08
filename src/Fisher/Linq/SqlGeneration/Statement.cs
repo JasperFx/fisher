@@ -81,9 +81,26 @@ internal class Statement
         ApplyInner(builder);
     }
 
+    /// <summary>
+    ///     Emits <c>select distinct</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Only ever set on a projected statement. DISTINCT over the document's own columns would
+    ///     compare whole serialized JSON strings byte for byte, which is an answer nobody wants and one
+    ///     that would look right on small test data — so the provider refuses it rather than emitting
+    ///     it. <c>DistinctBy</c> is the operator for deduplicating documents.
+    /// </remarks>
+    public bool IsDistinct { get; set; }
+
     private void ApplyInner(ICommandBuilder builder)
     {
         builder.Append("select ");
+
+        if (IsDistinct)
+        {
+            builder.Append("distinct ");
+        }
+
         builder.Append(SelectColumns);
         builder.Append(" from ");
 
