@@ -8,8 +8,8 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them. All twenty-six that ship in
- * JasperFx.Events.ComplianceTests 2.44.0 are enrolled; there is no suite Fisher declines.
+ * Suites were added one at a time as Fisher grew into them. All twenty-eight that ship in
+ * JasperFx.Events.ComplianceTests 2.45.0 are enrolled; there is no suite Fisher declines.
  *
  * Nothing in the fixture throws any more, but the discipline stands for the next seam member that
  * arrives ahead of the feature: a member Fisher cannot honour throws a NotSupportedException naming
@@ -93,3 +93,9 @@ public class rebuild_and_catch_up_compliance
 
 public class dead_letter_compliance
     : DeadLetterCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class conjoined_event_tenancy_compliance
+    : ConjoinedEventTenancyCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class subscription_compliance
+    : SubscriptionCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

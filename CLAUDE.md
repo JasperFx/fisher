@@ -978,7 +978,9 @@ next `Store` would skip its migration and write to nothing.
 - **A message bus, and deliberately so.** The side-effect seam exists and the default outbox drops
   every message. That is the end state, not a gap — fisher#8 was closed wontfix. Delivery is a bus
   integration's job here as it is on both siblings.
-- Multi-tenancy beyond a tenant id column.
+- Tenancy beyond the conjoined style. One database sliced by a tenant id column works and is pinned by
+  `ConjoinedEventTenancyCompliance`; database-per-tenant is not there, which is why every
+  `IEventDatabase` parameter in `DocumentStore.Daemon.cs` is ignored.
 - Natural keys and bulk insert.
 
 ### The `IEventStoreOperations` surface
@@ -1198,7 +1200,8 @@ coalescing on purpose. Do not present it as a performance feature.
 ### Compliance suites
 
 **Fisher is enrolled, in full.** `JasperFx.Events.ComplianceTests` is referenced unconditionally —
-the old `$(EnableComplianceTests)` gate is gone. **All 26 suites, 216 tests, are live**, as of 2.44.0.
+the old `$(EnableComplianceTests)` gate is gone. **All 28 suites, 230 tests, are live**, as of 2.45.0
+— which is the whole library, since 2.45.0 emptied the upstream event sourcing compliance backlog.
 The four that arrived in 2.40.0/2.41.0 — `StringStreamIdentityCompliance`,
 `SnapshotLifecycleCompliance`, `MultiStreamProjectionCompliance`, `FlatTableProjectionCompliance` —
 went in on the same bump.
@@ -1232,6 +1235,36 @@ were filed upstream as needing a seam and turned out not to: the whole rebuild s
 declared on `IProjectionDaemon`, and the dead letter path is `IEventStore<,>.ContinuousErrors` plus
 `IEventStore.AllDatabases()` → `IEventDatabase.QueryDeadLetterEventsAsync`, all of which Fisher
 already implements.
+
+`ConjoinedEventTenancyCompliance` and `SubscriptionCompliance` arrived in 2.45.0 and **both went green
+on the bump** — 14 tests, no production change, at the cost of two seam members and one partial.
+
+- **The tenancy suite is the first to check a Fisher feature nothing cross-store had covered.** Every
+  earlier suite either confirmed a port or demanded a new feature; conjoined event tenancy was built
+  with the original schema work and had only Fisher's own `event_store_schema_creation` holding it —
+  a schema test, which cannot see the property that matters. That property is *isolation*, and its
+  failure mode is silent and asymmetric: a store that leaks across tenants still answers correctly for
+  the tenant owning the data and misbehaves only for the other one. The suite checks both directions
+  on every test, over a stream id deliberately reused across two tenants.
+- **`ConjoinedEventTenancy` must be applied before the schema is created.** `StreamsTable` and
+  `EventsTable` read `TenancyStyle` when they build their columns and their primary key, so the
+  fixture sets it inside the `DocumentStore.For` lambda, ahead of
+  `ApplyAllConfiguredChangesToDatabaseAsync`. It is a schema decision, not a runtime one.
+- **Verified load-bearing by removing it**, which is the discipline a suite that passes on the bump
+  deserves — that is exactly where a seam member quietly doing nothing would hide. Without the flag
+  the suite fails with `ExistingStreamIdCollisionException` from `AppendPlanner`, the "collide on
+  append" outcome the suite's own notes predict for a store keying on id alone.
+- **The subscription's name is pinned, not defaulted.** `SubscriptionWrapper` derives
+  `ComplianceSubscription` from the type name anyway, so the registrar's explicit
+  `options.Name = ComplianceSubscription.SubscriptionName` is redundant today — deliberately. Daemon
+  progression is keyed on that string, and the seam should not rest on a naming convention Fisher
+  could reasonably change.
+- **`ComplianceSubscription` is the second shared type an alias cannot reach**, after
+  `ComplianceFlatTableProjection`, so it needs a per-consumer partial
+  (`Compliance/ComplianceSubscription.Fisher.cs`). Fisher's is the closest of the three stores to
+  being writable once: `ISubscription.ProcessEventsAsync` returns JasperFx's lifted
+  `IDaemonChangeListener` rather than a product-local `IChangeListener`, because fisher#21 took the
+  shared type instead of copying Polecat's older spelling.
 
 - **The dead letter suite reaches the error policy by casting the fixture's non-generic
   `IEventStore` to the closed generic.** Safe because the suite is generic over the same session pair

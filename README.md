@@ -7,12 +7,14 @@ SQLite Backed Document and Event Store within the Critter Stack
 > duplicated fields, user-declared indexes, document metadata mapping, LINQ, DCB tags, all four
 > projection shapes across all three lifecycles, the async projection daemon, subscriptions, event
 > rewriting — including data masking and stream compacting — and `AddFisher(...)` DI registration all
-> work and are tested. Fisher passes **all 26 suites and 216 tests** of
-> `JasperFx.Events.ComplianceTests`, the shared cross-store suite Marten and Polecat also enroll in.
+> work and are tested. Fisher passes **all 28 suites and 230 tests** of
+> `JasperFx.Events.ComplianceTests`, the shared cross-store suite Marten and Polecat also enroll in —
+> which as of 2.45.0 is the whole of that library's event sourcing backlog.
 >
 > What is *not* there is still real — no message bus (deliberately: the side-effect seam is there and
 > delivery is a bus integration's job, as it is on both siblings), no composite projections, no bulk
-> insert, no natural keys, and no multi-tenancy beyond a tenant id column. See
+> insert, no natural keys, and no tenancy beyond the conjoined style (one database sliced by a tenant
+> id column — now pinned by a suite; database-per-tenant is what SQLite makes a different problem). See
 > [CLAUDE.md](CLAUDE.md) for the current state and the SQLite-specific decisions,
 > [ROADMAP.md](ROADMAP.md) for what comes next, and [HANDOFF.md](HANDOFF.md) for the compliance
 > scoreboard and the deliberate gaps.

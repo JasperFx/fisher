@@ -1,6 +1,6 @@
 # Handoff
 
-State of Fisher after the **JasperFx 2.44.0 upgrade**, and the six features the 2.43.0 pass before it
+State of Fisher after the **JasperFx 2.45.0 upgrade**, and the six features the 2.43.0 pass before it
 uncovered — fisher#15 through #21, all closed except composite projections. Written for whoever picks
 this up next.
 
@@ -10,8 +10,45 @@ this up next.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**691 tests green on net9.0 and net10.0**, with no known intermittent failures. 216 of them are shared
-cross-store compliance tests.
+**705 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
+cross-store compliance tests — which as of 2.45.0 is every event sourcing suite the shared library has.
+
+## The 2.45.0 bump, and the first suite to check something nothing else did
+
+`ConjoinedEventTenancyCompliance` (8 tests) and `SubscriptionCompliance` (6) were enrolled and were
+green on the first run. **No production change** — the cost was two seam members and one small partial:
+
+- `ComplianceStoreConfig.ConjoinedEventTenancy` → `options.Events.TenancyStyle = Conjoined`, which has
+  to be set before `ApplyAllConfiguredChangesToDatabaseAsync` because it is a *schema* decision:
+  `StreamsTable` and `EventsTable` read it when they build their columns and their primary key.
+- `IComplianceStoreRegistrar.Subscribe(ComplianceSubscription)` → `Projections.Subscribe(...)`, with
+  the name pinned to `ComplianceSubscription.SubscriptionName`. Fisher's `SubscriptionWrapper` happens
+  to derive exactly that string from the type name, but progression is keyed on it and a store should
+  not leave that resting on a naming convention it could reasonably change.
+- `ComplianceSubscription.Fisher.cs`, the per-consumer partial — the same shape as
+  `ComplianceFlatTableProjection` and for the same reason. Fisher's is the closest of the three stores
+  to being writable once, because fisher#21 took JasperFx's lifted `IDaemonChangeListener` rather than
+  copying Polecat's older product-local `IChangeListener`.
+
+**The tenancy suite is the first to check a Fisher feature that had never had a cross-store test.**
+Every other suite so far has either confirmed a port or demanded a new feature. Conjoined event tenancy
+was built with the original schema work — `fi_streams` and `fi_events` have keyed on `(tenant_id, id)`
+since then — and the only thing holding it was Fisher's own `event_store_schema_creation`, a schema
+test. A schema test cannot see the property that actually matters: *isolation*, whose failure mode is
+silent and asymmetric, since a store that leaks across tenants still answers correctly for the tenant
+that owns the data and misbehaves only for the other one. The suite checks both directions on every
+test, over a stream id deliberately reused across two tenants.
+
+**Verified load-bearing rather than assumed.** A suite that passes on the bump is exactly where a
+seam member that quietly does nothing would hide, so the flag was removed and the suite re-run: it
+fails with `ExistingStreamIdCollisionException` from `AppendPlanner`, which is precisely the "collide
+on append" outcome the suite's own design notes predict for a store keying on id alone. The flag is
+doing the work.
+
+Like 2.43.0 and 2.44.0 this is a compliance-tests-only release — the core assemblies are unchanged and
+the whole diff is the two suite files, three seam additions and the version. **With it the upstream ES
+compliance backlog is empty**, so twenty-eight suites is where the library sits until a new one is
+filed.
 
 ## The 2.44.0 bump cost nothing whatever
 
@@ -113,11 +150,12 @@ Three of the six turned up a real defect or a wrong premise, which is the useful
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.44.0 ships **26 suites, 216 tests**. Fisher passes **all 216,
-all 26 suites**. Every suite compiles; every one is also subclassed and running.
+`JasperFx.Events.ComplianceTests` 2.45.0 ships **28 suites, 230 tests**. Fisher passes **all 230,
+all 28 suites**. Every suite compiles; every one is also subclassed and running. With 2.45.0 the
+upstream event sourcing backlog is empty, so this is the whole library rather than a snapshot of it.
 
-The eight suites added since 2.39.5 divided cleanly into "already true" and "had to be built", and the
-ratio is worth noticing — six of the eight cost nothing, because they arrived after Fisher had already
+The ten suites added since 2.39.5 divided cleanly into "already true" and "had to be built", and the
+ratio is worth noticing — eight of the ten cost nothing, because they arrived after Fisher had already
 been built to the sibling's shape:
 
 | New suite | Arrived | What it cost |
@@ -131,11 +169,13 @@ been built to the sibling's shape:
 | `StreamCompactingCompliance` | 2.43.0 | Nothing at all. 11 tests green on the bump; the member was already on the shared operations surface. |
 | `RebuildAndCatchUpCompliance` | 2.44.0 | Nothing at all. 11 tests green on the bump; the whole rebuild surface is on `IProjectionDaemon`. |
 | `DeadLetterCompliance` | 2.44.0 | Nothing at all. 6 tests green on the bump; `ContinuousErrors` and `QueryDeadLetterEventsAsync` were already there for the daemon. |
+| `ConjoinedEventTenancyCompliance` | 2.45.0 | One seam member, no production change. 8 tests green on the bump — and the first suite to test a Fisher feature nothing cross-store had covered. |
+| `SubscriptionCompliance` | 2.45.0 | One registrar member and a small partial, no production change. 6 tests green on the bump; fisher#21 had already built it to the shape. |
 
-**Green on all twenty-six is not the same as feature-complete.** The suites cover what is portable
+**Green on all twenty-eight is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 26 suites, 216 tests
+### Green — 28 suites, 230 tests
 
 | Suite | Tests |
 |---|---|
@@ -151,6 +191,7 @@ across stores; "Deliberate gaps" below is still the honest list of what Fisher d
 | `EventMetadataCompliance` | 9 |
 | `SelfAggregatingEvolveCompliance` | 8 |
 | `FlatTableProjectionCompliance` | 8 |
+| `ConjoinedEventTenancyCompliance` | 8 |
 | `FetchLatestCompliance` | 7 |
 | `LiveAggregationCompliance` | 7 |
 | `StringIdentitySingleStreamCompliance` | 6 |
@@ -159,6 +200,7 @@ across stores; "Deliberate gaps" below is still the honest list of what Fisher d
 | `EventStoreExplorerCompliance` | 6 |
 | `AssignTagWhereCompliance` | 6 |
 | `DeadLetterCompliance` | 6 |
+| `SubscriptionCompliance` | 6 |
 | `RebuildConcurrencyCapCompliance` | 5 |
 | `ActivityCorrelationCompliance` | 4 |
 | `EventProjectionRegistrationCompliance` | 3 |
@@ -811,8 +853,11 @@ Each of these is a decision with a reason, not an oversight:
   onto document members (fisher#11); Weasel's `DocumentDotNetTypeBinder` takes no member where every
   other binder does, so `DocumentMetadata` omits it rather than offering a mapping that would
   silently do nothing. That is an upstream gap, not a Fisher decision.
-- **Multi-tenancy stops at a tenant id column.** No database-per-tenant, which is why every
-  `IEventDatabase` parameter in `DocumentStore.Daemon.cs` is ignored.
+- **Multi-tenancy stops at the conjoined style.** One database sliced by a tenant id column, which
+  works and is now pinned cross-store by `ConjoinedEventTenancyCompliance`. What is absent is
+  database-per-tenant, which is why every `IEventDatabase` parameter in `DocumentStore.Daemon.cs` is
+  ignored — and on SQLite that is a different problem rather than a missing feature, since a store is
+  a file and separate tenants would mean separate files with their own lifecycle.
 - **No hot-cold daemon coordination**, and `AddAsyncDaemon(DaemonMode.HotCold)` refuses rather than
   quietly running Solo. Failover means several nodes competing for a leadership lease through the
   database, and a Fisher store is a file SQLite does not make safe to share across nodes.

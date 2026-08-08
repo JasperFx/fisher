@@ -61,6 +61,14 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
                 options.Events.EnableHeaders = true;
             }
 
+            // Conjoined event tenancy is a schema decision, not a runtime one — StreamsTable and
+            // EventsTable read TenancyStyle when they build their columns and their primary key — so
+            // it has to be set before ApplyAllConfiguredChangesToDatabaseAsync below.
+            if (config.ConjoinedEventTenancy)
+            {
+                options.Events.TenancyStyle = JasperFx.MultiTenancy.TenancyStyle.Conjoined;
+            }
+
             if (config.MaxConcurrentRebuildsPerDatabase.HasValue)
             {
                 options.DaemonSettings.MaxConcurrentRebuildsPerDatabase =
@@ -358,5 +366,19 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
 
         public void AddProjection(ProjectionBase projection, ProjectionLifecycle lifecycle)
             => _options.Projections.Add(projection, lifecycle);
+
+        /// <summary>
+        ///     Register the shared compliance subscription with Fisher's async daemon.
+        /// </summary>
+        /// <remarks>
+        ///     The name is pinned rather than left to default. Fisher's <c>SubscriptionWrapper</c>
+        ///     happens to take the subscription's short type name, which is already
+        ///     <see cref="ComplianceSubscription.SubscriptionName" /> — but progression is keyed on
+        ///     that string, so a store must not have it depend on a naming convention it could
+        ///     reasonably change.
+        /// </remarks>
+        public void Subscribe(ComplianceSubscription subscription)
+            => _options.Projections.Subscribe(subscription,
+                options => options.Name = ComplianceSubscription.SubscriptionName);
     }
 }
