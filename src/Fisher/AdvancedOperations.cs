@@ -80,6 +80,62 @@ public class AdvancedOperations
         => _store.Database.SequenceFor(typeof(T)).SetFloor(floor);
 
     /// <summary>
+    ///     Write many documents in as few transactions as possible.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>There is no <c>SqlBulkCopy</c> to reach for, and none is needed.</b> On SQLite the
+    ///         cost of an insert is dominated by the transaction rather than by the statement, so a
+    ///         prepared statement re-executed with rebound parameters inside one transaction is already
+    ///         the fast path — the same order as a bulk-copy protocol, with none of the protocol.
+    ///     </para>
+    ///     <para>
+    ///         <paramref name="batchSize" /> is a ceiling on how long the write lock is held, not a
+    ///         throughput knob. SQLite permits one writer per file, so a single transaction over a very
+    ///         large set blocks every other writer for its whole duration; committing periodically
+    ///         gives them a chance. The trade is that a failure part way leaves earlier batches
+    ///         committed — bulk insert is not atomic across batches and does not pretend to be.
+    ///     </para>
+    ///     <para>
+    ///         The statements are the ones <c>SqliteDocumentStorageDescriptorBuilder</c> already
+    ///         builds, reached through the session, rather than bulk-specific SQL. That is deliberate:
+    ///         a second set of write SQL is exactly where the positional <c>?</c> contract documented
+    ///         in CLAUDE.md would drift apart unnoticed.
+    ///     </para>
+    /// </remarks>
+    public async Task BulkInsertAsync<T>(IReadOnlyCollection<T> documents,
+        BulkInsertMode mode = BulkInsertMode.InsertsOnly, int batchSize = 1000,
+        string? tenantId = null, CancellationToken token = default) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(documents);
+        ArgumentOutOfRangeException.ThrowIfLessThan(batchSize, 1);
+
+        if (documents.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var batch in documents.Chunk(batchSize))
+        {
+            await using var session = _store.LightweightSession(tenantId);
+
+            foreach (var document in batch)
+            {
+                if (mode == BulkInsertMode.InsertsOnly)
+                {
+                    session.Insert(document);
+                }
+                else
+                {
+                    session.Store(document);
+                }
+            }
+
+            await session.SaveChangesAsync(token).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
     ///     How much is in the event store — event count, stream count, and the current sequence.
     /// </summary>
     /// <remarks>

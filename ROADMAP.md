@@ -3,8 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **twenty open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
-**All 28 compliance suites green.** 871 tests green on net9.0
+Status: **twenty-one open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
+**All 28 compliance suites green.** 878 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
 Twenty-eight of those twenty-nine came out of a file-by-file comparison against Polecat on 2026-08-08,
@@ -150,6 +150,7 @@ if something is deferred, it is in the list above.
 | LINQ projections (fisher#23) | `Select` as a compiled rewrite, `Distinct` over a projection, `DistinctBy` over documents through `row_number()`; the provider now splits source type from result type |
 | Tenant scoping fix (fisher#51) | a conjoined `Query<T>()` with no `Where` returned every tenant's rows; the filter is now one statement-level pass, like the hierarchy and soft-delete ones |
 | LINQ marker operators (fisher#26) | `AnyTenant`/`TenantIsOneOf`, `IsOneOf`/`In`, `IsEmpty`, `object.Equals`, `ModifiedSince`/`Before`, `QueryForNonStaleData` |
+| Bulk insert (fisher#36) | one transaction per batch through the ordinary statements; no bulk-copy protocol needed, and none exists |
 | Patching (fisher#35) | `Patch<T>` by id or predicate; every operation one json1 function, chains nesting into one statement, and a duplicated column following it with nothing to refresh |
 | `Advanced` parity (fisher#42) | event store statistics, `CleanAsync<T>`, DDL script generation, and the projection scenario harness |
 | JSON reads (fisher#28) | `LoadJsonAsync`, `ToJsonArrayAsync`, the version variant and streaming; byte-exact, which neither sibling can promise |
@@ -400,8 +401,7 @@ New suites arriving in a JasperFx bump are the only way this table grows now.
   test that would fail if `Serializable` stopped producing `BEGIN IMMEDIATE` — that needs two
   genuinely interleaved writers, not two sequential `SaveChangesAsync` calls.
 - **`Advanced` is no longer a thin subset.** fisher#42 added statistics, per-type cleaning, script
-  generation and the projection scenario. What is still absent is bulk insert
-  ([#36](https://github.com/JasperFx/fisher/issues/36)) and `InitialData`
+  generation and the projection scenario. What is still absent is `InitialData`
   ([#39](https://github.com/JasperFx/fisher/issues/39)).
 - **Tenancy beyond the conjoined style.** Conjoined works and is suite-pinned; database-per-tenant is
   [#47](https://github.com/JasperFx/fisher/issues/47), and it is the item where SQLite's single-writer

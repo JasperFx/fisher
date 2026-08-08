@@ -1499,6 +1499,27 @@ The provider takes both the column list and the materializer from the **query-on
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,
 which is what keeps the query path's read layout aligned with `LoadAsync`'s.
 
+### Bulk insert
+
+`Advanced.BulkInsertAsync` (fisher#36). **There is no `SqlBulkCopy` to reach for and none is needed**:
+on SQLite the cost of an insert is dominated by the transaction rather than by the statement, so a
+prepared statement re-executed with rebound parameters inside one transaction is already the fast path.
+The statements are the ones `SqliteDocumentStorageDescriptorBuilder` already builds, reached through a
+session — a second set of write SQL is exactly where the positional `?` contract would drift apart
+unnoticed.
+
+- **`batchSize` is a ceiling on how long the write lock is held, not a throughput knob.** One writer
+  per file means a single transaction over a very large set blocks every other writer for its whole
+  duration. The trade is that **bulk insert is not atomic across batches** — a failure part way leaves
+  earlier batches committed, which `a_failure_part_way_leaves_earlier_batches_committed` pins so it
+  reads as a decision rather than being discovered.
+- **`BulkInsertMode` has two values where Polecat has three.** `IgnoreDuplicates` needs
+  `insert or ignore`, which is a fifth statement in the descriptor and an operation to consume it —
+  Weasel's shared closed-shape operations bind to `descriptor.InsertSql` by name. Shipping an enum
+  value that throws would be worse than not shipping the value; see
+  [fisher#53](https://github.com/JasperFx/fisher/issues/53), which also records the filter-first
+  implementation that needs no upstream change.
+
 ### Patching
 
 `session.Patch<T>(id)` / `Patch<T>(predicate)` (fisher#35) — changing part of a stored document
