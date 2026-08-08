@@ -4,6 +4,8 @@ using Fisher.Linq.Members;
 using Fisher.Linq.Parsing;
 using Fisher.Linq.SqlGeneration;
 using Fisher.Storage;
+using Fisher.Storage.ClosedShape;
+using JasperFx;
 using Weasel.Core.SqlGeneration;
 using Weasel.Storage;
 
@@ -632,20 +634,17 @@ public class FisherQueryProvider : IQueryProvider
                 : string.Join(", ", selectClause.SelectFields()),
             GroupBy = parser.GroupByLocator,
             Limit = parser.Limit,
-            Offset = parser.Offset
+            Offset = parser.Offset,
+            NonStaleTimeout = parser.NonStaleTimeout
         };
 
         statement.OrderBys.AddRange(parser.OrderBys);
 
-        // Route the predicate through the storage so a conjoined table gets its tenant filter. Going
-        // around it is how a query path silently stops honouring tenancy the moment it lands.
-        foreach (var where in parser.Wheres)
-        {
-            statement.Wheres.Add(storage.FilterDocuments(where, _session));
-        }
-
+        statement.Wheres.AddRange(parser.Wheres);
         statement.Havings.AddRange(parser.Havings);
 
+        ApplyTenantFilter(statement, parser, mapping);
+        ApplyMetadataFilters(statement, parser);
         ApplyHierarchyFilter(statement, mapping, sourceType);
         ApplySoftDeleteFilters(statement, parser, storage, mapping);
 
@@ -715,6 +714,91 @@ public class FisherQueryProvider : IQueryProvider
         outer.OrderBys.AddRange(statement.OrderBys);
 
         return outer;
+    }
+
+    /// <summary>
+    ///     Scope the query to a tenant — once per statement, independent of everything else.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>fisher#51.</b> This used to be applied by wrapping each caller predicate through
+    ///         <c>IDocumentStorage.FilterDocuments</c>, which meant a query with no <c>Where</c> got no
+    ///         tenant term at all — so <c>Query&lt;T&gt;()</c> on a conjoined type returned every
+    ///         tenant's rows. That is a cross-tenant read, and a silent one: the tenant owning most of
+    ///         the data sees a correct-looking answer with extras, and a tenant with none sees somebody
+    ///         else's.
+    ///     </para>
+    ///     <para>
+    ///         <b>It is the same mistake <see cref="ApplyHierarchyFilter" /> already documents</b>, whose
+    ///         doc comment names both halves of it — composing a filter into <c>FilterDocuments</c>
+    ///         repeats it per predicate <em>and omits it from a query with none</em>. fisher#17 learned
+    ///         that for the <c>doc_type</c> discriminator; the tenant filter had the same shape and was
+    ///         not revisited. All three implicit filters now read the same way, one statement-level pass
+    ///         each, so no query shape can drop one.
+    ///     </para>
+    ///     <para>
+    ///         Being its own pass is also what lets <c>AnyTenant()</c> and <c>TenantIsOneOf(...)</c>
+    ///         <em>replace</em> the term rather than add to it, which is impossible while it is welded
+    ///         to each predicate.
+    ///     </para>
+    /// </remarks>
+    private void ApplyTenantFilter(Statement statement, LinqQueryParser parser, DocumentMapping mapping)
+    {
+        if (!mapping.IsConjoined)
+        {
+            // No tenant_id column to filter on, so an operator asking about tenancy has nothing to
+            // mean. Refused rather than silently ignored — the same rule the soft-delete operators
+            // follow against a type that is not soft-deleted.
+            if (parser.TenantScope != TenantScope.Current)
+            {
+                throw new BadLinqExpressionException(
+                    $"'{mapping.DocumentType.Name}' is not multi-tenanted, so it has no tenant_id column "
+                    + "for AnyTenant() or TenantIsOneOf() to have an opinion about. Register it with "
+                    + "Schema.For<T>().MultiTenanted() if it should be.");
+            }
+
+            return;
+        }
+
+        switch (parser.TenantScope)
+        {
+            case TenantScope.Current:
+                statement.Wheres.Add(new TenantFilterFragment(_session.TenantId));
+                break;
+
+            case TenantScope.NamedTenants:
+                statement.Wheres.Add(new WhereInFilter(StorageConstants.TenantIdColumn,
+                    parser.TenantIds!.Cast<object>().ToList()));
+                break;
+
+            case TenantScope.AnyTenant:
+                break;
+        }
+    }
+
+    /// <summary>
+    ///     <c>ModifiedSince</c> / <c>ModifiedBefore</c> — bounds on when the row was last written.
+    /// </summary>
+    /// <remarks>
+    ///     A plain comparison against <c>last_modified</c>, with the bound rendered through
+    ///     <see cref="SqliteTimestamp" />. None of the <c>strftime</c> normalisation a document's own
+    ///     <see cref="DateTimeOffset" /> member needs (fisher#1): the column already holds the
+    ///     fixed-width UTC form, chosen so a string comparison <em>is</em> an instant comparison. The
+    ///     same asymmetry as <c>DeletedSince</c> / <c>DeletedBefore</c>, and for the same reason.
+    /// </remarks>
+    private static void ApplyMetadataFilters(Statement statement, LinqQueryParser parser)
+    {
+        if (parser.ModifiedSince is { } since)
+        {
+            statement.Wheres.Add(new ComparisonFilter("last_modified", ">=",
+                SqliteTimestamp.ToDatabaseValue(since)));
+        }
+
+        if (parser.ModifiedBefore is { } before)
+        {
+            statement.Wheres.Add(new ComparisonFilter("last_modified", "<",
+                SqliteTimestamp.ToDatabaseValue(before)));
+        }
     }
 
     /// <summary>
@@ -818,6 +902,14 @@ public class FisherQueryProvider : IQueryProvider
     private async Task<Microsoft.Data.Sqlite.SqliteCommand> CommandFor(Statement statement,
         CancellationToken token)
     {
+        // QueryForNonStaleData: wait for the daemon before reading, not as part of the SQL. Read
+        // through the subquery chain so a count, a page, an aggregate or a reversal carries it without
+        // its wrap site having to remember to.
+        if (statement.EffectiveNonStaleTimeout is { } timeout)
+        {
+            await _session.FisherDatabase.WaitForNonStaleProjectionDataAsync(timeout).ConfigureAwait(false);
+        }
+
         var builder = new Weasel.Sqlite.CommandBuilder();
         statement.Apply(builder);
 

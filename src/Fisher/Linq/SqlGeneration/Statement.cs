@@ -92,6 +92,20 @@ internal class Statement
     /// </remarks>
     public bool IsDistinct { get; set; }
 
+    /// <summary>
+    ///     How long to wait for the async daemon to catch up before running — <c>QueryForNonStaleData</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Not SQL, and it sits here anyway because <see cref="Statement" /> is what every execution path
+    ///     is handed. <see cref="EffectiveNonStaleTimeout" /> reads through <see cref="Subquery" /> so
+    ///     that wrapping a statement — for a count, a page, an aggregate or a reversal — carries it
+    ///     without each wrap site having to remember to.
+    /// </remarks>
+    public TimeSpan? NonStaleTimeout { get; set; }
+
+    /// <inheritdoc cref="NonStaleTimeout" />
+    public TimeSpan? EffectiveNonStaleTimeout => NonStaleTimeout ?? Subquery?.EffectiveNonStaleTimeout;
+
     /// <summary>The <c>GROUP BY</c> key expression, or null.</summary>
     public string? GroupBy { get; set; }
 

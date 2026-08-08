@@ -584,6 +584,56 @@ untouched — which is exactly what the Optimistic operation's postprocessing re
 failure. The `DO UPDATE SET` clause assigns from `excluded.*` for every column rather than repeating
 each binder's `ValueSql`, so the update branch cannot drift from the insert branch.
 
+### Tenant scoping in LINQ, and the marker operators
+
+**fisher#51 was a cross-tenant read.** The tenant filter was applied by wrapping each caller predicate
+through `IDocumentStorage.FilterDocuments`, so a query with *no* `Where` got no tenant term at all —
+`Query<T>()` on a conjoined type returned every tenant's rows. Silent, and asymmetric in the way that
+makes it hard to spot: the tenant owning most of the data sees a correct-looking answer with extras,
+and a tenant with none sees somebody else's.
+
+**It is the same mistake `ApplyHierarchyFilter` already documents**, whose comment names both halves —
+composing a filter into `FilterDocuments` repeats it per predicate *and omits it from a query with
+none*. fisher#17 learned that for the `doc_type` discriminator and fixed it there; the tenant filter
+had the identical shape and was not revisited. All three implicit filters — tenant, hierarchy, soft
+delete — are now one statement-level pass each, so no query shape can drop one. Do not fold any of
+them back into a per-predicate wrapper.
+
+Nothing caught it because `ConjoinedEventTenancyCompliance` covers the *event* store, Fisher's own
+document tests were single-tenant, and `LoadAsync`/`LoadManyAsync` bake the tenant term into SQL built
+once in the storage's constructor — so the bug was confined to the one path that composed it per
+predicate. `tenanted_queries` now checks every statement shape in **both** directions.
+
+Being its own pass is also what `AnyTenant()` and `TenantIsOneOf(...)` need: they *replace* the term,
+which is impossible while it is welded to each predicate. Both are refused against a type that is not
+`MultiTenanted()`, because there is no column to have an opinion about — the same rule the soft-delete
+operators follow.
+
+The rest of fisher#26's operators:
+
+- **`IsOneOf` / `In`** produce the same `in (…)` as `EnumerableContains`, reached from the other
+  direction — there the collection is the receiver, here the member is.
+- **`IsEmpty()` has to test null as well as length.** `json_extract` yields SQL NULL for an absent key
+  and `json_array_length(null)` is NULL rather than 0, so a bare `= 0` leaves the row out instead of
+  matching. A caller asking "is this empty" means "is there anything in it", and "the key is not
+  there" is an honest yes.
+- **`ModifiedSince` / `ModifiedBefore`** compare `last_modified` as text with no `strftime` wrapper,
+  because the column already holds `SqliteTimestamp`'s fixed-width UTC form — the same asymmetry as
+  `DeletedSince` / `DeletedBefore`, and for the same reason. **`CreatedSince` / `CreatedBefore` are
+  deliberately absent**: there is no `created_at` column to answer from (fisher#29), and answering from
+  `last_modified` would be a different question asked with a straight face.
+- **`QueryForNonStaleData` waits for the whole store**, where Polecat waits for the projections feeding
+  the queried type. Stricter rather than weaker, and it needs no type-to-shard map. It is a wait, not
+  SQL, so it hangs off `Statement.NonStaleTimeout` and is read through `EffectiveNonStaleTimeout`,
+  which walks the subquery chain — that way wrapping a statement for a count, a page, an aggregate or a
+  reversal carries it without each wrap site having to remember.
+
+One test-shaped lesson worth keeping: `modified_since_and_before` first took its boundary from
+`DateTimeOffset.UtcNow` between two writes. It failed once and then passed on every rerun, which is the
+worst possible signal. `last_modified` is written by SQLite's `strftime('now')`, so a client-sampled
+bound compares two clocks that are only incidentally the same one. The test now reads the stored value
+back — removing the question rather than widening the window and hoping.
+
 ### LINQ projections
 
 `Select`, `Distinct` and `DistinctBy` (fisher#23). Before this every query materialised the whole

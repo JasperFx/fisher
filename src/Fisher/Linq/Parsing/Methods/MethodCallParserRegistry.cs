@@ -23,7 +23,10 @@ internal static class MethodCallParserRegistry
         new StringToLower(),
         new StringToUpper(),
         new StringTrim(),
-        new EnumerableContains()
+        new IsOneOf(),
+        new EnumerableContains(),
+        new IsEmpty(),
+        new ObjectEquals()
     ];
 
     public static IMethodCallParser? FindParser(MethodCallExpression expression)

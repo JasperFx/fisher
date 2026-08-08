@@ -94,6 +94,21 @@ internal class LinqQueryParser
     /// <summary>The <c>HAVING</c> fragments, from any <c>Where</c> after the <c>GroupBy</c>.</summary>
     public List<ISqlFragment> Havings { get; } = [];
 
+    /// <summary>Which tenants the query runs against. Defaults to the session's.</summary>
+    public TenantScope TenantScope { get; private set; } = TenantScope.Current;
+
+    /// <summary>The tenants named by <c>TenantIsOneOf</c>, when that is the scope.</summary>
+    public string[]? TenantIds { get; private set; }
+
+    /// <summary>A <c>last_modified</c> lower bound, from <c>ModifiedSince</c>.</summary>
+    public DateTimeOffset? ModifiedSince { get; private set; }
+
+    /// <summary>A <c>last_modified</c> upper bound, from <c>ModifiedBefore</c>.</summary>
+    public DateTimeOffset? ModifiedBefore { get; private set; }
+
+    /// <summary>Set by <c>QueryForNonStaleData</c>; how long to wait for the daemon before running.</summary>
+    public TimeSpan? NonStaleTimeout { get; private set; }
+
     private GroupingTranslator? _grouping;
 
     /// <summary>The key <c>DistinctBy</c> deduplicates on, or null.</summary>
@@ -166,6 +181,32 @@ internal class LinqQueryParser
 
             case "DistinctBy":
                 DistinctByLocator = LocatorFor(call);
+                break;
+
+            case nameof(LinqExtensions.AnyTenant)
+                when call.Method.DeclaringType == typeof(LinqExtensions):
+                TenantScope = TenantScope.AnyTenant;
+                break;
+
+            case nameof(LinqExtensions.TenantIsOneOf)
+                when call.Method.DeclaringType == typeof(LinqExtensions):
+                TenantScope = TenantScope.NamedTenants;
+                TenantIds = (string[])WhereClauseParser.ExtractValue(call.Arguments[1])!;
+                break;
+
+            case nameof(Metadata.MetadataExtensions.ModifiedSince)
+                when call.Method.DeclaringType == typeof(Metadata.MetadataExtensions):
+                ModifiedSince = (DateTimeOffset)WhereClauseParser.ExtractValue(call.Arguments[1])!;
+                break;
+
+            case nameof(Metadata.MetadataExtensions.ModifiedBefore)
+                when call.Method.DeclaringType == typeof(Metadata.MetadataExtensions):
+                ModifiedBefore = (DateTimeOffset)WhereClauseParser.ExtractValue(call.Arguments[1])!;
+                break;
+
+            case nameof(Metadata.NonStaleDataExtensions.QueryForNonStaleData)
+                when call.Method.DeclaringType == typeof(Metadata.NonStaleDataExtensions):
+                NonStaleTimeout = (TimeSpan)WhereClauseParser.ExtractValue(call.Arguments[1])!;
                 break;
 
             case "Take":
