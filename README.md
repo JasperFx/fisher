@@ -7,7 +7,7 @@ SQLite Backed Document and Event Store within the Critter Stack
 > duplicated fields, user-declared indexes, document metadata mapping, LINQ, DCB tags, all four
 > projection shapes across all three lifecycles, the async projection daemon, subscriptions, event
 > rewriting — including data masking and stream compacting — and `AddFisher(...)` DI registration all
-> work and are tested. Fisher passes **all 24 suites and 199 tests** of
+> work and are tested. Fisher passes **all 26 suites and 216 tests** of
 > `JasperFx.Events.ComplianceTests`, the shared cross-store suite Marten and Polecat also enroll in.
 >
 > What is *not* there is still real — no message bus (deliberately: the side-effect seam is there and

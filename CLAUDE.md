@@ -1198,7 +1198,7 @@ coalescing on purpose. Do not present it as a performance feature.
 ### Compliance suites
 
 **Fisher is enrolled, in full.** `JasperFx.Events.ComplianceTests` is referenced unconditionally —
-the old `$(EnableComplianceTests)` gate is gone. **All 24 suites, 199 tests, are live**, as of 2.43.0.
+the old `$(EnableComplianceTests)` gate is gone. **All 26 suites, 216 tests, are live**, as of 2.44.0.
 The four that arrived in 2.40.0/2.41.0 — `StringStreamIdentityCompliance`,
 `SnapshotLifecycleCompliance`, `MultiStreamProjectionCompliance`, `FlatTableProjectionCompliance` —
 went in on the same bump.
@@ -1224,6 +1224,34 @@ it on its own `Advanced` surface, and those share no interface.
   `EventGraph.AddMaskingRuleForProtectedInformation<T>`. The `Action` / `Func` split the seam demands
   is the same split Fisher already had, and for the same reason — see "Event data masking" for why
   only the `Action` form reaches contravariantly.
+
+`RebuildAndCatchUpCompliance` and `DeadLetterCompliance` arrived in 2.44.0 and **both went green on
+the bump alone** — 17 tests, no production change and no seam addition, the cheapest wave yet. Both
+were filed upstream as needing a seam and turned out not to: the whole rebuild surface (seven
+`RebuildProjectionAsync` overloads, both `CatchUpAsync` forms, `PrepareForRebuildsAsync`) is already
+declared on `IProjectionDaemon`, and the dead letter path is `IEventStore<,>.ContinuousErrors` plus
+`IEventStore.AllDatabases()` → `IEventDatabase.QueryDeadLetterEventsAsync`, all of which Fisher
+already implements.
+
+- **The dead letter suite reaches the error policy by casting the fixture's non-generic
+  `IEventStore` to the closed generic.** Safe because the suite is generic over the same session pair
+  the store closes over, and worth knowing as a general trick: it reaches the whole generic store
+  surface without adding a seam member. Fisher's `ContinuousErrors` returns
+  `Options.Projections.Errors` — the live options object, not a per-read copy, which
+  `skip_apply_errors_is_readable_back_off_the_shared_options` pins directly and
+  `the_shard_survives_a_poison_event_and_keeps_going` pins indirectly by requiring the daemon to have
+  actually consulted it.
+- **The rebuild suite's teardown test is the one that matters**, and it is the reason this wave was
+  worth having rather than a formality. A rebuild that replays onto surviving rows looks correct for
+  every stream whose events still exist and is wrong only for rows the replay can no longer produce —
+  so it passes any assertion about a live aggregate. The suite plants a document with no backing
+  events and requires the rebuild to remove it. That is the same divergence Fisher's own
+  `TeardownExistingProjectionStateAsync` had to learn for flat tables (see "Flat-table projections",
+  `IPublishesTables`), now checked for document projections too.
+- **Upstream disclosed an unreproduced intermittent** in `a_rebuild_reproduces_the_projected_state` —
+  two failures on Polecat early in that suite's development, none since. Not seen on Fisher: 15
+  consecutive runs of the suite clean, plus the full 216 twice. Recorded so a first sighting here is
+  recognised rather than investigated from scratch.
 
 The mechanics, because they are not what the package's name suggests:
 

@@ -1,7 +1,8 @@
 # Handoff
 
-State of Fisher after the **JasperFx 2.43.0 upgrade** and the six features it uncovered — fisher#15
-through #21, all closed except composite projections. Written for whoever picks this up next.
+State of Fisher after the **JasperFx 2.44.0 upgrade**, and the six features the 2.43.0 pass before it
+uncovered — fisher#15 through #21, all closed except composite projections. Written for whoever picks
+this up next.
 
 **Nothing is half-built.** Every milestone on disk builds, is tested, and was committed complete.
 [ROADMAP.md](ROADMAP.md) says what comes next and why in that order.
@@ -9,8 +10,43 @@ through #21, all closed except composite projections. Written for whoever picks 
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**674 tests green on net9.0 and net10.0**, with no known intermittent failures. 199 of them are shared
+**691 tests green on net9.0 and net10.0**, with no known intermittent failures. 216 of them are shared
 cross-store compliance tests.
+
+## The 2.44.0 bump cost nothing whatever
+
+The first bump to add suites and need **no Fisher change at all** — not a seam member, not a line of
+production code. `RebuildAndCatchUpCompliance` (11 tests) and `DeadLetterCompliance` (6) were enrolled
+and were green on the first run.
+
+Both were filed upstream as needing a seam addition and neither did, which is worth recording because
+the reasoning generalises. The whole rebuild surface — seven `RebuildProjectionAsync` overloads, both
+`CatchUpAsync` forms, `PrepareForRebuildsAsync` — is declared on the shared `IProjectionDaemon`, which
+the fixture's `StartDaemonAsync` already returns. The dead letter path is
+`IEventStore<TOperations, TQuerySession>.ContinuousErrors` for the policy and
+`IEventStore.AllDatabases()` → `IEventDatabase.QueryDeadLetterEventsAsync` for the rows; Fisher
+implements all three because the daemon needs them regardless of any suite.
+
+The trick the dead letter suite uses is worth knowing: it casts the fixture's **non-generic**
+`IEventStore` to the closed generic to reach `ContinuousErrors`. That is safe because the suite is
+generic over the same session pair the store closes over, and it reaches the entire generic store
+surface without any seam member at all.
+
+**The rebuild teardown test is the one with teeth.** A rebuild that replays onto surviving rows looks
+correct for every stream whose events still exist, and is wrong only for rows the replay can no longer
+produce — so it passes any assertion about a live aggregate and fails only on stale state. The suite
+plants a document with no backing events and requires the rebuild to remove it. Fisher already had
+this right; it is the same divergence `TeardownExistingProjectionStateAsync` had to learn for flat
+tables via `IPublishesTables`, now checked for document projections too.
+
+Like 2.43.0, this is a compliance-tests-only release — 2.44.0 is one commit past 2.43.0 and that
+commit touched only the two new suite files and the version.
+
+**One disclosure carried over from upstream.** The 2.44.0 commit message records two unreproduced
+failures of `a_rebuild_reproduces_the_projected_state` on Polecat early in that suite's development,
+with no error text and no reproduction, passing ever since. Not seen on Fisher: 15 consecutive runs of
+the rebuild suite clean, plus two full 216-test compliance runs. Recorded so a first sighting here is
+recognised rather than investigated cold.
 
 ## The 2.43.0 bump cost nothing but the seam
 
@@ -77,11 +113,11 @@ Three of the six turned up a real defect or a wrong premise, which is the useful
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.43.0 ships **24 suites, 199 tests**. Fisher passes **all 199,
-all 24 suites**. Every suite compiles; every one is also subclassed and running.
+`JasperFx.Events.ComplianceTests` 2.44.0 ships **26 suites, 216 tests**. Fisher passes **all 216,
+all 26 suites**. Every suite compiles; every one is also subclassed and running.
 
-The six suites added since 2.39.5 divided cleanly into "already true" and "had to be built", and the
-ratio is worth noticing — four of the six cost nothing, because they arrived after Fisher had already
+The eight suites added since 2.39.5 divided cleanly into "already true" and "had to be built", and the
+ratio is worth noticing — six of the eight cost nothing, because they arrived after Fisher had already
 been built to the sibling's shape:
 
 | New suite | Arrived | What it cost |
@@ -93,11 +129,13 @@ been built to the sibling's shape:
 | `StrongTypedIdentityCompliance` | 2.42.0 | A real feature, fisher#14: `Storage/StrongTypedId.cs` and `StrongTypedIdentification`. No new seam was needed — `IIdentification<TDoc,TId>` had already reserved the three members for it. |
 | `EventDataMaskingCompliance` | 2.43.0 | Three seam members, no production change. 10 tests green on the bump. |
 | `StreamCompactingCompliance` | 2.43.0 | Nothing at all. 11 tests green on the bump; the member was already on the shared operations surface. |
+| `RebuildAndCatchUpCompliance` | 2.44.0 | Nothing at all. 11 tests green on the bump; the whole rebuild surface is on `IProjectionDaemon`. |
+| `DeadLetterCompliance` | 2.44.0 | Nothing at all. 6 tests green on the bump; `ContinuousErrors` and `QueryDeadLetterEventsAsync` were already there for the daemon. |
 
-**Green on all twenty-four is not the same as feature-complete.** The suites cover what is portable
+**Green on all twenty-six is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 24 suites, 199 tests
+### Green — 26 suites, 216 tests
 
 | Suite | Tests |
 |---|---|
@@ -107,6 +145,7 @@ across stores; "Deliberate gaps" below is still the honest list of what Fisher d
 | `StreamReadCompliance` | 11 |
 | `StrongTypedIdentityCompliance` | 11 |
 | `StreamCompactingCompliance` | 11 |
+| `RebuildAndCatchUpCompliance` | 11 |
 | `MultiStreamProjectionCompliance` | 10 |
 | `EventDataMaskingCompliance` | 10 |
 | `EventMetadataCompliance` | 9 |
@@ -119,6 +158,7 @@ across stores; "Deliberate gaps" below is still the honest list of what Fisher d
 | `SnapshotLifecycleCompliance` | 6 |
 | `EventStoreExplorerCompliance` | 6 |
 | `AssignTagWhereCompliance` | 6 |
+| `DeadLetterCompliance` | 6 |
 | `RebuildConcurrencyCapCompliance` | 5 |
 | `ActivityCorrelationCompliance` | 4 |
 | `EventProjectionRegistrationCompliance` | 3 |

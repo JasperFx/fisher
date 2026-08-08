@@ -3,16 +3,16 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **one open issue** (#19, an enhancement — nothing is broken), on JasperFx **2.43.0**.
-**All 24 compliance suites green.** 674 tests green on net9.0
+Status: **one open issue** (#19, an enhancement — nothing is broken), on JasperFx **2.44.0**.
+**All 26 compliance suites green.** 691 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
 ## The destination
 
-**First round of JasperFx compliance tests passing — reached, and held through four package bumps
-that added six suites.** `JasperFx.Events.ComplianceTests` is the shared cross-store suite Marten and
+**First round of JasperFx compliance tests passing — reached, and held through five package bumps
+that added eight suites.** `JasperFx.Events.ComplianceTests` is the shared cross-store suite Marten and
 Polecat both enroll in; passing it is what makes Fisher a real Critter Stack event store rather than a
-lookalike. All twenty-four are green:
+lookalike. All twenty-six are green:
 
 | Suite | Tests |
 |---|---|
@@ -22,6 +22,7 @@ lookalike. All twenty-four are green:
 | `StreamReadCompliance` | 11 |
 | `StrongTypedIdentityCompliance` | 11 |
 | `StreamCompactingCompliance` | 11 |
+| `RebuildAndCatchUpCompliance` | 11 |
 | `MultiStreamProjectionCompliance` | 10 |
 | `EventDataMaskingCompliance` | 10 |
 | `EventMetadataCompliance` | 9 |
@@ -34,6 +35,7 @@ lookalike. All twenty-four are green:
 | `SnapshotLifecycleCompliance` | 6 |
 | `EventStoreExplorerCompliance` | 6 |
 | `AssignTagWhereCompliance` | 6 |
+| `DeadLetterCompliance` | 6 |
 | `RebuildConcurrencyCapCompliance` | 5 |
 | `ActivityCorrelationCompliance` | 4 |
 | `EventProjectionRegistrationCompliance` | 3 |
@@ -41,19 +43,19 @@ lookalike. All twenty-four are green:
 | `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-**Four of the six suites added since 2.39.5 went green on the version bump alone** —
-`StringStreamIdentityCompliance`, `SnapshotLifecycleCompliance`, `EventDataMaskingCompliance` and
-`StreamCompactingCompliance`. That is the useful signal, and it is a direct dividend of mirroring
-Polecat's internals: each of those features was built from the sibling's shape before a shared suite
-existed to check it, and the suite arriving green is what turns "ported faithfully" into a fact.
-`MultiStreamProjectionCompliance` cost one file; `FlatTableProjectionCompliance` and
-`StrongTypedIdentityCompliance` cost real features.
+**Six of the eight suites added since 2.39.5 went green on the version bump alone** —
+`StringStreamIdentityCompliance`, `SnapshotLifecycleCompliance`, `EventDataMaskingCompliance`,
+`StreamCompactingCompliance`, and both of 2.44.0's. That is the useful signal, and it is a direct
+dividend of mirroring Polecat's internals: each of those features was built from the sibling's shape
+before a shared suite existed to check it, and the suite arriving green is what turns "ported
+faithfully" into a fact. `MultiStreamProjectionCompliance` cost one file;
+`FlatTableProjectionCompliance` and `StrongTypedIdentityCompliance` cost real features.
 
 Test counts keep understating the suites that matter. `AsyncDaemonCompliance` is two tests that demand
 the whole daemon; `FlatTableProjectionCompliance` is eight that demand an upsert generator, a
 migration hook and rebuild teardown.
 
-Being green on all twenty-four is not the same as being feature-complete against Marten. The suites
+Being green on all twenty-six is not the same as being feature-complete against Marten. The suites
 cover what is portable across stores; the deliberate gaps listed in HANDOFF.md are still gaps.
 
 ## Filed follow-ups
@@ -125,6 +127,7 @@ if something is deferred, it is in the list above.
 | Strong-typed identities (fisher#14) | wrapper ids on aggregates and documents; `LoadAsync<T, TId>`; the last unenrolled compliance suite |
 | Stream compacting (fisher#10) | `CompactStreamAsync<T>` + the untyped `IEventStore` overload; reads back free, because JasperFx's aggregator fast-forwards a `Compacted<T>` |
 | JasperFx 2.43.0 | `EventDataMaskingCompliance` and `StreamCompactingCompliance` enrolled, both green on the bump; three seam members, no production change; `EventOperations.Unsupported.cs` emptied and deleted |
+| JasperFx 2.44.0 | `RebuildAndCatchUpCompliance` and `DeadLetterCompliance` enrolled, both green on the bump; **no seam members and no production change** |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -150,7 +153,7 @@ shrinking measured progress; it reached zero and was deleted. Two open decisions
   earlier deferral was waiting for.
 
 The `FisherCommandBuilder` shim is gone: weasel#424 shipped in Weasel.Sqlite 9.23.2. JasperFx is on
-**2.43.0** and Weasel on 9.23.2, both current. 2.40.0 and 2.41.0 are where four of the newest
+**2.44.0** and Weasel on 9.23.2, both current. 2.40.0 and 2.41.0 are where four of the newest
 compliance suites came from. 2.41.0 also lifted `CompactStreamAsync<T>` onto `IEventStoreOperations`
 and `IEventDataMasking` into `JasperFx.Events/Protected/`; the upstream note warns consumers that
 adopting the first is not optional, but that applies to Marten and Polecat, which declared the member
@@ -173,6 +176,16 @@ surface that hands one out is not, on any of the three stores. The core `JasperF
 `JasperFx.Events` assemblies did not change; 2.43.0 is a compliance-tests release. The pass also
 emptied and removed `EventOperations.Unsupported.cs`, which had been down to a single unreferenced
 constant.
+
+The 2.44.0 bump cost **nothing at all** — the first bump to add suites and require no Fisher change
+whatever, not even a seam member. `RebuildAndCatchUpCompliance` (11) and `DeadLetterCompliance` (6)
+were both filed upstream as needing a seam addition and both turned out not to: the rebuild surface
+is already declared on `IProjectionDaemon`, and the dead letter path runs through
+`IEventStore<,>.ContinuousErrors` and `IEventDatabase.QueryDeadLetterEventsAsync`, which Fisher
+implements because the daemon needs them anyway. Like 2.43.0 this is a compliance-tests-only release;
+the core assemblies are unchanged from 2.43.0, which is one commit behind it. The rebuild suite's
+teardown test is the one with teeth — see CLAUDE.md's "Compliance suites" for why, and for the
+unreproduced upstream intermittent that has not been seen here.
 
 ## Next, in order
 
