@@ -564,6 +564,19 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     public bool HeadersEnabled => Options.Events.EnableHeaders;
     public bool UserNameEnabled => Options.Events.EnableUserName;
 
+    /// <inheritdoc />
+    public void QueueSqlCommand(string sql, params object?[] parameterValues)
+        => QueueSqlCommand('?', sql, parameterValues);
+
+    /// <inheritdoc />
+    public void QueueSqlCommand(char placeholder, string sql, params object?[] parameterValues)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sql);
+        ArgumentNullException.ThrowIfNull(parameterValues);
+
+        QueueOperation(new Operations.ExecuteSqlStorageOperation(sql, placeholder, parameterValues));
+    }
+
     /// <summary>
     ///     Set a header value carried on every event appended in this unit of work.
     /// </summary>

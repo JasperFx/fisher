@@ -182,6 +182,49 @@ public interface IDocumentSession : IQuerySession, JasperFx.Events.IStorageOpera
     void UndoDeleteWhere<T>(Expression<Func<T, bool>> predicate) where T : notnull;
 
     /// <summary>
+    ///     Queue arbitrary SQL to run in this unit of work's transaction, alongside the documents and
+    ///     events.
+    /// </summary>
+    /// <param name="sql">
+    ///     The statement, with <c>?</c> for each parameter. A trailing semicolon is trimmed.
+    /// </param>
+    /// <param name="parameterValues">
+    ///     One value per <c>?</c>, in order. A count mismatch throws at commit, naming both counts.
+    /// </param>
+    /// <remarks>
+    ///     <para>
+    ///         <b>This is worth more on SQLite than the same method is on Marten or Polecat.</b> An
+    ///         application using Fisher keeps its own tables in the same file, and SQLite permits one
+    ///         writer per file — so without this, writing your rows and Fisher's atomically is not
+    ///         merely inconvenient, it means taking the write lock twice and contending with yourself.
+    ///     </para>
+    ///     <para>
+    ///         Values are converted to the encodings Fisher stores before binding: a <see cref="Guid" />
+    ///         to its lowercase canonical text, a <see cref="DateTimeOffset" /> or <see cref="DateTime" />
+    ///         to Fisher's fixed-width UTC form, a <see cref="decimal" /> to REAL. Bound raw, each of the
+    ///         three matches nothing Fisher has written — silently. Everything else binds unchanged.
+    ///     </para>
+    ///     <para>
+    ///         Statements run in the order they were queued, interleaved with nothing — document and
+    ///         event operations queued before and after keep their relative order too.
+    ///     </para>
+    /// </remarks>
+    void QueueSqlCommand(string sql, params object?[] parameterValues);
+
+    /// <summary>
+    ///     <see cref="QueueSqlCommand(string,object?[])" /> with a placeholder character other than
+    ///     <c>?</c>, for SQL that contains a literal one.
+    /// </summary>
+    /// <remarks>
+    ///     The placeholder is found by splitting the text, so a <c>?</c> inside a string literal or a
+    ///     JSON path would otherwise be read as a parameter and the counts would not add up. Polecat
+    ///     offers the same escape on <c>IAdvancedSql</c> rather than here; Fisher offers it in both
+    ///     places, because a JSON path is a much more likely thing to write against `fi_doc_*` than
+    ///     against a relational table.
+    /// </remarks>
+    void QueueSqlCommand(char placeholder, string sql, params object?[] parameterValues);
+
+    /// <summary>
     ///     Commit every queued operation in a single transaction.
     /// </summary>
     Task SaveChangesAsync(CancellationToken token = default);
