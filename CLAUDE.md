@@ -1269,6 +1269,35 @@ reintroduce fisher#20's bug one level up, where it is harder to see.
   interface map, so a member satisfied explicitly — compiling fine and then unreachable from the
   concrete type — is caught too.
 
+### `Advanced`, cleaning and the projection scenario
+
+`DocumentStore.Advanced` gained event store statistics, per-type cleaning, DDL script generation and
+the projection scenario harness (fisher#42). Four independent pieces, none large.
+
+- **`EventStoreStatistics` has three fields rather than two, and the third is the point.**
+  `EventSequenceNumber` can exceed `EventCount`, because archiving, compacting or deleting events
+  leaves the sequence where it was — `fi_events.seq_id` is `AUTOINCREMENT` and SQLite never reuses a
+  value it handed out. That is load-bearing rather than incidental (a reused sequence below the
+  daemon's high-water mark is an event no async projection ever sees), so the gap between the two
+  numbers is the count of events that once existed and no longer do.
+  **`sqlite_sequence` has no row until the first `AUTOINCREMENT` insert**, so the read is a `coalesce`
+  and an untouched store reports 0 rather than throwing.
+- **`CleanAsync<T>` matches against the tables that exist rather than issuing a blind `delete from`.**
+  A document table is created on demand at first write, and SQLite resolves a table name when it
+  *prepares* a statement — so cleaning a type that has never been written would fail before any guard
+  in the SQL could run. Same lesson rebuild teardown learned. It is a real delete even for a
+  soft-deleted type: flagging rows would leave a "cleaned" table that still answers `MaybeDeleted()`
+  and still refuses an insert on a duplicate id.
+- **`ToDatabaseScript()` is Weasel's**, inherited from `DatabaseBase` — Polecat writes its own only
+  because it needs `GO` separators. `the_script_creates_the_same_schema_the_migration_does` applies the
+  output to a fresh file and compares `sqlite_master`, which is the assertion worth having; that the
+  string contains a table name is not.
+- **`ProjectionScenario` is a seam and nothing else**, the same shape as `FisherProjectionDaemon` — the
+  harness lives in JasperFx. Its teardown clears the event store and the document types the registered
+  projections own, **not every table**: a scenario is entitled to seed documents its projections do not
+  produce, and clearing those would make the harness quietly destructive.
+  `the_teardown_leaves_unrelated_documents_alone` pins it.
+
 ### `Advanced` and cleaning
 
 `DocumentStore.Advanced` carries `Clean` (`IDocumentCleaner`), `ResetAllDataAsync` and

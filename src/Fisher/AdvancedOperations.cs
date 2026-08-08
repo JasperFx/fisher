@@ -78,4 +78,83 @@ public class AdvancedOperations
     /// </remarks>
     public Task ResetHiloSequenceFloorAsync<T>(long floor) where T : notnull
         => _store.Database.SequenceFor(typeof(T)).SetFloor(floor);
+
+    /// <summary>
+    ///     How much is in the event store — event count, stream count, and the current sequence.
+    /// </summary>
+    /// <remarks>
+    ///     Three scalars on one connection inside the resilience pipeline, so a <c>SQLITE_BUSY</c>
+    ///     retries the set rather than leaving the three readings taken at different moments.
+    /// </remarks>
+    public async Task<Events.EventStoreStatistics> FetchEventStoreStatisticsAsync(
+        CancellationToken token = default)
+    {
+        var events = _store.Options.EventGraph;
+
+        return await _store.Options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await _store.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
+
+            return new Events.EventStoreStatistics
+            {
+                EventCount = await ScalarAsync(connection,
+                    $"select count(*) from \"{events.EventsTableName}\"", ct).ConfigureAwait(false),
+                StreamCount = await ScalarAsync(connection,
+                    $"select count(*) from \"{events.StreamsTableName}\"", ct).ConfigureAwait(false),
+
+                // coalesce, not just a null check: sqlite_sequence has no row for a table nothing has
+                // been inserted into, and the table itself does not exist until the first AUTOINCREMENT
+                // insert anywhere in the database.
+                EventSequenceNumber = await ScalarAsync(connection,
+                    "select coalesce((select seq from sqlite_sequence where name = "
+                    + $"'{events.EventsTableName}'), 0)", ct).ConfigureAwait(false)
+            };
+        }, token).ConfigureAwait(false);
+    }
+
+    private static async Task<long> ScalarAsync(Microsoft.Data.Sqlite.SqliteConnection connection,
+        string sql, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+
+        return Convert.ToInt64(await command.ExecuteScalarAsync(token).ConfigureAwait(false));
+    }
+
+    /// <summary>
+    ///     The full creation DDL for this store, without applying any of it.
+    /// </summary>
+    /// <remarks>
+    ///     For reviewing a migration, and for the <c>AutoCreate.None</c> deployment story where
+    ///     somebody else runs the DDL. Covers every feature the store has registered — event store,
+    ///     document tables, Hi-Lo and flat tables — because it asks the same feature set
+    ///     <c>ApplyAllConfiguredChangesToDatabaseAsync</c> applies. A document type that has never been
+    ///     registered is absent, exactly as it is from a migration.
+    /// </remarks>
+    public string ToDatabaseScript() => _store.Database.ToDatabaseScript();
+
+    /// <inheritdoc cref="ToDatabaseScript" />
+    public Task WriteCreationScriptToFileAsync(string path, CancellationToken token = default)
+        => _store.Database.WriteCreationScriptToFileAsync(path, token);
+
+    /// <summary>
+    ///     Run a projection scenario — a given/when/then harness for asserting projected state after a
+    ///     set of events.
+    /// </summary>
+    /// <remarks>
+    ///     The harness itself is JasperFx's; Fisher supplies only the store seam, the same way
+    ///     <c>FisherProjectionDaemon</c> does for the daemon. <b>It deletes existing data first</b> —
+    ///     the event store, and the document types the registered projections own, but nothing else,
+    ///     so a scenario can seed unrelated documents beforehand and keep them.
+    /// </remarks>
+    public Task EventProjectionScenarioAsync(Action<Events.TestSupport.ProjectionScenario> configure,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var scenario = new Events.TestSupport.ProjectionScenario(_store);
+        configure(scenario);
+
+        return scenario.ExecuteAsync(token);
+    }
 }

@@ -40,6 +40,25 @@ internal sealed class FisherDocumentCleaner : IDocumentCleaner
         => ExecuteAgainstTablesAsync(name => name.StartsWith(DocumentPrefix, StringComparison.Ordinal),
             table => $"delete from \"{table}\"", token);
 
+    public Task CleanAsync<T>(CancellationToken token = default) where T : notnull
+        => CleanAsync(typeof(T), token);
+
+    /// <remarks>
+    ///     Matched against the tables that actually exist rather than issued blind, because a document
+    ///     table is created on demand at first write — SQLite resolves a table name when it *prepares*
+    ///     a statement, so a delete against a table that was never created fails before any guard in
+    ///     the SQL could run. The same reason rebuild teardown reads <c>sqlite_master</c> first.
+    /// </remarks>
+    public Task CleanAsync(Type documentType, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(documentType);
+
+        var table = _store.Options.Schema.MappingFor(documentType).TableName.Name;
+
+        return ExecuteAgainstTablesAsync(name => name == table,
+            name => $"delete from \"{name}\"", token);
+    }
+
     /// <summary>
     ///     Delete every row of event data — events, streams, progression, tags and dead letters.
     /// </summary>
