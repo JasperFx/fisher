@@ -440,6 +440,37 @@ internal partial class FisherSession
         return rows.Count == 0 ? null : rows[0];
     }
 
+    // ---- patching (fisher#35) ----
+
+    public Patching.IPatchExpression<T> Patch<T>(Guid id) where T : notnull => PatchById<T, Guid>(id);
+
+    public Patching.IPatchExpression<T> Patch<T>(string id) where T : notnull => PatchById<T, string>(id);
+
+    public Patching.IPatchExpression<T> Patch<T>(int id) where T : notnull => PatchById<T, int>(id);
+
+    public Patching.IPatchExpression<T> Patch<T>(long id) where T : notnull => PatchById<T, long>(id);
+
+    public Patching.IPatchExpression<T> Patch<T>(Expression<Func<T, bool>> predicate) where T : notnull
+        => PatchWhere<T>(ParsePredicate(predicate));
+
+    private Patching.IPatchExpression<T> PatchById<T, TId>(TId id)
+        where T : notnull where TId : notnull
+        => PatchWhere<T>(new Linq.SqlGeneration.ComparisonFilter("id",
+            "=", Storage.SqliteStorageDialect<TId>.ToDatabaseValue(id)));
+
+    private Patching.IPatchExpression<T> PatchWhere<T>(Weasel.Core.SqlGeneration.ISqlFragment where)
+        where T : notnull
+    {
+        var mapping = Options.Schema.MappingFor(typeof(T));
+        var operation = new Patching.PatchOperation(mapping, where,
+            mapping.IsConjoined ? TenantId : null);
+
+        QueueOperation(operation);
+
+        return new Patching.PatchExpression<T>(
+            new Linq.Members.MemberFactory(Options, mapping), FisherSerializer, operation);
+    }
+
     public Task<T> QueryByPlanAsync<T>(Batching.IQueryPlan<T> plan, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(plan);

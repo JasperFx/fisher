@@ -1499,6 +1499,54 @@ The provider takes both the column list and the materializer from the **query-on
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,
 which is what keeps the query path's read layout aligned with `LoadAsync`'s.
 
+### Patching
+
+`session.Patch<T>(id)` / `Patch<T>(predicate)` (fisher#35) — changing part of a stored document
+without loading it. Every operation is one json1 function inside a single
+`update … set data = …`, and a chain nests into one statement.
+
+**This is the strongest single case for SQLite in the backlog.** No server function to install (Marten
+needs a PL/pgSQL patch function), no `JSON_MODIFY` shape differences, and it composes. And **a
+duplicated field follows a patch with nothing to refresh**, because fisher#2 made duplicated fields
+`VIRTUAL` generated columns over `data` — both siblings must update theirs inside the patch SQL. That
+is the clearest dividend of that decision.
+
+**What a patch costs, said plainly:** `json_set` re-renders the document, so a patched row is no longer
+byte-identical to what the serializer would have written and a new or renamed key lands at the end. It
+avoids the deserialize/mutate/serialize round trip, *not* the row rewrite. Do not let "patching avoids
+the round trip" imply "patching is cheap" — and note it breaks the byte-exactness fisher#28 promises.
+
+- **Values go in through the store's serializer, not `SqliteParameterValue`.** fisher#34's conversions
+  exist to match *columns*; a patched value lands inside `data`, so it must match what a full write
+  would have produced — a timestamp in System.Text.Json's format rather than `SqliteTimestamp`'s.
+  Wrapping in `json(?)` then makes a string a JSON string, a number a JSON number and an object a JSON
+  object with no per-type branching.
+- **`Increment` needs `coalesce(…, 0)`.** `json_extract` of an absent *or null* key is SQL NULL and
+  `NULL + n` is NULL, so without it the member silently becomes null instead of the increment.
+  `increment_an_absent_member` uses an `int?` member deliberately: a non-nullable `int` serializes as 0
+  rather than being absent, and the first version of that test passed with and without the coalesce.
+- **Steps that read what they change read the accumulated expression**, not the bare `data` column, so
+  a chain sees its own earlier work. The cost is that the text grows with the chain.
+- **The value placeholders are indexed.** `ICommandBuilder.AppendParameter` writes its marker into the
+  SQL *at the point it is called*, so the expression cannot bind while composing — it would put `@p0`
+  in front of `update`. It is built with placeholders and split at render time; the index rather than a
+  bare marker is needed because `AppendIfNotExists` embeds the accumulated expression twice, and a
+  positional placeholder would be counted twice over.
+- **The version and timestamp columns are assigned explicitly.** They are not in the JSON, so nothing
+  about the json1 expression moves them — and without it an optimistic-concurrency type would silently
+  stop seeing patched writes and `ModifiedSince` would miss them.
+- **A patch does not reach a soft-deleted row**, the same rule the load SQL and the LINQ default filter
+  follow. Verified by removing the guard.
+- **The by-name overloads take the *stored* key**, not a CLR member name — `"name"`, not `"Name"`. That
+  is the point of them: reaching a key the type no longer has a member for, which is exactly what
+  `Rename` is for. They are deliberately not routed through `MemberFactory`, which would refuse the
+  case they exist for.
+- **Insert-at-an-index is absent** ([fisher#52](https://github.com/JasperFx/fisher/issues/52)):
+  `json_insert` only inserts where the path does not exist, so at an occupied index it is a silent
+  no-op. Doing it properly needs a `Remove`-style array rebuild with ordinal arithmetic, and
+  `json_each`'s row order is not a documented guarantee. `Remove` gets away with the rebuild because a
+  filter does not care about order.
+
 ### JSON-returning reads
 
 `LoadJsonAsync`, `ToJsonArrayAsync`, `ToJsonFirstWithVersionAsync` and `StreamJsonArrayAsync`

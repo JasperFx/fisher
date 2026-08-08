@@ -246,6 +246,42 @@ public interface IDocumentSession : IQuerySession, JasperFx.Events.IStorageOpera
     void UndoDeleteWhere<T>(Expression<Func<T, bool>> predicate) where T : notnull;
 
     /// <summary>
+    ///     Change part of a stored document without loading it.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Every operation becomes one json1 function inside a single <c>update</c>, and several
+    ///         calls on the returned expression nest into one statement. Committed with everything else
+    ///         in the unit of work.
+    ///     </para>
+    ///     <para>
+    ///         It avoids the deserialize/mutate/serialize round trip, <b>not</b> the row rewrite —
+    ///         <c>json_set</c> re-renders the document, so a patched row is no longer byte-identical to
+    ///         what the serializer would have written and a new or renamed key lands at the end.
+    ///     </para>
+    /// </remarks>
+    Patching.IPatchExpression<T> Patch<T>(Guid id) where T : notnull;
+
+    /// <inheritdoc cref="Patch{T}(Guid)" />
+    Patching.IPatchExpression<T> Patch<T>(string id) where T : notnull;
+
+    /// <inheritdoc cref="Patch{T}(Guid)" />
+    Patching.IPatchExpression<T> Patch<T>(int id) where T : notnull;
+
+    /// <inheritdoc cref="Patch{T}(Guid)" />
+    Patching.IPatchExpression<T> Patch<T>(long id) where T : notnull;
+
+    /// <summary>
+    ///     Patch every document matching a predicate.
+    /// </summary>
+    /// <remarks>
+    ///     The predicate goes through the same LINQ layer <c>Query&lt;T&gt;()</c> uses, and is applied
+    ///     last — after the tenant scope and the soft-delete guard — because a compound predicate is
+    ///     parenthesised and so cannot swallow them.
+    /// </remarks>
+    Patching.IPatchExpression<T> Patch<T>(Expression<Func<T, bool>> predicate) where T : notnull;
+
+    /// <summary>
     ///     Queue arbitrary SQL to run in this unit of work's transaction, alongside the documents and
     ///     events.
     /// </summary>

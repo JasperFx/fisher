@@ -4,7 +4,7 @@ Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.
 architecture and the SQLite-specific decisions.
 
 Status: **twenty open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
-**All 28 compliance suites green.** 855 tests green on net9.0
+**All 28 compliance suites green.** 871 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
 Twenty-eight of those twenty-nine came out of a file-by-file comparison against Polecat on 2026-08-08,
@@ -150,6 +150,7 @@ if something is deferred, it is in the list above.
 | LINQ projections (fisher#23) | `Select` as a compiled rewrite, `Distinct` over a projection, `DistinctBy` over documents through `row_number()`; the provider now splits source type from result type |
 | Tenant scoping fix (fisher#51) | a conjoined `Query<T>()` with no `Where` returned every tenant's rows; the filter is now one statement-level pass, like the hierarchy and soft-delete ones |
 | LINQ marker operators (fisher#26) | `AnyTenant`/`TenantIsOneOf`, `IsOneOf`/`In`, `IsEmpty`, `object.Equals`, `ModifiedSince`/`Before`, `QueryForNonStaleData` |
+| Patching (fisher#35) | `Patch<T>` by id or predicate; every operation one json1 function, chains nesting into one statement, and a duplicated column following it with nothing to refresh |
 | `Advanced` parity (fisher#42) | event store statistics, `CleanAsync<T>`, DDL script generation, and the projection scenario harness |
 | JSON reads (fisher#28) | `LoadJsonAsync`, `ToJsonArrayAsync`, the version variant and streaming; byte-exact, which neither sibling can promise |
 | Batching and plans (fisher#37) | the DCB batch widened to documents and moved to `Fisher.Batching`, plus `IQueryPlan`, `CheckExistsAsync` and `ToSql` |

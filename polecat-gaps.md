@@ -69,7 +69,7 @@ timestamp and a decimal each bind to something Fisher never wrote.
 | Feature | Issue |
 |---|---|
 | Metadata columns `created_at`, `correlation_id`, `causation_id`, `last_modified_by`, `headers`; `MetadataForAsync` | [#29](https://github.com/JasperFx/fisher/issues/29) |
-| Patching — `Set` / `Increment` / `Append` / `Insert` / `Remove` / `Rename` / `Delete`, by id or predicate | [#35](https://github.com/JasperFx/fisher/issues/35) |
+| ~~Patching — `Set` / `Increment` / `Append` / `Remove` / `Rename` / `Delete` / `Duplicate`, by id or predicate~~ (`Insert` at an index is [#52](https://github.com/JasperFx/fisher/issues/52)) | [#35](https://github.com/JasperFx/fisher/issues/35) **done** |
 | Bulk insert, with `InsertsOnly` / `IgnoreDuplicates` / `OverwriteExisting` | [#36](https://github.com/JasperFx/fisher/issues/36) |
 | Document foreign keys | [#38](https://github.com/JasperFx/fisher/issues/38) |
 | `[Index]` / `[UniqueIndex]` / `[HiloSequence]` attributes, `AddSubClassHierarchy()`, `StorePolicies`, `IInitialData` | [#39](https://github.com/JasperFx/fisher/issues/39) |
