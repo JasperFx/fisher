@@ -220,6 +220,8 @@ Working, with tests:
   documents and streams in one transaction
 - **Document foreign keys** — `Schema.For<T>().ForeignKey<TOther>(x => x.OtherId)`, enforced, with
   cascade options; the child column is the generated one a duplicated field creates
+- **Declarative and store-wide configuration** — `[Index]` / `[UniqueIndex]` / `[DuplicateField]` /
+  `[HiloSequence]`, `AddSubClassHierarchy()`, `StoreOptions.Policies` and `StoreOptions.InitialData`
 
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
@@ -1366,6 +1368,52 @@ CREATE TABLE, long after the line that caused it.
 `Duplicate(x => x.Name)` cannot infer its document type from a lambda and the receiver has to carry
 it — the same reason Marten has `MartenRegistry.DocumentMappingExpression<T>`. The mapping is a
 property on it; only what needs the type parameter lives on the expression.
+
+### Configuration layers, attributes, policies and initial data
+
+fisher#39 — the declarative and store-wide halves of configuration: `[Index]`, `[UniqueIndex]`,
+`[DuplicateField]`, `[HiloSequence]`, `AddSubClassHierarchy()`, `StoreOptions.Policies` and
+`StoreOptions.InitialData`.
+
+**There are now four configuration layers, and their order is the thing to remember.** A store policy,
+then the JasperFx metadata interfaces, then the schema attributes, then `Schema.For<T>()` — each
+overriding the one before. Weakest first, for a reason that reads off the layer: a policy was written
+without knowing about the type it lands on; an interface is intrinsic to the type but says nothing
+about this store; an attribute is on the type and about storage; the DSL names the type in this
+store's own configuration. The first three run in `DocumentMapping`'s constructor, in that order.
+
+- **The attributes are read where the mapping is created, not by an assembly scan.** A mapping is
+  built lazily per type, which is the moment the type is known — so there is no world to scan and
+  nothing to keep in sync.
+- **Fisher's `[Index]` is deliberately narrower than Polecat's**, which carries `SortOrder`, `Casing`
+  and `SqlType`. All three describe a *computed column*, which is what a Polecat index is built over;
+  a Fisher index is an expression index and has no column to type, no casing to apply (SQLite's
+  default collation is case-sensitive and the LINQ string operators are ordinal to match) and no
+  direction worth naming. Carrying them would be three knobs that silently do nothing.
+- **Members sharing an `IndexName` become one composite index**, in `GetMembers` order. That is the
+  only reason a per-member attribute carries a name at all.
+- **`AddSubClassHierarchy()` orders by full name, not by reflection order.** Two sub-classes whose
+  default aliases collide have to fail the same way on every run, and `Assembly.GetTypes()` promises
+  no ordering — a collision that appeared on one machine and not another would be the worst version of
+  that error. Abstract and interface types are skipped, because a discriminator names something a row
+  can be read back *as*.
+- **`ForDocument<T>` is not `Schema.For<T>()`**, and the difference is the one that matters: it does
+  not create the mapping. A type nothing ever stores stays unmapped and gets no table. It means "if
+  you store one of these, store it like so".
+- **`SeedInitialDataOnStartup()` refuses to be registered before
+  `ApplyAllDatabaseChangesOnStartup()`.** Hosted services start in registration order, so the other
+  way round writes to tables that do not exist yet — and that presents as `no such table`, which names
+  the table and not the mistake.
+- **No "already seeded" marker, deliberately.** A seeder that upserts by a known id is idempotent for
+  free, which is what every useful seeder does; a marker table would be a table nobody asked for
+  holding a claim Fisher cannot verify. Both siblings say the same.
+
+**Partitioning is out of scope permanently, not pending.** Polecat's
+`AllDocumentsAreMultiTenantedWithPartitioning()` and its relatives have no SQLite equivalent — no
+partition functions, no partition schemes, no per-partition storage. The nearest thing is separate
+tables behind a `UNION ALL` view, which carries none of the operational properties (partition
+switching, aged-partition drop) that make the feature worth having. Said in `StorePolicies` so it is
+not rediscovered as a gap.
 
 ### Document foreign keys
 

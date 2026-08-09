@@ -283,6 +283,51 @@ public class DocumentMappingExpression<T> where T : notnull
     }
 
     /// <summary>
+    ///     Register every concrete sub-class of <typeparamref name="T" /> found in an assembly, so a
+    ///     hierarchy of a dozen types is one line rather than twelve that have to be kept in sync with
+    ///     the type tree (fisher#39).
+    /// </summary>
+    /// <param name="assembly">
+    ///     Where to look. Defaults to the assembly declaring <typeparamref name="T" />, which is where
+    ///     a hierarchy nearly always lives; name another when the sub-classes are elsewhere.
+    /// </param>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Abstract and interface types are skipped</b>, because a discriminator alias names
+    ///         something a row can be deserialized as and nothing is ever stored as an abstract type.
+    ///     </para>
+    ///     <para>
+    ///         <b>Ordered by full name, not by reflection order.</b> Two sub-classes whose default
+    ///         aliases collide have to fail the same way on every run, and
+    ///         <c>Assembly.GetTypes()</c> gives no ordering guarantee — an alias collision that showed
+    ///         up on one machine and not another would be the worst possible version of that error.
+    ///     </para>
+    ///     <para>
+    ///         Each type gets its default alias, which follows <c>DocumentMapping.Alias</c>'s convention
+    ///         rather than snake case — see <see cref="AddSubClass{TSub}" />. A sub-class that needs a
+    ///         stable alias across a rename should be named explicitly with <c>AddSubClass</c>, which
+    ///         this leaves alone: registering the same type twice is idempotent.
+    ///     </para>
+    /// </remarks>
+    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification = "Scans a caller-named assembly for sub-classes of a document type the caller has already preserved.")]
+    public DocumentMappingExpression<T> AddSubClassHierarchy(System.Reflection.Assembly? assembly = null)
+    {
+        var subclasses = (assembly ?? typeof(T).Assembly)
+            .GetTypes()
+            .Where(x => x != typeof(T) && typeof(T).IsAssignableFrom(x))
+            .Where(x => !x.IsAbstract && !x.IsInterface)
+            .OrderBy(x => x.FullName, StringComparer.Ordinal);
+
+        foreach (var subclass in subclasses)
+        {
+            Mapping.AddSubClass(subclass, alias: null);
+        }
+
+        return this;
+    }
+
+    /// <summary>
     ///     Walk a member-access lambda back to its parameter, outermost member last.
     /// </summary>
     /// <remarks>

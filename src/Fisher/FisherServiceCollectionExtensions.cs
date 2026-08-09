@@ -125,6 +125,37 @@ public sealed class FisherConfigurationExpression
     }
 
     /// <summary>
+    ///     Run <see cref="StoreOptions.InitialData" /> at startup (fisher#39).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Ordering is the whole reason this is separate from registering the seeders.</b>
+    ///         Hosted services start in registration order, so this must be called after
+    ///         <see cref="ApplyAllDatabaseChangesOnStartup" /> — a seeder writing to a table that does
+    ///         not exist yet would fail, and nothing else creates them. Calling it first is refused by
+    ///         name rather than left to present as "no such table" at startup.
+    ///     </para>
+    ///     <para>
+    ///         Seeders run once per host start and are expected to be idempotent; Fisher keeps no
+    ///         "already seeded" marker. See <see cref="IInitialData" />.
+    ///     </para>
+    /// </remarks>
+    public FisherConfigurationExpression SeedInitialDataOnStartup()
+    {
+        if (_services.All(x => x.ImplementationType != typeof(FisherSchemaActivator)))
+        {
+            throw new InvalidOperationException(
+                "Call ApplyAllDatabaseChangesOnStartup() before SeedInitialDataOnStartup(). Hosted "
+                + "services start in registration order, and a seeder that runs before the schema is "
+                + "applied writes to tables that do not exist yet. If the schema is applied some other "
+                + "way, run the seeders that way too.");
+        }
+
+        _services.AddSingleton<IHostedService, FisherInitialDataActivator>();
+        return this;
+    }
+
+    /// <summary>
     ///     Host the async projection daemon for the lifetime of the application.
     /// </summary>
     /// <remarks>
@@ -180,6 +211,27 @@ internal sealed class FisherSchemaActivator : IHostedService
         => _store.Options.AutoCreateSchemaObjects == AutoCreate.None
             ? Task.CompletedTask
             : _store.ApplyAllConfiguredChangesToDatabaseAsync(cancellationToken);
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+/// <summary>
+///     Runs the configured initial-data seeders once, at host start, after the schema activator
+///     (fisher#39).
+/// </summary>
+internal sealed class FisherInitialDataActivator : IHostedService
+{
+    private readonly IDocumentStore _store;
+
+    public FisherInitialDataActivator(IDocumentStore store) => _store = store;
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        foreach (var data in _store.Options.InitialData)
+        {
+            await data.Populate(_store, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

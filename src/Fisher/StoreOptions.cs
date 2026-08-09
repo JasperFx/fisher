@@ -184,6 +184,25 @@ public class StoreOptions
     public List<ISchemaObject> ExtendedSchemaObjects { get; } = new();
 
     /// <summary>
+    ///     Configuration applied to every document mapping as it is created (fisher#39).
+    /// </summary>
+    /// <remarks>
+    ///     The weakest of the four configuration layers — policy, then metadata interface, then schema
+    ///     attribute, then <c>Schema.For&lt;T&gt;()</c>. See <see cref="Storage.StorePolicies" />.
+    /// </remarks>
+    public Storage.StorePolicies Policies { get; } = new();
+
+    /// <summary>
+    ///     Data seeded at startup, after the schema has been applied (fisher#39).
+    /// </summary>
+    /// <remarks>
+    ///     Run by <c>AddFisher</c>'s hosted services. Building a store by hand runs nothing — there is
+    ///     no startup to hang it off — which is why <see cref="IInitialData" /> says the seeders belong
+    ///     in a hosted application.
+    /// </remarks>
+    public InitialDataCollection InitialData { get; } = new();
+
+    /// <summary>
     ///     Unit-of-work hooks applied to every session this store opens (fisher#32).
     /// </summary>
     /// <remarks>
