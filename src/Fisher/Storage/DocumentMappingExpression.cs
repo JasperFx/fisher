@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 using Fisher.Storage.Metadata;
+using Weasel.Core;
 
 namespace Fisher.Storage;
 
@@ -207,6 +208,50 @@ public class DocumentMappingExpression<T> where T : notnull
     public DocumentMappingExpression<T> UniqueIndex(Expression<Func<T, object?>>[] members,
         string? name = null)
         => Index(members, name, unique: true);
+
+    /// <summary>
+    ///     Declare a real foreign key from a member of <typeparamref name="T" /> to
+    ///     <typeparamref name="TReference" />'s identity (fisher#38).
+    /// </summary>
+    /// <param name="member">The member holding the other document's identity.</param>
+    /// <param name="onDelete">
+    ///     What happens to these rows when the referenced document is deleted. Defaults to
+    ///     <see cref="CascadeAction.NoAction" />, which refuses the delete while a child row points at
+    ///     it.
+    /// </param>
+    /// <param name="columnName">
+    ///     The generated column's name. Defaults to the member in snake case, as
+    ///     <see cref="Duplicate{TValue}" /> does — and it is the same column, because this duplicates
+    ///     the member.
+    /// </param>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Enforced from the moment it is declared.</b> SQLite's foreign key enforcement is
+    ///         per-connection and off by default in the library, but Weasel's default pragma profile
+    ///         turns it on for every connection Fisher opens.
+    ///     </para>
+    ///     <para>
+    ///         <b>This duplicates the member as well</b>, because a foreign key needs a real column and
+    ///         a document member lives in <c>data</c>. That column is a <c>VIRTUAL</c> generated one, so
+    ///         it costs index space rather than row space and cannot drift — see
+    ///         <see cref="DocumentForeignKey" /> for the verification that SQLite accepts a generated
+    ///         column as a foreign key child at all, which was the one thing that could have sunk this.
+    ///     </para>
+    ///     <para>
+    ///         <b>A document whose member is absent or null is unconstrained</b>, because
+    ///         <c>json_extract</c> yields SQL NULL and SQLite exempts a NULL child value — the same
+    ///         asymmetry <see cref="UniqueIndex{TValue}" /> documents, and the same on both siblings.
+    ///     </para>
+    /// </remarks>
+    public DocumentMappingExpression<T> ForeignKey<TReference>(Expression<Func<T, object?>> member,
+        CascadeAction onDelete = CascadeAction.NoAction, string? columnName = null)
+        where TReference : notnull
+    {
+        ArgumentNullException.ThrowIfNull(member);
+
+        Mapping.ForeignKey(ChainOf(member), typeof(TReference), onDelete, columnName);
+        return this;
+    }
 
     /// <summary>
     ///     Register a sub-class, so <typeparamref name="T" /> and its sub-classes share one table.

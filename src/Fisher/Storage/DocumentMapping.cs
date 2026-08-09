@@ -3,6 +3,7 @@ using System.Reflection;
 using Fisher.Attributes;
 using Fisher.Storage.Metadata;
 using JasperFx;
+using Weasel.Core;
 using JasperFx.Metadata;
 using JasperFx.MultiTenancy;
 using Weasel.Core.Sequences;
@@ -354,6 +355,71 @@ public class DocumentMapping
         DuplicatedFields.Add(field);
 
         return field;
+    }
+
+    /// <summary>
+    ///     The foreign keys declared from this document type to others (fisher#38).
+    /// </summary>
+    internal List<DocumentForeignKey> ForeignKeys { get; } = [];
+
+    /// <summary>
+    ///     Register a foreign key from a member of this type to another document type's identity.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The member is duplicated as a side effect, because a foreign key needs a real column and
+    ///         a document member lives in <c>data</c> — see <see cref="DocumentForeignKey" /> for why
+    ///         that is folded in rather than demanded of the caller. Indexed, both because a duplicated
+    ///         field is by default and because SQLite recommends an index on a foreign key's child
+    ///         column: without one, every delete of a parent row scans the child table.
+    ///     </para>
+    ///     <para>
+    ///         Declaring the same key twice is idempotent; declaring it twice with different cascade
+    ///         behaviour is a real mistake and says so.
+    ///     </para>
+    /// </remarks>
+    internal DocumentForeignKey ForeignKey(MemberInfo[] members, Type referencedType,
+        CascadeAction onDelete, string? columnName)
+    {
+        if (members.Length == 0)
+        {
+            throw new ArgumentException("A foreign key needs at least one member.", nameof(members));
+        }
+
+        if (referencedType == DocumentType)
+        {
+            // Not refused for being circular — SQLite is perfectly happy with a self-reference — but
+            // because the migration would have to order a table against itself, and the only shape
+            // that needs it (a tree) is better served by no constraint than by one that blocks the
+            // root insert.
+            throw new InvalidOperationException(
+                $"'{DocumentType.Name}' cannot declare a foreign key to itself. A self-referencing "
+                + "document hierarchy has no insert order that satisfies the constraint for its own "
+                + "root; index the member instead.");
+        }
+
+        Duplicate(members, columnName, columnType: null, shouldIndex: true);
+
+        var existing = ForeignKeys.FirstOrDefault(
+            x => x.MemberNames.SequenceEqual(members.Select(m => m.Name), StringComparer.Ordinal));
+
+        if (existing is not null)
+        {
+            if (existing.ReferencedType != referencedType || existing.OnDelete != onDelete)
+            {
+                throw new InvalidOperationException(
+                    $"'{DocumentType.Name}.{string.Join(".", existing.MemberNames)}' already has a "
+                    + $"foreign key to '{existing.ReferencedType.Name}' with OnDelete = "
+                    + $"{existing.OnDelete}. Declare it once.");
+            }
+
+            return existing;
+        }
+
+        var key = new DocumentForeignKey(members, referencedType, onDelete);
+        ForeignKeys.Add(key);
+
+        return key;
     }
 
     /// <summary>

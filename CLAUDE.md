@@ -218,11 +218,12 @@ Working, with tests:
   session, bracketing the unit of work the same way the outbox does
 - **Cross-tenant writes** — `session.ForTenant(id)`, so one `SaveChangesAsync` writes several tenants'
   documents and streams in one transaction
+- **Document foreign keys** — `Schema.For<T>().ForeignKey<TOther>(x => x.OtherId)`, enforced, with
+  cascade options; the child column is the generated one a duplicated field creates
 
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
 
-- **Document foreign keys** (fisher#38).
 - **Database-per-tenant** (fisher#47) — the conjoined style works and is pinned by
   `ConjoinedEventTenancyCompliance`; a file per tenant does not, which is why every `IEventDatabase`
   parameter in `DocumentStore.Daemon.cs` is ignored.
@@ -1365,6 +1366,52 @@ CREATE TABLE, long after the line that caused it.
 `Duplicate(x => x.Name)` cannot infer its document type from a lambda and the receiver has to carry
 it — the same reason Marten has `MartenRegistry.DocumentMappingExpression<T>`. The mapping is a
 property on it; only what needs the type parameter lives on the expression.
+
+### Document foreign keys
+
+`Schema.For<T>().ForeignKey<TOther>(x => x.OtherId)` (fisher#38) — a real, enforced foreign key
+between two document tables.
+
+**SQLite's reputation invites the question, so state it plainly: it supports this completely.**
+Foreign keys, `ON DELETE CASCADE` and `ON DELETE SET NULL` are all there. Enforcement is
+per-connection through `PRAGMA foreign_keys` and off by default *in the SQLite library* — but on for
+every connection Fisher opens, because Weasel's default profile sets it. That is the fact fisher#6
+discovered the hard way, and it means a document foreign key bites the moment it is declared.
+
+- **The blocker fisher#38 flagged does not exist.** It asked, correctly, whether SQLite accepts a
+  `VIRTUAL` generated column as a foreign key *child*, because a "no" would have forced a `STORED` or
+  written column and reopened the write-path question fisher#2 closed. **Probed against SQLite 3.50.4
+  before anything was built** (the version Microsoft.Data.Sqlite 10.0.9 bundles): the table is
+  created, an orphan insert fails, a row whose key is absent from the JSON is allowed, `ON DELETE
+  CASCADE` works, and `pragma_foreign_key_list` reports it. So the write path is untouched and a
+  foreign key costs index space only.
+- **Declaring a foreign key duplicates the member implicitly, and that is a real divergence.** A
+  constraint needs a column and a document member lives in `data`; the alternative is an error message
+  telling the caller to write a `Duplicate(...)` line with no other purpose. On both siblings the two
+  are already separate concepts because their duplicated columns are *written*. Here the column is
+  generated, so folding one into the other loses nothing — and an explicit `Duplicate` on the same
+  member still wins, because `DocumentMapping.Duplicate` is idempotent. The column is indexed, which
+  SQLite wants anyway: without an index on the child column every parent delete scans the child table.
+- **The referenced side is always the other type's `id`.** SQLite requires a foreign key to reference a
+  `PRIMARY KEY` or `UNIQUE` column, and a document table's identity is its primary key. Referencing a
+  duplicated field would need that field's index to be `UNIQUE`.
+- **A document whose member is absent or null is unconstrained**, because `json_extract` yields SQL
+  NULL and SQLite exempts a NULL child. Same asymmetry as a `UNIQUE` index over an absent member.
+- **The referenced table is named unqualified, and that is forced rather than chosen.** SQLite's
+  `REFERENCES` clause cannot be schema-qualified — and Fisher folds its logical schema into the table
+  *prefix* rather than using real schemas, so the rendered name is already the whole name and two
+  logical stores in one file each reference their own table.
+- **`DeleteAllDocumentsAsync` now orders by foreign key, referencing tables first** — fisher#6's lesson
+  one layer over. The order comes from `pragma_foreign_key_list` rather than from the store's
+  configuration, so it is the database's account of what references what: a table left behind by an
+  earlier configuration is still enforced and the store no longer knows about it. Verified by removing
+  the ordering. `CompletelyRemoveAllAsync` still needs none — SQLite does not enforce a key against a
+  dropped table.
+- **A self-reference is refused at configuration time.** Not because SQLite minds, but because the only
+  shape that wants one (a tree) has no insert order that satisfies the constraint for its own root.
+
+Adding a foreign key to a type whose table already exists means recreating the table: SQLite has no
+`ALTER TABLE ADD CONSTRAINT`, and Weasel reports that rather than attempting it.
 
 ### User-declared indexes
 

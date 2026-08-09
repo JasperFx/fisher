@@ -36,9 +36,17 @@ internal sealed class FisherDocumentCleaner : IDocumentCleaner
 
     private string DocumentPrefix => Prefix + "doc_";
 
+    /// <remarks>
+    ///     <b>Ordered by foreign key, referencing tables first</b> — the lesson
+    ///     <see cref="DeleteAllEventDataAsync" /> learned in fisher#6, one layer over. Weasel's default
+    ///     pragma profile enforces foreign keys on every connection Fisher opens, so once one document
+    ///     table references another (fisher#38) an unordered sweep fails with
+    ///     <c>FOREIGN KEY constraint failed</c> roughly half the time — whichever order
+    ///     <c>sqlite_master</c> happens to return.
+    /// </remarks>
     public Task DeleteAllDocumentsAsync(CancellationToken token = default)
         => ExecuteAgainstTablesAsync(name => name.StartsWith(DocumentPrefix, StringComparison.Ordinal),
-            table => $"delete from \"{table}\"", token);
+            table => $"delete from \"{table}\"", OrderByForeignKeys, token);
 
     public Task CleanAsync<T>(CancellationToken token = default) where T : notnull
         => CleanAsync(typeof(T), token);
@@ -136,7 +144,12 @@ internal sealed class FisherDocumentCleaner : IDocumentCleaner
         }, token).ConfigureAwait(false);
     }
 
+    private Task ExecuteAgainstTablesAsync(Func<string, bool> matches, Func<string, string> sqlFor,
+        CancellationToken token)
+        => ExecuteAgainstTablesAsync(matches, sqlFor, order: null, token);
+
     private async Task ExecuteAgainstTablesAsync(Func<string, bool> matches, Func<string, string> sqlFor,
+        Func<SqliteConnection, List<string>, CancellationToken, Task<List<string>>>? order,
         CancellationToken token)
     {
         await _store.Options.ResiliencePipeline.ExecuteAsync(async ct =>
@@ -144,14 +157,88 @@ internal sealed class FisherDocumentCleaner : IDocumentCleaner
             await using var connection = await _store.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
 
             var tables = await ReadTableNamesAsync(connection, ct).ConfigureAwait(false);
+            var matching = tables.Where(matches).ToList();
 
-            foreach (var table in tables.Where(matches))
+            if (order is not null)
+            {
+                matching = await order(connection, matching, ct).ConfigureAwait(false);
+            }
+
+            foreach (var table in matching)
             {
                 await using var command = connection.CreateCommand();
                 command.CommandText = sqlFor(table);
                 await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
         }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Order the tables so that a table referencing another comes first.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Read from <c>pragma_foreign_key_list</c> rather than from the store's configuration, so
+    ///         it is the database's own account of what references what. That matters: a table left
+    ///         behind by an earlier configuration is still enforced, and the store no longer knows about
+    ///         it.
+    ///     </para>
+    ///     <para>
+    ///         A plain depth-first topological sort with a visiting set, so a reference cycle degrades
+    ///         to "some order" rather than looping. Fisher refuses a self-reference at configuration
+    ///         time and a cycle between two document types is not a shape the DSL makes easy, so this is
+    ///         a backstop rather than a supported case — and a cycle would fail the delete anyway, which
+    ///         is an honest answer.
+    ///     </para>
+    /// </remarks>
+    private static async Task<List<string>> OrderByForeignKeys(SqliteConnection connection,
+        List<string> tables, CancellationToken token)
+    {
+        var references = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var table in tables)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"select \"table\" from pragma_foreign_key_list('{table.Replace("'", "''")}')";
+
+            var parents = new List<string>();
+
+            await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                parents.Add(reader.GetString(0));
+            }
+
+            references[table] = parents;
+        }
+
+        var ordered = new List<string>();
+        var done = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var visiting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void Visit(string table)
+        {
+            if (!done.Add(table) || !visiting.Add(table))
+            {
+                return;
+            }
+
+            // Children first: everything that references this table has to be emptied before it is.
+            foreach (var child in tables.Where(x => references[x].Contains(table, StringComparer.OrdinalIgnoreCase)))
+            {
+                Visit(child);
+            }
+
+            visiting.Remove(table);
+            ordered.Add(table);
+        }
+
+        foreach (var table in tables)
+        {
+            Visit(table);
+        }
+
+        return ordered;
     }
 
     private static async Task<List<string>> ReadTableNamesAsync(SqliteConnection connection,

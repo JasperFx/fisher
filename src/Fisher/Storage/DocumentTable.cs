@@ -88,6 +88,53 @@ internal class DocumentTable : Table
         AddOptionalMetadata(mapping);
         AddDuplicatedFields(mapping);
         AddDeclaredIndexes(mapping);
+        AddForeignKeys(mapping);
+    }
+
+    /// <summary>
+    ///     A table-level <c>foreign key (…) references &lt;table&gt; (id)</c> per declared key
+    ///     (fisher#38).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The child column is the duplicated field the declaration created, which is a
+    ///         <c>VIRTUAL</c> generated column — accepted by SQLite as a foreign key child, and
+    ///         enforced. See <see cref="DocumentForeignKey" /> for the verification.
+    ///     </para>
+    ///     <para>
+    ///         <b>The referenced table is named unqualified</b>, which is not a shortcut: SQLite's
+    ///         <c>REFERENCES</c> clause takes a bare table name and cannot be schema-qualified, and
+    ///         Fisher folds its logical schema into the table <em>prefix</em> rather than using real
+    ///         schemas — so the name Weasel renders is already the whole name. Two logical stores in one
+    ///         file therefore each get their own key to their own table.
+    ///     </para>
+    ///     <para>
+    ///         Added after the columns because it names one, and rendered inline with the CREATE TABLE
+    ///         because SQLite has no <c>ALTER TABLE ADD CONSTRAINT</c> — adding a key to a type that
+    ///         already has a table means recreating it, which Weasel reports rather than attempting.
+    ///     </para>
+    /// </remarks>
+    private void AddForeignKeys(DocumentMapping mapping)
+    {
+        foreach (var declared in mapping.ForeignKeys)
+        {
+            var field = mapping.DuplicateFor(declared.Members)
+                        ?? throw new InvalidOperationException(
+                            $"The foreign key on '{mapping.DocumentType.Name}."
+                            + $"{string.Join(".", declared.MemberNames)}' has no column. Declaring one is "
+                            + "supposed to duplicate the member; this is a bug in DocumentMapping.ForeignKey.");
+
+            var referenced = mapping.StoreOptions.Schema.MappingFor(declared.ReferencedType);
+
+            ForeignKeys.Add(new Weasel.Sqlite.Tables.ForeignKey(
+                $"fkey_{Identifier.Name}_{field.ColumnName}")
+            {
+                ColumnNames = [field.ColumnName],
+                LinkedTable = referenced.TableName,
+                LinkedNames = ["id"],
+                OnDelete = declared.OnDelete
+            });
+        }
     }
 
     /// <summary>
