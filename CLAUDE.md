@@ -211,15 +211,22 @@ Working, with tests:
   `Advanced.ApplyEventDataMaskingAsync`, and stream compacting via `CompactStreamAsync<T>`
 - **Sessions and `SessionOptions`** — `QuerySession()` and `OpenSession(SessionOptions)` on the store,
   and enlistment: a session running on a connection or inside a transaction the caller owns
+- **Session tracking** — an identity map, dirty tracking, and `Eject` / `EjectAllOfType` /
+  `EjectAllPendingChanges`, through `SessionOptions.Tracking` and the `IdentitySession()` /
+  `DirtyTrackedSession()` factories
 
-Not implemented yet — do not assume these work:
+Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
+most likely to be assumed present:
 
-- **Document storage** — `Store`/`Insert`/`Update`/`Delete`/`LoadAsync`/`LoadManyAsync`, soft delete,
-  duplicated fields, user-declared indexes, numeric revisions, metadata member mapping and LINQ all
-  work over Guid, string, int and long ids, in the same unit of work and transaction as event appends.
-  Document hierarchies work too — one table per hierarchy, keyed on a `doc_type` alias.
-- **Event rewriting** — all of it works: `OverwriteEvent` / `CompletelyReplaceEvent`, event data
-  masking and stream compacting.
+- **Session listeners and `IChangeSet`** (fisher#32) — there is no way to observe a unit of work.
+- **`ForTenant`** (fisher#33) — a session writes for its own tenant only.
+- **Document foreign keys** (fisher#38).
+- **Database-per-tenant** (fisher#47) — the conjoined style works and is pinned by
+  `ConjoinedEventTenancyCompliance`; a file per tenant does not, which is why every `IEventDatabase`
+  parameter in `DocumentStore.Daemon.cs` is ignored.
+- **A message bus** — the side-effect seam exists and the default outbox drops every message. That is
+  the end state, not a gap: fisher#8 was closed wontfix, and delivery is a bus integration's job here
+  as it is on both siblings.
 
 ### Inline projections
 
@@ -614,7 +621,8 @@ Weasel.Storage supplies the selectors and the write operations but **not** an
 own, and `FisherDocumentStorage<TDoc,TId>` is Fisher's. Around it:
 
 - `DocumentProviderRegistry` (`IProviderGraph`) caches one `DocumentProvider<T>` per document type,
-  holding four flavors. Fisher has no dirty tracking, so the identity-map storage takes that slot too.
+  holding all four flavors. Which one a session resolves is `SessionOptions.Tracking`'s answer — see
+  "Session tracking".
 - **Storages record; the session queues.** `IStorageSession` has no operation queue, so
   `IDocumentStorage.Store` only assigns an identity and registers the document; `FisherSession.Store<T>`
   queues the `Upsert`. A storage that tried to enqueue would have to know a concrete session type.
@@ -1015,18 +1023,89 @@ query that is genuinely slow. And it does not bound the wait at `BEGIN IMMEDIATE
 transaction is begun on the connection rather than through a command — that busy wait comes from the
 connection string's `Default Timeout`, 30s by default. Both halves verified.
 
-**`Tracking` and `Listeners` are deliberately absent**, though both are on Polecat's `SessionOptions`:
-Fisher has no identity map or dirty tracking (fisher#31) and no session listeners (fisher#32), so
-either would be a knob that silently does nothing. They arrive with the features that give them
-meaning. **`LightweightSession(SessionOptions)` and `OpenSessionAsync` are absent** for the same class
-of reason — Fisher opens one kind of session, and a session opens its connection lazily, so the first
-is a second name for `OpenSession` and the second has nothing to await.
+**`Listeners` is deliberately absent**, though it is on Polecat's `SessionOptions`: Fisher has no
+session listeners (fisher#32), so it would be a knob that silently does nothing. It arrives with the
+feature that gives it meaning. **`Tracking` was absent for the same reason and no longer is** — see
+"Session tracking". **`LightweightSession(SessionOptions)` and `OpenSessionAsync` are absent** for a
+related reason: tracking is a property of the options rather than a choice of constructor, so
+`OpenSession` already *is* the lightweight one, and a session opens its connection lazily so the
+second has nothing to await.
 
 **`QuerySession()`'s narrowing is a convention, not a guarantee**, and fisher#30 asked for that to be
 decided rather than left implied. It is the same session narrowed to the read interface, so a cast
 gets a write handle back; a genuine query-only type would cost a connection per scope to express a
 distinction the store does not make. Said on `IQuerySession` itself, and pinned by
 `a_query_session_is_the_same_session_type_narrowed` so that making it real is a deliberate change.
+
+### Session tracking
+
+`DocumentTracking`, `SessionOptions.Tracking`, `IdentitySession()` / `DirtyTrackedSession()`, and the
+`Eject` family (fisher#31). **Almost none of this was new machinery.** Weasel.Storage already ships
+the identity-map *and* dirty-tracking closed-shape selectors, `ChangeTracker<T>`, and the
+`ChangeTrackers` / `ItemMap` slots on `IStorageSession`; Fisher already had a whole
+`IdentityMapFisherStorage<TDoc,TId>` family built and cached in `DocumentProvider<T>` with nothing
+able to select it. What was missing was the mode, three one-member subclasses, and the session's half
+of change detection.
+
+- **A dirty-tracking storage is its identity-map storage with the selector replaced**, which is one
+  overridden member and nothing else. Marten's `DirtyCheckedDocumentStorage` is the same one-line
+  subclass, and for the same reason: the difference between the two flavors is entirely what happens
+  when a row is *read* — Weasel's dirty selectors do everything the identity-map ones do and
+  additionally register a `ChangeTracker<T>` per materialised document.
+- **The identity map covers `Query<T>()`, not just `LoadAsync`.** fisher#31 asserted the opposite
+  ("the map must be defeated by a query") and it is wrong about Marten, whose documentation says
+  plainly: "applied to all documents loaded by Id **or Linq queries**". It falls out rather than being
+  arranged — the LINQ provider resolves its storage through `IStorageSession.StorageFor`, so a query
+  under a tracking session builds a tracking selector without knowing it did. Raw SQL
+  (`AdvancedSql`) does bypass it, resolving the query-only flavor directly, which is also Marten's
+  behaviour and for a real reason: a raw query names its own columns and may select no identity at all.
+- **Storing a second *instance* under a mapped id throws**, as on Marten. That is the safety property
+  the map exists for rather than a caching detail: two instances of one document, both stored, is a
+  last-write-wins outcome indistinguishable from a lost update. A type declaring `IEquatable<T>` is
+  taken at its word and exempted. A lightweight session keeps no map and does not check.
+- **`SessionOptions.Tracking` defaults to `None`, where Marten's `OpenSession(SessionOptions)`
+  defaults to its identity map.** Marten's default predates `LightweightSession()`; following it would
+  silently give every existing `OpenSession` caller a map they did not ask for, *and* that throw.
+- **`LoadManyAsync` preselects out of the map** and asks only for the ids it does not hold. Reference
+  identity would survive either way — the identity-map selector returns the cached instance for a row
+  it re-reads — so what the preselect buys is the read itself, which is the other half of the point.
+  Pinned by deleting the row out of band between the two calls, which is the only way to tell "not
+  read" from "read and discarded".
+- **`ProcessChangeTrackers` runs before the emptiness check**, because a dirty session's whole point is
+  that a unit of work with nothing queued may still have work to do; **`ResetChangeTracking` runs after
+  the write and outside the resilience pipeline**, which is fisher#12's property again — re-baselining
+  inside a retried delegate would leave the retry comparing against a snapshot it had already taken.
+- **Reset has two halves and they fail differently.** Re-baselining stops a second commit rewriting a
+  document nothing has touched; registering trackers for documents the unit of work *stored* is what
+  makes dirty tracking apply to documents the session created rather than only to ones that pre-existed
+  it. The first half is easy to test wrongly: a test that changes a document twice passes without any
+  reset at all, because the document really did change both times. It is only observable as somebody
+  else's write disappearing, which is what `a_committed_document_is_not_written_again_by_the_next_commit`
+  plants. Verified by removing the reset — the two-changes test still passed.
+- **A delete by id removes the change tracker as well as the map entry**, and they are not the same
+  thing: the map decides what a later load hands back, the tracker decides what the next commit writes.
+  A tracker left behind resurrects the row the caller just deleted, with nothing anywhere to report it.
+  `RemoveDirtyTracker` is implemented once on the base rather than per flavor, because outside a dirty
+  session the tracker list is empty and it returns immediately.
+- **`Eject` matches by reference**, so ejecting one instance leaves a queued write made with a
+  different instance alone — the distinction the map exists to make. `EjectAllOfType` cannot simply
+  drop the map entry: a document hierarchy shares one table and therefore one entry keyed by the
+  *base*, so entries whose key is not exactly the type are scanned and matching values removed
+  individually. That handles a hierarchy without knowing it is one.
+- **`EjectAllPendingChanges` keeps the identity map and clears the change trackers**, which looks
+  inconsistent and is not: a tracker is a queued write that has not been asked for yet. Pending DCB
+  boundaries go too — a boundary guards appends that are being dropped, so keeping it would fail a
+  later commit on behalf of a unit of work that no longer exists.
+- **The map and the tracker list are unguarded, and fisher#13 is the reason that needs saying.** They
+  are exactly the kind of shared mutable per-session state the operation queue turned out to be. The
+  difference is that a tracking mode is only ever chosen by whoever opens the session, and the one
+  caller that drives a session from several threads — the async daemon — opens `LightweightSession()`
+  everywhere. `the_daemon_opens_untracked_sessions` pins that, so making the daemon's sessions tracked
+  has to be a deliberate act. Guarding here would also only be half a guard: Weasel's selectors hold
+  their own reference to the same dictionary.
+- **There is no `QueryOnly` tracking value**, where Marten has one. Marten's names a session that
+  cannot write; Fisher has none — `QuerySession()`'s narrowing is a convention — so a mode resolving
+  the query-only flavor would make `Store` throw on a session the store hands out as writeable.
 
 ### Raw SQL
 
@@ -1589,13 +1668,6 @@ arbitrary:
 `CompletelyRemoveAllAsync` calls `FisherDatabase.ForgetEnsuredTables()` afterwards. Without it the
 "this document table already exists" cache would still claim tables that were just dropped, and the
 next `Store` would skip its migration and write to nothing.
-
-- **A message bus, and deliberately so.** The side-effect seam exists and the default outbox drops
-  every message. That is the end state, not a gap — fisher#8 was closed wontfix. Delivery is a bus
-  integration's job here as it is on both siblings.
-- Tenancy beyond the conjoined style. One database sliced by a tenant id column works and is pinned by
-  `ConjoinedEventTenancyCompliance`; database-per-tenant is not there, which is why every
-  `IEventDatabase` parameter in `DocumentStore.Daemon.cs` is ignored.
 
 ### Natural keys
 

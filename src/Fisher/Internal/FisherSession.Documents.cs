@@ -237,6 +237,110 @@ internal partial class FisherSession
 
         QueueOperation(hard ? storage.HardDeleteForId(id, TenantId) : storage.DeleteForId(id, TenantId));
         storage.EjectById(this, id);
+
+        // Both, and they are not the same thing: the map decides what a later load hands back, the
+        // tracker decides what the next commit writes. A tracker left behind would detect the deleted
+        // document as unchanged, which is harmless, or as changed if the caller mutates it — and then
+        // resurrect the row the caller just deleted.
+        storage.RemoveDirtyTracker(this, id);
+    }
+
+    // ---- ejection (fisher#31) ----
+
+    /// <summary>
+    ///     Remove a document from this session entirely: out of the identity map, out of the change
+    ///     trackers, and out of the queued writes it has not committed yet.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Worth having with or without an identity map, because of the third clause: without it
+    ///         there is no way to unqueue one document's write once <c>Store</c> has been called. The
+    ///         match is by <b>reference</b>, so ejecting one instance does not unqueue a different
+    ///         instance of the same document — which is the whole distinction the identity map exists
+    ///         to make.
+    ///     </para>
+    ///     <para>
+    ///         An eject does not touch the database, so a document already committed stays committed.
+    ///     </para>
+    /// </remarks>
+    public void Eject<T>(T document) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        StorageFor<T>().Eject(this, document);
+
+        RemoveOperations(operation => operation is Weasel.Storage.IDocumentStorageOperation stored
+                                      && ReferenceEquals(stored.Document, document));
+
+        RemoveChangeTrackers(tracker => ReferenceEquals(tracker.Document, document));
+    }
+
+    /// <inheritdoc cref="Eject{T}" />
+    /// <remarks>
+    ///     <para>
+    ///         The identity map is keyed by the type its storage was resolved for, which for a document
+    ///         hierarchy is the <em>base</em> — every sub-class shares one table and one map. So this
+    ///         cannot simply drop the entry under <paramref name="type" />: ejecting one sub-class has
+    ///         to leave its siblings mapped. Entries are therefore tested individually against the type
+    ///         wherever the map's own key is not exactly it, which handles a hierarchy without knowing
+    ///         it is one.
+    ///     </para>
+    /// </remarks>
+    public void EjectAllOfType(Type type)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+
+        foreach (var (mapped, raw) in ItemMap.ToArray())
+        {
+            if (mapped == type)
+            {
+                ItemMap.Remove(mapped);
+                continue;
+            }
+
+            if (raw is not System.Collections.IDictionary entries)
+            {
+                continue;
+            }
+
+            foreach (var key in entries.Keys.Cast<object>().Where(x => type.IsInstanceOfType(entries[x])).ToArray())
+            {
+                entries.Remove(key);
+            }
+        }
+
+        RemoveOperations(operation => operation is Weasel.Storage.IDocumentStorageOperation stored
+                                      && type.IsInstanceOfType(stored.Document));
+
+        RemoveChangeTrackers(tracker => type.IsInstanceOfType(tracker.Document));
+    }
+
+    /// <summary>
+    ///     Drop every queued operation — document writes, deletions, raw SQL, appended events and the
+    ///     DCB boundaries guarding them — without touching the identity map.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The identity map deliberately survives, as it does on Marten: this abandons a unit of
+    ///         work, not the session's knowledge of what it has read.
+    ///     </para>
+    ///     <para>
+    ///         <b>The change trackers do not survive</b>, which looks like an exception to that and is
+    ///         not: a tracker is a queued write that has not been asked for yet. Leaving them would make
+    ///         "drop every pending change" write the loaded documents anyway at the next commit.
+    ///     </para>
+    ///     <para>
+    ///         Pending DCB boundaries go too. A boundary asserts that no matching event has landed since
+    ///         it was read, and it is only meaningful as a guard on the appends being dropped here —
+    ///         keeping it would fail a later commit on behalf of a unit of work that no longer exists.
+    ///     </para>
+    /// </remarks>
+    public void EjectAllPendingChanges()
+    {
+        TakePendingOperations();
+        Events.ClearPendingStreams();
+        ClearBoundaries();
+        _changeTrackers?.Clear();
     }
 
     /// <summary>

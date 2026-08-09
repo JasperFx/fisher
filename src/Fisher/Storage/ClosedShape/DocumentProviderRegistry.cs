@@ -77,10 +77,10 @@ internal class DocumentProviderRegistry : IProviderGraph
     ///     Close the storage generics over the document type and its identity type.
     /// </summary>
     /// <remarks>
-    ///     The four identity types <see cref="DocumentMapping.SupportedIdTypes" /> names, and nothing
-    ///     else — a strongly typed id wrapper needs a strategy that unwraps it, and Fisher has no
-    ///     strong-typed-id support anywhere. The numeric pair resolve their sequence through
-    ///     <c>ISequenceSource</c>, which is <c>FisherDatabase</c>, keyed on the document type.
+    ///     The four identity types <see cref="DocumentMapping.SupportedIdTypes" /> names, plus a
+    ///     strong-typed wrapper around one of them, which gets a strategy that unwraps it. The numeric
+    ///     pair resolve their sequence through <c>ISequenceSource</c>, which is <c>FisherDatabase</c>,
+    ///     keyed on the document type.
     /// </remarks>
     private object BuildProviderFor(DocumentMapping mapping)
     {
@@ -174,8 +174,16 @@ internal class DocumentProviderRegistry : IProviderGraph
             _ => new UnversionedIdentityMapFisherStorage<TDoc, TId>(mapping, descriptor)
         };
 
-        // Fisher has no dirty tracking, as Polecat has none: the identity-map storage takes that slot
-        // because it is the closest tracking mode on offer.
-        return new DocumentProvider<TDoc>(queryOnly, lightweight, identityMap, identityMap);
+        FisherDocumentStorage<TDoc, TId> dirtyTracking = descriptor.ConcurrencyMode switch
+        {
+            ConcurrencyMode.Optimistic => new OptimisticDirtyTrackingFisherStorage<TDoc, TId>(mapping, descriptor),
+            ConcurrencyMode.Numeric => new NumericDirtyTrackingFisherStorage<TDoc, TId>(mapping, descriptor),
+            _ => new UnversionedDirtyTrackingFisherStorage<TDoc, TId>(mapping, descriptor)
+        };
+
+        // All four flavors are built for every registered type, whether or not any session asks for
+        // them: they are cheap, they are cached with the provider, and which one a session resolves is
+        // decided per session by SessionOptions.Tracking.
+        return new DocumentProvider<TDoc>(queryOnly, lightweight, identityMap, dirtyTracking);
     }
 }

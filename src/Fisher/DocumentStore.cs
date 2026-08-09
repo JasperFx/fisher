@@ -91,16 +91,48 @@ public partial class DocumentStore : IDocumentStore
         => new FisherSession(Options, Database, tenantId ?? StorageConstants.DefaultTenantId);
 
     /// <summary>
-    ///     Open a session configured by <see cref="SessionOptions" /> — a tenant, a timeout, or a
-    ///     connection or transaction of your own to run inside.
+    ///     Open a session with an identity map — a document loaded or stored under an identity is
+    ///     handed back as the same instance for the rest of the session (fisher#31).
+    /// </summary>
+    /// <remarks>
+    ///     The map covers loads by id and <c>Query&lt;T&gt;()</c> alike. See
+    ///     <see cref="DocumentTracking.IdentityOnly" /> for what it buys and what it costs.
+    /// </remarks>
+    public IDocumentSession IdentitySession(string? tenantId = null)
+        => OpenSession(new SessionOptions
+        {
+            TenantId = tenantId ?? StorageConstants.DefaultTenantId,
+            Tracking = DocumentTracking.IdentityOnly
+        });
+
+    /// <summary>
+    ///     Open a session that detects changes to the documents it loaded, so
+    ///     <c>SaveChangesAsync</c> writes them without <c>Store</c> being called.
+    /// </summary>
+    /// <remarks>
+    ///     Includes the identity map. See <see cref="DocumentTracking.DirtyTracking" /> for the cost —
+    ///     a serialized snapshot per document read, and a re-serialization per document per commit.
+    /// </remarks>
+    public IDocumentSession DirtyTrackedSession(string? tenantId = null)
+        => OpenSession(new SessionOptions
+        {
+            TenantId = tenantId ?? StorageConstants.DefaultTenantId,
+            Tracking = DocumentTracking.DirtyTracking
+        });
+
+    /// <summary>
+    ///     Open a session configured by <see cref="SessionOptions" /> — a tenant, a tracking mode, a
+    ///     timeout, or a connection or transaction of your own to run inside.
     /// </summary>
     /// <remarks>
     ///     <para>
     ///         <b>There is no <c>LightweightSession(SessionOptions)</c> and no <c>OpenSessionAsync</c>,
-    ///         where Polecat has both.</b> Fisher opens one kind of session, so the first would be a
-    ///         second name for this method; and a session opens its connection lazily on first use, so
-    ///         the second would be an asynchronous method with nothing to await. Polecat needs the async
-    ///         form because its session may open a connection eagerly.
+    ///         where Polecat has both.</b> Tracking is a property of the options rather than a choice of
+    ///         constructor — <see cref="SessionOptions.Tracking" /> defaults to
+    ///         <see cref="DocumentTracking.None" />, so this method already <em>is</em> the lightweight
+    ///         one and the first would be a second name for it. And a session opens its connection
+    ///         lazily on first use, so the second would be an asynchronous method with nothing to await;
+    ///         Polecat needs the async form because its session may open a connection eagerly.
     ///     </para>
     /// </remarks>
     public IDocumentSession OpenSession(SessionOptions options)

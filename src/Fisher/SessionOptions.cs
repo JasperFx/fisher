@@ -44,12 +44,10 @@ namespace Fisher;
 ///         committed — one rule each, rather than four combinations of which two are traps.
 ///     </para>
 ///     <para>
-///         <b>Deliberately absent, because the behaviour they would name does not exist yet:</b> a
-///         <c>Tracking</c> mode (Fisher has no identity map and no dirty tracking —
-///         <see href="https://github.com/JasperFx/fisher/issues/31">fisher#31</see>) and session
+///         <b>Deliberately absent, because the behaviour it would name does not exist yet:</b> session
 ///         <c>Listeners</c> (<see href="https://github.com/JasperFx/fisher/issues/32">fisher#32</see>).
-///         Both are on Polecat's <c>SessionOptions</c>; carrying either here would be a knob that
-///         silently does nothing, which is the one thing this codebase refuses to ship.
+///         It is on Polecat's <c>SessionOptions</c>; carrying it here would be a knob that silently
+///         does nothing, which is the one thing this codebase refuses to ship.
 ///     </para>
 /// </remarks>
 public class SessionOptions
@@ -58,6 +56,27 @@ public class SessionOptions
     ///     The tenant every operation in the session is scoped to.
     /// </summary>
     public string TenantId { get; set; } = StorageConstants.DefaultTenantId;
+
+    /// <summary>
+    ///     What the session remembers about the documents it loads and stores (fisher#31).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Defaults to <see cref="DocumentTracking.None" />, where Marten's
+    ///         <c>OpenSession(SessionOptions)</c> defaults to its identity map.</b> Marten's default is
+    ///         historical — it predates <c>LightweightSession()</c> — and following it here would
+    ///         silently change what every existing <c>OpenSession</c> caller gets: an identity map they
+    ///         did not ask for, and with it Marten's rule that storing a <em>second instance</em> under
+    ///         an id already in the map throws. A tracking mode is cheap to ask for and expensive to be
+    ///         given, so it is asked for.
+    ///     </para>
+    ///     <para>
+    ///         <see cref="DocumentStore.IdentitySession" /> and
+    ///         <see cref="DocumentStore.DirtyTrackedSession" /> are the shorthands for the two modes
+    ///         that are not the default.
+    ///     </para>
+    /// </remarks>
+    public DocumentTracking Tracking { get; set; } = DocumentTracking.None;
 
     /// <summary>
     ///     The isolation level <c>SaveChangesAsync</c> opens its transaction at.

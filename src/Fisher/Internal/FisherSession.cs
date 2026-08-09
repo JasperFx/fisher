@@ -130,6 +130,19 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
         }
     }
 
+    /// <summary>
+    ///     Drop every queued operation the predicate matches — how <c>Eject</c> unqueues a write.
+    /// </summary>
+    private void RemoveOperations(Predicate<Weasel.Storage.IStorageOperation> match)
+    {
+        lock (_operationsLock)
+        {
+            _operations.RemoveAll(match);
+        }
+    }
+
+    private void RemoveChangeTrackers(Predicate<IChangeTracker> match) => _changeTrackers?.RemoveAll(match);
+
     private List<(JasperFx.Events.Tags.EventTagQuery Query, long LastSeenSequence)>? _boundaries;
 
     /// <summary>
@@ -137,6 +150,8 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     /// </summary>
     internal void TrackBoundary(JasperFx.Events.Tags.EventTagQuery query, long lastSeenSequence)
         => (_boundaries ??= []).Add((query, lastSeenSequence));
+
+    private void ClearBoundaries() => _boundaries?.Clear();
 
     /// <summary>
     ///     Fail the commit if any event matching a tracked boundary's query has been appended since the
@@ -208,6 +223,10 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     /// </summary>
     public async Task SaveChangesAsync(CancellationToken token = default)
     {
+        // Before the emptiness check, because a dirty-tracking session's whole point is that a unit of
+        // work with nothing queued may still have work to do.
+        ProcessChangeTrackers();
+
         var streams = Events.PendingStreams.ToArray();
 
         if (PendingOperationCount == 0 && streams.Length == 0)
@@ -272,6 +291,87 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
         // Not reused across units of work: a batch's hooks have fired, and a second SaveChangesAsync
         // publishing through it would flush the same messages again.
         _messageBatch = null;
+
+        ResetChangeTracking(queued);
+    }
+
+    /// <summary>
+    ///     Ask every change tracker whether its document has changed since it was read, and queue the
+    ///     write for each one that has.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Comparison is by JSON — <c>ToCleanJson</c> now against <c>ToCleanJson</c> at load — and
+    ///         not by <c>Equals</c>. The question a commit is asking is whether the stored row would
+    ///         change, so a type whose equality disagrees with its serialization (a record with a
+    ///         non-serialized member, say, or a class with reference equality) would answer a different
+    ///         question convincingly.
+    ///     </para>
+    ///     <para>
+    ///         Runs <em>before</em> the operations are taken, so a detected change commits in the same
+    ///         transaction as everything else the unit of work holds rather than in a second one.
+    ///     </para>
+    /// </remarks>
+    private void ProcessChangeTrackers()
+    {
+        if (_changeTrackers is not { Count: > 0 })
+        {
+            return;
+        }
+
+        // Indexed rather than foreach: DetectChanges resolves storage, which can register a mapping,
+        // and the list is the same one the selectors append to.
+        for (var i = 0; i < _changeTrackers.Count; i++)
+        {
+            if (_changeTrackers[i].DetectChanges(this, out var operation))
+            {
+                QueueOperation(operation);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Re-baseline the change trackers against what was just written, and start tracking every
+    ///     document this unit of work stored but had not loaded.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Without the reset, the next <c>SaveChangesAsync</c> would compare against the document as
+    ///         it was <em>read</em> and write it again unchanged. Without the second half, a document
+    ///         created by <c>Store</c> rather than loaded would never be dirty-tracked at all, so the
+    ///         mode would apply only to documents that happened to pre-exist the session.
+    ///     </para>
+    ///     <para>
+    ///         <b>Outside the resilience pipeline, and outside the enlisted branch's write.</b> A
+    ///         retried <c>SQLITE_BUSY</c> re-executes the whole delegate; re-baselining inside it would
+    ///         leave the retry comparing against a snapshot it had already taken, so a document mutated
+    ///         between the two attempts would silently not be written. The same property fisher#12
+    ///         established for the batch's own input.
+    ///     </para>
+    /// </remarks>
+    private void ResetChangeTracking(IReadOnlyList<Weasel.Storage.IStorageOperation> written)
+    {
+        if (SessionOptions.Tracking != DocumentTracking.DirtyTracking)
+        {
+            return;
+        }
+
+        foreach (var tracker in ChangeTrackers)
+        {
+            tracker.Reset(this);
+        }
+
+        var tracked = new HashSet<object>(ChangeTrackers.Select(x => x.Document),
+            ReferenceEqualityComparer.Instance);
+
+        foreach (var operation in written)
+        {
+            if (operation is Weasel.Storage.IDocumentStorageOperation document
+                && tracked.Add(document.Document))
+            {
+                ChangeTrackers.Add(document.ToTracker(this));
+            }
+        }
     }
 
     /// <summary>
@@ -587,12 +687,38 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     IVersionTracker IStorageSession.Versions => _versionTracker ??= new FisherVersionTracker();
 
     /// <summary>
-    ///     Fisher has no dirty tracking by design, mirroring Polecat, so no change trackers are ever
-    ///     registered and the shared runtime iterates an empty list.
+    ///     One tracker per document this session read under
+    ///     <see cref="DocumentTracking.DirtyTracking" />, added by Weasel's dirty-tracking selectors as
+    ///     each row is materialised. Empty under every other tracking mode, which is what makes
+    ///     <see cref="ProcessChangeTrackers" /> free for a session that did not ask for it.
     /// </summary>
-    IList<IChangeTracker> IStorageSession.ChangeTrackers => _changeTrackers ??= new List<IChangeTracker>();
+    IList<IChangeTracker> IStorageSession.ChangeTrackers => ChangeTrackers;
 
-    Dictionary<Type, object> IStorageSession.ItemMap => _itemMap ??= new Dictionary<Type, object>();
+    private List<IChangeTracker> ChangeTrackers => _changeTrackers ??= new List<IChangeTracker>();
+
+    /// <summary>
+    ///     The identity map, one <c>Dictionary&lt;TId, TDoc&gt;</c> per document type.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Written by the identity-map and dirty-tracking storage flavors and by the matching
+    ///         Weasel selectors, and empty under <see cref="DocumentTracking.None" /> because neither is
+    ///         resolved. So a lightweight session pays nothing for it.
+    ///     </para>
+    ///     <para>
+    ///         <b>Unguarded, deliberately, and the reason is worth stating because fisher#13 is the
+    ///         obvious precedent.</b> That bug was the async daemon queueing onto one session from
+    ///         several threads, and the map is exactly the same kind of shared mutable state as the
+    ///         operation queue was. The difference is that a tracking mode is only ever chosen by the
+    ///         caller opening the session, and the daemon opens <c>LightweightSession()</c> everywhere —
+    ///         so the concurrent caller is the one caller that never touches this. Guarding it here
+    ///         would also only be half a guard: Weasel's selectors hold their own reference to the same
+    ///         dictionary. A tracking session is single-threaded, as it is on Marten.
+    ///     </para>
+    /// </remarks>
+    Dictionary<Type, object> IStorageSession.ItemMap => ItemMap;
+
+    private Dictionary<Type, object> ItemMap => _itemMap ??= new Dictionary<Type, object>();
 
     ConcurrencyChecks IStorageSession.Concurrency => ConcurrencyChecks.Enabled;
 
@@ -606,15 +732,35 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     IDocumentStorage<T> IStorageSession.StorageFor<T>() => StorageFor<T>();
 
     /// <summary>
-    ///     The storage flavor this session reads and writes <typeparamref name="T" /> through.
+    ///     The storage flavor this session reads and writes <typeparamref name="T" /> through, chosen
+    ///     by <see cref="SessionOptions.Tracking" />.
     /// </summary>
     /// <remarks>
-    ///     Fisher only opens lightweight sessions today, so this always resolves the lightweight
-    ///     flavor. The identity-map and query-only flavors are built and cached alongside it, waiting
-    ///     on the session kinds that would select them.
+    ///     <para>
+    ///         Every read path resolves through here, which is what makes the identity map cover
+    ///         <c>Query&lt;T&gt;()</c> as well as <c>LoadAsync</c> — the LINQ provider takes both its
+    ///         column list and its materializer from this storage, so a query under a tracking session
+    ///         builds a tracking selector without knowing it did. That is Marten's behaviour, stated
+    ///         plainly in its documentation ("applied to all documents loaded by Id or Linq queries").
+    ///     </para>
+    ///     <para>
+    ///         The query-only flavor is deliberately unreachable from here. It is resolved directly
+    ///         where a read genuinely has no session identity to feed — <c>AdvancedSql</c>'s select
+    ///         list and its document materialization — and a tracking mode that resolved it would make
+    ///         <c>Store</c> throw on a session the store hands out as writeable.
+    ///     </para>
     /// </remarks>
     internal IDocumentStorage<T> StorageFor<T>() where T : notnull
-        => FisherDatabase.Providers.StorageFor<T>().Lightweight;
+    {
+        var provider = FisherDatabase.Providers.StorageFor<T>();
+
+        return SessionOptions.Tracking switch
+        {
+            DocumentTracking.IdentityOnly => provider.IdentityMap,
+            DocumentTracking.DirtyTracking => provider.DirtyTracking,
+            _ => provider.Lightweight
+        };
+    }
 
     // ---- JasperFx.Events.IStorageOperations ----
     //

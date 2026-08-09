@@ -93,27 +93,64 @@ internal abstract class IdentityMapFisherStorage<TDoc, TId> : FisherDocumentStor
         return document;
     }
 
+    /// <remarks>
+    ///     The already-mapped ids are answered from memory and left out of the statement, rather than
+    ///     read back and discarded. Reference identity would hold either way — the identity-map
+    ///     selector returns the cached instance for a row it has already seen — so what this saves is
+    ///     the read, which is the other half of what the map is for.
+    /// </remarks>
     public override async Task<IReadOnlyList<TDoc>> LoadManyAsync(TId[] ids, IStorageSession session,
         CancellationToken token)
     {
-        var documents = await QueryManyAsync(ids, session, token).ConfigureAwait(false);
         var map = MapFor(session);
+        var results = new List<TDoc>();
+        var missing = new List<TId>();
 
-        foreach (var document in documents)
+        foreach (var id in ids)
         {
-            map[Identity(document)] = document;
+            if (map.TryGetValue(id, out var cached))
+            {
+                results.Add(cached);
+            }
+            else
+            {
+                missing.Add(id);
+            }
         }
 
-        return documents;
+        // The selector maps whatever it materialises, so nothing has to be mapped again here.
+        results.AddRange(await QueryManyAsync(missing.ToArray(), session, token).ConfigureAwait(false));
+
+        return results;
     }
 
+    /// <remarks>
+    ///     <b>A second instance under an id the map already holds is refused</b>, as Marten refuses it.
+    ///     That is the whole safety property an identity map buys: two instances of one document in one
+    ///     session, both stored, is a last-write-wins outcome indistinguishable from a lost update. A
+    ///     type that declares <see cref="IEquatable{T}" /> is taken at its word, since it has said what
+    ///     "the same document" means.
+    /// </remarks>
     public override void Store(IStorageSession session, TDoc document)
     {
         var id = _descriptor.Identification.AssignIfMissing(document, session.Database);
+        var map = MapFor(session);
+
+        if (map.TryGetValue(id, out var existing) && !ReferenceEquals(existing, document)
+            && document is not IEquatable<TDoc>)
+        {
+            throw new InvalidOperationException(
+                $"A different instance of '{typeof(TDoc).FullName}' with identity '{id}' is already in "
+                + "this session's identity map. Storing both would write one over the other, which is a "
+                + "lost update wearing a last-write-wins hat. Store the instance the session handed you, "
+                + $"call Eject to drop the mapped one first, or make {typeof(TDoc).Name} IEquatable<"
+                + $"{typeof(TDoc).Name}> to say what 'the same document' means. A LightweightSession "
+                + "keeps no map and does not check.");
+        }
 
         // Mapped before the write runs, so a load later in the same session returns what the caller
         // stored rather than what the database still holds.
-        MapFor(session)[id] = document;
+        map[id] = document;
 
         session.MarkAsAddedForStorage(id, document);
     }
@@ -177,7 +214,7 @@ internal sealed class UnversionedLightweightFisherStorage<TDoc, TId> : Lightweig
             : new FlatUnversionedClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor);
 }
 
-internal sealed class UnversionedIdentityMapFisherStorage<TDoc, TId> : IdentityMapFisherStorage<TDoc, TId>
+internal class UnversionedIdentityMapFisherStorage<TDoc, TId> : IdentityMapFisherStorage<TDoc, TId>
     where TDoc : notnull
     where TId : notnull
 {
@@ -275,7 +312,7 @@ internal sealed class NumericLightweightFisherStorage<TDoc, TId> : LightweightFi
             : new FlatNumericClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor);
 }
 
-internal sealed class NumericIdentityMapFisherStorage<TDoc, TId> : IdentityMapFisherStorage<TDoc, TId>
+internal class NumericIdentityMapFisherStorage<TDoc, TId> : IdentityMapFisherStorage<TDoc, TId>
     where TDoc : notnull
     where TId : notnull
 {
@@ -379,7 +416,7 @@ internal sealed class OptimisticLightweightFisherStorage<TDoc, TId> : Lightweigh
             : new FlatOptimisticClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor);
 }
 
-internal sealed class OptimisticIdentityMapFisherStorage<TDoc, TId> : IdentityMapFisherStorage<TDoc, TId>
+internal class OptimisticIdentityMapFisherStorage<TDoc, TId> : IdentityMapFisherStorage<TDoc, TId>
     where TDoc : notnull
     where TId : notnull
 {
@@ -426,6 +463,65 @@ internal sealed class OptimisticIdentityMapFisherStorage<TDoc, TId> : IdentityMa
         => _descriptor.ResolveDocumentType is not null
             ? new HierarchicalOptimisticClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor)
             : new FlatOptimisticClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor);
+}
+
+// ---- dirty tracking ----
+//
+// Each of these is its concurrency mode's identity-map storage with one member replaced: the
+// selector. That is the entire difference between the two flavors, and it is a difference in what
+// happens when a row is *read* — Weasel's dirty-tracking selectors do everything the identity-map
+// ones do and additionally register a ChangeTracker<T> per materialised document. Nothing about
+// storing, loading by id, or writing changes, so nothing else is overridden. Marten's own
+// DirtyCheckedDocumentStorage is the same one-line subclass of its identity-map storage.
+//
+// Detection and reset are the session's job, not the storage's: FisherSession.SaveChangesAsync asks
+// every tracker for its operation before taking the batch, and re-baselines them after the write.
+
+internal sealed class UnversionedDirtyTrackingFisherStorage<TDoc, TId>
+    : UnversionedIdentityMapFisherStorage<TDoc, TId>
+    where TDoc : notnull
+    where TId : notnull
+{
+    public UnversionedDirtyTrackingFisherStorage(DocumentMapping mapping,
+        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
+    {
+    }
+
+    public override ISelector BuildSelector(IStorageSession session)
+        => _descriptor.ResolveDocumentType is not null
+            ? new HierarchicalUnversionedClosedShapeDirtyTrackingSelector<TDoc, TId>(session, _descriptor)
+            : new FlatUnversionedClosedShapeDirtyTrackingSelector<TDoc, TId>(session, _descriptor);
+}
+
+internal sealed class NumericDirtyTrackingFisherStorage<TDoc, TId> : NumericIdentityMapFisherStorage<TDoc, TId>
+    where TDoc : notnull
+    where TId : notnull
+{
+    public NumericDirtyTrackingFisherStorage(DocumentMapping mapping,
+        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
+    {
+    }
+
+    public override ISelector BuildSelector(IStorageSession session)
+        => _descriptor.ResolveDocumentType is not null
+            ? new HierarchicalNumericClosedShapeDirtyTrackingSelector<TDoc, TId>(session, _descriptor)
+            : new FlatNumericClosedShapeDirtyTrackingSelector<TDoc, TId>(session, _descriptor);
+}
+
+internal sealed class OptimisticDirtyTrackingFisherStorage<TDoc, TId>
+    : OptimisticIdentityMapFisherStorage<TDoc, TId>
+    where TDoc : notnull
+    where TId : notnull
+{
+    public OptimisticDirtyTrackingFisherStorage(DocumentMapping mapping,
+        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
+    {
+    }
+
+    public override ISelector BuildSelector(IStorageSession session)
+        => _descriptor.ResolveDocumentType is not null
+            ? new HierarchicalOptimisticClosedShapeDirtyTrackingSelector<TDoc, TId>(session, _descriptor)
+            : new FlatOptimisticClosedShapeDirtyTrackingSelector<TDoc, TId>(session, _descriptor);
 }
 
 // ---- query only ----

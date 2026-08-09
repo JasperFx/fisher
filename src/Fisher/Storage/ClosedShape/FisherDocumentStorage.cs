@@ -292,10 +292,25 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
     }
 
     /// <summary>
-    ///     A no-op — Fisher has no dirty tracking, mirroring Polecat.
+    ///     Drop the change tracker watching the document with this identity, so a document deleted or
+    ///     ejected by id is not written back by the next commit's change detection.
     /// </summary>
+    /// <remarks>
+    ///     Not overridden per flavor and not guarded by one: outside a dirty-tracking session the
+    ///     tracker list is empty and this returns immediately, which is cheaper than asking which
+    ///     flavor is in play and leaves one implementation to be right.
+    /// </remarks>
     public void RemoveDirtyTracker(IStorageSession session, object id)
     {
+        var trackers = session.ChangeTrackers;
+
+        for (var i = trackers.Count - 1; i >= 0; i--)
+        {
+            if (trackers[i].Document is TDoc document && Identity(document).Equals(id))
+            {
+                trackers.RemoveAt(i);
+            }
+        }
     }
 
     // ---- deletions ----

@@ -400,6 +400,40 @@ public interface IDocumentSession : IQuerySession, JasperFx.Events.IStorageOpera
     void QueueSqlCommand(char placeholder, string sql, params object?[] parameterValues);
 
     /// <summary>
+    ///     Remove a document from this session's identity map, its change tracking and its queued
+    ///     writes (fisher#31).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Nothing reaches the database: a document already committed stays committed. What this
+    ///         undoes is everything the session still holds about it — including a <c>Store</c> that has
+    ///         not been saved yet, which is the one thing there was no other way to take back.
+    ///     </para>
+    ///     <para>
+    ///         Matching is by reference, so ejecting one instance leaves a different instance of the
+    ///         same document alone.
+    ///     </para>
+    /// </remarks>
+    void Eject<T>(T document) where T : notnull;
+
+    /// <summary>
+    ///     <see cref="Eject{T}" /> for every document of a type, including sub-classes of it in a
+    ///     document hierarchy.
+    /// </summary>
+    void EjectAllOfType(Type type);
+
+    /// <summary>
+    ///     Abandon this unit of work: every queued document write, deletion, raw SQL command, appended
+    ///     event and DCB boundary is dropped, and nothing is written.
+    /// </summary>
+    /// <remarks>
+    ///     The identity map survives — this abandons pending changes, not what the session has read.
+    ///     Change trackers do not, because a tracker <em>is</em> a pending change that has not been
+    ///     asked for yet.
+    /// </remarks>
+    void EjectAllPendingChanges();
+
+    /// <summary>
     ///     Commit every queued operation in a single transaction.
     /// </summary>
     Task SaveChangesAsync(CancellationToken token = default);

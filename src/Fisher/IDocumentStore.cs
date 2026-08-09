@@ -54,6 +54,12 @@ public interface IDocumentStore : IDisposable, IAsyncDisposable
     /// <inheritdoc cref="DocumentStore.LightweightSession" />
     IDocumentSession LightweightSession(string? tenantId = null);
 
+    /// <inheritdoc cref="DocumentStore.IdentitySession" />
+    IDocumentSession IdentitySession(string? tenantId = null);
+
+    /// <inheritdoc cref="DocumentStore.DirtyTrackedSession" />
+    IDocumentSession DirtyTrackedSession(string? tenantId = null);
+
     /// <inheritdoc cref="DocumentStore.OpenSession" />
     IDocumentSession OpenSession(SessionOptions options);
 
