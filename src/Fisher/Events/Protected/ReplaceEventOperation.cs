@@ -111,6 +111,14 @@ internal sealed class ReplaceEventOperation : Weasel.Storage.IStorageOperation
             builder.Append(", causation_id = null");
         }
 
+        // The replacement is always a JSON body — a binary one is refused at the entry point — so a row
+        // that used to be binary has to lose its BLOB, or it keeps a body no reader will ever look at.
+        // Only when the column exists: it does not on a store with no binary serializer.
+        if (_graph.EventOptions.BinarySerializer is not null)
+        {
+            builder.Append(", data_binary = null");
+        }
+
         builder.Append(" where seq_id = ");
         Bind(builder, _sequence, StorageColumnType.Long);
         builder.Append(";");

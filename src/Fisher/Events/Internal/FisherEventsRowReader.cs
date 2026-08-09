@@ -74,6 +74,12 @@ internal static class FisherEventsRowReader
             sb.Append(", user_name");
         }
 
+        // Last in the list, so every ordinal above it is unmoved whether or not the store has one.
+        if (options.BinarySerializer is not null)
+        {
+            sb.Append(", data_binary");
+        }
+
         return sb.ToString();
     }
 
@@ -169,7 +175,6 @@ internal static class FisherEventsRowReader
         var eventId = Guid.Parse(reader.GetString(1));
         // stream_id at ordinal 2 — the caller already knows it; not read here.
         var eventVersion = reader.GetInt64(3);
-        var json = reader.GetString(4);
         var typeName = reader.GetString(5);
         var eventTimestamp = SqliteTimestamp.FromDatabaseValue(reader.GetString(6));
         var tenantId = reader.IsDBNull(7) ? ctx.DefaultTenantId : reader.GetString(7);
@@ -184,7 +189,15 @@ internal static class FisherEventsRowReader
         }
 
         var mapping = ctx.EventGraph.EventMappingFor(resolvedType);
-        var data = ctx.Serializer.FromJson(resolvedType, json);
+
+        // Whichever column holds this row's body. Reading the flag off the resolved event type rather
+        // than testing the columns is what keeps the two encodings from being told apart by a null
+        // check that a genuinely null body would also pass.
+        var data = mapping.IsBinary
+            ? ctx.EventGraph.EventOptions.BinarySerializer!.Deserialize(
+                (byte[])reader.GetValue(slots.BinaryDataIdx), resolvedType)
+            : ctx.Serializer.FromJson(resolvedType, reader.GetString(4));
+
         var @event = mapping.Wrap(data);
 
         @event.Id = eventId;

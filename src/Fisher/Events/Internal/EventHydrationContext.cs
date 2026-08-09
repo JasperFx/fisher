@@ -36,18 +36,25 @@ internal readonly struct EventHydrationContext
 /// </summary>
 internal readonly struct MetadataSlots
 {
-    private MetadataSlots(int correlation, int causation, int headers, int userName)
+    private MetadataSlots(int correlation, int causation, int headers, int userName, int binaryData)
     {
         CorrelationIdx = correlation;
         CausationIdx = causation;
         HeadersIdx = headers;
         UserNameIdx = userName;
+        BinaryDataIdx = binaryData;
     }
 
     public int CorrelationIdx { get; }
     public int CausationIdx { get; }
     public int HeadersIdx { get; }
     public int UserNameIdx { get; }
+
+    /// <summary>
+    ///     Where <c>data_binary</c> sits, or -1 when the store has no binary serializer and therefore
+    ///     no such column (fisher#43).
+    /// </summary>
+    public int BinaryDataIdx { get; }
 
     /// <summary>
     ///     Compute the slots for the projection <see cref="FisherEventsRowReader.ComposeSelectColumns" />
@@ -60,8 +67,12 @@ internal readonly struct MetadataSlots
         var correlation = options.EnableCorrelationId ? next++ : -1;
         var causation = options.EnableCausationId ? next++ : -1;
         var headers = options.EnableHeaders ? next++ : -1;
-        var userName = options.EnableUserName ? next : -1;
+        var userName = options.EnableUserName ? next++ : -1;
 
-        return new MetadataSlots(correlation, causation, headers, userName);
+        // Last, so adding it shifts nothing above it — the same reason fisher#29's session metadata
+        // binders were appended rather than inserted.
+        var binaryData = options.BinarySerializer is not null ? next : -1;
+
+        return new MetadataSlots(correlation, causation, headers, userName, binaryData);
     }
 }

@@ -302,6 +302,8 @@ public partial class EventOperations
         // No DocumentMapping at all: most event types have no identity member and DocumentMapping
         // refuses a type without one — and asking for a mapping would register the event type as a
         // document, giving it a table in the next migration.
+        Graph.AssertBodyIsQueryable(typeof(T), "QueryEventDataAsync");
+
         var members = new Linq.Members.MemberFactory(_session.Options);
         var predicate = new WhereClauseParser(members).Parse(filter.Body);
 

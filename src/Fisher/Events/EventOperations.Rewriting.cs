@@ -43,6 +43,12 @@ public partial class EventOperations
                 + "event read back from the store, not one built in memory.", nameof(e));
         }
 
+        // Refused rather than supported: the operation writes the data column, and against a binary
+        // event that would leave the row with a JSON body *and* a BLOB body — the single most likely
+        // way this feature could corrupt data, and the reason fisher#43 called it out. Silently
+        // writing both is not an option; supporting it is a rewrite path nothing has asked for.
+        Graph.AssertBodyIsRewritable(e.EventType, "OverwriteEvent");
+
         _session.QueueOperation(new OverwriteEventOperation(Graph, e));
     }
 
@@ -65,6 +71,8 @@ public partial class EventOperations
             throw new ArgumentOutOfRangeException(nameof(sequence),
                 "An event sequence is assigned by the database and starts at 1.");
         }
+
+        Graph.AssertBodyIsRewritable(typeof(T), "CompletelyReplaceEvent");
 
         var operation = new ReplaceEventOperation(Graph, sequence, eventBody);
         _session.QueueOperation(operation);

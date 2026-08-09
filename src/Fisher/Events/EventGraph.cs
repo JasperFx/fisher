@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
 using System.Text;
 using Fisher.Events.Schema;
 using Fisher.Serialization;
@@ -240,6 +241,79 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     public override FisherEventType EventMappingFor(Type eventType)
         => _eventTypes.GetOrAdd(eventType, static type => new FisherEventType(type));
 
+    /// <summary>
+    ///     The encoded body for an event whose type is marked <see cref="BinaryEventAttribute" />, or
+    ///     null when it is stored as JSON (fisher#43).
+    /// </summary>
+    /// <remarks>
+    ///     Refused by name when the type is binary and no serializer is configured, because the column
+    ///     the body would go in does not exist: the store was created without it, and the caller would
+    ///     otherwise meet a NOT NULL constraint on <c>data</c> that names neither the event type nor
+    ///     the missing configuration.
+    /// </remarks>
+    internal byte[]? BinaryEncoderFor(IEvent @event)
+    {
+        var eventType = @event.EventType;
+
+        if (!EventMappingFor(eventType).IsBinary)
+        {
+            return null;
+        }
+
+        if (EventOptions.BinarySerializer is not { } serializer)
+        {
+            throw new InvalidOperationException(
+                $"'{eventType.Name}' is marked [BinaryEvent] but this store has no "
+                + "StoreOptions.Events.BinarySerializer, so there is no data_binary column to write it "
+                + "to — the column is created only when a serializer is configured, because that is a "
+                + "schema decision. Set the serializer before the schema is created.");
+        }
+
+        return serializer.Serialize(@event.Data, eventType);
+    }
+
+    /// <summary>
+    ///     Refuse an operation that reads into an event body for a type stored as a BLOB.
+    /// </summary>
+    /// <remarks>
+    ///     The trade <see cref="BinaryEventAttribute" /> names, enforced where it bites: a binary body
+    ///     is not readable by <c>json_extract</c>, so a query over one would quietly match nothing —
+    ///     <c>data</c> is null for those rows and <c>json_extract(null, …)</c> is null. Returning an
+    ///     empty result would be the wrong kind of answer to a question that cannot be asked.
+    /// </remarks>
+    /// <summary>
+    ///     Refuse an operation that rewrites an event body for a type stored as a BLOB.
+    /// </summary>
+    /// <remarks>
+    ///     <b>The single most likely way this feature could corrupt data</b>, and the reason fisher#43
+    ///     called it out. Both rewrite operations write the <c>data</c> column; against a binary event
+    ///     that leaves the row carrying a JSON body <em>and</em> a BLOB body, which every reader then
+    ///     resolves by the event type — so the JSON is invisible and the row is quietly wrong. Refusing
+    ///     is an acceptable answer here; writing both is not.
+    /// </remarks>
+    internal void AssertBodyIsRewritable(Type eventType, string operation)
+    {
+        if (EventMappingFor(eventType).IsBinary)
+        {
+            throw new InvalidOperationException(
+                $"'{eventType.Name}' is marked [BinaryEvent], so {operation} cannot rewrite it — the "
+                + "rewrite writes the JSON data column, which would leave the row holding a JSON body "
+                + "and a BLOB body at once. Archive or compact the stream instead.");
+        }
+    }
+
+    internal void AssertBodyIsQueryable(Type eventType, string operation)
+    {
+        if (EventMappingFor(eventType).IsBinary)
+        {
+            throw new InvalidOperationException(
+                $"'{eventType.Name}' is marked [BinaryEvent], so its body is a BLOB in data_binary and "
+                + $"{operation} cannot reach into it — json_extract reads the JSON column, which is null "
+                + "for a binary event. Query its metadata with QueryEventsAsync, or drop [BinaryEvent] "
+                + "from the type.");
+        }
+    }
+
     public override void AddEventType(Type eventType) => EventMappingFor(eventType);
 
     /// <summary>
@@ -376,9 +450,19 @@ public class FisherEventType : IEventType
         EventType = eventType;
         EventTypeName = EventGraph.ToEventTypeName(eventType.Name);
         DotNetTypeName = $"{eventType.FullName}, {eventType.Assembly.GetName().Name}";
+
+        // Read once, here, because every append and every read of this type asks — and because the
+        // answer cannot change: it is an attribute on the type.
+        IsBinary = eventType.GetCustomAttribute<BinaryEventAttribute>() is not null;
     }
 
     public Type EventType { get; }
+
+    /// <summary>
+    ///     Whether this event's body is stored as a BLOB in <c>data_binary</c> rather than as JSON text
+    ///     in <c>data</c> (fisher#43).
+    /// </summary>
+    public bool IsBinary { get; }
     public string EventTypeName { get; set; }
     public string DotNetTypeName { get; set; }
     public string Alias => EventTypeName;

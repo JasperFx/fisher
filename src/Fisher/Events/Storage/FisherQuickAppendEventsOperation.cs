@@ -88,7 +88,16 @@ internal sealed class FisherQuickAppendEventsOperation
         {
             builder.Append("insert into ");
             builder.Append(_graph.EventsTableName);
+            // A binary body goes into data_binary and leaves data null; a JSON body does the reverse.
+            // Which one this event is comes off the event type, so a stream can mix the two freely.
+            var binary = _graph.BinaryEncoderFor(@event);
+
             builder.Append(" (id, stream_id, version, data, type, timestamp, tenant_id, dotnet_type");
+
+            if (binary is not null)
+            {
+                builder.Append(", data_binary");
+            }
 
             if (options.EnableCorrelationId)
             {
@@ -128,7 +137,15 @@ internal sealed class FisherQuickAppendEventsOperation
             Bind(builder, @event.Version, StorageColumnType.Long);
 
             builder.Append(", ");
-            Bind(builder, session.Serializer.ToJson(@event.Data), StorageColumnType.Json);
+
+            if (binary is null)
+            {
+                Bind(builder, session.Serializer.ToJson(@event.Data), StorageColumnType.Json);
+            }
+            else
+            {
+                builder.Append("null");
+            }
 
             builder.Append(", ");
             Bind(builder, @event.EventTypeName, StorageColumnType.String);
@@ -167,6 +184,14 @@ internal sealed class FisherQuickAppendEventsOperation
             {
                 builder.Append(", ");
                 Bind(builder, (object?)@event.UserName ?? DBNull.Value, StorageColumnType.String);
+            }
+
+            // Last, because it is the last column in the list above — the two orders are one contract,
+            // as everywhere else Fisher builds a positional insert.
+            if (binary is not null)
+            {
+                builder.Append(", ");
+                builder.AppendParameter(binary);
             }
 
             builder.Append(");");

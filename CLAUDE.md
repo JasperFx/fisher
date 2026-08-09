@@ -222,6 +222,8 @@ Working, with tests:
   cascade options; the child column is the generated one a duplicated field creates
 - **Declarative and store-wide configuration** — `[Index]` / `[UniqueIndex]` / `[DuplicateField]` /
   `[HiloSequence]`, `AddSubClassHierarchy()`, `StoreOptions.Policies` and `StoreOptions.InitialData`
+- **Binary event bodies** — `[BinaryEvent]` over a supplied `IEventBinarySerializer`, stored in a
+  `data_binary` BLOB column beside the JSON one
 
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
@@ -2230,6 +2232,47 @@ interleaved.
   `to_sql_shows_the_filters_fisher_adds` uses it for.
 - `QueryListPlan<T>` implements both `IQueryPlan` and `IBatchQueryPlan` from one `Query` method, which
   is what keeps the batched and unbatched paths from drifting into two different queries with one name.
+
+### Binary event bodies
+
+`[BinaryEvent]` and `StoreOptions.Events.BinarySerializer` (fisher#43) — an event body stored as a
+BLOB in `fi_events.data_binary` rather than as JSON text in `data`.
+
+**Worth more here than the same feature is on Marten**, and for a structural reason: Fisher is
+embedded, so the store's disk footprint *is* the application's, and SQLite has no `jsonb` — where
+PostgreSQL keeps a compact binary form for free, Fisher stores the literal JSON text of every event
+forever, property names included.
+
+- **A separate nullable BLOB column, not BLOBs mixed into `data`.** SQLite would tolerate the mixture,
+  since affinity is a preference rather than a constraint — but then `typeof(data)` is the only way to
+  tell an encoding apart, and `json_extract` over the column silently stops meaning anything for the
+  rows that are binary. One nullable column per row buys an unambiguous shape.
+- **The column exists only when a serializer is configured, and that gate is the whole schema story.**
+  `data` becomes nullable at the same moment. Gated rather than made unconditional so a store that will
+  never hold a binary event keeps the constraint it had — and the gate is checkable, because the
+  serializer has to be supplied for the feature to work at all. Appending a binary event to a store
+  created without one is refused by name rather than failing on `data`'s NOT NULL constraint.
+- **`data_binary` is composed last in the SELECT and gets the last `MetadataSlots` ordinal**, so every
+  ordinal above it is unmoved whether or not the store has one. Same reason fisher#29's session
+  metadata binders were appended rather than inserted.
+- **Which column a row's body is in is read off the resolved event type, never off a null check.** A
+  genuinely null body would pass the null check too.
+- **Both rewrite operations refuse a binary event by name, and that was the likeliest way this feature
+  could corrupt data.** They write the JSON `data` column; against a binary row that leaves a JSON body
+  *and* a BLOB body, and every reader resolves by event type — so the JSON would be invisible and the
+  row quietly wrong. `QueryEventDataAsync<T>` (fisher#41) refuses one too, because `data` is null for
+  those rows and `json_extract(null, …)` is null: it would match nothing and report that as an answer.
+- **Compacting works and clears the BLOB.** The snapshot it writes is a JSON `Compacted<T>`, so the
+  replace is permitted; `ReplaceEventOperation` nulls `data_binary` as well, or the row keeps a body no
+  reader will ever look at.
+- **Fisher ships no `IEventBinarySerializer`, and that is the end state** — the position `IMessageOutbox`
+  holds. A binary encoding is a choice with real consequences for schema evolution (MessagePack,
+  protobuf and compressed JSON fail differently when an event type gains a member), and picking one
+  would be Fisher deciding how an application's data ages.
+
+Everything that reads the row's *columns* is unaffected — stream reads, the daemon's loader, DCB tag
+queries, `QueryEventsAsync`'s metadata filters — which is why a stream can mix the two encodings
+freely, and why the daemon needed no change at all.
 
 ### Querying event bodies
 

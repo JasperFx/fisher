@@ -311,6 +311,26 @@ public class EventStoreOptions : IEventStoreInstrumentation
     public bool EnableUserName { get; set; }
 
     /// <summary>
+    ///     The serializer for event types marked <see cref="Events.BinaryEventAttribute" />
+    ///     (fisher#43). Null — the default — means the store stores every event body as JSON text.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Setting this is a schema decision and has to happen before the schema is created.</b>
+    ///         It is what adds <c>fi_events.data_binary</c> and makes <c>data</c> nullable; a store
+    ///         created without it has neither, and appending a binary event to one is refused by name
+    ///         rather than failing on a NOT NULL constraint. Same rule as
+    ///         <see cref="TenancyStyle" /> and the <c>Enable*</c> metadata flags, and for the same
+    ///         reason.
+    ///     </para>
+    ///     <para>
+    ///         Fisher ships no implementation — see <see cref="Events.IEventBinarySerializer" /> for
+    ///         why that is the end state rather than a gap.
+    ///     </para>
+    /// </remarks>
+    public Events.IEventBinarySerializer? BinarySerializer { get; set; }
+
+    /// <summary>
     ///     Run inline projections' side effects when an inline projection is applied during
     ///     <c>SaveChangesAsync</c>. Off by default.
     /// </summary>
