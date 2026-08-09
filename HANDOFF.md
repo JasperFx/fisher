@@ -133,6 +133,12 @@ post-join `where` goes in the `WHERE`** — the first says which rows may match,
 rows survive, and on a left join the difference is visible in the answer. Moving the inner-side filters
 to the `WHERE` fails five tests, all of them cases where a left join quietly became an inner one.
 
+Two follow-ups were filed rather than shipped half-done: the scalar aggregates and `LastAsync` over a
+join ([#54](https://github.com/JasperFx/fisher/issues/54) — the pieces exist, they just reach
+`Build<T>` and ask for a mapping of a shape that never had one) and more than one join per query
+([#55](https://github.com/JasperFx/fisher/issues/55) — `Statement.Joins` is already a list, and
+everything above it is written for exactly two sides).
+
 Both LINQ spellings are supported, which is more than the issue asked for: query syntax's plain `join`
 clause emits `Queryable.Join` rather than `GroupJoin`, and a `where` or `orderby` after it names the
 transparent identifier rather than the projected result. One rewriter collapses all of it onto
