@@ -364,6 +364,8 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             return;
         }
 
+        using var activity = FisherTracing.StartOperation(FisherTracing.SaveChanges, Options);
+
         foreach (var listener in Listeners)
         {
             await listener.BeforeSaveChangesAsync(this, token).ConfigureAwait(false);
@@ -402,8 +404,67 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         // migration on its own connection.
         await EnsureDocumentTablesAsync(queued, token).ConfigureAwait(false);
 
+        // Counted after everything that can add to the unit of work has run, so the numbers describe
+        // what was written rather than what had been asked for when the span opened.
+        if (activity is { IsAllDataRequested: true })
+        {
+            activity.SetTag("fisher.operations", queued.Count);
+            activity.SetTag("fisher.streams", streams.Length);
+            activity.SetTag("fisher.events", streams.Sum(x => x.Events.Count));
+            activity.SetTag("fisher.enlisted", EnlistedTransaction is not null);
+            activity.SetTag("fisher.tenant", TenantId);
+        }
+
         var connection = await ConnectionAsync(token).ConfigureAwait(false);
 
+        try
+        {
+            await WriteUnitOfWorkAsync(connection, queued, streams, token).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            // The span has to say it failed, or a trace shows a commit that never happened as a
+            // successful one — and the retry events recorded underneath it would then read as noise
+            // rather than as the story of what went wrong.
+            activity.RecordFailure(e);
+            throw;
+        }
+
+        // Not reused across units of work: a batch's hooks have fired, and a second SaveChangesAsync
+        // publishing through it would flush the same messages again.
+        _messageBatch = null;
+
+        ResetChangeTracking(queued);
+
+        foreach (var scope in TenantScopes)
+        {
+            scope.ResetChangeTracking(queued);
+        }
+
+        // Outside the resilience pipeline, and skipped entirely for an enlisted session. The first is
+        // fisher#4's property — a retried SQLITE_BUSY re-executes the whole delegate, so a listener
+        // invoked inside it fires twice for a transaction that already committed. The second is
+        // SessionOptions.ForTransaction's: "everyone can see this now" is a claim only the caller's
+        // commit can make, and Fisher is not told when that happens.
+        if (Listeners.Count > 0 && EnlistedTransaction is null)
+        {
+            var commit = new Services.ChangeSet(queued, streams);
+
+            foreach (var listener in Listeners)
+            {
+                await listener.AfterCommitAsync(this, commit, token).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     The write itself: the caller's transaction, or one of Fisher's inside the resilience
+    ///     pipeline.
+    /// </summary>
+    private async Task WriteUnitOfWorkAsync(SqliteConnection connection,
+        IReadOnlyList<Weasel.Storage.IStorageOperation> queued, StreamAction[] streams,
+        CancellationToken token)
+    {
         if (EnlistedTransaction is { } enlisted)
         {
             // Everything the unit of work holds, written into the caller's transaction — and then
@@ -439,31 +500,6 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             }, token).ConfigureAwait(false);
         }
 
-        // Not reused across units of work: a batch's hooks have fired, and a second SaveChangesAsync
-        // publishing through it would flush the same messages again.
-        _messageBatch = null;
-
-        ResetChangeTracking(queued);
-
-        foreach (var scope in TenantScopes)
-        {
-            scope.ResetChangeTracking(queued);
-        }
-
-        // Outside the resilience pipeline, and skipped entirely for an enlisted session. The first is
-        // fisher#4's property — a retried SQLITE_BUSY re-executes the whole delegate, so a listener
-        // invoked inside it fires twice for a transaction that already committed. The second is
-        // SessionOptions.ForTransaction's: "everyone can see this now" is a claim only the caller's
-        // commit can make, and Fisher is not told when that happens.
-        if (Listeners.Count > 0 && EnlistedTransaction is null)
-        {
-            var commit = new Services.ChangeSet(queued, streams);
-
-            foreach (var listener in Listeners)
-            {
-                await listener.AfterCommitAsync(this, commit, token).ConfigureAwait(false);
-            }
-        }
     }
 
     /// <summary>
@@ -1046,8 +1082,20 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         }
     }
 
+    /// <remarks>
+    ///     The closed-shape storage's read seam, so this is where a document load gets its span
+    ///     (fisher#48). It covers executing the statement, not materializing the document — the same
+    ///     boundary the LINQ path draws, and for the same reason.
+    /// </remarks>
     public async Task<DbDataReader> ExecuteReaderAsync(DbCommand command, CancellationToken token = default)
     {
+        using var activity = FisherTracing.StartOperation(FisherTracing.Load, Options);
+
+        if (activity is { IsAllDataRequested: true })
+        {
+            activity.SetTag("fisher.tenant", TenantId);
+        }
+
         await ConfigureCommandAsync(command, token).ConfigureAwait(false);
 
         return await command.ExecuteReaderAsync(token).ConfigureAwait(false);

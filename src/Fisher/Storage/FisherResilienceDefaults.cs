@@ -33,7 +33,20 @@ internal static class FisherResilienceDefaults
             MaxRetryAttempts = 5,
             Delay = TimeSpan.FromMilliseconds(50),
             BackoffType = DelayBackoffType.Exponential,
-            UseJitter = true
+            UseJitter = true,
+
+            // fisher#48. A SQLITE_BUSY retry is the single most useful thing Fisher can report and
+            // was the one thing nothing could see: a request that spent its time queued behind
+            // another writer looked exactly like a request that was slow. Recorded as an event on
+            // whatever span is current rather than as a span of its own — a retry is the same
+            // operation happening again, not a nested one.
+            OnRetry = arguments =>
+            {
+                Internal.FisherTracing.RecordRetry(
+                    arguments.AttemptNumber + 1, arguments.RetryDelay, arguments.Outcome.Exception);
+
+                return default;
+            }
         });
     }
 

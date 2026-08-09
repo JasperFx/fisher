@@ -226,6 +226,8 @@ Working, with tests:
   `data_binary` BLOB column beside the JSON one
 - **Document-side tooling** — `IDocumentStoreUsageSource`, `IDocumentStoreDiagnostics` and projection
   step-through, so a monitoring console sees the document half as well as the event half
+- **Tracing** — an `ActivitySource` named `Fisher`, with spans for commits, queries and loads and a
+  retry event that says a call waited on the write lock
 
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
@@ -1808,6 +1810,48 @@ reintroduce fisher#20's bug one level up, where it is harder to see.
   `the_store_implements_every_interface_member_implicitly` checks the other direction through the
   interface map, so a member satisfied explicitly — compiling fine and then unreachable from the
   concrete type — is caught too.
+
+### Tracing
+
+`Internal/FisherTracing.cs` (fisher#48) — an `ActivitySource` named `Fisher`, spans around
+`SaveChangesAsync`, a LINQ execution and a document load, and a retry event on the enclosing span.
+
+**The instinct is that tracing is for network calls and an embedded store has none. That is backwards
+for what operators actually hit.** SQLite serialises writers per file, so the interesting question
+about a slow Fisher call is almost always how long it waited for the write lock — and a request that
+spent its time queued behind another writer is otherwise indistinguishable from one that was simply
+slow.
+
+- **Instrumented inside `FisherSession`, not through a decorator.** Polecat's
+  `TracingSessionDecorator` means re-implementing every member of `IDocumentSession` as a pass-through
+  — a cost that grows with every feature added to the interface, and one that interacts badly with the
+  daemon queueing onto the concrete session type.
+- **The retry event is the point, and it lives in the resilience pipeline's `OnRetry`.** Recorded
+  against `Activity.Current` rather than a captured span, because the pipeline is shared by every path
+  that executes SQL — a session's commit, the daemon's batch, the Hi-Lo advance. It is an *event* on
+  the enclosing span rather than a span of its own: a retry is the same operation happening again.
+- **A query's span covers building and executing the statement, not materializing the rows.** Every
+  terminal reads rows after `ExecuteReaderAsync` returns, so covering materialization would mean a
+  span per terminal — five copies of three lines, one of which would eventually be forgotten — and the
+  question the span exists to answer is entirely inside the boundary drawn.
+- **A failed commit marks its span `Error`.** Otherwise a trace shows a commit that never happened as
+  a successful one, and the retry events under it read as noise rather than as the story.
+- `SaveChangesAsync`'s counts are tagged *after* everything that can add to the unit of work has run —
+  listeners, inline projections — so they describe what was written rather than what had been asked
+  for when the span opened.
+
+Two things learned while writing the tests, both worth keeping:
+
+- **A contended write does not reach the retry the way you would expect.** The wait at
+  `BEGIN IMMEDIATE` comes from the connection string's `Default Timeout` and from nowhere else — not
+  `SessionOptions.Timeout`, which bounds a command, and not `PRAGMA busy_timeout`, which does not cover
+  it. And `Default Timeout=0` means *no limit*, not "do not wait". So a contended save either sits for
+  the full wait and succeeds with no retry, or fails while the connection is still being opened, since
+  opening one applies the PRAGMAs and `journal_mode` wants the write lock. `a_busy_retry_is_recorded_on_the_span_it_contended`
+  therefore drives the store's own pipeline with a planted `SQLITE_BUSY` and says so.
+- **An `ActivityListener` is process-wide, and xUnit runs collections in parallel.** A test that
+  asserts `Single(...)` over recorded spans is green alone and red in the full suite. Filter by a tag
+  the test's own store sets.
 
 ### The document-side tooling surface
 

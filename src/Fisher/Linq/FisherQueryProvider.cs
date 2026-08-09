@@ -1218,17 +1218,50 @@ public partial class FisherQueryProvider : IQueryProvider
         }
     }
 
+    /// <remarks>
+    ///     <b>The span covers building and executing the statement, not materializing the rows</b>,
+    ///     and that boundary is deliberate rather than convenient. Every terminal reads rows after this
+    ///     returns, so covering materialization would mean a span per terminal — five copies of the
+    ///     same three lines, one of which would eventually be forgotten. And the question the span
+    ///     exists to answer is where the time went waiting for SQLite, which is entirely inside it.
+    /// </remarks>
     private async Task<System.Data.Common.DbDataReader> ExecuteReaderAsync(Statement statement,
         CancellationToken token)
     {
+        using var activity = StartQueryActivity(statement);
+
         var command = await CommandFor(statement, token).ConfigureAwait(false);
         return await command.ExecuteReaderAsync(token).ConfigureAwait(false);
     }
 
+    /// <inheritdoc cref="ExecuteReaderAsync" />
     private async Task<object?> ExecuteScalarAsync(Statement statement, CancellationToken token)
     {
+        using var activity = StartQueryActivity(statement);
+
         var command = await CommandFor(statement, token).ConfigureAwait(false);
         return await command.ExecuteScalarAsync(token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     A span around one LINQ execution, or null when nothing is listening (fisher#48).
+    /// </summary>
+    /// <remarks>
+    ///     Opened here rather than at each terminal because this is the one place every terminal
+    ///     converges — a span per terminal would be five copies of the same three lines, and one of
+    ///     them would eventually be forgotten.
+    /// </remarks>
+    private System.Diagnostics.Activity? StartQueryActivity(Statement statement)
+    {
+        var activity = Internal.FisherTracing.StartOperation(Internal.FisherTracing.Query, _session.Options);
+
+        if (activity is { IsAllDataRequested: true })
+        {
+            activity.SetTag("db.collection.name", statement.FromTable);
+            activity.SetTag("fisher.tenant", _session.TenantId);
+        }
+
+        return activity;
     }
 
     private async Task<Microsoft.Data.Sqlite.SqliteCommand> CommandFor(Statement statement,
