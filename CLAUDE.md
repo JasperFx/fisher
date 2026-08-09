@@ -228,6 +228,8 @@ Working, with tests:
   step-through, so a monitoring console sees the document half as well as the event half
 - **Tracing** — an `ActivitySource` named `Fisher`, with spans for commits, queries and loads and a
   retry event that says a call waited on the write lock
+- **Multi-store registration** — `AddFisherStore<T>` and `IConfigureFisher`, so several independently
+  configured stores live in one container
 
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
@@ -1810,6 +1812,43 @@ reintroduce fisher#20's bug one level up, where it is harder to see.
   `the_store_implements_every_interface_member_implicitly` checks the other direction through the
   interface map, so a member satisfied explicitly — compiling fine and then unreachable from the
   concrete type — is caught too.
+
+### Multi-store registration
+
+`AddFisherStore<T>(...)`, `IConfigureFisher` and `FisherStoreRegistry` (fisher#46).
+
+**Several stores are a *better* fit here than on either sibling.** On PostgreSQL or SQL Server a second
+store usually means a second schema in one database and the isolation is the server's. On SQLite a
+second store can simply be a second **file** — separately backed up, separately deletable, and with its
+own write lock. That last point is the one that matters: one writer per file is SQLite's central
+constraint, so splitting a workload across two files is the primary way to get two concurrent writers,
+and this is the ergonomic front door to it. Both shapes already worked at the storage layer; only the
+registration surface was missing.
+
+- **The marker proxy is `System.Reflection.DispatchProxy`** — in the BCL, so no proxy library and no
+  code generation. A marker interface is empty apart from what it inherits, so every call it can
+  receive is one the wrapped store already implements. `TargetInvocationException` is unwrapped with
+  `ExceptionDispatchInfo`, or every exception from a secondary store arrives wrapped and the proxy
+  leaks into the application's catch blocks. **The proxy class cannot be `sealed`** — `DispatchProxy`
+  derives from it at runtime and says so.
+- **A proxy is not an `IEventStore`.** `DispatchProxy` implements the interfaces it was asked for and no
+  others, and the tooling surfaces are implemented explicitly and deliberately absent from
+  `IDocumentStore` (fisher#45) — so the `IEventStore` registration reaches *through* the proxy to the
+  real store, or a secondary store is invisible to a monitoring console.
+- **A secondary store's sessions are reached through the store, not injected.** `IDocumentSession`
+  cannot be registered scoped for two stores at once; Polecat answers this the same way, and keyed
+  registrations would give Fisher a shape neither sibling has for a case a property access reads
+  perfectly well. Pinned, so it is a convention rather than an accident.
+- **Two stores registered over one file with the same `DatabaseSchemaName` are refused.** They would
+  share every table — each reading, writing and cleaning the other's rows — and it is silent. The
+  registry is **scoped to the container, not the process**, deliberately: building two `DocumentStore`s
+  over one file by hand is something tests and migrations legitimately do, and
+  `applying_the_configuration_again_is_a_no_op` is exactly that. What is refused is *registering* two.
+- **`IConfigureFisher<T>` exists because which store a contribution is about has to be sayable.** An
+  untargeted contribution reaches the primary store only; without the distinction, a library's
+  configuration would reach stores it has never heard of.
+- `StoreName` defaults to the marker's name, so two stores are distinguishable in a monitoring tool and
+  in a trace with nothing said.
 
 ### Tracing
 
