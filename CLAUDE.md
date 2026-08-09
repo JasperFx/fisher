@@ -179,6 +179,8 @@ Working, with tests:
   and as a document's
 - **Event rewriting** — `OverwriteEvent`, `CompletelyReplaceEvent`, event data masking through
   `Advanced.ApplyEventDataMaskingAsync`, and stream compacting via `CompactStreamAsync<T>`
+- **Sessions and `SessionOptions`** — `QuerySession()` and `OpenSession(SessionOptions)` on the store,
+  and enlistment: a session running on a connection or inside a transaction the caller owns
 
 Not implemented yet — do not assume these work:
 
@@ -833,6 +835,85 @@ by text, which is not .NET's `Guid` ordering.** `Guid.CompareTo` compares the fi
 int, so the two disagree whenever the set straddles `0x80000000`. A test comparing against
 `Enumerable.Min` would be a genuine intermittent; `min_and_max_over_members_that_are_not_numbers`
 builds its expectation with `StringComparer.Ordinal` instead.
+
+### Sessions, `SessionOptions` and enlistment
+
+`DocumentStore.QuerySession()`, `OpenSession(SessionOptions)`, and `Internal/Sessions/` (fisher#30).
+The store used to expose exactly one factory, `LightweightSession(tenantId)`, against Polecat's eight.
+
+**Enlistment is the part that matters, and it is worth more here than the same feature is on either
+sibling.** One writer per file, and an application using Fisher keeps its own tables in that file — so
+without a way to hand Fisher an open transaction, "my rows and Fisher's, or neither" means taking the
+write lock twice and contending with yourself. `QueueSqlCommand` (fisher#34) answers the same problem
+from the other direction.
+
+**Three modes, one rule each.** No `Connection` and no `Transaction` is the ordinary session; a
+`Connection` alone means Fisher opens and commits its own transaction on it and **never disposes a
+connection it did not open**; a `Transaction` means Fisher **neither commits nor rolls back**. Marten's
+`OwnsConnectionLifecycle` / `OwnsTransactionLifecycle` pair is deliberately absent — four combinations
+of which two are traps, in place of two rules that are always true.
+
+`IConnectionLifetime` is much narrower than Polecat's interface of the same name, which wraps every
+execution. Fisher's session hands its connection out rather than executing through a lifetime object
+(the append planner, the tag writer and the boundary check all take a connection *and* a transaction),
+so it carries only the two things that actually vary: where the connection comes from, and the
+caller's transaction to join.
+
+Five decisions in the enlisted path, each of which would be silently wrong the other way:
+
+- **`command.Transaction` is set on every command, and without it enlistment does not work at all.**
+  Microsoft.Data.Sqlite refuses to execute a command whose `Transaction` is unset while its connection
+  has a pending local transaction — *"Execute requires the command to have a transaction object"*. A
+  command from `connection.CreateCommand()` inherits the connection's transaction and never meets
+  this; **Weasel's command builder compiles a detached command**, which is what every Fisher statement
+  is. `FisherSession.ConfigureCommandAsync` is the one place that sets it, and routing the four
+  command sites through it is what keeps that true. Verified by removing the line: six of
+  `session_options`' tests fail with that exact message.
+- **No resilience pipeline.** An ordinary commit can be retried after `SQLITE_BUSY` because the failed
+  attempt's transaction rolled back with it. An enlisted one did not — it is the caller's and still
+  open — so a retry would write everything the first attempt already wrote a second time. The busy
+  surfaces to the caller instead. Same property as `StreamAsync` and `AfterCommitAsync`.
+- **No post-commit step.** An outbox's `AfterCommitAsync` and the append observer both claim "everyone
+  can see this now", and Fisher is not told when the caller commits. Neither fires; `BeforeCommitAsync`
+  does, as the last thing the session writes.
+- **Document tables are not created on demand.** That path runs a migration on its own connection,
+  which would block against the write lock the caller's transaction is holding — a session deadlocking
+  against itself, presenting after thirty seconds as `database is locked`. A missing table throws by
+  name instead. The existence check runs on the *caller's* connection, so a table created inside the
+  same transaction counts, which is what makes "your tables and Fisher's in one transaction" work.
+- **A deferred caller transaction weakens the append guard, and Fisher cannot warn about it.** The
+  append planner reads a stream's version and writes version+1 on the strength of holding the write
+  lock. SQLite still refuses the second writer, so there is no lost update; what changes is that the
+  loser gets `SQLITE_BUSY` at first write rather than a clean concurrency failure. The provider reports
+  `Serializable` for a deferred transaction and an immediate one alike, so the two are
+  indistinguishable from outside — documentation is the only instrument available.
+
+**`SessionOptions.IsolationLevel` is carried for parity and refuses exactly one value.** Verified
+against Microsoft.Data.Sqlite 10.0.9: `Unspecified`, `ReadCommitted`, `RepeatableRead` and
+`Serializable` all produce the same `BEGIN IMMEDIATE` and all report `Serializable` back; `Chaos` and
+`Snapshot` are refused by the provider. **`ReadUncommitted` is refused by Fisher** — it is the one
+value that begins a *deferred* transaction, and nothing would signal the loss, because the transaction
+still describes itself as `Serializable`. So Polecat code setting `ReadCommitted` (its default) ports
+across and behaves identically.
+
+**`SessionOptions.Timeout` means something different here than on either sibling, in two ways.** It
+bounds how long a *statement* waits for the write lock before `SQLITE_BUSY`; it does not interrupt a
+query that is genuinely slow. And it does not bound the wait at `BEGIN IMMEDIATE`, because the
+transaction is begun on the connection rather than through a command — that busy wait comes from the
+connection string's `Default Timeout`, 30s by default. Both halves verified.
+
+**`Tracking` and `Listeners` are deliberately absent**, though both are on Polecat's `SessionOptions`:
+Fisher has no identity map or dirty tracking (fisher#31) and no session listeners (fisher#32), so
+either would be a knob that silently does nothing. They arrive with the features that give them
+meaning. **`LightweightSession(SessionOptions)` and `OpenSessionAsync` are absent** for the same class
+of reason — Fisher opens one kind of session, and a session opens its connection lazily, so the first
+is a second name for `OpenSession` and the second has nothing to await.
+
+**`QuerySession()`'s narrowing is a convention, not a guarantee**, and fisher#30 asked for that to be
+decided rather than left implied. It is the same session narrowed to the read interface, so a cast
+gets a write handle back; a genuine query-only type would cost a connection per scope to express a
+distinction the store does not make. Said on `IQuerySession` itself, and pinned by
+`a_query_session_is_the_same_session_type_narrowed` so that making it real is a deliberate change.
 
 ### Raw SQL
 

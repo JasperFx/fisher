@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**888 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
+**906 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
 cross-store compliance tests — which as of 2.45.0 is every event sourcing suite the shared library has.
 
 ## Closed since the comparison
@@ -21,7 +21,71 @@ cross-store compliance tests — which as of 2.45.0 is every event sourcing suit
 `Last` (#22) · `Select` projections, `Distinct`, `DistinctBy` (#23) · `GroupBy` and `HAVING` (#24) ·
 **a cross-tenant read (#51)** · the marker operators (#26) · offset and keyset paging (#27) · batching,
 query plans, `CheckExistsAsync`, `ToSql` (#37) · JSON-returning reads (#28) · `Advanced` parity (#42) ·
-patching (#35) · bulk insert (#36) · composite projections (#19) · event body queries (#41).
+patching (#35) · bulk insert (#36) · composite projections (#19) · event body queries (#41) ·
+sessions, `SessionOptions` and enlistment (#30).
+
+## Sessions and enlistment — the one the ordering called a hard stop
+
+**#30 was the only open issue ROADMAP described as a hard stop rather than an inconvenience**, and the
+reason is structural. SQLite permits one writer per file and an application using Fisher keeps its own
+tables in that file, so an application that wanted its rows and Fisher's in one atomic unit had no way
+to get it: `QueueSqlCommand` (#34) covers "my SQL inside Fisher's transaction", and there was nothing
+for "Fisher's writes inside mine". `SessionOptions.ForTransaction(tx)` is that half.
+
+`SessionOptions` has **three modes with one rule each** — no connection and no transaction is the
+ordinary session; a connection alone means Fisher opens and commits its own transaction on it and never
+disposes it; a transaction means Fisher neither commits nor rolls back. Marten's
+`OwnsConnectionLifecycle` / `OwnsTransactionLifecycle` pair is deliberately not carried, because four
+combinations of which two are traps is a worse surface than two rules that are always true.
+
+**The finding worth carrying forward is the command/transaction one, because the probe that was meant
+to establish it got the wrong answer.** A scratch program said a command with `Transaction` unset
+executes happily on a connection with an open transaction — so the design treated setting it as
+tidiness. It is not: Microsoft.Data.Sqlite throws *"Execute requires the command to have a transaction
+object when the connection assigned to the command is in a pending local transaction"*. The probe was
+wrong because it built its command with `connection.CreateCommand()`, **which inherits the connection's
+transaction**, while every Fisher statement is a detached command out of Weasel's builder. Six tests
+fail with that exact message if `ConfigureCommandAsync` stops setting it. The lesson generalises: a
+provider probe has to construct its command the way the production path does.
+
+Four other things about the enlisted path, each of which would have been silently wrong the other way:
+
+- **No resilience pipeline.** A retried `SQLITE_BUSY` re-executes the whole batch, and the failed
+  attempt's writes are still sitting in the caller's transaction rather than having rolled back with
+  it — so the retry would write everything twice. Same property as fisher#4 and fisher#12; third
+  time this shape has come up.
+- **No post-commit step.** `AfterCommitAsync` and the append observer both claim "everyone can see
+  this now", and Fisher is not told when the caller commits. `BeforeCommitAsync` still fires.
+- **No on-demand table creation.** That path runs a migration on its own connection, which would block
+  against the write lock the caller's transaction holds — a session deadlocking against itself,
+  presenting after thirty seconds as `database is locked`. It throws by name instead, and the
+  existence check runs on the caller's connection so a table created inside the same transaction
+  counts.
+- **A deferred caller transaction weakens the append guard and Fisher cannot warn about it.** Safety
+  holds (SQLite still refuses the second writer, so no lost update); what changes is the loser gets
+  `SQLITE_BUSY` rather than a clean concurrency failure. The provider reports `Serializable` for a
+  deferred transaction and an immediate one alike, so there is nothing to detect — documentation is
+  the only instrument.
+
+`IsolationLevel` is carried for parity and refuses exactly one value. Verified against
+Microsoft.Data.Sqlite 10.0.9: `Unspecified`, `ReadCommitted`, `RepeatableRead` and `Serializable` all
+produce the same `BEGIN IMMEDIATE` and all report `Serializable` back, so Polecat code setting its
+`ReadCommitted` default ports across unchanged. **`ReadUncommitted` is refused**, being the one value
+that begins a deferred transaction — and nothing would signal the loss, since the transaction still
+describes itself as `Serializable`.
+
+**Two of the issue's five listed `SessionOptions` members were deliberately not built.** `Tracking`
+belongs to [#31](https://github.com/JasperFx/fisher/issues/31) (no identity map, no dirty tracking) and
+`Listeners` to [#32](https://github.com/JasperFx/fisher/issues/32); shipping either now would be a knob
+that silently does nothing, which is the one thing this codebase refuses. `LightweightSession(SessionOptions)`
+and `OpenSessionAsync` are absent for the same class of reason — Fisher opens one kind of session and
+opens its connection lazily, so one is a second name for `OpenSession` and the other has nothing to
+await.
+
+The read-only question the issue refused to leave implied is decided: **`QuerySession()`'s narrowing is
+a convention, not a guarantee**, said on `IQuerySession` itself and pinned by
+`a_query_session_is_the_same_session_type_narrowed`, so making it real is a deliberate change rather
+than a discovery.
 
 **#51 is the one to read.** It was a genuine cross-tenant data leak — a conjoined `Query<T>()` with no
 `Where` returned every tenant's rows, because the tenant filter was applied by wrapping each caller

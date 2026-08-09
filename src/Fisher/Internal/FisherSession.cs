@@ -43,17 +43,30 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     /// </remarks>
     private readonly System.Threading.Lock _operationsLock = new();
     private List<IChangeTracker>? _changeTrackers;
-    private SqliteConnection? _connection;
+    private readonly Sessions.IConnectionLifetime _lifetime;
     private Dictionary<Type, object>? _itemMap;
     private IStorageSerializer? _storageSerializer;
     private int _tempTableNumber;
     private FisherVersionTracker? _versionTracker;
 
     public FisherSession(StoreOptions options, FisherDatabase database, string tenantId)
+        : this(options, database, new SessionOptions { TenantId = tenantId })
     {
+    }
+
+    public FisherSession(StoreOptions options, FisherDatabase database, SessionOptions sessionOptions)
+    {
+        sessionOptions.AssertValid();
+
         Options = options;
         FisherDatabase = database;
-        TenantId = tenantId;
+        SessionOptions = sessionOptions;
+        TenantId = sessionOptions.TenantId;
+
+        _lifetime = sessionOptions.ExternalConnection is { } external
+            ? new Sessions.ExternalConnectionLifetime(external, sessionOptions.Transaction)
+            : new Sessions.OwnedConnectionLifetime(database);
+
         Events = new EventOperations(this);
 
         // Seed distributed tracing context onto the session so appended events carry it without the
@@ -66,6 +79,19 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     }
 
     internal StoreOptions Options { get; }
+
+    internal SessionOptions SessionOptions { get; }
+
+    /// <summary>
+    ///     The caller's transaction this session is enlisted in, or null for an ordinary session.
+    /// </summary>
+    internal SqliteTransaction? EnlistedTransaction => _lifetime.EnlistedTransaction;
+
+    /// <summary>
+    ///     The command timeout every statement this session runs carries — the session's own, or the
+    ///     store's.
+    /// </summary>
+    internal int CommandTimeout => SessionOptions.Timeout ?? Options.CommandTimeout;
 
     internal FisherDatabase FisherDatabase { get; }
 
@@ -146,8 +172,36 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     ///     Open (or return) this session's connection. One connection per session for its whole
     ///     lifetime, so that reads inside a unit of work see the session's own uncommitted writes.
     /// </summary>
-    internal async ValueTask<SqliteConnection> ConnectionAsync(CancellationToken token = default)
-        => _connection ??= await FisherDatabase.OpenConnectionAsync(token).ConfigureAwait(false);
+    internal ValueTask<SqliteConnection> ConnectionAsync(CancellationToken token = default)
+        => _lifetime.ConnectionAsync(token);
+
+    /// <summary>
+    ///     Point a command at this session's connection, transaction and timeout.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Every command a session runs goes through here — the batch executor, the LINQ provider,
+    ///         the raw SQL reads and the storage's own loads. That matters for enlistment: joining the
+    ///         caller's transaction is one line, in one place rather than at four sites that would each
+    ///         have to remember.
+    ///     </para>
+    ///     <para>
+    ///         <b>The transaction assignment is not tidiness — without it an enlisted session does not
+    ///         work at all.</b> Microsoft.Data.Sqlite refuses to execute a command whose
+    ///         <c>Transaction</c> is unset while its connection has a pending local transaction:
+    ///         "Execute requires the command to have a transaction object". A command from
+    ///         <c>connection.CreateCommand()</c> inherits the connection's transaction and so never
+    ///         meets this; Weasel's command builder compiles a detached command, which is what every
+    ///         Fisher statement is. Verified by removing the line — six of this feature's tests fail
+    ///         with that exact message.
+    ///     </para>
+    /// </remarks>
+    internal async ValueTask ConfigureCommandAsync(DbCommand command, CancellationToken token)
+    {
+        command.Connection = await ConnectionAsync(token).ConfigureAwait(false);
+        command.Transaction = EnlistedTransaction;
+        command.CommandTimeout = CommandTimeout;
+    }
 
     /// <summary>
     ///     Flush every queued operation inside one transaction.
@@ -180,64 +234,86 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
 
         var connection = await ConnectionAsync(token).ConfigureAwait(false);
 
-        await Options.ResiliencePipeline.ExecuteAsync(async ct =>
+        if (EnlistedTransaction is { } enlisted)
         {
-            // BEGIN IMMEDIATE, not the default deferred transaction. The append planner reads each
-            // stream's current version and then writes version+1; under a deferred transaction
-            // SQLite would not take the write lock until that write, leaving a window where two
-            // sessions both read version N. IMMEDIATE takes the lock up front, which is Fisher's
-            // stand-in for Marten's advisory lock and Polecat's UPDLOCK/HOLDLOCK read.
-            await using var transaction = (SqliteTransaction)await connection
-                .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
-
-            var operations = new List<Weasel.Storage.IStorageOperation>(queued);
-
-            if (streams.Length > 0)
+            // Everything the unit of work holds, written into the caller's transaction — and then
+            // nothing. No commit, because it is not ours; no resilience pipeline, because a retried
+            // SQLITE_BUSY would re-execute a batch whose first attempt is still sitting in that
+            // transaction rather than having rolled back with it; and no post-commit step, because
+            // "everyone can see this now" is a claim only the caller's commit can make. See
+            // SessionOptions.ForTransaction.
+            await WriteAsync(connection, enlisted, queued, streams, token).ConfigureAwait(false);
+        }
+        else
+        {
+            await Options.ResiliencePipeline.ExecuteAsync(async ct =>
             {
-                var planned = await new AppendPlanner(this)
-                    .PlanAsync(streams, connection, transaction, ct).ConfigureAwait(false);
+                // BEGIN IMMEDIATE, not the default deferred transaction. The append planner reads each
+                // stream's current version and then writes version+1; under a deferred transaction
+                // SQLite would not take the write lock until that write, leaving a window where two
+                // sessions both read version N. IMMEDIATE takes the lock up front, which is Fisher's
+                // stand-in for Marten's advisory lock and Polecat's UPDLOCK/HOLDLOCK read.
+                await using var transaction = (SqliteTransaction)await connection
+                    .BeginTransactionAsync(SessionOptions.IsolationLevel, ct).ConfigureAwait(false);
 
-                operations.AddRange(planned);
-            }
+                await WriteAsync(connection, transaction, queued, streams, ct).ConfigureAwait(false);
 
-            // Before anything is written: a boundary's guarantee is that no matching event has landed
-            // since it was read, and checking after the write would be checking against our own
-            // appends. Inside the transaction because BEGIN IMMEDIATE already holds the write lock,
-            // which is what makes the check meaningful rather than advisory.
-            await AssertBoundariesAreStillConsistentAsync(connection, transaction, ct).ConfigureAwait(false);
+                await transaction.CommitAsync(ct).ConfigureAwait(false);
 
-            await ExecuteBatchAsync(connection, transaction, operations, ct).ConfigureAwait(false);
+                if (_messageBatch is not null)
+                {
+                    await _messageBatch.AfterCommitAsync(ct).ConfigureAwait(false);
+                }
 
-            // After the batch, because a tag row is keyed by the seq_id the append's trailing
-            // read-back has only just supplied; inside the transaction, because an event that is
-            // visible but not yet tagged is indistinguishable to a tag query from one that was never
-            // tagged at all.
-            if (streams.Length > 0)
-            {
-                await new Events.Storage.EventTagWriter(EventGraph)
-                    .WriteAsync(streams, connection, transaction, ct).ConfigureAwait(false);
-            }
-
-            // Last thing inside the transaction: an outbox that wants its messages to be atomic with
-            // the write persists them here. Null unless something actually published.
-            if (_messageBatch is not null)
-            {
-                await _messageBatch.BeforeCommitAsync(ct).ConfigureAwait(false);
-            }
-
-            await transaction.CommitAsync(ct).ConfigureAwait(false);
-
-            if (_messageBatch is not null)
-            {
-                await _messageBatch.AfterCommitAsync(ct).ConfigureAwait(false);
-            }
-
-            NotifyAppendObserver(streams);
-        }, token).ConfigureAwait(false);
+                NotifyAppendObserver(streams);
+            }, token).ConfigureAwait(false);
+        }
 
         // Not reused across units of work: a batch's hooks have fired, and a second SaveChangesAsync
         // publishing through it would flush the same messages again.
         _messageBatch = null;
+    }
+
+    /// <summary>
+    ///     Everything a unit of work does inside its transaction, up to but not including the commit.
+    /// </summary>
+    private async Task WriteAsync(SqliteConnection connection, SqliteTransaction transaction,
+        IReadOnlyList<Weasel.Storage.IStorageOperation> queued, StreamAction[] streams, CancellationToken token)
+    {
+        var operations = new List<Weasel.Storage.IStorageOperation>(queued);
+
+        if (streams.Length > 0)
+        {
+            var planned = await new AppendPlanner(this)
+                .PlanAsync(streams, connection, transaction, token).ConfigureAwait(false);
+
+            operations.AddRange(planned);
+        }
+
+        // Before anything is written: a boundary's guarantee is that no matching event has landed
+        // since it was read, and checking after the write would be checking against our own
+        // appends. Inside the transaction because BEGIN IMMEDIATE already holds the write lock,
+        // which is what makes the check meaningful rather than advisory.
+        await AssertBoundariesAreStillConsistentAsync(connection, transaction, token).ConfigureAwait(false);
+
+        await ExecuteBatchAsync(connection, transaction, operations, token).ConfigureAwait(false);
+
+        // After the batch, because a tag row is keyed by the seq_id the append's trailing
+        // read-back has only just supplied; inside the transaction, because an event that is
+        // visible but not yet tagged is indistinguishable to a tag query from one that was never
+        // tagged at all.
+        if (streams.Length > 0)
+        {
+            await new Events.Storage.EventTagWriter(EventGraph)
+                .WriteAsync(streams, connection, transaction, token).ConfigureAwait(false);
+        }
+
+        // Last thing inside the transaction: an outbox that wants its messages to be atomic with
+        // the write persists them here. Null unless something actually published.
+        if (_messageBatch is not null)
+        {
+            await _messageBatch.BeforeCommitAsync(token).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -260,10 +336,58 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
 
         foreach (var documentType in operations.Select(x => x.DocumentType).Distinct())
         {
-            if (documentType is not null && Options.Schema.HasMappingFor(documentType))
+            if (documentType is null || !Options.Schema.HasMappingFor(documentType))
+            {
+                continue;
+            }
+
+            if (EnlistedTransaction is not null)
+            {
+                await AssertDocumentTableExistsAsync(documentType, token).ConfigureAwait(false);
+            }
+            else
             {
                 await FisherDatabase.EnsureDocumentTableAsync(documentType, token).ConfigureAwait(false);
             }
+        }
+    }
+
+    /// <summary>
+    ///     For an enlisted session, check that a document type's table is already there rather than
+    ///     creating it.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Creating it runs a migration on its own connection, and the caller's transaction is
+    ///         holding the write lock — so the ordinary path would block for the connection's busy
+    ///         timeout and then fail with <c>SQLITE_BUSY</c>, which is a session deadlocking against
+    ///         itself dressed up as contention. Naming the type and the fix beats waiting thirty
+    ///         seconds to be told "database is locked".
+    ///     </para>
+    ///     <para>
+    ///         The check runs on the caller's own connection, so a table they created inside the same
+    ///         transaction counts as existing — which is what makes "create your tables and Fisher's in
+    ///         one transaction" work at all.
+    ///     </para>
+    /// </remarks>
+    private async Task AssertDocumentTableExistsAsync(Type documentType, CancellationToken token)
+    {
+        var table = Options.Schema.MappingFor(documentType).TableName;
+
+        await using var command = new SqliteCommand(
+            "select 1 from sqlite_master where type = 'table' and name = $name");
+        command.Parameters.AddWithValue("$name", table.Name);
+
+        await ConfigureCommandAsync(command, token).ConfigureAwait(false);
+
+        if (await command.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
+        {
+            throw new InvalidOperationException(
+                $"There is no table '{table.Name}' for document type {documentType.FullName}, and a session "
+                + "enlisted in a transaction it does not own cannot create one — the migration runs on its "
+                + "own connection, which would block against the write lock that transaction is holding. "
+                + "Call ApplyAllConfiguredChangesToDatabaseAsync (or create the table inside your own "
+                + "transaction) before enlisting.");
         }
     }
 
@@ -405,7 +529,7 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
             var command = builder.Compile();
             command.Connection = connection;
             command.Transaction = transaction;
-            command.CommandTimeout = Options.CommandTimeout;
+            command.CommandTimeout = CommandTimeout;
 
             try
             {
@@ -537,9 +661,7 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
 
     public async Task<DbDataReader> ExecuteReaderAsync(DbCommand command, CancellationToken token = default)
     {
-        var connection = await ConnectionAsync(token).ConfigureAwait(false);
-        command.Connection = connection;
-        command.CommandTimeout = Options.CommandTimeout;
+        await ConfigureCommandAsync(command, token).ConfigureAwait(false);
 
         return await command.ExecuteReaderAsync(token).ConfigureAwait(false);
     }
@@ -590,11 +712,7 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     {
         GC.SuppressFinalize(this);
 
-        if (_connection is not null)
-        {
-            await _connection.DisposeAsync().ConfigureAwait(false);
-            _connection = null;
-        }
+        await _lifetime.DisposeAsync().ConfigureAwait(false);
     }
 
     /// <summary>
@@ -612,7 +730,6 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     {
         GC.SuppressFinalize(this);
 
-        _connection?.Dispose();
-        _connection = null;
+        _lifetime.Dispose();
     }
 }

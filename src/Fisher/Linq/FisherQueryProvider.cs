@@ -1079,8 +1079,7 @@ public class FisherQueryProvider : IQueryProvider
         statement.Apply(builder);
 
         var command = builder.Compile();
-        command.Connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
-        command.CommandTimeout = _session.Options.CommandTimeout;
+        await _session.ConfigureCommandAsync(command, token).ConfigureAwait(false);
 
         return command;
     }

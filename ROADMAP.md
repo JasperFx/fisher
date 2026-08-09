@@ -3,8 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **nineteen open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
-**All 28 compliance suites green.** 888 tests green on net9.0
+Status: **seventeen open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
+**All 28 compliance suites green.** 906 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
 Twenty-eight of those twenty-nine came out of a file-by-file comparison against Polecat on 2026-08-08,
@@ -159,6 +159,7 @@ if something is deferred, it is in the list above.
 | Batching and plans (fisher#37) | the DCB batch widened to documents and moved to `Fisher.Batching`, plus `IQueryPlan`, `CheckExistsAsync` and `ToSql` |
 | LINQ paging (fisher#27) | `ToPagedListAsync` with a real total, and keyset paging with a Polecat-compatible cursor |
 | LINQ grouping (fisher#24) | `GroupBy`, a `Select` over the group, `HAVING` from a `Where` after it, and ordering by an aggregate; the expected lax-GROUP-BY hazard is unreachable through the API |
+| Sessions and enlistment (fisher#30) | `QuerySession()` and `OpenSession(SessionOptions)` on the store, and a session running inside a connection or transaction the caller owns — the other half of the atomicity problem `QueueSqlCommand` answers from one side |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
@@ -311,7 +312,7 @@ rather than by size. Full rationale per issue; [polecat-gaps.md](polecat-gaps.md
 
 | | Why first |
 |---|---|
-| [#30](https://github.com/JasperFx/fisher/issues/30) sessions and `SessionOptions` | The enlistment half: one writer per file means an application writing its own tables and Fisher's in the same file cannot do both atomically today. `QuerySession()` on the store is a one-liner alongside it. |
+| ~~[#30](https://github.com/JasperFx/fisher/issues/30) sessions and `SessionOptions`~~ | **Done.** Enlistment was the half that mattered and it landed: a session runs on a caller's connection, or inside a caller's transaction, committing nothing. Two of the five listed options were deliberately not built — `Tracking` belongs to #31 and `Listeners` to #32, and either would be a knob that does nothing. |
 | ~~[#34](https://github.com/JasperFx/fisher/issues/34) `QueueSqlCommand`~~ | **Done**, with `IAdvancedSql` alongside it. The port was the small half; the work was `SqliteParameterValue`, which has no sibling to port from — raw SQL is the one path with no conversion between the caller's value and what Fisher stored, and Guid, timestamp and decimal each bind to something that matches nothing. |
 | ~~[#45](https://github.com/JasperFx/fisher/issues/45) `IDocumentStore`~~ | **Done.** Eight public members, extracted and pinned by reflection in both directions. [#46](https://github.com/JasperFx/fisher/issues/46) and [#49](https://github.com/JasperFx/fisher/issues/49) are unblocked. |
 

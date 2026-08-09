@@ -47,7 +47,7 @@ where T-SQL needs the expanded OR-of-ANDs form the planner cannot index.
 
 | Feature | Issue |
 |---|---|
-| `QuerySession()` on the store (it exists on `ISessionFactory` but not on `DocumentStore`), and `SessionOptions` (tenant, isolation, timeout, listeners, **connection/transaction enlistment**) | [#30](https://github.com/JasperFx/fisher/issues/30) |
+| ~~`QuerySession()` on the store, and `SessionOptions` (tenant, isolation, timeout, **connection/transaction enlistment**)~~ | [#30](https://github.com/JasperFx/fisher/issues/30) **done** — the listeners half stays with #32 |
 | `IdentitySession()`, `DocumentTracking`, dirty tracking, `Eject` / `EjectAllOfType` / `EjectAllPendingChanges` | [#31](https://github.com/JasperFx/fisher/issues/31) |
 | `IDocumentSessionListener` and `IChangeSet` | [#32](https://github.com/JasperFx/fisher/issues/32) |
 | `ForTenant(...)` / `ITenantOperations` — writing for several tenants in one unit of work | [#33](https://github.com/JasperFx/fisher/issues/33) |
@@ -57,12 +57,15 @@ where T-SQL needs the expanded OR-of-ANDs form the planner cannot index.
 `SessionOptions`' enlistment half and `ITransactionParticipant` are the two answers to the same
 problem from opposite ownership directions, and it is a **sharper problem here than on either
 sibling**: one writer per file means an application that writes its own tables and Fisher's in the
-same file cannot do both atomically, and contends with itself trying.
-[#34](https://github.com/JasperFx/fisher/issues/34) is the third and cheapest answer, and it is
-**done** — `QueueSqlCommand` enrols the application's own statements in Fisher's transaction, so the
-common case needs neither of the other two. Building it turned up the piece with no sibling to port:
-raw SQL is the only path where a caller's value reaches a parameter unconverted, and a Guid, a
-timestamp and a decimal each bind to something Fisher never wrote.
+same file cannot do both atomically, and contends with itself trying. **Two of the three answers are
+now built.** [#34](https://github.com/JasperFx/fisher/issues/34) is the cheapest —
+`QueueSqlCommand` enrols the application's own statements in Fisher's transaction, so the common case
+needs nothing else. Building it turned up the piece with no sibling to port: raw SQL is the only path
+where a caller's value reaches a parameter unconverted, and a Guid, a timestamp and a decimal each
+bind to something Fisher never wrote. [#30](https://github.com/JasperFx/fisher/issues/30) is the other
+direction — `SessionOptions.ForTransaction(tx)` puts Fisher's writes inside a transaction the caller
+owns and commits. `ITransactionParticipant` ([#50](https://github.com/JasperFx/fisher/issues/50)) is
+the remaining one, and it is now the EF Core interop story rather than an atomicity gap.
 
 ## Document storage
 

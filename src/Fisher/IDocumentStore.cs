@@ -54,6 +54,15 @@ public interface IDocumentStore : IDisposable, IAsyncDisposable
     /// <inheritdoc cref="DocumentStore.LightweightSession" />
     IDocumentSession LightweightSession(string? tenantId = null);
 
+    /// <inheritdoc cref="DocumentStore.OpenSession" />
+    IDocumentSession OpenSession(SessionOptions options);
+
+    /// <inheritdoc cref="DocumentStore.QuerySession(string)" />
+    IQuerySession QuerySession(string? tenantId = null);
+
+    /// <inheritdoc cref="DocumentStore.QuerySession(string)" />
+    IQuerySession QuerySession(SessionOptions options);
+
     /// <inheritdoc cref="DocumentStore.ApplyAllConfiguredChangesToDatabaseAsync" />
     Task ApplyAllConfiguredChangesToDatabaseAsync(CancellationToken token = default);
 

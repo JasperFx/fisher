@@ -91,6 +91,42 @@ public partial class DocumentStore : IDocumentStore
         => new FisherSession(Options, Database, tenantId ?? StorageConstants.DefaultTenantId);
 
     /// <summary>
+    ///     Open a session configured by <see cref="SessionOptions" /> — a tenant, a timeout, or a
+    ///     connection or transaction of your own to run inside.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>There is no <c>LightweightSession(SessionOptions)</c> and no <c>OpenSessionAsync</c>,
+    ///         where Polecat has both.</b> Fisher opens one kind of session, so the first would be a
+    ///         second name for this method; and a session opens its connection lazily on first use, so
+    ///         the second would be an asynchronous method with nothing to await. Polecat needs the async
+    ///         form because its session may open a connection eagerly.
+    ///     </para>
+    /// </remarks>
+    public IDocumentSession OpenSession(SessionOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        return new FisherSession(Options, Database, options);
+    }
+
+    /// <summary>
+    ///     Open a read-only session.
+    /// </summary>
+    /// <remarks>
+    ///     <b>The narrowing is a convention, not a guarantee.</b> Fisher has no query-only session
+    ///     type — <see cref="IQuerySession" /> is the read half of <see cref="IDocumentSession" /> —
+    ///     so this is the same session as <see cref="LightweightSession" />, and casting it back to
+    ///     <see cref="IDocumentSession" /> yields a working write handle. That is deliberate: a second
+    ///     session type would cost a connection per scope to express a distinction the store does not
+    ///     make. Use it to say what a piece of code intends, not to stop it doing otherwise.
+    /// </remarks>
+    public IQuerySession QuerySession(string? tenantId = null) => LightweightSession(tenantId);
+
+    /// <inheritdoc cref="QuerySession(string)" />
+    public IQuerySession QuerySession(SessionOptions options) => OpenSession(options);
+
+    /// <summary>
     ///     Apply every configured schema change to the database.
     /// </summary>
     /// <remarks>

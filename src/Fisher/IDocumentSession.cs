@@ -6,6 +6,14 @@ namespace Fisher;
 /// <summary>
 ///     A read-only Fisher session.
 /// </summary>
+/// <remarks>
+///     <b>Read-only here is a convention rather than a guarantee.</b> Fisher has no query-only session
+///     type — this is the read half of <see cref="IDocumentSession" />, and every session the store
+///     hands out implements both — so an injected <see cref="IQuerySession" /> can be cast back to a
+///     working write handle. A separate type would cost a connection per scope to express a
+///     distinction the store does not make. Declare this where a piece of code only reads, to say so;
+///     do not rely on it to stop code that means otherwise.
+/// </remarks>
 public interface IQuerySession : IAsyncDisposable, IDisposable
 {
     /// <summary>

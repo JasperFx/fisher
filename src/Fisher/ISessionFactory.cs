@@ -30,10 +30,9 @@ internal sealed class DefaultSessionFactory : ISessionFactory
     public IDocumentSession OpenSession() => _store.LightweightSession();
 
     /// <remarks>
-    ///     The same lightweight session, narrowed to the read interface. Fisher has no query-only
-    ///     session type — <see cref="IQuerySession" /> is the read half of
-    ///     <see cref="IDocumentSession" /> — so handing back a second session type would cost a
-    ///     connection per scope to express a distinction the store does not make.
+    ///     Through the store's own <see cref="IDocumentStore.QuerySession(string)" />, so the decision
+    ///     about what read-only means lives in one place rather than being made once here for the
+    ///     container and again there for everybody else.
     /// </remarks>
-    public IQuerySession QuerySession() => _store.LightweightSession();
+    public IQuerySession QuerySession() => _store.QuerySession();
 }
