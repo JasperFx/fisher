@@ -3,8 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **fourteen open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
-**All 28 compliance suites green.** 968 tests green on net9.0
+Status: **thirteen open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
+**All 28 compliance suites green.** 980 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
 Twenty-eight of those twenty-nine came out of a file-by-file comparison against Polecat on 2026-08-08,
@@ -161,6 +161,7 @@ if something is deferred, it is in the list above.
 | LINQ grouping (fisher#24) | `GroupBy`, a `Select` over the group, `HAVING` from a `Where` after it, and ordering by an aggregate; the expected lax-GROUP-BY hazard is unreachable through the API |
 | LINQ joins (fisher#25) | `Join` and `GroupJoin(...).SelectMany(...)` on the ordinary `Statement`, so counting, paging and `ToSql` serve a join for free; aliases threaded through `MemberFactory` rather than rewritten into rendered SQL. One follow-up still open: [#55](https://github.com/JasperFx/fisher/issues/55), more than one join |
 | Join aggregates (fisher#54) | the scalar aggregates and `Last` over a join, from the chain's source type rather than its element type — which also fixed a real defect, an aggregate after a `Select` throwing about identity members instead of refusing by name |
+| Natural keys (fisher#40) | `fi_natural_key_<alias>`, written inside the append's transaction and resolved through a join to `fi_streams` — which is also why there is no `is_archived` column to keep in sync, and so no rebuild path. Closes the last partial member on `IEventStoreOperations` |
 | Document metadata (fisher#29) | five opt-in columns — `created_at`, `correlation_id`, `causation_id`, `last_modified_by`, `headers` — plus `tenant_id` read back onto a member, and `MetadataForAsync`. Every binder was already in Weasel.Storage, so it was wiring; and `created_at` needed no exception to the `excluded.*` rule after all, because a read-only binder never enters the write list |
 | Sessions and enlistment (fisher#30) | `QuerySession()` and `OpenSession(SessionOptions)` on the store, and a session running inside a connection or transaction the caller owns — the other half of the atomicity problem `QueueSqlCommand` answers from one side |
 

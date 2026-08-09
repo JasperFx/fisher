@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**968 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
+**980 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
 cross-store compliance tests — which as of 2.45.0 is every event sourcing suite the shared library has.
 
 ## Closed since the comparison
@@ -24,7 +24,41 @@ query plans, `CheckExistsAsync`, `ToSql` (#37) · JSON-returning reads (#28) · 
 patching (#35) · bulk insert (#36) · composite projections (#19) · event body queries (#41) ·
 sessions, `SessionOptions` and enlistment (#30) · **LINQ joins (#25)** · aggregates and `Last` over a
 join (#54) · `IgnoreDuplicates` (#53) · patch `Insert` at an index (#52) · **document metadata and
-`MetadataForAsync` (#29)**.
+`MetadataForAsync` (#29)** · **natural keys (#40)**.
+
+## Natural keys — and the end of the last partial member
+
+**#40 closes the one place `IEventStoreOperations` was still described as partial.** `FetchForWriting<T,
+TId>` and `FetchLatest<T, TId>` are the natural-key and strong-typed-id entry point in both siblings;
+fisher#14 closed the second half and this closes the first, so the qualifier comes out of CLAUDE.md.
+
+As with the daemon, **the definition and the discovery are JasperFx's** — `NaturalKeyDefinition`,
+`[NaturalKey]`, `[NaturalKeySource]` and `JasperFxAggregationProjectionBase` all ship in 2.45.0 — and
+Fisher supplies the storage seam. Four divergences from Polecat, each verified:
+
+- **No `is_archived` column on the lookup table.** Polecat copies the flag from `pc_streams` and keeps
+  it in sync from a projection watching for the `Archived` event, which is then why it needs a second
+  rebuild-time entry point: a daemon rebuild replays events without appending streams, so the table
+  would be left empty after teardown. Fisher archives with a direct operation rather than an event, and
+  the lookup joins `fi_streams` anyway — reading the flag off the join makes the streams table the only
+  place that knows, and removes the sync step, the projection and the rebuild path together.
+- **The rows are written from the session rather than from an inline projection**, next to
+  `EventTagWriter` and inside the append's transaction. A key registered outside it leaves either a
+  stream no key resolves to or a key naming a stream that does not exist.
+- **A second stream claiming an existing key is refused.** Polecat's `MERGE` repoints, so the newcomer
+  silently takes the key and the original becomes unreachable by the identifier it was created with.
+  The conflict clause is guarded and the statement returns the row it settled on; "no row" is the
+  failure, which is exactly how the optimistic document upsert reads its version guard.
+- **No foreign key to `fi_streams`, uniformly** — Polecat has one for single-tenant stores and drops it
+  under conjoined tenancy, so its two tenancy styles differ there.
+
+The Guid trap showed up for the third time and behaved identically: binding the uppercase form makes
+every lookup return nothing. Documents, tag rows, and now this.
+
+One thing worth knowing that no test would have told you: **the lookup rows have to be cleared by
+`DeleteAllEventDataAsync`.** Left behind, the duplicate guard fires on data that no longer exists — and
+since the compliance fixture cleans before every test, that presents as an unexplained failure two
+tests later rather than where the cause is.
 
 ## Document metadata — the wiring that was already there
 
@@ -1106,8 +1140,8 @@ Each of these is a decision with a reason, not an oversight:
   discovers them and `FisherProjectionOptions` derives from it, but nobody has tried it. Also the
   likeliest place to find whatever fisher#13 did not cover, because a composite is more of exactly the
   concurrent-queueing shape that bug lived in.
-- **No natural keys** ([#40](https://github.com/JasperFx/fisher/issues/40)) — the last stated partial
-  on `IEventStoreOperations`. Bulk insert used to be on this line and is done (#36, #53).
+- **Nothing on `IEventStoreOperations` is partial any more.** Natural keys were the last of it (#40);
+  bulk insert and strong-typed ids came off this line earlier (#36, #53, #14).
 - **`dotnet_type` is the one metadata column with nowhere to go.** Every other one is projectable onto
   a document member (fisher#11, widened by fisher#29); Weasel's `DocumentDotNetTypeBinder` takes no
   member where every other binder does, so `DocumentMetadata` omits it rather than offering a mapping

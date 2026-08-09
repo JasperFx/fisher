@@ -83,6 +83,13 @@ internal sealed class FisherDocumentCleaner : IDocumentCleaner
 
         var ordered = new List<string>();
         ordered.AddRange(events.TagTypes.Select(events.TagTableName));
+
+        // The natural key lookups (fisher#40). They carry no foreign key, so their position is free —
+        // but leaving them behind is not: a cleaned store would still refuse the next stream to claim
+        // a key it had already seen, which is the duplicate guard firing on data that is gone.
+        ordered.AddRange(_store.Options.Projections.NaturalKeys
+            .Select(x => events.QuotedNaturalKeyTableName(x.AggregateType)));
+
         ordered.Add(events.EventsTableName);
         ordered.Add(events.StreamsTableName);
         ordered.Add(events.ProgressionTableName);

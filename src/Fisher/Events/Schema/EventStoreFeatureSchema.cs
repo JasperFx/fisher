@@ -11,11 +11,14 @@ namespace Fisher.Events.Schema;
 internal class EventStoreFeatureSchema : FeatureSchemaBase
 {
     private readonly EventGraph _events;
+    private readonly IReadOnlyList<JasperFx.Events.NaturalKeyDefinition> _naturalKeys;
 
-    public EventStoreFeatureSchema(EventGraph events)
+    public EventStoreFeatureSchema(EventGraph events,
+        IReadOnlyList<JasperFx.Events.NaturalKeyDefinition> naturalKeys)
         : base("EventStore", new SqliteMigrator())
     {
         _events = events;
+        _naturalKeys = naturalKeys;
     }
 
     public override Type StorageType => typeof(EventStoreFeatureSchema);
@@ -37,6 +40,13 @@ internal class EventStoreFeatureSchema : FeatureSchemaBase
         foreach (var tagTable in _events.BuildTagTables())
         {
             yield return tagTable;
+        }
+
+        // The natural key lookups (fisher#40). No foreign key to fi_streams, so their position here is
+        // presentational rather than an ordering constraint — see NaturalKeyTable for why not.
+        foreach (var naturalKeyTable in _events.BuildNaturalKeyTables(_naturalKeys))
+        {
+            yield return naturalKeyTable;
         }
     }
 }

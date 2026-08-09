@@ -1596,7 +1596,57 @@ next `Store` would skip its migration and write to nothing.
 - Tenancy beyond the conjoined style. One database sliced by a tenant id column works and is pinned by
   `ConjoinedEventTenancyCompliance`; database-per-tenant is not there, which is why every
   `IEventDatabase` parameter in `DocumentStore.Daemon.cs` is ignored.
-- Natural keys and bulk insert.
+
+### Natural keys
+
+`fi_natural_key_<alias>` and `Events/Storage/NaturalKey*.cs` (fisher#40) — addressing a stream by the
+business identifier it was created with. **The definition, the attributes and the discovery are all
+JasperFx's** (`NaturalKeyDefinition`, `[NaturalKey]`, `[NaturalKeySource]`,
+`JasperFxAggregationProjectionBase`), so what Fisher supplies is the storage seam, the same division as
+the async daemon. Ported in shape from Polecat's `Events/Schema` + `Events/Projections` + `Events/Fetching`
+set, with four things different and each of them a decision:
+
+- **No `is_archived` column on the lookup table.** Polecat copies the flag from `pc_streams` and keeps
+  it in sync from a projection watching for the `Archived` event — which then needs a second,
+  rebuild-time entry point, because a daemon rebuild replays events without appending streams and
+  would otherwise leave the table empty after teardown. Fisher archives with a direct operation rather
+  than an event, so there is nothing to watch; and the lookup joins `fi_streams` anyway, so reading the
+  flag off the join makes the streams table the only place that knows. Removing the filter makes
+  `an_archived_stream_no_longer_resolves` fail.
+- **The rows are written from the session, not from an inline projection.** A natural key row is an
+  index over streams, not a projection of them. Being a projection is exactly what forces Polecat's
+  rebuild path; nothing here is reachable from a rebuild, so there is nothing to repopulate.
+  `NaturalKeyWriter` runs beside `EventTagWriter`, inside the append's transaction, because a key
+  registered outside it leaves either a stream no key resolves to or a key naming a stream that does
+  not exist.
+- **A second stream claiming a key is refused, where Polecat repoints.** Polecat's `MERGE` updates the
+  stream id on conflict, so the newcomer silently takes the key and the original stream becomes
+  unreachable by the identifier it was created with. Fisher's conflict clause carries
+  `where stream_id = excluded.stream_id` and returns the row it settled on — same stream returns it, a
+  new key returns it, a conflicting stream matches nothing — and "no row" becomes
+  `DuplicateNaturalKeyException`. That is the same shape the optimistic document upsert reads its
+  version guard with. Re-asserting the *same* mapping stays idempotent, which it has to be: every
+  event carrying the key rewrites the row.
+- **No foreign key to `fi_streams`, uniformly.** Polecat declares one for a single-tenant store and
+  omits it under conjoined tenancy, where Weasel.SqlServer's alphabetical column sorting breaks the
+  composite mapping — so its two tenancy styles behave differently. One rule beats referential
+  integrity in half the configurations, and a row whose stream is gone resolves to nothing anyway
+  because the join is what produces an answer.
+
+Two more things:
+
+- **Resolving outside the write transaction is safe, and it is the same argument the optimistic append
+  rests on.** The version guard runs inside the write transaction regardless, so a stale resolution
+  fails the commit rather than writing a wrong version. A lock would only buy the loser waiting instead
+  of failing — the trade Fisher already makes everywhere.
+- **A Guid stream id binds as lowercase canonical text.** Third table where getting that wrong is
+  silent, after documents and tag rows, and the failure mode is identical: every lookup returns
+  nothing. Verified by binding the uppercase form, which makes the round-trip test throw
+  `UnknownNaturalKeyException`.
+
+`DeleteAllEventDataAsync` clears the lookup tables with the rest. Leaving them behind is not cosmetic:
+the duplicate guard would then fire on data that no longer exists, and the compliance fixture cleans
+before every test.
 
 ### The `IEventStoreOperations` surface
 
@@ -1613,9 +1663,12 @@ state.
 `EventOperations.Unsupported.cs`, one file on purpose so that file shrinking was the progress
 measure; it reached zero members and was deleted. Reintroduce it, rather than scattering throws, if a
 future JasperFx release widens the interface past what Fisher implements.
-`FetchForWriting<T, TId>` and `FetchLatest<T, TId>` are partial:
-they accept an id that is already the stream identity type and throw for anything else, because in the
-siblings that overload is the natural-key and strong-typed-id entry point.
+**`FetchForWriting<T, TId>` and `FetchLatest<T, TId>` are whole now too**, which they were not for a
+long time: in the siblings that overload is the natural-key and strong-typed-id entry point, fisher#14
+closed the second half and fisher#40 the first. **The stream identity type wins where the two
+coincide** — a string id on a string-identity store is read as the stream key — because which reading
+applies must not depend on whichever aggregate types happen to declare a key.
+`FetchForWritingByNaturalKey` / `FetchLatestByNaturalKey` are the unambiguous spellings.
 
 One Fisher-specific hazard in this area: pending streams are tracked in a **dictionary keyed by
 identity**, where Polecat uses a list. `FetchForWriting` must therefore reuse an already-tracked

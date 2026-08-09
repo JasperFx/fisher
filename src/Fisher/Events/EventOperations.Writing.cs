@@ -138,20 +138,102 @@ public partial class EventOperations
         => FetchForWriting<T>(key, cancellation);
 
     /// <summary>
-    ///     Fetch for writing by an identity whose type is not fixed by the signature.
+    ///     Fetch for writing by an identity whose type is not fixed by the signature — a stream
+    ///     identity, or a natural key.
     /// </summary>
     /// <remarks>
-    ///     In Marten and Polecat this overload is the natural-key and strong-typed-id entry point.
-    ///     Fisher has neither, so it accepts only an id that is already the stream identity type.
+    ///     <para>
+    ///         In Marten and Polecat this overload is the natural-key and strong-typed-id entry point,
+    ///         and it is both here too now: fisher#14 closed the strong-typed half and fisher#40 the
+    ///         natural-key one, so nothing on <c>IEventStoreOperations</c> is partial any more.
+    ///     </para>
+    ///     <para>
+    ///         <b>The stream identity type wins when the two coincide.</b> A string natural key on a
+    ///         store with string stream identity is ambiguous by construction, and reading it as the
+    ///         stream key is the interpretation that does not depend on which aggregate types happen to
+    ///         declare a key. <c>FetchForWritingByNaturalKey</c> is the unambiguous spelling.
+    ///     </para>
     /// </remarks>
     public Task<IEventStream<T>> FetchForWriting<T, TId>(TId id, CancellationToken cancellation = default)
         where T : class where TId : notnull
         => id switch
         {
+            Guid guid when Graph.StreamIdentity == StreamIdentity.AsGuid
+                => FetchForWriting<T>(guid, cancellation),
+            string key when Graph.StreamIdentity == StreamIdentity.AsString
+                => FetchForWriting<T>(key, cancellation),
+            _ when NaturalKeyFor<T>() is not null => FetchForWritingByNaturalKey<T, TId>(id, cancellation),
             Guid guid => FetchForWriting<T>(guid, cancellation),
             string key => FetchForWriting<T>(key, cancellation),
             _ => throw new NotImplementedException(UnsupportedIdentityMessage(typeof(TId)))
         };
+
+    /// <summary>
+    ///     Fetch a stream for writing by the aggregate's natural key — the business identifier it was
+    ///     created with, rather than its stream id (fisher#40).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The key is resolved through <c>fi_natural_key_&lt;alias&gt;</c> and the fetch then goes
+    ///         through the ordinary <c>FetchForWriting</c> flow, so the optimistic version guard, the
+    ///         aggregation and the tracked <c>StreamAction</c> are all the same ones. Two statements
+    ///         rather than Polecat's one, because its single round trip exists to take a row lock in
+    ///         the same breath and Fisher has no row lock to take.
+    ///     </para>
+    ///     <para>
+    ///         A key naming no live stream throws <see cref="Exceptions.UnknownNaturalKeyException" />
+    ///         rather than handing back an empty stream to append to. The mapping row is written by the
+    ///         <c>StartStream</c> that created the stream, so "no such key" means the stream was never
+    ///         started — appending to a stream id invented here would create one the key does not name.
+    ///     </para>
+    /// </remarks>
+    public async Task<IEventStream<T>> FetchForWritingByNaturalKey<T, TId>(TId key,
+        CancellationToken cancellation = default) where T : class where TId : notnull
+    {
+        var streamId = await ResolveNaturalKeyAsync<T, TId>(key, cancellation).ConfigureAwait(false);
+
+        return streamId switch
+        {
+            Guid guid => await FetchForWriting<T>(guid, cancellation).ConfigureAwait(false),
+            _ => await FetchForWriting<T>((string)streamId, cancellation).ConfigureAwait(false)
+        };
+    }
+
+    /// <inheritdoc cref="FetchForWritingByNaturalKey{T,TId}" />
+    public async ValueTask<T?> FetchLatestByNaturalKey<T, TId>(TId key,
+        CancellationToken cancellation = default) where T : class where TId : notnull
+    {
+        var streamId = await ResolveNaturalKeyAsync<T, TId>(key, cancellation).ConfigureAwait(false);
+
+        return streamId switch
+        {
+            Guid guid => await FetchLatest<T>(guid, cancellation).ConfigureAwait(false),
+            _ => await FetchLatest<T>((string)streamId, cancellation).ConfigureAwait(false)
+        };
+    }
+
+    private NaturalKeyDefinition? NaturalKeyFor<T>()
+        => Graph.Options.Projections.NaturalKeyFor(typeof(T));
+
+    private async Task<object> ResolveNaturalKeyAsync<T, TId>(TId key, CancellationToken cancellation)
+        where T : class where TId : notnull
+    {
+        var definition = NaturalKeyFor<T>()
+                         ?? throw new InvalidOperationException(
+                             $"'{typeof(T).Name}' declares no natural key. Mark the aggregate's "
+                             + "identifying member with [NaturalKey] and register the projection, or "
+                             + "fetch by stream id.");
+
+        var unwrapped = definition.Unwrap(key)
+                        ?? throw new ArgumentNullException(nameof(key), "A natural key cannot be null.");
+
+        var connection = await _session.ConnectionAsync(cancellation).ConfigureAwait(false);
+
+        return await new Storage.NaturalKeyLookup(Graph)
+                   .ResolveAsync(definition, unwrapped, _session.TenantId, connection, cancellation)
+                   .ConfigureAwait(false)
+               ?? throw new Exceptions.UnknownNaturalKeyException(typeof(T), unwrapped);
+    }
 
     /// <inheritdoc cref="FetchForWriting{T,TId}(TId,CancellationToken)" />
     public Task<IEventStream<T>> FetchForExclusiveWriting<T, TId>(TId id, CancellationToken cancellation = default)
@@ -267,10 +349,14 @@ public partial class EventOperations
         => await AggregateStreamAsync<T>(id, token: cancellation).ConfigureAwait(false);
 
     /// <inheritdoc cref="FetchForWriting{T,TId}(TId,CancellationToken)" />
+    /// <inheritdoc cref="FetchForWriting{T,TId}(TId,CancellationToken)" />
     public ValueTask<T?> FetchLatest<T, TId>(TId id, CancellationToken cancellation = default)
         where T : class where TId : notnull
         => id switch
         {
+            Guid guid when Graph.StreamIdentity == StreamIdentity.AsGuid => FetchLatest<T>(guid, cancellation),
+            string key when Graph.StreamIdentity == StreamIdentity.AsString => FetchLatest<T>(key, cancellation),
+            _ when NaturalKeyFor<T>() is not null => FetchLatestByNaturalKey<T, TId>(id, cancellation),
             Guid guid => FetchLatest<T>(guid, cancellation),
             string key => FetchLatest<T>(key, cancellation),
             _ => throw new NotImplementedException(UnsupportedIdentityMessage(typeof(TId)))

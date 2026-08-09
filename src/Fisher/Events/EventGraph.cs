@@ -107,6 +107,23 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
         => FisherTableNaming.QuotedTableName(DatabaseSchemaName, EventTagTable.SuffixFor(registration));
 
     /// <summary>
+    ///     The <c>fi_natural_key_&lt;alias&gt;</c> object name for one aggregate type (fisher#40).
+    /// </summary>
+    internal Weasel.Sqlite.SqliteObjectName NaturalKeyTableName(Type aggregateType)
+        => FisherTableNaming.ObjectFor(DatabaseSchemaName, NaturalKeySuffixFor(aggregateType));
+
+    /// <inheritdoc cref="NaturalKeyTableName" />
+    internal string QuotedNaturalKeyTableName(Type aggregateType)
+        => FisherTableNaming.QuotedTableName(DatabaseSchemaName, NaturalKeySuffixFor(aggregateType));
+
+    private static string NaturalKeySuffixFor(Type aggregateType)
+        => $"natural_key_{ToEventTypeName(aggregateType.Name)}";
+
+    internal IEnumerable<NaturalKeyTable> BuildNaturalKeyTables(
+        IEnumerable<NaturalKeyDefinition> definitions)
+        => definitions.Select(definition => new NaturalKeyTable(this, definition));
+
+    /// <summary>
     ///     The shared closed-shape <c>Weasel.Storage.EventStorage&lt;TId&gt;</c> for this event graph,
     ///     built once from <see cref="Storage.SqliteEventStoreDialect" /> and cached. Boxed as
     ///     <see cref="object" /> because <c>TId</c> is fixed by <see cref="StreamIdentity" />; callers

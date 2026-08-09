@@ -54,7 +54,7 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
 
     public override IFeatureSchema[] BuildFeatureSchemas()
     {
-        var schemas = new List<IFeatureSchema> { new EventStoreFeatureSchema(_events) };
+        var schemas = new List<IFeatureSchema> { new EventStoreFeatureSchema(_events, _options.Projections.NaturalKeys) };
 
         var mappings = _options.Schema.AllMappings();
 

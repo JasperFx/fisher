@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Fisher.Events;
 using JasperFx.Core.Reflection;
+using JasperFx.Events.Aggregation;
 using JasperFx.Events.Projections;
 using JasperFx.Events.Subscriptions;
 
@@ -182,6 +183,27 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     public void Subscribe<T>(Action<ISubscriptionOptions>? configure = null)
         where T : Subscriptions.ISubscription, new()
         => Subscribe(new T(), configure);
+
+    /// <summary>
+    ///     Every natural key declared by a registered aggregate projection (fisher#40).
+    /// </summary>
+    /// <remarks>
+    ///     The definitions themselves are JasperFx's — <c>[NaturalKey]</c> on the aggregate and
+    ///     <c>[NaturalKeySource]</c> or <c>NaturalKeyFor(...)</c> for the extractors, all discovered by
+    ///     <c>JasperFxAggregationProjectionBase</c>. What a store supplies is the storage seam, the same
+    ///     division as the async daemon. Fisher reaches them through the registered projections rather
+    ///     than through a registry of its own, because that is where the discovery already put them.
+    /// </remarks>
+    internal IReadOnlyList<JasperFx.Events.NaturalKeyDefinition> NaturalKeys
+        => All.OfType<IAggregateProjection>()
+            .Select(x => x.NaturalKeyDefinition)
+            .Where(x => x is not null)
+            .Select(x => x!)
+            .ToList();
+
+    /// <inheritdoc cref="NaturalKeys" />
+    internal JasperFx.Events.NaturalKeyDefinition? NaturalKeyFor(Type aggregateType)
+        => NaturalKeys.FirstOrDefault(x => x.AggregateType == aggregateType);
 
     private IInlineProjection<IDocumentSession>[]? _inlineProjections;
 
