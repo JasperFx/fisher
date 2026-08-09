@@ -1,4 +1,5 @@
 using Fisher.Linq;
+using Fisher.Linq.SoftDeletes;
 using JasperFx;
 
 namespace Fisher.Tests.Documents;
@@ -25,6 +26,7 @@ public class bulk_inserting : IAsyncLifetime
             o.AutoCreateSchemaObjects = AutoCreate.All;
             o.Schema.For<Angler>();
             o.Schema.For<Numbered>();
+            o.Schema.For<Perishable>().SoftDeleted();
         });
         await _store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
     }
@@ -134,6 +136,108 @@ public class bulk_inserting : IAsyncLifetime
         ids.ShouldAllBe(x => x > 0);
     }
 
+    // ---- IgnoreDuplicates (fisher#53) ----
+
+    /// <summary>
+    ///     The property that distinguishes this mode from <c>OverwriteExisting</c>: what was already
+    ///     there is <em>unchanged</em>, not rewritten with the incoming version.
+    /// </summary>
+    [Fact]
+    public async Task ignore_duplicates_inserts_the_new_and_leaves_the_stored_alone()
+    {
+        var stored = Anglers(3);
+        await _store.Advanced.BulkInsertAsync(stored, token: Token);
+
+        foreach (var angler in stored)
+        {
+            angler.Name = "renamed";
+        }
+
+        var feed = stored.Concat(Anglers(2)).ToList();
+
+        await _store.Advanced.BulkInsertAsync(feed, BulkInsertMode.IgnoreDuplicates, token: Token);
+
+        await using var session = _store.LightweightSession();
+        var names = (await session.Query<Angler>().ToListAsync(Token)).Select(x => x.Name).ToList();
+
+        names.Count.ShouldBe(5);
+        names.Count(x => x == "renamed").ShouldBe(0);
+        names.Count(x => x.StartsWith("angler-")).ShouldBe(5);
+    }
+
+    [Fact]
+    public async Task ignore_duplicates_over_a_batch_that_is_entirely_new_or_entirely_existing()
+    {
+        var anglers = Anglers(4);
+
+        await _store.Advanced.BulkInsertAsync(anglers, BulkInsertMode.IgnoreDuplicates, token: Token);
+        await _store.Advanced.BulkInsertAsync(anglers, BulkInsertMode.IgnoreDuplicates, token: Token);
+
+        await using var session = _store.LightweightSession();
+        (await session.Query<Angler>().CountAsync(Token)).ShouldBe(4);
+    }
+
+    [Fact]
+    public async Task ignore_duplicates_spans_batches()
+    {
+        var anglers = Anglers(20);
+        await _store.Advanced.BulkInsertAsync(anglers.Take(8).ToList(), token: Token);
+
+        await _store.Advanced.BulkInsertAsync(anglers, BulkInsertMode.IgnoreDuplicates, batchSize: 3,
+            token: Token);
+
+        await using var session = _store.LightweightSession();
+        (await session.Query<Angler>().CountAsync(Token)).ShouldBe(20);
+    }
+
+    /// <summary>
+    ///     An integer identity is where the comparison has to normalise: the reader hands an INTEGER
+    ///     column back as <c>long</c> while the identity is an <c>int</c>, and boxed those never compare
+    ///     equal — so every document would look new and the second pass would fail on the primary key
+    ///     rather than skipping.
+    /// </summary>
+    [Fact]
+    public async Task ignore_duplicates_over_an_integer_identity()
+    {
+        var numbered = Enumerable.Range(1, 5).Select(_ => new Numbered()).ToList();
+        await _store.Advanced.BulkInsertAsync(numbered, token: Token);
+
+        numbered.ShouldAllBe(x => x.Id > 0);
+
+        await _store.Advanced.BulkInsertAsync(numbered, BulkInsertMode.IgnoreDuplicates, token: Token);
+
+        await using var session = _store.LightweightSession();
+        (await session.Query<Numbered>().CountAsync(Token)).ShouldBe(5);
+    }
+
+    /// <summary>
+    ///     A soft-deleted row still holds its primary key, so it is a duplicate even though no ordinary
+    ///     load can see it. Probing through a filtered read would call it new and then collide.
+    /// </summary>
+    [Fact]
+    public async Task a_soft_deleted_row_is_still_a_duplicate()
+    {
+        var perishable = new Perishable { Id = Guid.NewGuid(), Name = "milk" };
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Store(perishable);
+            await session.SaveChangesAsync(Token);
+
+            session.Delete(perishable);
+            await session.SaveChangesAsync(Token);
+        }
+
+        await Should.NotThrowAsync(() => _store.Advanced.BulkInsertAsync(
+            new List<Perishable> { perishable }, BulkInsertMode.IgnoreDuplicates, token: Token));
+
+        await using var check = _store.LightweightSession();
+
+        // Still exactly one row, and still deleted — the insert was skipped rather than reviving it.
+        (await check.Query<Perishable>().MaybeDeleted().CountAsync(Token)).ShouldBe(1);
+        (await check.Query<Perishable>().CountAsync(Token)).ShouldBe(0);
+    }
+
     public class Angler
     {
         public Guid Id { get; set; }
@@ -144,5 +248,11 @@ public class bulk_inserting : IAsyncLifetime
     public class Numbered
     {
         public int Id { get; set; }
+    }
+
+    public class Perishable
+    {
+        public Guid Id { get; set; }
+        public string Name { get; set; } = "";
     }
 }

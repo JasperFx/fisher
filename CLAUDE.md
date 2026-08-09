@@ -1735,12 +1735,27 @@ unnoticed.
   duration. The trade is that **bulk insert is not atomic across batches** — a failure part way leaves
   earlier batches committed, which `a_failure_part_way_leaves_earlier_batches_committed` pins so it
   reads as a decision rather than being discovered.
-- **`BulkInsertMode` has two values where Polecat has three.** `IgnoreDuplicates` needs
-  `insert or ignore`, which is a fifth statement in the descriptor and an operation to consume it —
-  Weasel's shared closed-shape operations bind to `descriptor.InsertSql` by name. Shipping an enum
-  value that throws would be worse than not shipping the value; see
-  [fisher#53](https://github.com/JasperFx/fisher/issues/53), which also records the filter-first
-  implementation that needs no upstream change.
+- **`IgnoreDuplicates` filters, where both siblings use a statement** (fisher#53). Marten has
+  `on conflict do nothing` and Polecat a temp table and a `MERGE`; Fisher's four write statements are
+  consumed by Weasel's shared closed-shape operations *by name*, so a fifth would need a slot on
+  Weasel's own `DocumentStorageDescriptor`. Each batch instead reads which of its ids are already
+  stored and queues only the rest. Three things in that read:
+  - **It deliberately ignores the soft-delete and hierarchy filters** an ordinary load applies. The
+    question is not "can I read this" but "would inserting this collide", and a soft-deleted row still
+    holds the primary key — which is why it is hand-built rather than routed through `LoadManyAsync`
+    or `Query<T>()`, the one place in the LINQ-adjacent code that going around them is correct. It
+    *does* scope by tenant, because a conjoined table keys on `(tenant_id, id)`. Adding the
+    soft-delete term makes `a_soft_deleted_row_is_still_a_duplicate` fail with `UNIQUE constraint
+    failed`, which was verified.
+  - **Both sides compare as invariant strings.** Microsoft.Data.Sqlite hands an INTEGER column back as
+    `long` while an `int` identity's raw value is an `int`, and boxed to `object` those never compare
+    equal — so an int-keyed type finds nothing and fails on the constraint the mode exists to avoid.
+    `ignore_duplicates_over_an_integer_identity` fails with exactly that without the normalisation.
+  - **The probe is outside the write transaction, and the window is not silent.** A concurrent writer
+    inserting one of the same ids in between makes the insert fail with its unique-constraint
+    violation rather than being skipped. Closing it would mean holding `BEGIN IMMEDIATE` across the
+    probe through an enlisted session, which forfeits the `SQLITE_BUSY` retry — a worse trade for the
+    operation most likely to contend for the write lock.
 
 ### Patching
 

@@ -3,8 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **seventeen open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
-**All 28 compliance suites green.** 943 tests green on net9.0
+Status: **sixteen open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
+**All 28 compliance suites green.** 948 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
 Twenty-eight of those twenty-nine came out of a file-by-file comparison against Polecat on 2026-08-08,
@@ -152,7 +152,7 @@ if something is deferred, it is in the list above.
 | LINQ marker operators (fisher#26) | `AnyTenant`/`TenantIsOneOf`, `IsOneOf`/`In`, `IsEmpty`, `object.Equals`, `ModifiedSince`/`Before`, `QueryForNonStaleData` |
 | Event body queries (fisher#41) | `QueryEventDataAsync<T>`; no new SQL machinery, because an event body is a JSON document in a column called `data` |
 | Composite projections (fisher#19) | ordered stages under one shard, rebuilt in one pass; close to free as predicted, and the cross-stage semantics are the aggregate cache rather than a database read |
-| Bulk insert (fisher#36) | one transaction per batch through the ordinary statements; no bulk-copy protocol needed, and none exists |
+| Bulk insert (fisher#36, fisher#53) | one transaction per batch through the ordinary statements; no bulk-copy protocol needed, and none exists. `IgnoreDuplicates` filters rather than adding a fifth statement — and its probe is the one place where going around the soft-delete and hierarchy filters is the correct answer, because a soft-deleted row still holds the primary key |
 | Patching (fisher#35) | `Patch<T>` by id or predicate; every operation one json1 function, chains nesting into one statement, and a duplicated column following it with nothing to refresh |
 | `Advanced` parity (fisher#42) | event store statistics, `CleanAsync<T>`, DDL script generation, and the projection scenario harness |
 | JSON reads (fisher#28) | `LoadJsonAsync`, `ToJsonArrayAsync`, the version variant and streaming; byte-exact, which neither sibling can promise |

@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**943 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
+**948 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
 cross-store compliance tests — which as of 2.45.0 is every event sourcing suite the shared library has.
 
 ## Closed since the comparison
@@ -99,7 +99,22 @@ Two follow-ups were filed rather than shipped half-done: `Insert`-at-an-array-in
 ([#52](https://github.com/JasperFx/fisher/issues/52), because `json_insert` is a silent no-op at an
 occupied path) and `BulkInsertMode.IgnoreDuplicates`
 ([#53](https://github.com/JasperFx/fisher/issues/53), because `insert or ignore` is a fifth statement
-in the descriptor rather than a flag). `GroupJoin` ([#25](https://github.com/JasperFx/fisher/issues/25)) was left for last in that tier for
+in the descriptor rather than a flag). **#53 is now closed** — not with the fifth statement, but by
+filtering: each batch reads which of its ids are already stored and queues only the rest. The read is
+the interesting part, because it is the one place where going *around* the implicit filters is
+correct. `LoadManyAsync` and `Query<T>()` both answer "which of these can I read" and apply the
+soft-delete and hierarchy terms to do it; the question here is "which of these would collide", and a
+soft-deleted row still holds the primary key. Adding the soft-delete term makes the batch fail with
+`UNIQUE constraint failed`, which was verified. The tenant term stays, because a conjoined table keys
+on `(tenant_id, id)`.
+
+Two more things in it, both verified by reverting them. **Ids compare as invariant strings**, because
+the reader hands an INTEGER column back as `long` while an `int` identity's raw value is an `int` and
+boxed those never compare equal — an int-keyed type would find nothing and fail on the very
+constraint the mode exists to avoid. And **the probe is outside the write transaction on purpose**:
+closing that window means holding `BEGIN IMMEDIATE` across it through an enlisted session, which
+forfeits the `SQLITE_BUSY` retry for the operation most likely to contend for the write lock. The
+window is not silent — a concurrent writer makes the insert fail loudly rather than being skipped. `GroupJoin` ([#25](https://github.com/JasperFx/fisher/issues/25)) was left for last in that tier for
 the right reason — every locator and all three implicit filters qualified for two tables — and is now
 done; see below.
 
@@ -1013,8 +1028,8 @@ Each of these is a decision with a reason, not an oversight:
   discovers them and `FisherProjectionOptions` derives from it, but nobody has tried it. Also the
   likeliest place to find whatever fisher#13 did not cover, because a composite is more of exactly the
   concurrent-queueing shape that bug lived in.
-- **No bulk insert and no natural keys.** Both additive against the current column shape, as soft
-  delete's two columns were.
+- **No natural keys** ([#40](https://github.com/JasperFx/fisher/issues/40)) — the last stated partial
+  on `IEventStoreOperations`. Bulk insert used to be on this line and is done (#36, #53).
 - **`dotnet_type` is the one metadata column with nowhere to go.** The other four are projected back
   onto document members (fisher#11); Weasel's `DocumentDotNetTypeBinder` takes no member where every
   other binder does, so `DocumentMetadata` omits it rather than offering a mapping that would

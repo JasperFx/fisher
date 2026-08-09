@@ -115,13 +115,28 @@ public class AdvancedOperations
             return;
         }
 
+        var storage = mode == BulkInsertMode.IgnoreDuplicates
+            ? _store.Database.Providers.StorageFor<T>().Lightweight
+            : null;
+
         foreach (var batch in documents.Chunk(batchSize))
         {
             await using var session = _store.LightweightSession(tenantId);
 
+            var alreadyStored = storage is null
+                ? null
+                : await AlreadyStoredAsync(storage, batch, session.TenantId, token).ConfigureAwait(false);
+
             foreach (var document in batch)
             {
-                if (mode == BulkInsertMode.InsertsOnly)
+                if (alreadyStored is not null)
+                {
+                    if (!alreadyStored.Contains(Compare(storage!.RawIdentityValue(storage.IdentityFor(document)))))
+                    {
+                        session.Insert(document);
+                    }
+                }
+                else if (mode == BulkInsertMode.InsertsOnly)
                 {
                     session.Insert(document);
                 }
@@ -134,6 +149,96 @@ public class AdvancedOperations
             await session.SaveChangesAsync(token).ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    ///     Which of a batch's ids already occupy a row — the read behind
+    ///     <see cref="BulkInsertMode.IgnoreDuplicates" />.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Hand-built rather than routed through <c>LoadManyAsync</c> or <c>Query&lt;T&gt;()</c>,
+    ///         which is the opposite of what this codebase usually does and is the point: those two
+    ///         answer "which of these can I read", and both apply the soft-delete and hierarchy filters
+    ///         to do it. The question here is "which of these would collide", and a soft-deleted row or
+    ///         a sub-class row still holds the primary key. It also reads one column instead of
+    ///         materializing every document it finds.
+    ///     </para>
+    ///     <para>
+    ///         Ids are compared as their <em>raw</em> SQL values on both sides —
+    ///         <c>RawIdentityValue</c> going in and the reader's own value coming back — so a Guid is
+    ///         the lowercase canonical text the row holds rather than the uppercase form a bare
+    ///         <see cref="Guid" /> binds as. That is the recurring trap, and here it would present as
+    ///         every document looking new and the batch failing on the constraint it exists to avoid.
+    ///     </para>
+    ///     <para>
+    ///         A document whose identity is still unassigned needs no special case, which is worth
+    ///         saying because it looks like it should. A Guid or numeric identity is assigned before the
+    ///         write, so no row can hold <c>Guid.Empty</c> or <c>0</c> for the probe to match; a string
+    ///         identity is externally assigned, so an empty one is a real key and finding it is the
+    ///         right answer. Only a null identity is dropped, and only because
+    ///         <c>RawIdentityValue</c> has nothing to convert.
+    ///     </para>
+    ///     <para>
+    ///         Both sides are compared as invariant strings, which is not decoration:
+    ///         Microsoft.Data.Sqlite hands an INTEGER column back as <see cref="long" /> while an
+    ///         <see cref="int" /> identity's raw value is an <see cref="int" />, and boxed to
+    ///         <see cref="object" /> those two never compare equal — so an int-keyed type would find
+    ///         nothing and fail on the constraint this mode exists to avoid. Within one id type the
+    ///         rendering is injective, so nothing else can collide.
+    ///     </para>
+    /// </remarks>
+    private async Task<HashSet<string>> AlreadyStoredAsync<T>(Weasel.Storage.IDocumentStorage<T> storage,
+        IReadOnlyList<T> batch, string tenantId, CancellationToken token) where T : notnull
+    {
+        var probe = batch
+            .Select(x => storage.IdentityFor(x))
+            .Where(x => x is not null)
+            .Select(storage.RawIdentityValue)
+            .Distinct()
+            .ToArray();
+
+        var found = new HashSet<string>();
+
+        if (probe.Length == 0)
+        {
+            return found;
+        }
+
+        var conjoined = storage.TenancyStyle == JasperFx.MultiTenancy.TenancyStyle.Conjoined;
+
+        return await _store.Options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await _store.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
+
+            var builder = new Weasel.Sqlite.CommandBuilder();
+            builder.Append($"select id from {storage.TableName.QualifiedName} ");
+            builder.Append("where id in (select value from json_each(");
+            builder.AppendParameter(System.Text.Json.JsonSerializer.Serialize(probe));
+            builder.Append("))");
+
+            if (conjoined)
+            {
+                builder.Append(" and tenant_id = ");
+                builder.AppendParameter(tenantId);
+            }
+
+            await using var command = builder.Compile();
+            command.Connection = connection;
+
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                found.Add(Compare(reader.GetValue(0)));
+            }
+
+            return found;
+        }, token).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc cref="AlreadyStoredAsync{T}" />
+    private static string Compare(object? rawId)
+        => Convert.ToString(rawId, System.Globalization.CultureInfo.InvariantCulture) ?? "";
 
     /// <summary>
     ///     How much is in the event store — event count, stream count, and the current sequence.
