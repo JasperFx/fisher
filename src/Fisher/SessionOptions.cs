@@ -43,12 +43,6 @@ namespace Fisher;
 ///         Marten has. A supplied connection is never disposed and a supplied transaction is never
 ///         committed — one rule each, rather than four combinations of which two are traps.
 ///     </para>
-///     <para>
-///         <b>Deliberately absent, because the behaviour it would name does not exist yet:</b> session
-///         <c>Listeners</c> (<see href="https://github.com/JasperFx/fisher/issues/32">fisher#32</see>).
-///         It is on Polecat's <c>SessionOptions</c>; carrying it here would be a knob that silently
-///         does nothing, which is the one thing this codebase refuses to ship.
-///     </para>
 /// </remarks>
 public class SessionOptions
 {
@@ -77,6 +71,12 @@ public class SessionOptions
     ///     </para>
     /// </remarks>
     public DocumentTracking Tracking { get; set; } = DocumentTracking.None;
+
+    /// <summary>
+    ///     Unit-of-work hooks for this session alone, run after the store's
+    ///     <see cref="StoreOptions.Listeners" /> (fisher#32).
+    /// </summary>
+    public IList<IDocumentSessionListener> Listeners { get; } = new List<IDocumentSessionListener>();
 
     /// <summary>
     ///     The isolation level <c>SaveChangesAsync</c> opens its transaction at.

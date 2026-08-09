@@ -184,6 +184,15 @@ public class StoreOptions
     public List<ISchemaObject> ExtendedSchemaObjects { get; } = new();
 
     /// <summary>
+    ///     Unit-of-work hooks applied to every session this store opens (fisher#32).
+    /// </summary>
+    /// <remarks>
+    ///     A session runs these first and then any on its own <see cref="SessionOptions.Listeners" />.
+    ///     Read once per session and cached, so adding one after a session is open does not reach it.
+    /// </remarks>
+    public IList<IDocumentSessionListener> Listeners { get; } = new List<IDocumentSessionListener>();
+
+    /// <summary>
     ///     Replace the default Polly resilience pipeline with a custom one.
     /// </summary>
     public void ConfigurePolly(Action<ResiliencePipelineBuilder> configure)

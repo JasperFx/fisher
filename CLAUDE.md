@@ -214,11 +214,12 @@ Working, with tests:
 - **Session tracking** — an identity map, dirty tracking, and `Eject` / `EjectAllOfType` /
   `EjectAllPendingChanges`, through `SessionOptions.Tracking` and the `IdentitySession()` /
   `DirtyTrackedSession()` factories
+- **Session listeners** — `IDocumentSessionListener` and `IChangeSet`, registered store-wide or per
+  session, bracketing the unit of work the same way the outbox does
 
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
 
-- **Session listeners and `IChangeSet`** (fisher#32) — there is no way to observe a unit of work.
 - **`ForTenant`** (fisher#33) — a session writes for its own tenant only.
 - **Document foreign keys** (fisher#38).
 - **Database-per-tenant** (fisher#47) — the conjoined style works and is pinned by
@@ -1023,10 +1024,9 @@ query that is genuinely slow. And it does not bound the wait at `BEGIN IMMEDIATE
 transaction is begun on the connection rather than through a command — that busy wait comes from the
 connection string's `Default Timeout`, 30s by default. Both halves verified.
 
-**`Listeners` is deliberately absent**, though it is on Polecat's `SessionOptions`: Fisher has no
-session listeners (fisher#32), so it would be a knob that silently does nothing. It arrives with the
-feature that gives it meaning. **`Tracking` was absent for the same reason and no longer is** — see
-"Session tracking". **`LightweightSession(SessionOptions)` and `OpenSessionAsync` are absent** for a
+**`Tracking` and `Listeners` were both absent as knobs that would silently do nothing, and both now
+mean something** — see "Session tracking" and "Session listeners".
+**`LightweightSession(SessionOptions)` and `OpenSessionAsync` are absent** for a
 related reason: tracking is a property of the options rather than a choice of constructor, so
 `OpenSession` already *is* the lightweight one, and a session opens its connection lazily so the
 second has nothing to await.
@@ -1106,6 +1106,54 @@ of change detection.
 - **There is no `QueryOnly` tracking value**, where Marten has one. Marten's names a session that
   cannot write; Fisher has none — `QuerySession()`'s narrowing is a convention — so a mode resolving
   the query-only flavor would make `Store` throw on a session the store hands out as writeable.
+
+### Session listeners
+
+`IDocumentSessionListener`, `Services/IChangeSet.cs`, `StoreOptions.Listeners` and
+`SessionOptions.Listeners` (fisher#32). **The hard part was already done**: fisher#4 settled where a
+commit hook goes and what the rest of the database can see when it fires, and pinned it by probing
+over a separate connection. A session listener is a second client of that seam, and reuses the probe
+rather than resettling the question.
+
+- **`AfterCommitAsync` runs outside `StoreOptions.ResiliencePipeline`.** A retried `SQLITE_BUSY`
+  re-executes the whole delegate, so a hook invoked inside it fires twice for a transaction that
+  already committed. Fourth client of that property after the outbox (fisher#4), the batch's own input
+  (fisher#12) and the subscription listener (fisher#21).
+- **An enlisted session fires the before hook and not the after one.** "Everyone can see this now" is
+  a claim only the caller's commit can make, and Fisher is not told when that happens — the same rule
+  the outbox's after-commit hook and the append observer already follow.
+- **An empty unit of work fires nothing**, as on Marten. Without it every no-op `SaveChangesAsync`
+  would run every store-wide listener.
+- **The async daemon's projection batch does not fire session listeners**, and that is a decision. A
+  projection batch is the daemon's unit of work, not the application's; firing user listeners for it
+  would run an application's `AfterCommitAsync` on the daemon's threads for every batch of every
+  shard. JasperFx's `IDaemonChangeListener` is the hook for that side and Fisher already supports it.
+- **Pending streams are collected *after* the before hook, where Marten collects them before.** Costs
+  nothing, and makes "work queued in the hook joins this transaction" true of appended events as well
+  as of documents. Marten's listener that starts a stream is appending to the *next* unit of work.
+- **The two synchronous members are default-implemented**, which is both why a commit-only listener
+  needs two methods and why a listener written against Polecat's two-member interface compiles here
+  unaltered. Marten's `DocumentSessionListenerBase` exists for the same purpose and predates default
+  interface members. `DocumentLoaded` / `DocumentAddedForStorage` needed no new seam either —
+  `IStorageSession.MarkAsDocumentLoaded` and `MarkAsAddedForStorage` were already called by Weasel's
+  selectors and Fisher's storages, and were empty no-ops. The listener list is composed once and
+  cached per session, because `MarkAsDocumentLoaded` runs per row.
+- **`IChangeSet.Deleted` is `IEnumerable<IDocumentDeletion>`, not `IEnumerable<IDeletion>`.**
+  `Weasel.Storage.IDeletion` is already in this codebase, is the storage *operation* that deletes, and
+  is referenced unqualified in the very file that builds one — so a second `IDeletion` one namespace
+  away is the `DocumentMetadata` collision again. Members are unchanged, so a listener body ports; only
+  a declaration naming the type has to be edited.
+- **Classification tests `IDeletion` before the role, and that ordering is load-bearing.** Every
+  deletion carries `OperationRole.Deletion`, *including the soft form whose statement is an `UPDATE`* —
+  so a role-first switch would route by-id deletions through the predicate branch and report every one
+  of them with a null id. A predicate delete really does report a null id, because it named no row.
+- **`Clone()` returns `this`.** On Marten the change set *is* the live unit of work, which is reset
+  after every commit, so retaining one without cloning watches it empty out. Fisher builds it from the
+  operations snapshot `TakePendingOperations` already took — the same snapshot the transaction wrote
+  from, for fisher#12's reason — so it is immutable by construction. The member is carried so a
+  listener that clones out of habit still compiles.
+- A patch, a raw `QueueSqlCommand` and an `UndoDeleteWhere` appear in no bucket: none of them carries a
+  document, and inventing one would be worse than the omission. Marten is the same.
 
 ### Raw SQL
 

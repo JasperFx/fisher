@@ -227,12 +227,21 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
         // work with nothing queued may still have work to do.
         ProcessChangeTrackers();
 
-        var streams = Events.PendingStreams.ToArray();
-
-        if (PendingOperationCount == 0 && streams.Length == 0)
+        if (PendingOperationCount == 0 && Events.PendingStreams.Count == 0)
         {
+            // Nothing to do, and therefore no listeners either — Marten's rule, and without it every
+            // no-op save would run every registered listener.
             return;
         }
+
+        foreach (var listener in Listeners)
+        {
+            await listener.BeforeSaveChangesAsync(this, token).ConfigureAwait(false);
+        }
+
+        // After the hook, not before, so that a listener can start or extend a stream and have those
+        // events commit in this unit of work. Marten collects them earlier and cannot.
+        var streams = Events.PendingStreams.ToArray();
 
         // Inline projections run before the batch is taken, because applying one queues further
         // operations — the snapshot writes — that have to commit alongside the events that caused
@@ -293,6 +302,21 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
         _messageBatch = null;
 
         ResetChangeTracking(queued);
+
+        // Outside the resilience pipeline, and skipped entirely for an enlisted session. The first is
+        // fisher#4's property — a retried SQLITE_BUSY re-executes the whole delegate, so a listener
+        // invoked inside it fires twice for a transaction that already committed. The second is
+        // SessionOptions.ForTransaction's: "everyone can see this now" is a claim only the caller's
+        // commit can make, and Fisher is not told when that happens.
+        if (Listeners.Count > 0 && EnlistedTransaction is null)
+        {
+            var commit = new Services.ChangeSet(queued, streams);
+
+            foreach (var listener in Listeners)
+            {
+                await listener.AfterCommitAsync(this, commit, token).ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>
@@ -805,12 +829,53 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
         return _messageBatch ??= await Options.Events.MessageOutbox.CreateBatch(this).ConfigureAwait(false);
     }
 
+    private IReadOnlyList<IDocumentSessionListener>? _listeners;
+
+    /// <summary>
+    ///     The unit-of-work hooks this session runs: the store's, then its own (fisher#32).
+    /// </summary>
+    /// <remarks>
+    ///     Composed once and cached, because <see cref="MarkAsDocumentLoaded" /> consults it for every
+    ///     row of every read and a concatenation per row would be a real cost for a feature almost no
+    ///     session uses. The consequence is that the two lists are read when the session first asks,
+    ///     so registering a listener on an already-open session does not reach it — said on both
+    ///     properties.
+    /// </remarks>
+    internal IReadOnlyList<IDocumentSessionListener> Listeners
+        => _listeners ??= Options.Listeners.Count + SessionOptions.Listeners.Count == 0
+            ? Array.Empty<IDocumentSessionListener>()
+            : [.. Options.Listeners, .. SessionOptions.Listeners];
+
+    /// <summary>
+    ///     A document has been queued for writing. Fires <c>DocumentAddedForStorage</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Called by every storage flavor's <c>Store</c>, so this is the one place the hook needs to be
+    ///     — the identity map's bookkeeping happens there too and for the same call.
+    /// </remarks>
     public virtual void MarkAsAddedForStorage(object id, object document)
     {
+        for (var i = 0; i < Listeners.Count; i++)
+        {
+            Listeners[i].DocumentAddedForStorage(id, document);
+        }
     }
 
+    /// <summary>
+    ///     A document has been materialised from a row. Fires <c>DocumentLoaded</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Called by Weasel's lightweight, identity-map and dirty-tracking selectors alike, so the hook
+    ///     covers loads by id and <c>Query&lt;T&gt;()</c> under every tracking mode. The query-only
+    ///     selector does not call it, having no identity column to report — which is why a raw-SQL read
+    ///     does not fire it.
+    /// </remarks>
     public virtual void MarkAsDocumentLoaded(object id, object document)
     {
+        for (var i = 0; i < Listeners.Count; i++)
+        {
+            Listeners[i].DocumentLoaded(id, document);
+        }
     }
 
     public async Task<DbDataReader> ExecuteReaderAsync(DbCommand command, CancellationToken token = default)
