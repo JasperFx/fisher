@@ -1799,11 +1799,23 @@ the round trip" imply "patching is cheap" — and note it breaks the byte-exactn
   is the point of them: reaching a key the type no longer has a member for, which is exactly what
   `Rename` is for. They are deliberately not routed through `MemberFactory`, which would refuse the
   case they exist for.
-- **Insert-at-an-index is absent** ([fisher#52](https://github.com/JasperFx/fisher/issues/52)):
-  `json_insert` only inserts where the path does not exist, so at an occupied index it is a silent
-  no-op. Doing it properly needs a `Remove`-style array rebuild with ordinal arithmetic, and
-  `json_each`'s row order is not a documented guarantee. `Remove` gets away with the rebuild because a
-  filter does not care about order.
+- **`Insert` at an index rebuilds the array** (fisher#52). `json_insert` only inserts where the path
+  does not exist, so at an occupied index it is a silent no-op, and `json_replace` overwrites rather
+  than shifting. The rebuild does not lean on `json_each`'s row order, which is not a documented
+  guarantee: it computes an explicit ordinal from `json_each.key` and orders by it — an existing
+  element keeps `2k` below the insertion point and takes `2k+2` at or above it, and the new element is
+  `2*index+1`, so it lands strictly between two neighbours. An index past the end sorts above
+  everything and therefore appends, which is why that case needs no length to check.
+- **The rebuilt element must be keyed on `json_each.type`, not on its value**, and this is where the
+  original `Remove` was wrong twice. SQLite has no boolean, so a JSON `true` arrives as the integer 1
+  and `json_quote` writes it back as `1` — every rebuild silently turned an array's booleans into
+  numbers. And a JSON `null` element reads back as SQL NULL, so `Remove`'s `where value <> ?` was NULL
+  rather than true for it and **every removal dropped every null in the array**. `ElementSql` and an
+  `is not` comparison fix both; `the_rebuild_keeps_booleans_and_nulls` covers them, and each half was
+  verified by reverting it.
+- **json1's JSON subtype does not survive a subquery.** `Insert` projects its elements through one, so
+  `json_group_array(v)` writes every element as a quoted string; the aggregate has to re-parse with
+  `json_group_array(json(v))`. `Remove` never meets this because its rebuild is a single flat select.
 
 ### JSON-returning reads
 

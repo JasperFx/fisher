@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**948 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
+**955 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
 cross-store compliance tests — which as of 2.45.0 is every event sourcing suite the shared library has.
 
 ## Closed since the comparison
@@ -99,7 +99,39 @@ Two follow-ups were filed rather than shipped half-done: `Insert`-at-an-array-in
 ([#52](https://github.com/JasperFx/fisher/issues/52), because `json_insert` is a silent no-op at an
 occupied path) and `BulkInsertMode.IgnoreDuplicates`
 ([#53](https://github.com/JasperFx/fisher/issues/53), because `insert or ignore` is a fifth statement
-in the descriptor rather than a flag). **#53 is now closed** — not with the fifth statement, but by
+in the descriptor rather than a flag). **Both are now closed.**
+
+### #52 — and the two bugs the probe found in `Remove`
+
+The insert itself went as the issue predicted: a `Remove`-style rebuild, with the ordering taken from
+an explicit ordinal rather than from `json_each`'s row order, which is not a documented guarantee.
+Doubling the ordinals is what lets the new element sit strictly between two neighbours — an existing
+element keeps `2k` below the insertion point and takes `2k+2` at or above it, and the new one is
+`2*index+1`. Past the end sorts above everything and therefore appends, which is why that case needs
+no length to check and no round trip to learn one.
+
+**Probing it found two defects in the `Remove` that shipped with fisher#35**, both silent and both
+invisible to an array of one type:
+
+- **A JSON `true` came back as `1`.** SQLite has no boolean, so `json_each` hands one over as the
+  integer 1 and `json_quote` writes it back as a number. Any rebuild — so any `Remove` — flattened
+  every boolean in the array.
+- **Every removal dropped every `null` in the array.** A JSON null element reads back as SQL NULL, and
+  `where value <> ?` is NULL rather than true for it, so the filter excluded it along with the element
+  actually named. `Remove(member, null)` also removed nothing.
+
+Both are fixed here, because they live in the expression `Insert` had to generalise anyway. The
+element expression is keyed on `json_each.type` and the comparison is `is not`. Each half was verified
+by reverting it.
+
+One more thing worth knowing, because nothing in `Remove` could have taught it: **json1's JSON subtype
+does not survive a subquery.** `Insert` projects its elements through one, so
+`json_group_array(v)` writes every element as a quoted string and the aggregate has to re-parse with
+`json_group_array(json(v))`.
+
+### #53 — `IgnoreDuplicates`, and the one place going around the filters is right
+
+Not with the fifth statement the issue expected, but by
 filtering: each batch reads which of its ids are already stored and queues only the rest. The read is
 the interesting part, because it is the one place where going *around* the implicit filters is
 correct. `LoadManyAsync` and `Query<T>()` both answer "which of these can I read" and apply the

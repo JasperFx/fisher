@@ -87,12 +87,39 @@ public interface IPatchExpression<T>
         TElement value);
 
     /// <summary>
+    ///     Insert into an array member at <paramref name="index" />, shifting the rest along
+    ///     (fisher#52).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b><c>json_insert</c> is not the mechanism, which is why this arrived after the rest.</b>
+    ///         It only inserts where the path does not already exist, so at an occupied index it is a
+    ///         silent no-op — <c>json_insert('{"t":["a","b"]}', '$.t[1]', json('"z"'))</c> returns the
+    ///         document unchanged. <c>json_replace</c> would overwrite rather than shift, which is a
+    ///         different operation. So the array is rebuilt, the way <see cref="Remove{TElement}" />
+    ///         rebuilds it, with the new element placed by ordinal.
+    ///     </para>
+    ///     <para>
+    ///         <b>An index past the end appends rather than throwing.</b> A <c>List&lt;T&gt;</c> would
+    ///         throw, but a patch does not read the document — refusing would mean a round trip to learn
+    ///         a length, which is the whole cost patching exists to avoid. A negative index is refused,
+    ///         because it names no position at all.
+    ///     </para>
+    ///     <para>
+    ///         An absent or empty member becomes a one-element array, as <see cref="Append{TElement}" />
+    ///         does.
+    ///     </para>
+    /// </remarks>
+    IPatchExpression<T> Insert<TElement>(Expression<Func<T, IEnumerable<TElement>>> member,
+        TElement value, int index = 0);
+
+    /// <summary>
     ///     Remove every element of an array member equal to <paramref name="value" />.
     /// </summary>
     /// <remarks>
     ///     Every match, not the first. json1 has no way to address "the first element equal to x" for
-    ///     removal, so the array is rebuilt without the matching elements — and rebuilding it to drop
-    ///     only one occurrence would need an ordering json_each does not promise.
+    ///     removal, so the array is rebuilt without the matching elements — and dropping only one
+    ///     occurrence would mean deciding which, which the rebuild has no way to express.
     /// </remarks>
     IPatchExpression<T> Remove<TElement>(Expression<Func<T, IEnumerable<TElement>>> member, TElement value);
 
@@ -193,22 +220,69 @@ internal sealed class PatchExpression<T> : IPatchExpression<T> where T : notnull
         return this;
     }
 
+    public IPatchExpression<T> Insert<TElement>(Expression<Func<T, IEnumerable<TElement>>> member,
+        TElement value, int index = 0)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+
+        var path = PathOf(member);
+
+        // Ordinals are doubled so the new element can sit strictly between two of them: an existing
+        // element keeps 2k below the insertion point and takes 2k+2 at or above it, and the new one is
+        // 2*index+1. An index past the end simply lands above every existing ordinal, which is why
+        // that case appends with no length to check.
+        _operation.Add((inner, bind) =>
+            $"json_set({inner}, '{path}', (select json_group_array(json(v)) from ("
+            + $"select case when key < {index} then key * 2 else key * 2 + 2 end as ord, "
+            + $"{ElementSql} as v from json_each(json_extract({inner}, '{path}')) "
+            + $"union all select {index} * 2 + 1, json({bind(Json(value))}) order by ord)))");
+
+        return this;
+    }
+
     public IPatchExpression<T> Remove<TElement>(Expression<Func<T, IEnumerable<TElement>>> member,
         TElement value)
     {
         var path = PathOf(member);
 
         // Rebuilt rather than removed in place: json1 cannot address "the element equal to x" as a
-        // path. json_each exposes `type`, which is what keeps an object element an object rather than
-        // being re-quoted as a string by json_quote.
+        // path.
+        //
+        // `is not` rather than `<>`, because a JSON null element reads back as SQL NULL and `NULL <> x`
+        // is NULL rather than true — so every removal silently dropped every null in the array, and
+        // Remove(member, null) removed nothing.
         _operation.Add((inner, bind) =>
-            $"json_set({inner}, '{path}', coalesce((select json_group_array("
-            + "case when type in ('object','array') then json(value) else json_quote(value) end) "
+            $"json_set({inner}, '{path}', coalesce((select json_group_array(json({ElementSql})) "
             + $"from json_each(json_extract({inner}, '{path}')) "
-            + $"where value <> json_extract(json({bind(Json(value))}), '$')), json_array()))");
+            + $"where value is not json_extract(json({bind(Json(value))}), '$')), json_array()))");
 
         return this;
     }
+
+    /// <summary>
+    ///     One element of a rebuilt array, as text that a surrounding <c>json(...)</c> re-parses.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Keyed on <c>json_each.type</c>, not on the value.</b> SQLite has no boolean, so a JSON
+    ///         <c>true</c> arrives as the integer 1 and <c>json_quote</c> writes it back as <c>1</c> —
+    ///         a rebuild that went through the value alone silently turned every boolean in the array
+    ///         into a number. <c>type</c> is the only thing that still knows.
+    ///     </para>
+    ///     <para>
+    ///         A JSON <c>null</c> needs nothing: its value is SQL NULL and <c>json_quote(NULL)</c> is
+    ///         the text <c>null</c>. An object or array is already its own JSON text.
+    ///     </para>
+    ///     <para>
+    ///         The result is deliberately plain text rather than a value carrying json1's JSON subtype,
+    ///         because <b>the subtype does not survive a subquery</b> — <see cref="Insert{TElement}" />
+    ///         projects this through one, and without the outer <c>json(...)</c> every element comes
+    ///         back double-quoted. Verified against SQLite 3.51.
+    ///     </para>
+    /// </remarks>
+    private const string ElementSql =
+        "case type when 'true' then 'true' when 'false' then 'false' "
+        + "when 'object' then value when 'array' then value else json_quote(value) end";
 
     public IPatchExpression<T> Rename(string oldName, Expression<Func<T, object>> newMember)
     {

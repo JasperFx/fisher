@@ -40,7 +40,8 @@ public class patching_documents : IAsyncLifetime
         session.Store(new Angler
         {
             Id = _frodo, Name = "Frodo", Catches = 3, Fee = 12.5m,
-            Flies = ["dun", "olive"], Home = new Water { Name = "Brandywine" }
+            Flies = ["dun", "olive"], Home = new Water { Name = "Brandywine" },
+            Mixed = [1, null, true, false, "keep"]
         });
         session.Store(new Angler { Id = _sam, Name = "Sam", Catches = 9, Flies = [] });
         await session.SaveChangesAsync(Token);
@@ -179,6 +180,154 @@ public class patching_documents : IAsyncLifetime
         }
 
         (await Reload(_frodo)).Flies.ShouldBe(["olive"]);
+    }
+
+    // ---- Insert at an index, and what the rebuild has to preserve (fisher#52) ----
+
+    [Fact]
+    public async Task insert_at_the_front_the_middle_and_the_end()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Insert(x => x.Flies, "first");
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Flies.ShouldBe(["first", "dun", "olive"]);
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Insert(x => x.Flies, "middle", 2);
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Flies.ShouldBe(["first", "dun", "middle", "olive"]);
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Insert(x => x.Flies, "last", 4);
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Flies.ShouldBe(["first", "dun", "middle", "olive", "last"]);
+    }
+
+    /// <summary>
+    ///     Past the end appends rather than throwing: a patch does not read the document, so there is
+    ///     no length to check without the round trip patching exists to avoid.
+    /// </summary>
+    [Fact]
+    public async Task insert_past_the_end_appends()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Insert(x => x.Flies, "way out", 99);
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Flies.ShouldBe(["dun", "olive", "way out"]);
+    }
+
+    [Fact]
+    public async Task insert_into_an_empty_array()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_sam).Insert(x => x.Flies, "only", 3);
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_sam)).Flies.ShouldBe(["only"]);
+    }
+
+    /// <summary>
+    ///     A member the stored document has no key for at all, which is the case
+    ///     <c>json_extract</c> answers with SQL NULL — <c>json_each</c> over that yields no rows, so the
+    ///     rebuild produces the one-element array.
+    /// </summary>
+    [Fact]
+    public async Task insert_into_an_absent_member()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Delete(x => x.Flies);
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Insert(x => x.Flies, "reborn");
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Flies.ShouldBe(["reborn"]);
+    }
+
+    [Fact]
+    public async Task insert_into_an_array_of_objects()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo)
+                .Insert(x => x.Mixed, new Water { Name = "Withywindle" }, 1);
+            await session.SaveChangesAsync(Token);
+        }
+
+        // A naive rebuild re-quotes an object as a string; this is what says it did not.
+        (await MixedJson(_frodo)).ShouldBe("""[1,{"name":"Withywindle"},null,true,false,"keep"]""");
+    }
+
+    /// <summary>
+    ///     The two things the rebuild has to carry that no single-typed array can show: a JSON boolean,
+    ///     which SQLite hands back as an integer, and a JSON null, which comes back as SQL NULL.
+    /// </summary>
+    [Fact]
+    public async Task the_rebuild_keeps_booleans_and_nulls()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Insert(x => x.Mixed, 42, 5);
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await MixedJson(_frodo)).ShouldBe("""[1,null,true,false,"keep",42]""");
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Remove(x => x.Mixed, "keep");
+            await session.SaveChangesAsync(Token);
+        }
+
+        // Without the type-keyed element expression the booleans come back as 1 and 0; without the
+        // NULL-safe comparison the null is dropped along with the element actually named.
+        (await MixedJson(_frodo)).ShouldBe("[1,null,true,false,42]");
+    }
+
+    [Fact]
+    public void a_negative_index_is_refused()
+    {
+        using var session = _store.LightweightSession();
+
+        Should.Throw<ArgumentOutOfRangeException>(() =>
+            session.Patch<Angler>(_frodo).Insert(x => x.Flies, "nowhere", -1));
+    }
+
+    /// <summary>The stored array, byte-exact, without deserializing it into <c>JsonElement</c>s.</summary>
+    private async Task<string> MixedJson(Guid id)
+    {
+        await using var session = _store.LightweightSession();
+        var json = await session.LoadJsonAsync<Angler>(id, Token);
+
+        var start = json!.IndexOf("\"mixed\":", StringComparison.Ordinal) + "\"mixed\":".Length;
+        var depth = 0;
+
+        for (var i = start; i < json.Length; i++)
+        {
+            if (json[i] == '[') depth++;
+            if (json[i] == ']' && --depth == 0) return json[start..(i + 1)];
+        }
+
+        throw new InvalidOperationException($"No 'mixed' array in {json}");
     }
 
     [Fact]
@@ -400,6 +549,16 @@ public class patching_documents : IAsyncLifetime
         public decimal Fee { get; set; }
         public DateTimeOffset LandedAt { get; set; }
         public string[] Flies { get; set; } = [];
+
+        /// <summary>
+        ///     Deliberately mixed, and read back as raw JSON rather than deserialized. SQLite has no
+        ///     boolean and json_each hands a JSON <c>true</c> back as the integer 1, so a rebuild that
+        ///     went through the value alone would turn it into a number — and a JSON <c>null</c> reads
+        ///     back as SQL NULL, which a <c>&lt;&gt;</c> filter drops silently. An array of one type
+        ///     cannot see either.
+        /// </summary>
+        public object?[] Mixed { get; set; } = [];
+
         public Water Home { get; set; } = new();
     }
 
