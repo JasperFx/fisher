@@ -174,16 +174,23 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
 }
 
 /// <summary>
-///     A writable Fisher session: a unit of work over the event store, flushed by
-///     <see cref="SaveChangesAsync" />.
+///     Everything that queues work into a unit of work: reads, document writes, event appends and the
+///     metadata stamped onto them — but not the commit.
 /// </summary>
 /// <remarks>
-///     The <see cref="JasperFx.Events.IStorageOperations" /> half is what lets Fisher's session types
-///     close JasperFx's aggregation and projection generics, which constrain the write session to be
-///     both the read session and a storage-operations surface. Its members are the projection write
-///     path — see <c>Fisher.Internal.FisherSession</c> for which of them are live today.
+///     <para>
+///         Split out of <see cref="IDocumentSession" /> for fisher#33, and it is the split that makes
+///         <see cref="ITenantOperations" /> expressible: a tenant scope can do everything a session
+///         can <em>except</em> commit, because it has no unit of work of its own to commit — it queues
+///         into its parent's. Marten and Polecat draw the line in the same place, so code taking an
+///         <c>IDocumentOperations</c> ports between the three.
+///     </para>
+///     <para>
+///         Anything that is about the session rather than about the work — <c>SaveChangesAsync</c>,
+///         the <c>Eject</c> family, <c>ForTenant</c> itself — is on <see cref="IDocumentSession" />.
+///     </para>
 /// </remarks>
-public interface IDocumentSession : IQuerySession, JasperFx.Events.IStorageOperations
+public interface IDocumentOperations : IQuerySession
 {
     /// <summary>
     ///     The event store write surface for this session.
@@ -398,6 +405,40 @@ public interface IDocumentSession : IQuerySession, JasperFx.Events.IStorageOpera
     ///     against a relational table.
     /// </remarks>
     void QueueSqlCommand(char placeholder, string sql, params object?[] parameterValues);
+}
+
+/// <summary>
+///     A writable Fisher session: a unit of work over documents and the event store, flushed by
+///     <see cref="SaveChangesAsync" />.
+/// </summary>
+/// <remarks>
+///     The <see cref="JasperFx.Events.IStorageOperations" /> half is what lets Fisher's session types
+///     close JasperFx's aggregation and projection generics, which constrain the write session to be
+///     both the read session and a storage-operations surface. Its members are the projection write
+///     path — see <c>Fisher.Internal.FisherSession</c> for which of them are live today.
+/// </remarks>
+public interface IDocumentSession : IDocumentOperations, JasperFx.Events.IStorageOperations
+{
+    /// <summary>
+    ///     Queue work for a different tenant into <em>this</em> unit of work, so one
+    ///     <see cref="SaveChangesAsync" /> writes for several tenants in one transaction (fisher#33).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Worth more on SQLite than on either sibling, and for once the single-writer model is
+    ///         the reason it is better rather than the reason something is harder.</b> The alternative
+    ///         is a session and a transaction per tenant, which on one database file means taking the
+    ///         write lock N times in sequence where one transaction would do — and leaves a
+    ///         part-written admin operation if the process dies between two of them. A cross-tenant
+    ///         write here is trivially atomic; a database-per-tenant store would need a distributed
+    ///         transaction to match it.
+    ///     </para>
+    ///     <para>
+    ///         The returned scope has no <c>SaveChangesAsync</c> of its own — it is not a session. It
+    ///         queues onto this one.
+    ///     </para>
+    /// </remarks>
+    ITenantOperations ForTenant(string tenantId);
 
     /// <summary>
     ///     Remove a document from this session's identity map, its change tracking and its queued

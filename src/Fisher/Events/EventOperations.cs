@@ -17,10 +17,57 @@ public partial class EventOperations : IEventStoreOperations
 {
     private readonly Dictionary<object, StreamAction> _streams = new();
     private readonly FisherSession _session;
+    private readonly string? _tenantId;
 
-    internal EventOperations(FisherSession session)
+    internal EventOperations(FisherSession session, string? tenantId = null)
     {
         _session = session;
+        _tenantId = tenantId;
+    }
+
+    /// <summary>
+    ///     The tenant every append and every read here is scoped to.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The session's own, unless this is a tenant scope's event surface — see
+    ///         <see cref="ITenantOperations" /> (fisher#33). Everything in this class reads it rather
+    ///         than the session's, which is the entire mechanism: an appended <c>StreamAction</c> is
+    ///         stamped with it here, and <c>AppendPlanner</c> already writes each stream's own tenant
+    ///         rather than the session's, so a cross-tenant append needed no change to the write path.
+    ///     </para>
+    ///     <para>
+    ///         A tenant scope gets its own <c>EventOperations</c>, and therefore its own
+    ///         <see cref="_streams" /> dictionary. That is not tidiness: the dictionary is keyed by
+    ///         stream id, and under conjoined tenancy the same id in two tenants is two different
+    ///         streams — sharing one dictionary would silently merge them.
+    ///     </para>
+    /// </remarks>
+    internal string TenantId
+    {
+        get
+        {
+            if (_tenantId is null)
+            {
+                return _session.TenantId;
+            }
+
+            // The event-store half of the rule FisherSession.StorageFor applies to documents: with
+            // TenancyStyle.Single there is no tenant_id on fi_streams or fi_events, so a scoped append
+            // would write the one unscoped stream space and a scoped read would answer about it — both
+            // silently. Refused rather than ignored.
+            if (Graph.TenancyStyle != JasperFx.MultiTenancy.TenancyStyle.Conjoined)
+            {
+                throw new InvalidOperationException(
+                    $"The event store is not multi-tenanted, so it cannot be reached through ForTenant("
+                    + $"\"{_tenantId}\"): fi_streams and fi_events have no tenant_id column, and both the "
+                    + "append and the read would use the one stream space every tenant shares. Set "
+                    + "StoreOptions.Events.TenancyStyle = TenancyStyle.Conjoined before the schema is "
+                    + "created, or use the session itself.");
+            }
+
+            return _tenantId;
+        }
     }
 
     private EventGraph Graph => _session.EventGraph;
@@ -46,14 +93,14 @@ public partial class EventOperations : IEventStoreOperations
     public void ArchiveStream(Guid streamId)
     {
         AssertGuidIdentity();
-        _session.QueueOperation(Graph.ArchiveStreamOperation(streamId, _session.TenantId, true));
+        _session.QueueOperation(Graph.ArchiveStreamOperation(streamId, TenantId, true));
     }
 
     /// <inheritdoc cref="ArchiveStream(Guid)" />
     public void ArchiveStream(string streamKey)
     {
         AssertStringIdentity();
-        _session.QueueOperation(Graph.ArchiveStreamOperation(streamKey, _session.TenantId, true));
+        _session.QueueOperation(Graph.ArchiveStreamOperation(streamKey, TenantId, true));
     }
 
     /// <summary>
@@ -62,14 +109,14 @@ public partial class EventOperations : IEventStoreOperations
     public void UnArchiveStream(Guid streamId)
     {
         AssertGuidIdentity();
-        _session.QueueOperation(Graph.ArchiveStreamOperation(streamId, _session.TenantId, false));
+        _session.QueueOperation(Graph.ArchiveStreamOperation(streamId, TenantId, false));
     }
 
     /// <inheritdoc cref="UnArchiveStream(Guid)" />
     public void UnArchiveStream(string streamKey)
     {
         AssertStringIdentity();
-        _session.QueueOperation(Graph.ArchiveStreamOperation(streamKey, _session.TenantId, false));
+        _session.QueueOperation(Graph.ArchiveStreamOperation(streamKey, TenantId, false));
     }
 
     /// <summary>
@@ -91,14 +138,14 @@ public partial class EventOperations : IEventStoreOperations
     public void TombstoneStream(Guid streamId)
     {
         AssertGuidIdentity();
-        _session.QueueOperation(Graph.TombstoneStreamOperation(streamId, _session.TenantId));
+        _session.QueueOperation(Graph.TombstoneStreamOperation(streamId, TenantId));
     }
 
     /// <inheritdoc cref="TombstoneStream(Guid)" />
     public void TombstoneStream(string streamKey)
     {
         AssertStringIdentity();
-        _session.QueueOperation(Graph.TombstoneStreamOperation(streamKey, _session.TenantId));
+        _session.QueueOperation(Graph.TombstoneStreamOperation(streamKey, TenantId));
     }
 
     // ---- StartStream ----
@@ -142,7 +189,7 @@ public partial class EventOperations : IEventStoreOperations
         AssertGuidIdentity();
 
         var stream = StreamAction.Start(Graph, id, events);
-        stream.TenantId = _session.TenantId;
+        stream.TenantId = TenantId;
 
         return Track(id, stream);
     }
@@ -155,7 +202,7 @@ public partial class EventOperations : IEventStoreOperations
         AssertStringIdentity();
 
         var stream = StreamAction.Start(Graph, streamKey, events);
-        stream.TenantId = _session.TenantId;
+        stream.TenantId = TenantId;
 
         return Track(streamKey, stream);
     }
@@ -238,7 +285,7 @@ public partial class EventOperations : IEventStoreOperations
         }
 
         var stream = create();
-        stream.TenantId = _session.TenantId;
+        stream.TenantId = TenantId;
 
         return Track(key, stream);
     }

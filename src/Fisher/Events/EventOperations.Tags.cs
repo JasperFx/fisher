@@ -152,7 +152,7 @@ public partial class EventOperations
         if (IsConjoined)
         {
             sql.Append(" and tenant_id = @tenant_id");
-            command.Parameters.AddWithValue("@tenant_id", _session.TenantId);
+            command.Parameters.AddWithValue("@tenant_id", TenantId);
         }
 
         sql.Append(" order by seq_id");
@@ -162,7 +162,7 @@ public partial class EventOperations
 
         // Empty stream id: a tag query spans streams, so each event's identity comes off its own row
         // rather than from the context. See FisherEventsRowReader.ReadEventAcrossStreams.
-        var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, string.Empty, _session.TenantId);
+        var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, string.Empty, TenantId);
         var slots = MetadataSlots.For(options);
         var isGuid = IsGuidIdentity;
 
@@ -212,7 +212,7 @@ public partial class EventOperations
         if (IsConjoined)
         {
             sql.Append(" and tenant_id = @tenant_id");
-            command.Parameters.AddWithValue("@tenant_id", _session.TenantId);
+            command.Parameters.AddWithValue("@tenant_id", TenantId);
         }
 
         sql.Append(')');
@@ -257,7 +257,7 @@ public partial class EventOperations
         if (IsConjoined)
         {
             sql.Append(" and tenant_id = @tenant_id");
-            command.Parameters.AddWithValue("@tenant_id", _session.TenantId);
+            command.Parameters.AddWithValue("@tenant_id", TenantId);
         }
 
         sql.Append(')');

@@ -216,11 +216,12 @@ Working, with tests:
   `DirtyTrackedSession()` factories
 - **Session listeners** — `IDocumentSessionListener` and `IChangeSet`, registered store-wide or per
   session, bracketing the unit of work the same way the outbox does
+- **Cross-tenant writes** — `session.ForTenant(id)`, so one `SaveChangesAsync` writes several tenants'
+  documents and streams in one transaction
 
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
 
-- **`ForTenant`** (fisher#33) — a session writes for its own tenant only.
 - **Document foreign keys** (fisher#38).
 - **Database-per-tenant** (fisher#47) — the conjoined style works and is pinned by
   `ConjoinedEventTenancyCompliance`; a file per tenant does not, which is why every `IEventDatabase`
@@ -1154,6 +1155,47 @@ rather than resettling the question.
   listener that clones out of habit still compiles.
 - A patch, a raw `QueueSqlCommand` and an `UndoDeleteWhere` appear in no bucket: none of them carries a
   document, and inventing one would be worse than the omission. Marten is the same.
+
+### Cross-tenant writes
+
+`session.ForTenant(id)` returning an `ITenantOperations` (fisher#33), so one `SaveChangesAsync` writes
+several tenants' rows in one transaction. `IDocumentOperations` — everything that queues work, minus
+the commit — was split out of `IDocumentSession` to express it, as it is on both siblings.
+
+**This is the one place SQLite's single-writer model is the advantage rather than the constraint.**
+The alternative is a session and a transaction per tenant, which on one database file means taking the
+write lock N times in sequence and leaves a part-written admin operation if the process dies between
+two of them. A database-per-tenant store would need a distributed transaction to match what falls out
+here for free.
+
+- **A tenant scope is a real `FisherSession`, not a delegating facade.** Polecat's
+  `NestedTenantSession` is 250 lines of one-line delegation, and a delegation site that forgot to pass
+  the tenant would be a silent cross-tenant write — fisher#51's exact failure mode. Everything a scope
+  does differently is "read a different `TenantId`", and a session already reads its own everywhere, so
+  a second session is the version with no per-member correctness to get wrong. `FisherSession`
+  therefore implements `ITenantOperations` as well, and `ForTenant` returns one.
+- **What is shared and what is not, each way round for a reason.** Shared: the connection lifetime and
+  the operation queue — that *is* the feature. Not shared: the `EventOperations`, whose pending-stream
+  dictionary is keyed by stream id and would merge two tenants' same-id streams into one; and the
+  identity map, change trackers and version tracker, all keyed by document identity, which is unique
+  per tenant rather than globally. Shared by delegation: correlation id, causation id, user name and
+  headers, which describe the unit of work rather than the tenant.
+- **The append path needed nothing.** `AppendPlanner` already wrote `stream.TenantId` rather than the
+  session's, so a cross-tenant append works the moment the `StreamAction` is stamped with the scope's
+  tenant. `SaveChangesAsync` gathers the scopes' pending streams alongside its own — they are gathered
+  rather than queued as operations because planning happens inside the write transaction.
+- **`StorageFor<T>` is the single choke point for refusing a single-tenant type**, and it covers every
+  read and every write because all of them resolve storage through it. A type without `MultiTenanted()`
+  has no `tenant_id` column, so a write "for another tenant" would land in the one shared table and look
+  like it worked. `EventOperations.TenantId` is the event-store half of the same rule.
+- **Scopes are flattened and cached per tenant.** `ForTenant` twice is the same scope, so its queued
+  events are collected once; a scope of a scope is a scope of the session, so the parent has one level
+  to walk. `ITenantOperations` deliberately does not offer `ForTenant` — the flattening exists for
+  whoever finds the cast.
+- **A scope cannot commit and disposes nothing.** `SaveChangesAsync` throws naming `Parent`; `Dispose`
+  returns without touching the shared connection, so `await using` out of habit does no harm.
+- The scopes' DCB boundaries are checked by the parent inside its transaction, for the same reason
+  their operations are written there: a guard checked in no transaction guards nothing.
 
 ### Raw SQL
 

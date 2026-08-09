@@ -63,7 +63,7 @@ public partial class EventOperations
         if (IsConjoined)
         {
             builder.Append(" and tenant_id = ");
-            builder.AppendParameter(_session.TenantId);
+            builder.AppendParameter(TenantId);
         }
 
         builder.Append(" order by seq_id");
@@ -72,7 +72,7 @@ public partial class EventOperations
         command.Connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
         command.CommandTimeout = _session.Options.CommandTimeout;
 
-        var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, string.Empty, _session.TenantId);
+        var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, string.Empty, TenantId);
         var slots = MetadataSlots.For(options);
         var isGuid = IsGuidIdentity;
 
@@ -149,7 +149,7 @@ public partial class EventOperations
         command.Connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
         command.CommandTimeout = _session.Options.CommandTimeout;
 
-        var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, string.Empty, _session.TenantId);
+        var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, string.Empty, TenantId);
         var slots = MetadataSlots.For(options);
         var isGuid = IsGuidIdentity;
 
@@ -266,7 +266,7 @@ public partial class EventOperations
 
         if (IsConjoined)
         {
-            Clause("tenant_id", _session.TenantId);
+            Clause("tenant_id", TenantId);
         }
     }
 
@@ -321,7 +321,7 @@ public partial class EventOperations
         if (IsConjoined)
         {
             builder.Append(" and tenant_id = ");
-            builder.AppendParameter(_session.TenantId);
+            builder.AppendParameter(TenantId);
         }
 
         builder.Append(" order by seq_id");

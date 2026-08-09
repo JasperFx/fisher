@@ -81,7 +81,7 @@ public partial class EventOperations
 
         if (IsConjoined)
         {
-            command.Parameters.Add(new SqliteParameter("tenant_id", _session.TenantId)
+            command.Parameters.Add(new SqliteParameter("tenant_id", TenantId)
             {
                 SqliteType = SqliteType.Text
             });
@@ -109,7 +109,7 @@ public partial class EventOperations
                 });
         }
 
-        var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, streamId, _session.TenantId);
+        var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, streamId, TenantId);
         var slots = MetadataSlots.For(options);
         var isGuid = IsGuidIdentity;
         var results = new List<IEvent>();
@@ -172,7 +172,7 @@ public partial class EventOperations
 
         if (IsConjoined)
         {
-            command.Parameters.Add(new SqliteParameter("tenant_id", _session.TenantId)
+            command.Parameters.Add(new SqliteParameter("tenant_id", TenantId)
             {
                 SqliteType = SqliteType.Text
             });
@@ -212,7 +212,7 @@ public partial class EventOperations
         var isGuid = IsGuidIdentity;
         object streamId = isGuid ? Guid.Parse(rawStreamId) : rawStreamId;
 
-        var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, streamId, _session.TenantId);
+        var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, streamId, TenantId);
         var slots = MetadataSlots.For(options);
 
         return isGuid

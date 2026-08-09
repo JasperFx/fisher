@@ -25,9 +25,9 @@ namespace Fisher.Internal;
 ///         contention against itself rather than throughput.
 ///     </para>
 /// </remarks>
-internal partial class FisherSession : IDocumentSession, IStorageSession, IAsyncDisposable
+internal partial class FisherSession : IDocumentSession, ITenantOperations, IStorageSession, IAsyncDisposable
 {
-    private readonly List<Weasel.Storage.IStorageOperation> _operations = new();
+    private readonly List<Weasel.Storage.IStorageOperation> _operations;
 
     /// <summary>
     ///     Guards <see cref="_operations" />.
@@ -41,9 +41,20 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     ///     commits the progression row for a range whose documents were only partly written, with no
     ///     error anywhere. Exactly the shape of fisher#12, one layer up.
     /// </remarks>
-    private readonly System.Threading.Lock _operationsLock = new();
+    private readonly System.Threading.Lock _operationsLock;
     private List<IChangeTracker>? _changeTrackers;
     private readonly Sessions.IConnectionLifetime _lifetime;
+
+    /// <summary>
+    ///     The session this one is a tenant scope of, or null for an ordinary session (fisher#33).
+    /// </summary>
+    private readonly FisherSession? _parent;
+
+    /// <summary>
+    ///     One tenant scope per tenant, so <c>ForTenant("b")</c> twice is the same scope and its
+    ///     queued events are collected once.
+    /// </summary>
+    private Dictionary<string, FisherSession>? _tenantScopes;
     private Dictionary<Type, object>? _itemMap;
     private IStorageSerializer? _storageSerializer;
     private int _tempTableNumber;
@@ -63,6 +74,9 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
         SessionOptions = sessionOptions;
         TenantId = sessionOptions.TenantId;
 
+        _operations = [];
+        _operationsLock = new System.Threading.Lock();
+
         _lifetime = sessionOptions.ExternalConnection is { } external
             ? new Sessions.ExternalConnectionLifetime(external, sessionOptions.Transaction)
             : new Sessions.OwnedConnectionLifetime(database);
@@ -77,6 +91,99 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
         CorrelationId = Activity.Current?.RootId;
         CausationId = Activity.Current?.ParentId;
     }
+
+    /// <summary>
+    ///     A tenant scope of <paramref name="parent" /> — a session in every respect except that it
+    ///     shares the parent's connection and unit of work and cannot commit (fisher#33).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Why a real session rather than a delegating facade.</b> Polecat's
+    ///         <c>NestedTenantSession</c> is 250 lines of one-line delegation, and a delegation site
+    ///         that forgot to pass the tenant would be a silent cross-tenant write — precisely
+    ///         fisher#51's failure mode. Everything a tenant scope needs to do differently is
+    ///         "read a different <c>TenantId</c>", and a session already reads its own everywhere, so
+    ///         constructing a second session is the version with no per-member correctness to get
+    ///         wrong. <see cref="ITenantOperations" /> is then satisfied by the session itself.
+    ///     </para>
+    ///     <para>
+    ///         <b>What is shared and what is not, and why each way round:</b>
+    ///     </para>
+    ///     <list type="bullet">
+    ///         <item>
+    ///             <b>Shared: the connection lifetime and the operation queue.</b> That is the feature —
+    ///             one <c>BEGIN IMMEDIATE</c>, several tenants' rows.
+    ///         </item>
+    ///         <item>
+    ///             <b>Not shared: the event operations.</b> Its pending-stream dictionary is keyed by
+    ///             stream id, and under conjoined tenancy the same id in two tenants is two different
+    ///             streams — one dictionary would merge them.
+    ///         </item>
+    ///         <item>
+    ///             <b>Not shared: the identity map, the change trackers and the version tracker.</b>
+    ///             All three are keyed by document identity, and identities are unique per tenant, not
+    ///             globally. A shared map would hand one tenant's document back for another's id.
+    ///         </item>
+    ///         <item>
+    ///             <b>Shared by delegation: the session metadata.</b> Correlation id, causation id, user
+    ///             name and headers describe the unit of work, not the tenant, so a document written
+    ///             for another tenant carries the same values as everything else in the transaction.
+    ///         </item>
+    ///     </list>
+    /// </remarks>
+    private FisherSession(FisherSession parent, string tenantId)
+    {
+        _parent = parent;
+
+        Options = parent.Options;
+        FisherDatabase = parent.FisherDatabase;
+        SessionOptions = parent.SessionOptions;
+        TenantId = tenantId;
+
+        _lifetime = parent._lifetime;
+        _operations = parent._operations;
+        _operationsLock = parent._operationsLock;
+
+        Events = new EventOperations(this, tenantId);
+    }
+
+    /// <inheritdoc cref="IDocumentSession.ForTenant" />
+    public ITenantOperations ForTenant(string tenantId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+
+        // Flattened rather than nested: a scope of a scope is a scope of the session, so the
+        // dictionary that collects pending work has one level to walk and Parent is always the
+        // session that will commit.
+        if (_parent is not null)
+        {
+            return _parent.ForTenant(tenantId);
+        }
+
+        if (tenantId == TenantId)
+        {
+            return this;
+        }
+
+        _tenantScopes ??= new Dictionary<string, FisherSession>();
+
+        if (!_tenantScopes.TryGetValue(tenantId, out var scope))
+        {
+            scope = new FisherSession(this, tenantId);
+            _tenantScopes[tenantId] = scope;
+        }
+
+        return scope;
+    }
+
+    /// <inheritdoc />
+    IDocumentSession ITenantOperations.Parent => _parent ?? this;
+
+    /// <summary>
+    ///     This session's tenant scopes, or an empty set. Never recursive — scopes are flattened.
+    /// </summary>
+    private IEnumerable<FisherSession> TenantScopes
+        => _tenantScopes?.Values ?? Enumerable.Empty<FisherSession>();
 
     internal StoreOptions Options { get; }
 
@@ -166,6 +273,15 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     private async Task AssertBoundariesAreStillConsistentAsync(SqliteConnection connection,
         SqliteTransaction transaction, CancellationToken token)
     {
+        // A tenant scope's boundaries are the parent's to enforce, for the same reason its operations
+        // are the parent's to write: there is one transaction, and a guard checked in no transaction
+        // guards nothing.
+        foreach (var scope in TenantScopes)
+        {
+            await scope.AssertBoundariesAreStillConsistentAsync(connection, transaction, token)
+                .ConfigureAwait(false);
+        }
+
         if (_boundaries is not { Count: > 0 })
         {
             return;
@@ -223,11 +339,25 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     /// </summary>
     public async Task SaveChangesAsync(CancellationToken token = default)
     {
+        if (_parent is not null)
+        {
+            throw new InvalidOperationException(
+                "A tenant scope has no unit of work of its own and cannot commit — everything it "
+                + "queues belongs to the session that created it, which is the point of ForTenant. Call "
+                + "SaveChangesAsync on that session (ITenantOperations.Parent).");
+        }
+
         // Before the emptiness check, because a dirty-tracking session's whole point is that a unit of
         // work with nothing queued may still have work to do.
         ProcessChangeTrackers();
 
-        if (PendingOperationCount == 0 && Events.PendingStreams.Count == 0)
+        foreach (var scope in TenantScopes)
+        {
+            scope.ProcessChangeTrackers();
+        }
+
+        if (PendingOperationCount == 0 && Events.PendingStreams.Count == 0
+            && TenantScopes.All(x => x.Events.PendingStreams.Count == 0))
         {
             // Nothing to do, and therefore no listeners either — Marten's rule, and without it every
             // no-op save would run every registered listener.
@@ -241,7 +371,14 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
 
         // After the hook, not before, so that a listener can start or extend a stream and have those
         // events commit in this unit of work. Marten collects them earlier and cannot.
-        var streams = Events.PendingStreams.ToArray();
+        //
+        // A tenant scope's streams are gathered here rather than being queued as operations, because
+        // planning an append is what turns a StreamAction into operations and that happens inside the
+        // write transaction. Each action already carries its own tenant, and AppendPlanner already
+        // writes stream.TenantId rather than the session's — so a cross-tenant append needs nothing
+        // from the planner beyond being handed the action.
+        var streams = Events.PendingStreams
+            .Concat(TenantScopes.SelectMany(x => x.Events.PendingStreams)).ToArray();
 
         // Inline projections run before the batch is taken, because applying one queues further
         // operations — the snapshot writes — that have to commit alongside the events that caused
@@ -253,6 +390,11 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
 
         var queued = TakePendingOperations();
         Events.ClearPendingStreams();
+
+        foreach (var scope in TenantScopes)
+        {
+            scope.Events.ClearPendingStreams();
+        }
 
         // A document type can be stored without ever having been registered, and a snapshot type is
         // registered by projection configuration — so the first write of either may be the first time
@@ -302,6 +444,11 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
         _messageBatch = null;
 
         ResetChangeTracking(queued);
+
+        foreach (var scope in TenantScopes)
+        {
+            scope.ResetChangeTracking(queued);
+        }
 
         // Outside the resilience pipeline, and skipped entirely for an enlisted session. The first is
         // fisher#4's property — a retried SQLITE_BUSY re-executes the whole delegate, so a listener
@@ -778,6 +925,20 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     {
         var provider = FisherDatabase.Providers.StorageFor<T>();
 
+        // The one place a tenant scope has to refuse something, and it covers every read and every
+        // write because every one of them resolves storage here. A type registered without
+        // MultiTenanted() has no tenant_id column, so a write "for another tenant" would land in the
+        // single unscoped table and look like it had worked — the silent cross-tenant answer fisher#51
+        // was, arrived at from the other direction.
+        if (_parent is not null && !((Storage.ClosedShape.IFisherDocumentStorage)provider.Lightweight).IsConjoined)
+        {
+            throw new InvalidOperationException(
+                $"'{typeof(T).Name}' is not multi-tenanted, so it cannot be reached through ForTenant("
+                + $"\"{TenantId}\"): there is no tenant_id column to scope by, and the write would go to "
+                + "the one table every tenant shares. Call StoreOptions.Schema.For<"
+                + $"{typeof(T).Name}>().MultiTenanted(), or use the session itself.");
+        }
+
         return SessionOptions.Tracking switch
         {
             DocumentTracking.IdentityOnly => provider.IdentityMap,
@@ -826,6 +987,13 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     /// </remarks>
     public async ValueTask<IMessageSink> GetOrStartMessageSink()
     {
+        // A tenant scope shares the unit of work, so it shares the batch that brackets it — a second
+        // batch would flush its messages against a transaction it does not commit.
+        if (_parent is not null)
+        {
+            return await _parent.GetOrStartMessageSink().ConfigureAwait(false);
+        }
+
         return _messageBatch ??= await Options.Events.MessageOutbox.CreateBatch(this).ConfigureAwait(false);
     }
 
@@ -895,10 +1063,48 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     // ---- IMetadataContext ----
 
     public string TenantId { get; internal set; }
-    public string? CausationId { get; set; }
-    public string? CorrelationId { get; set; }
-    public string? CurrentUserName { get; set; }
-    public Dictionary<string, object>? Headers { get; private set; }
+
+    // Delegated on a tenant scope: correlation, causation, user and headers describe the unit of work
+    // rather than the tenant, and there is one unit of work. So a document written for another tenant
+    // carries the same values as everything else in the transaction, and setting one through a scope
+    // sets it for the whole of it.
+    private string? _causationId;
+    private string? _correlationId;
+    private string? _currentUserName;
+
+    public string? CausationId
+    {
+        get => _parent is null ? _causationId : _parent.CausationId;
+        set
+        {
+            if (_parent is null) _causationId = value;
+            else _parent.CausationId = value;
+        }
+    }
+
+    public string? CorrelationId
+    {
+        get => _parent is null ? _correlationId : _parent.CorrelationId;
+        set
+        {
+            if (_parent is null) _correlationId = value;
+            else _parent.CorrelationId = value;
+        }
+    }
+
+    public string? CurrentUserName
+    {
+        get => _parent is null ? _currentUserName : _parent.CurrentUserName;
+        set
+        {
+            if (_parent is null) _currentUserName = value;
+            else _parent.CurrentUserName = value;
+        }
+    }
+
+    private Dictionary<string, object>? _headers;
+
+    public Dictionary<string, object>? Headers => _parent is null ? _headers : _parent.Headers;
 
     public bool CorrelationIdEnabled => Options.Events.EnableCorrelationId;
     public bool CausationIdEnabled => Options.Events.EnableCausationId;
@@ -923,13 +1129,30 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
 
-        Headers ??= new Dictionary<string, object>();
-        Headers[key] = value;
+        if (_parent is not null)
+        {
+            _parent.SetHeader(key, value);
+            return;
+        }
+
+        _headers ??= new Dictionary<string, object>();
+        _headers[key] = value;
     }
 
+    /// <remarks>
+    ///     <b>A tenant scope disposes nothing</b>, because it owns nothing — the connection is the
+    ///     session's. Writing <c>await using var scope = session.ForTenant("b")</c> out of habit
+    ///     therefore does no harm, where closing the shared connection would end the unit of work the
+    ///     scope exists to join.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
         GC.SuppressFinalize(this);
+
+        if (_parent is not null)
+        {
+            return;
+        }
 
         await _lifetime.DisposeAsync().ConfigureAwait(false);
     }
@@ -945,9 +1168,15 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
     ///     unusable rather than merely less efficient. <c>SqliteConnection</c> supplies both, so there
     ///     is nothing to block on.
     /// </remarks>
+    /// <inheritdoc cref="DisposeAsync" />
     public void Dispose()
     {
         GC.SuppressFinalize(this);
+
+        if (_parent is not null)
+        {
+            return;
+        }
 
         _lifetime.Dispose();
     }

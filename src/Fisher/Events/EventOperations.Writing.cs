@@ -230,7 +230,7 @@ public partial class EventOperations
         var connection = await _session.ConnectionAsync(cancellation).ConfigureAwait(false);
 
         return await new Storage.NaturalKeyLookup(Graph)
-                   .ResolveAsync(definition, unwrapped, _session.TenantId, connection, cancellation)
+                   .ResolveAsync(definition, unwrapped, TenantId, connection, cancellation)
                    .ConfigureAwait(false)
                ?? throw new Exceptions.UnknownNaturalKeyException(typeof(T), unwrapped);
     }
@@ -448,7 +448,7 @@ public partial class EventOperations
             : new StreamAction((string)streamId, version.HasValue ? StreamActionType.Append : StreamActionType.Start);
 
         action.ExpectedVersionOnServer = version ?? 0;
-        action.TenantId = _session.TenantId;
+        action.TenantId = TenantId;
 
         return Track(streamId, action);
     }
@@ -474,7 +474,7 @@ public partial class EventOperations
 
         if (IsConjoined)
         {
-            command.Parameters.Add(new SqliteParameter("tenant_id", _session.TenantId)
+            command.Parameters.Add(new SqliteParameter("tenant_id", TenantId)
             {
                 SqliteType = SqliteType.Text
             });
