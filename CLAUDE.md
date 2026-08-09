@@ -224,6 +224,8 @@ Working, with tests:
   `[HiloSequence]`, `AddSubClassHierarchy()`, `StoreOptions.Policies` and `StoreOptions.InitialData`
 - **Binary event bodies** — `[BinaryEvent]` over a supplied `IEventBinarySerializer`, stored in a
   `data_binary` BLOB column beside the JSON one
+- **Document-side tooling** — `IDocumentStoreUsageSource`, `IDocumentStoreDiagnostics` and projection
+  step-through, so a monitoring console sees the document half as well as the event half
 
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
@@ -1806,6 +1808,47 @@ reintroduce fisher#20's bug one level up, where it is harder to see.
   `the_store_implements_every_interface_member_implicitly` checks the other direction through the
   interface map, so a member satisfied explicitly — compiling fine and then unreachable from the
   concrete type — is caught too.
+
+### The document-side tooling surface
+
+`IDocumentStoreUsageSource`, `IDocumentStoreDiagnostics` and projection step-through (fisher#44) —
+three partials on `DocumentStore`, all implemented **explicitly** like the event-side ones.
+
+Before this, Fisher answered the event half of every question a monitoring console asks and none of
+the document half — which renders as "no documents" rather than "this store does not answer that".
+Same outcome the standing discipline exists to prevent, reached by a different route: not a member
+that throws, but an interface never implemented.
+
+- **The usage sweep has to force the mappings into existence.** A mapping is created lazily on first
+  use, so a store that has opened no session has none — exactly the state a console sees on a fresh
+  boot. `MaterializeMappings` asks the schema for every projection's aggregate type first.
+- **`PartitioningStrategy` is reported as null rather than omitted.** SQLite has no table
+  partitioning, so the field has a value — none — rather than being unknown.
+- **A DDL failure is reported as a SQL comment, not thrown.** One bad mapping should not take the whole
+  store's description with it.
+- **`QueryDocumentsAsync` is hand-built SQL, which makes it a fourth caller of the three implicit
+  filters.** It cannot go through `Query<T>()`: a console names its type as a *string* and filters on
+  *columns* (correlation id, causation id, last-modified-by) that are not document members, so there is
+  no expression tree to build. The mitigation is that each filter is composed from the one place that
+  owns it — `SoftDelete.NotDeletedSql`, `DocumentHierarchy.FilterSqlFor`, the tenant column — rather
+  than re-spelled, and `diagnostics_reads_carry_the_implicit_filters` pins all three.
+- **A table that does not exist reports an empty page.** SQLite resolves a table name when it
+  *prepares* a statement, so a count against a type whose table was never created fails before any
+  guard could run — the lesson rebuild teardown and `CleanAsync<T>` both learned, met again on a
+  console's first click.
+- **A sub-class resolves to its base's mapping plus a `doc_type` filter.** A registered sub-class has no
+  mapping of its own, which is fisher#17's whole point; the name a console passes may still be one.
+- **A console's id is converted through the mapping's identity type before it is bound.** Fourth
+  appearance of the uppercase-Guid trap: `fi_doc_*.id` holds the lowercase canonical form under a
+  case-sensitive collation, so binding the caller's string directly matches nothing.
+- **Projection replay copies the aggregate at every step**, and this is the one thing Polecat's does
+  not. JasperFx's aggregation mutates the aggregate in place, so a timeline built from live references
+  shows the *final* state at every step — the single thing a step-through exists not to do. The copy
+  goes through the store's own serializer, which also makes each captured state exactly what would have
+  been persisted. Found by the test failing with `[1, 1, 1]` where `[1, 2, 1]` was expected.
+- **A step's exception is recorded on the step rather than thrown**, or the first bad event would hide
+  every step after it. An unknown event type is skipped, following the stream reads' policy rather than
+  the daemon's: a console may be pointed at a store holding types this deployment does not know.
 
 ### `Advanced`, cleaning and the projection scenario
 
