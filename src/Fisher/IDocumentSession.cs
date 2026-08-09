@@ -171,6 +171,34 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
     Task<IReadOnlyList<T>> LoadManyAsync<T>(params long[] ids) where T : class;
+
+    /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
+    /// <remarks>
+    ///     The token comes first because the ids are a <c>params</c> array and nothing may follow one.
+    ///     Same shape Marten uses (fisher#56).
+    /// </remarks>
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params Guid[] ids) where T : class;
+
+    /// <inheritdoc cref="LoadManyAsync{T}(CancellationToken,Guid[])" />
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params string[] ids) where T : class;
+
+    /// <inheritdoc cref="LoadManyAsync{T}(CancellationToken,Guid[])" />
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params int[] ids) where T : class;
+
+    /// <inheritdoc cref="LoadManyAsync{T}(CancellationToken,Guid[])" />
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params long[] ids) where T : class;
+
+    /// <summary>
+    ///     Load several documents by strong-typed identity.
+    /// </summary>
+    /// <remarks>
+    ///     The many-form of <see cref="LoadAsync{T,TId}" />, and the same rule applies: both type
+    ///     parameters are explicit, which is what keeps it unambiguous against the four
+    ///     single-parameter overloads. The ids are an ordinary array rather than <c>params</c>, so the
+    ///     token can keep its usual place at the end.
+    /// </remarks>
+    Task<IReadOnlyList<T>> LoadManyAsync<T, TId>(TId[] ids, CancellationToken token = default)
+        where T : class where TId : notnull;
 }
 
 /// <summary>

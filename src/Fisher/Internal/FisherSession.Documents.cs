@@ -473,6 +473,11 @@ internal partial class FisherSession
     public Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params long[] ids) where T : class
         => LoadManyByIdAsync<T, long>(ids, token);
 
+    /// <inheritdoc cref="IDocumentSession.LoadManyAsync{T,TId}" />
+    public Task<IReadOnlyList<T>> LoadManyAsync<T, TId>(TId[] ids, CancellationToken token = default)
+        where T : class where TId : notnull
+        => LoadManyByIdAsync<T, TId>(ids, token);
+
     private Task<IReadOnlyList<T>> LoadManyByIdAsync<T, TId>(TId[] ids, CancellationToken token)
         where T : class where TId : notnull
         => ((Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>()).LoadManyAsync(ids, this, token);

@@ -182,6 +182,34 @@ public class storing_documents : IAsyncLifetime
         (await session.LoadManyAsync<Trail>(Array.Empty<Guid>())).ShouldBeEmpty();
     }
 
+    /// <remarks>
+    ///     fisher#56 — these existed on the session and on no interface, so they were unreachable and
+    ///     <c>LoadManyAsync</c> was the only read that could not be cancelled. The token leads because
+    ///     nothing may follow a <c>params</c> array.
+    /// </remarks>
+    [Fact]
+    public async Task loads_many_with_a_cancellation_token()
+    {
+        var trail = new Trail { Id = Guid.NewGuid(), Name = "One" };
+        var marker = new Marker { Id = "m1", Label = "Cairn" };
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Store(trail);
+            session.Store(marker);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var query = _store.LightweightSession();
+
+        (await query.LoadManyAsync<Trail>(TestContext.Current.CancellationToken, trail.Id)).Count.ShouldBe(1);
+        (await query.LoadManyAsync<Marker>(TestContext.Current.CancellationToken, "m1")).Count.ShouldBe(1);
+
+        // And the explicit-identity form, which had no many-shape at all.
+        (await query.LoadManyAsync<Trail, Guid>([trail.Id], TestContext.Current.CancellationToken))
+            .Count.ShouldBe(1);
+    }
+
     [Fact]
     public async Task deletes_a_document()
     {
