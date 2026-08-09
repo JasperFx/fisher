@@ -38,8 +38,22 @@ internal class MemberFactory : IMemberResolver
     private readonly EnumStorage _enumStorage;
     private readonly DocumentMapping? _mapping;
     private readonly bool _hasIdentityColumn;
+    private readonly string _qualifier;
 
-    public MemberFactory(StoreOptions options, DocumentMapping mapping) : this(options, mapping, true)
+    /// <param name="options">The store's options — serializer naming policy and enum storage.</param>
+    /// <param name="mapping">The document the members belong to.</param>
+    /// <param name="tableAlias">
+    ///     The table alias every locator is qualified with, or null for the unqualified form.
+    /// </param>
+    /// <remarks>
+    ///     <b>The alias belongs here rather than being applied to a finished locator</b> (fisher#25). A
+    ///     join needs <c>json_extract(outer_t.data, '$.x')</c>, and the alias goes on <c>data</c> —
+    ///     inside the call — not on the <c>json_extract</c> result. Rewriting the rendered string
+    ///     afterwards, which is Polecat's answer, produces valid SQL that reads the wrong table's column
+    ///     when a pattern matches something it should not; building it qualified from the start cannot.
+    /// </remarks>
+    public MemberFactory(StoreOptions options, DocumentMapping mapping, string? tableAlias = null)
+        : this(options, mapping, true, tableAlias)
     {
     }
 
@@ -58,14 +72,16 @@ internal class MemberFactory : IMemberResolver
     ///         against the wrong column and return rows rather than an error.
     ///     </para>
     /// </remarks>
-    public MemberFactory(StoreOptions options) : this(options, null, false)
+    public MemberFactory(StoreOptions options) : this(options, null, false, null)
     {
     }
 
-    private MemberFactory(StoreOptions options, DocumentMapping? mapping, bool hasIdentityColumn)
+    private MemberFactory(StoreOptions options, DocumentMapping? mapping, bool hasIdentityColumn,
+        string? tableAlias)
     {
         _mapping = mapping;
         _hasIdentityColumn = hasIdentityColumn;
+        _qualifier = tableAlias is null ? "" : tableAlias + ".";
         _enumStorage = options.Serializer.EnumStorage;
 
         if (options.Serializer is Serializer serializer)
@@ -88,7 +104,7 @@ internal class MemberFactory : IMemberResolver
         // The identity lives in its own column, not in the JSON body.
         if (expression.Expression is ParameterExpression && IsIdentityMember(expression.Member))
         {
-            return new IdMember(_mapping!.IdType);
+            return new IdMember(_mapping!.IdType, _qualifier);
         }
 
         return ResolveMember(ChainOf(expression));
@@ -110,7 +126,7 @@ internal class MemberFactory : IMemberResolver
         var member = CreateMember(BuildJsonPath(chain), GetMemberType(chain[^1]));
         var duplicate = _mapping?.DuplicateFor(chain);
 
-        return duplicate is null ? member : new DuplicatedMember(member, duplicate.ColumnName);
+        return duplicate is null ? member : new DuplicatedMember(member, duplicate.ColumnName, _qualifier);
     }
 
     /// <summary>
@@ -141,7 +157,7 @@ internal class MemberFactory : IMemberResolver
 
     private IQueryableMember CreateMember(string jsonPath, Type memberType)
     {
-        var locator = $"json_extract(data, '{jsonPath}')";
+        var locator = $"json_extract({_qualifier}data, '{jsonPath}')";
         var underlying = Nullable.GetUnderlyingType(memberType) ?? memberType;
 
         if (underlying.IsEnum)

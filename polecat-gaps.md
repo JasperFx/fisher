@@ -30,16 +30,17 @@ The single largest area. Fisher's `LinqQueryParser` handles `Where`, the four or
 | ~~`SumAsync` / `MinAsync` / `MaxAsync` / `AverageAsync`, `LastAsync`, predicate overloads of `CountAsync`/`AnyAsync`~~ | [#22](https://github.com/JasperFx/fisher/issues/22) **done** |
 | ~~`Select` projections (scalar, anonymous, constructor), `Distinct`, `DistinctBy`~~ | [#23](https://github.com/JasperFx/fisher/issues/23) **done** |
 | ~~`GroupBy`, with `Where`-after-group as `HAVING`~~ | [#24](https://github.com/JasperFx/fisher/issues/24) **done** |
-| `GroupJoin(...).SelectMany(...)` | [#25](https://github.com/JasperFx/fisher/issues/25) |
+| ~~`Join`, `GroupJoin(...).SelectMany(...)`~~ | [#25](https://github.com/JasperFx/fisher/issues/25) **done** — plus the plain `Join` the issue did not ask for |
 | ~~`AnyTenant` / `TenantIsOneOf`, `ModifiedSince` / `ModifiedBefore`, `QueryForNonStaleData`, `IsOneOf` / `In` / `IsEmpty` / `object.Equals`~~ (`CreatedSince`/`CreatedBefore` wait on [#29](https://github.com/JasperFx/fisher/issues/29)) | [#26](https://github.com/JasperFx/fisher/issues/26) **done** |
 | ~~`IPagedList` / `ToPagedListAsync`, and keyset (cursor) pagination~~ | [#27](https://github.com/JasperFx/fisher/issues/27) **done** |
 | ~~`LoadJsonAsync`, `ToJsonArrayAsync`, `ToJsonFirstWithVersionAsync`, streaming~~ | [#28](https://github.com/JasperFx/fisher/issues/28) **done** |
 | ~~Batched document queries, `IQueryPlan`, `CheckExistsAsync`, `ToSql`~~ | [#37](https://github.com/JasperFx/fisher/issues/37) **done** |
 
-Two of these are *cheaper* on SQLite than on either sibling and the issues say why. `GroupJoin`
+Two of these were *cheaper* on SQLite than on either sibling and both paid out. `GroupJoin`
 ([#25](https://github.com/JasperFx/fisher/issues/25)) is a plain join between two tables with no
 `OPENJSON` and no round trip to amortise — and the usual "a round trip is cheaper than a join"
-argument inverts for an in-process store. Keyset pagination
+argument inverts for an in-process store. It also needed no statement type of its own, where Polecat
+carries a parallel `JoinStatement`. Keyset pagination
 ([#27](https://github.com/JasperFx/fisher/issues/27)) can use SQLite's native row-value comparison,
 where T-SQL needs the expanded OR-of-ANDs form the planner cannot index.
 

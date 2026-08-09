@@ -174,7 +174,8 @@ Working, with tests:
 - `DocumentStore.Advanced` — `Clean`, `ResetAllDataAsync`, `ResetHiloSequenceFloorAsync<T>`
 - `DocumentStore : IEventStore` — the explorer reads (`GetRecentStreamsAsync`,
   `GetStreamMetadataAsync`) and `TryCreateUsage`; see below
-- **LINQ** — `session.Query<T>()` over `json_extract`: where, ordering, paging, async terminals
+- **LINQ** — `session.Query<T>()` over `json_extract`: where, ordering, paging, projections, grouping,
+  aggregates and **joins** (`Join` / `GroupJoin(...).SelectMany(...)`), with async terminals
 - **DCB tags** — tag tables, tagged appends, `QueryByTagsAsync`, `EventsExistAsync`,
   `AssignTagWhere`, `AggregateByTagsAsync`, `FetchForWritingByTags` with its consistency guard, and
   batched queries
@@ -752,6 +753,68 @@ or why. Defaulting matches what deserializing the document would have produced f
 what the aggregate terminals already return over no rows. Found while building fisher#24, and it
 affected both projection paths; pinned by `a_null_column_becomes_the_default_rather_than_throwing` in
 both test classes.
+
+### LINQ joins
+
+`Join` and `GroupJoin(...).SelectMany(...)` across two document tables (fisher#25) — `Linq/Joins/`.
+**This is the LINQ tier where SQLite is the easiest of the three dialects rather than the hardest**: a
+join between two document tables is `join fi_doc_catch inner_t on outer_t.id =
+json_extract(inner_t.data, '$.anglerId')`, with no `OPENJSON`, no lateral join, and an expression index
+(fisher#16) usable on either side. It is also worth *more* here than on either sibling — the usual
+argument against joins in a document store is that a round trip is cheap next to a join's cost, and an
+embedded store has no round trip to be cheap; the alternative is two statements and a client-side
+stitch.
+
+- **The join is on the ordinary `Statement`, not a parallel one.** Polecat's `JoinStatement`
+  re-implements the select list, the wheres, the ordering and the paging, so anything built for one
+  shape has to be built again for the other — its join path carries its own `Count` and its own
+  `TOP`/`OFFSET` rendering. Fisher's `Count`, `Any`, `ToPagedListAsync` and `ToSql` serve a join
+  without knowing it is one. The one place that had to learn about joins is `WrapAsSubquery`, which
+  must carry `Joins` and `FromAlias` or a count over a paged join counts the outer table instead.
+- **The alias goes into `MemberFactory`, so every locator is built qualified.** Polecat rewrites the
+  rendered string afterwards (`AliasingCommandBuilder`, `JoinStatement.AliasLocator`), which produces
+  valid SQL that reads the wrong table whenever the pattern matches something it should not. Building
+  `json_extract(outer_t.data, …)` from the start cannot — and the alias belongs *inside*
+  `json_extract`, on `data`, not on its result. `a_member_both_sides_have_reads_its_own_table` is the
+  case that tells the two apart, and removing the qualifier fails 17 of the 27 join tests.
+- **Everything about the inner side goes in the `ON` clause; a post-join `where` goes in the `WHERE`.**
+  Not an inconsistency — an inner-side filter says which rows the join may *match*, a post-join
+  predicate says which joined rows *survive*. On a left join the two differ visibly: the first keeps an
+  unmatched outer row and the second may remove it, which is exactly what the same clauses do in
+  memory. Putting an inner-side term in the `WHERE` turns a left join back into an inner one, silently
+  and only for the rows the left join exists to keep; moving them there fails five tests.
+- **The inner query's own predicates are applied. Polecat drops them silently** — it collects only the
+  tenant and soft-delete filters for its inner table, so `GroupJoin(session.Query<Catch>().Where(...))`
+  there returns rows the caller excluded. Fisher parses the inner source with the same parser and the
+  inner alias; anything beyond filtering (ordering, paging, projection) is refused, being a question
+  about one outer row's matches after the join has flattened them.
+- **All three implicit filters apply per side**, through the same statement-level passes the unjoined
+  path uses, now taking a qualifier. That is fisher#51's lesson held to: a fourth caller composing its
+  own tenant term is how that bug happened.
+- **The inner document is materialized by its own storage's selector, through an offsetting reader.**
+  A closed-shape selector reads from fixed positions (id 0, data 1, metadata 2+), so the inner side —
+  whose columns start after the outer's — needs the *reader* shifted rather than the selector changed.
+  `OffsetDataReader` is that. Polecat's join handler instead calls the serializer on the `data` column
+  directly, which loses `doc_type` resolution — a sub-class comes back as its base, quietly missing
+  whatever it added — and the metadata binders with it. `a_joined_hierarchy_comes_back_as_its_sub_classes`
+  is the dividend.
+- **Both spellings collapse to one lambda over the two documents.** A `GroupJoin`'s pair of selectors
+  and a query-syntax `Join`'s transparent identifier are the same shape one call apart, so
+  `JoinResultSelectorRewriter` serves both; a plain `Join` that spelled its result out needs no rewrite
+  at all. **A `GroupJoin`'s second parameter is the group, not a row**, and is deliberately left
+  unmapped — an expression still naming it (`x.catches.Count()`) is asking about rows the join has
+  flattened, and is refused rather than silently answered about the one matched row.
+- **A predicate or ordering key written after the join is resolved against whichever shape it names**,
+  decided by its parameter's type rather than by trying one and falling back: method syntax names the
+  projected result, query syntax's `where`/`orderby` come before its `select` and name the intermediate
+  shape. Both land on the projection's own two parameters, so which side a member belongs to is decided
+  **by parameter reference, not by type** — a self-join has the same type on both sides.
+- **A member the projection computed is refused rather than sorted or filtered on**, since its value
+  exists only after the row is read.
+- Refused by name, each with the alternative: keyset paging, JSON reads, `LastAsync`, the scalar
+  aggregates, `Select`/`GroupBy`/`Distinct`/`DistinctBy` after the join, and a second join.
+  `ToListAsync`, the `First`/`Single` family, `CountAsync`, `AnyAsync`, `ToPagedListAsync` and `ToSql`
+  all work.
 
 ### LINQ paging
 

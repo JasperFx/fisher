@@ -34,6 +34,20 @@ internal static class SoftDelete
     public const string DeletedSql = IsDeletedColumn + " = 1";
 
     /// <summary>
+    ///     <see cref="NotDeletedSql" /> against a table alias — <c>inner_t.is_deleted = 0</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Only a join has an alias to qualify with (fisher#25), and the qualifier is empty everywhere
+    ///     else. Here rather than at the call site so that this file stays the one place the column
+    ///     name is spelled: the table definition, the storage and the query layer would each otherwise
+    ///     write it out.
+    /// </remarks>
+    public static string NotDeletedSqlFor(string qualifier) => qualifier + NotDeletedSql;
+
+    /// <inheritdoc cref="NotDeletedSqlFor" />
+    public static string DeletedSqlFor(string qualifier) => qualifier + DeletedSql;
+
+    /// <summary>
     ///     The <c>update … set</c> head that a soft delete is, in place of a <c>delete from</c>.
     /// </summary>
     public static string MarkDeletedSql(string quotedTableName)

@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**906 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
+**933 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
 cross-store compliance tests — which as of 2.45.0 is every event sourcing suite the shared library has.
 
 ## Closed since the comparison
@@ -22,7 +22,7 @@ cross-store compliance tests — which as of 2.45.0 is every event sourcing suit
 **a cross-tenant read (#51)** · the marker operators (#26) · offset and keyset paging (#27) · batching,
 query plans, `CheckExistsAsync`, `ToSql` (#37) · JSON-returning reads (#28) · `Advanced` parity (#42) ·
 patching (#35) · bulk insert (#36) · composite projections (#19) · event body queries (#41) ·
-sessions, `SessionOptions` and enlistment (#30).
+sessions, `SessionOptions` and enlistment (#30) · **LINQ joins (#25)**.
 
 ## Sessions and enlistment — the one the ordering called a hard stop
 
@@ -98,9 +98,46 @@ Two follow-ups were filed rather than shipped half-done: `Insert`-at-an-array-in
 ([#52](https://github.com/JasperFx/fisher/issues/52), because `json_insert` is a silent no-op at an
 occupied path) and `BulkInsertMode.IgnoreDuplicates`
 ([#53](https://github.com/JasperFx/fisher/issues/53), because `insert or ignore` is a fifth statement
-in the descriptor rather than a flag). **`GroupJoin` ([#25](https://github.com/JasperFx/fisher/issues/25))
-is the one LINQ issue deliberately left open** — it needs every locator and all three implicit filters
-qualified for two tables, which is a materially bigger piece than the rest of the tier combined.
+in the descriptor rather than a flag). `GroupJoin` ([#25](https://github.com/JasperFx/fisher/issues/25)) was left for last in that tier for
+the right reason — every locator and all three implicit filters qualified for two tables — and is now
+done; see below.
+
+## Joins — the piece where the port stopped being the answer
+
+**#25 is the one issue so far where following Polecat's shape would have made Fisher worse**, and it is
+worth reading the two side by side before touching `Linq/Joins/`. Three divergences, each verified by
+reverting it:
+
+- **The join is a `JoinClause` on the ordinary `Statement`, not a parallel `JoinStatement`.** Polecat's
+  join path re-implements the select list, the wheres, the ordering, the paging and the count; Fisher's
+  `Count`, `Any`, `ToPagedListAsync` and `ToSql` serve a join without knowing it is one. The single
+  place that had to learn about joins is `WrapAsSubquery` — a count over a *paged* join has to carry the
+  join into the subquery or it counts the outer table. The test that catches that has to page to a size
+  between the two counts, which the first version of it did not.
+- **The table alias is threaded through `MemberFactory`, not rewritten into finished SQL.** Polecat has
+  an `AliasingCommandBuilder` and a string-replacing `AliasLocator` because it applies aliases after
+  rendering; that produces valid SQL reading the wrong table whenever a pattern matches something it
+  should not. Removing the qualifier fails 17 of the 27 join tests, most of them silently wrong rather
+  than erroring.
+- **Both documents are materialized by their own storages' selectors**, the inner one through an
+  offsetting `DbDataReader` view, because a closed-shape selector reads from fixed positions. Polecat
+  deserializes the `data` column directly, which loses `doc_type` resolution — a joined sub-class comes
+  back as its base — and every metadata binder with it.
+
+**Polecat also drops the inner query's `Where` clauses silently**, collecting only its tenant and
+soft-delete filters. Fisher parses the inner source with the same parser and the inner alias, so
+`GroupJoin(session.Query<Catch>().Where(...))` means what it says.
+
+The placement rule worth remembering: **everything about the inner side goes in the `ON` clause, and a
+post-join `where` goes in the `WHERE`** — the first says which rows may match, the second which joined
+rows survive, and on a left join the difference is visible in the answer. Moving the inner-side filters
+to the `WHERE` fails five tests, all of them cases where a left join quietly became an inner one.
+
+Both LINQ spellings are supported, which is more than the issue asked for: query syntax's plain `join`
+clause emits `Queryable.Join` rather than `GroupJoin`, and a `where` or `orderby` after it names the
+transparent identifier rather than the projected result. One rewriter collapses all of it onto
+`(outer, inner) => …`; which shape a later clause names is decided by its parameter's *type*, and which
+side a member belongs to by parameter *reference* — a self-join makes the type ambiguous.
 
 ## The 2.45.0 bump, and the first suite to check something nothing else did
 

@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Fisher.Internal;
+using Fisher.Linq.Joins;
 using Fisher.Linq.Members;
 using Fisher.Linq.CursorPaging;
 using Fisher.Linq.Parsing;
@@ -17,9 +18,10 @@ namespace Fisher.Linq;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         Far smaller than Polecat's provider, which carries grouping, projections, joins, cursor
-///         paging and soft deletes. Fisher answers the operators it has SQL for and refuses the rest by
-///         name.
+///         Smaller than Polecat's provider of the same job, and the reason is that everything it
+///         answers goes through one <see cref="Statement" /> — grouping, projections, paging, soft
+///         deletes and joins alike. Anything it cannot translate is refused by name rather than
+///         falling back to evaluating in memory.
 ///     </para>
 ///     <para>
 ///         The SELECT and the materialization both come from the existing query-only closed-shape
@@ -30,7 +32,7 @@ namespace Fisher.Linq;
 ///         <c>LoadAsync</c>'s.
 ///     </para>
 /// </remarks>
-public class FisherQueryProvider : IQueryProvider
+public partial class FisherQueryProvider : IQueryProvider
 {
     private readonly FisherSession _session;
 
@@ -73,6 +75,11 @@ public class FisherQueryProvider : IQueryProvider
     internal async Task<IReadOnlyList<T>> ToListAsync<T>(Expression expression, CancellationToken token)
         where T : notnull
     {
+        if (JoinFor(expression) is { } joined)
+        {
+            return await JoinListAsync<T>(joined.Statement, joined.Plan, token).ConfigureAwait(false);
+        }
+
         if (ProjectionFor(expression) is { } projected)
         {
             return await ProjectListAsync<T>(projected, token).ConfigureAwait(false);
@@ -130,22 +137,20 @@ public class FisherQueryProvider : IQueryProvider
         CancellationToken token)
         where T : notnull
     {
+        if (JoinFor(expression) is { } joined)
+        {
+            joined.Statement.Limit = enforceSingle ? 2 : 1;
+
+            return OneOf(await JoinListAsync<T>(joined.Statement, joined.Plan, token).ConfigureAwait(false),
+                enforceSingle, required);
+        }
+
         if (ProjectionFor(expression) is { } projected)
         {
             projected.Statement.Limit = enforceSingle ? 2 : 1;
 
-            var rows = await ProjectListAsync<T>(projected, token).ConfigureAwait(false);
-
-            if (rows.Count == 0)
-            {
-                return required
-                    ? throw new InvalidOperationException($"The query returned no {typeof(T).Name}.")
-                    : default;
-            }
-
-            return enforceSingle && rows.Count > 1
-                ? throw new InvalidOperationException($"The query returned more than one {typeof(T).Name}.")
-                : rows[0];
+            return OneOf(await ProjectListAsync<T>(projected, token).ConfigureAwait(false),
+                enforceSingle, required);
         }
 
         var (statement, selector) = Build<T>(expression);
@@ -170,10 +175,28 @@ public class FisherQueryProvider : IQueryProvider
         return result;
     }
 
+    /// <summary>
+    ///     What <c>First</c>, <c>FirstOrDefault</c>, <c>Single</c> and <c>SingleOrDefault</c> mean once
+    ///     the rows are in hand — the shape the projected and joined reads share.
+    /// </summary>
+    private static T? OneOf<T>(IReadOnlyList<T> rows, bool enforceSingle, bool required)
+    {
+        if (rows.Count == 0)
+        {
+            return required
+                ? throw new InvalidOperationException($"The query returned no {typeof(T).Name}.")
+                : default;
+        }
+
+        return enforceSingle && rows.Count > 1
+            ? throw new InvalidOperationException($"The query returned more than one {typeof(T).Name}.")
+            : rows[0];
+    }
+
     internal async Task<long> CountAsync<T>(Expression expression, CancellationToken token)
         where T : notnull
     {
-        var (statement, parser, _) = BuildStatement(SourceTypeFor(expression), expression);
+        var (statement, parser, _, _) = BuildStatement(SourceTypeFor(expression), expression);
 
         // A projected count has to count the projected rows, and under Distinct that is the whole
         // point of the count — so the projection becomes a subquery rather than having its select
@@ -211,7 +234,7 @@ public class FisherQueryProvider : IQueryProvider
     internal async Task<long> CountIgnoringPagingAsync<T>(Expression expression, CancellationToken token)
         where T : notnull
     {
-        var (statement, parser, _) = BuildStatement(SourceTypeFor(expression), expression);
+        var (statement, parser, _, _) = BuildStatement(SourceTypeFor(expression), expression);
 
         statement.Limit = null;
         statement.Offset = null;
@@ -241,13 +264,20 @@ public class FisherQueryProvider : IQueryProvider
     internal async Task<Pagination.CursorPage<T>> CursorPageAsync<T>(Expression expression,
         int pageSize, string? cursor, CancellationToken token) where T : notnull
     {
-        var (statement, parser, selectClause) = BuildStatement(SourceTypeFor(expression), expression);
+        var (statement, parser, selectClause, join) = BuildStatement(SourceTypeFor(expression), expression);
 
         if (RowProjection.For(parser) is not null)
         {
             throw new BadLinqExpressionException(
                 "Keyset pagination returns documents, so it cannot follow a Select. Project the page's "
                 + "items after it comes back.");
+        }
+
+        if (join is not null)
+        {
+            throw new BadLinqExpressionException(
+                "Keyset pagination returns documents of one type, so it cannot follow a join. Page the "
+                + "outer query and join the page's items afterwards, or use ToPagedListAsync.");
         }
 
         CursorPagination.ValidateOrdering(parser.OrderByMembers);
@@ -300,7 +330,7 @@ public class FisherQueryProvider : IQueryProvider
     /// </summary>
     internal string ToSql<T>(Expression expression) where T : notnull
     {
-        var (statement, _, _) = BuildStatement(SourceTypeFor(expression), expression);
+        var (statement, _, _, _) = BuildStatement(SourceTypeFor(expression), expression);
 
         var builder = new Weasel.Sqlite.CommandBuilder();
         statement.Apply(builder);
@@ -326,12 +356,13 @@ public class FisherQueryProvider : IQueryProvider
     internal async Task<IReadOnlyList<string>> JsonRowsAsync<T>(Expression expression, string columns,
         int? limit, CancellationToken token) where T : notnull
     {
-        var (statement, parser, _) = BuildStatement(SourceTypeFor(expression), expression);
+        var (statement, parser, _, join) = BuildStatement(SourceTypeFor(expression), expression);
 
-        if (RowProjection.For(parser) is not null)
+        if (RowProjection.For(parser) is not null || join is not null)
         {
             throw new BadLinqExpressionException(
-                "A JSON read returns stored documents, so it cannot follow a Select or a GroupBy.");
+                "A JSON read returns stored documents, so it cannot follow a Select, a GroupBy or a "
+                + "join.");
         }
 
         statement.SelectColumns = columns;
@@ -369,7 +400,7 @@ public class FisherQueryProvider : IQueryProvider
     {
         // Built non-generically so it answers a projected query too — whether any row exists does not
         // depend on what the rows are shaped into.
-        var (statement, _, _) = BuildStatement(SourceTypeFor(expression), expression);
+        var (statement, _, _, _) = BuildStatement(SourceTypeFor(expression), expression);
         statement.SelectColumns = "1";
         statement.OrderBys.Clear();
         statement.IsExistsWrapper = true;
@@ -398,6 +429,11 @@ public class FisherQueryProvider : IQueryProvider
     internal async Task<T?> LastAsync<T>(Expression expression, bool required, CancellationToken token)
         where T : notnull
     {
+        // Refused ahead of Build<T>, which would otherwise ask the schema for a mapping of the join's
+        // result type — a shape that is not a document and never had one.
+        RefuseJoin(expression, "LastAsync",
+            "Order the outer query and take the last of the result in memory.");
+
         if (ProjectionFor(expression) is { } projected)
         {
             return await LastProjectedAsync<T>(projected, required, token).ConfigureAwait(false);
@@ -484,6 +520,10 @@ public class FisherQueryProvider : IQueryProvider
         AggregateFunction function, LambdaExpression selector, CancellationToken token)
         where T : notnull
     {
+        RefuseJoin(expression, $"{function}Async",
+            "Aggregate the outer or the inner query on its own, or aggregate the join's result in "
+            + "memory.");
+
         var (statement, _) = Build<T>(expression);
         var locator = AggregateLocatorFor<T>(function, selector);
 
@@ -704,10 +744,15 @@ public class FisherQueryProvider : IQueryProvider
         var inner = new Statement
         {
             FromTable = statement.FromTable,
+            // Carried because a count over a paged join has to count the joined rows. Dropping them
+            // would count the outer table instead — the same number for a one-to-one join and a
+            // silently different one for every other.
+            FromAlias = statement.FromAlias,
             SelectColumns = "1",
             Limit = statement.Limit,
             Offset = statement.Offset
         };
+        inner.Joins.AddRange(statement.Joins);
         inner.Wheres.AddRange(statement.Wheres);
         inner.OrderBys.AddRange(statement.OrderBys);
 
@@ -749,19 +794,30 @@ public class FisherQueryProvider : IQueryProvider
     /// </summary>
     private (Statement Statement, RowProjection Projection)? ProjectionFor(Expression expression)
     {
-        var (statement, parser, _) = BuildStatement(SourceTypeFor(expression), expression);
+        var (statement, parser, _, _) = BuildStatement(SourceTypeFor(expression), expression);
 
         return RowProjection.For(parser) is { } projection ? (statement, projection) : null;
     }
 
     private (Statement Statement, ISelector<T> Selector) Build<T>(Expression expression) where T : notnull
     {
-        var (statement, parser, selectClause) = BuildStatement(typeof(T), expression);
+        var (statement, parser, selectClause, join) = BuildStatement(typeof(T), expression);
 
         if (RowProjection.For(parser) is not null)
         {
             throw new BadLinqExpressionException(
                 $"This query projects with Select, so it does not return {typeof(T).Name} documents.");
+        }
+
+        // Everything reaching here reads whole documents of one type through one selector, which a
+        // joined row is not. ToListAsync, the First/Single family, CountAsync and AnyAsync each take
+        // the join path before they get here; the rest are refused rather than silently answering
+        // about the outer table alone.
+        if (join is not null)
+        {
+            throw new BadLinqExpressionException(
+                "Fisher cannot answer this operator over a join. A joined query supports ToListAsync, "
+                + "the First/Single family, CountAsync, AnyAsync, ToPagedListAsync and ToSql.");
         }
 
         return (statement, (ISelector<T>)selectClause.BuildSelector(_session));
@@ -776,8 +832,8 @@ public class FisherQueryProvider : IQueryProvider
     ///     <see cref="Build{T}" /> cannot serve both; splitting here is what avoids reflecting over a
     ///     runtime type to build a statement.
     /// </remarks>
-    private (Statement Statement, LinqQueryParser Parser, ISelectClause SelectClause) BuildStatement(
-        Type sourceType, Expression expression)
+    private (Statement Statement, LinqQueryParser Parser, ISelectClause SelectClause, JoinPlan? Join)
+        BuildStatement(Type sourceType, Expression expression)
     {
         var mapping = _session.Options.Schema.MappingFor(sourceType);
         var storage = ((IStorageSession)_session).StorageFor(sourceType);
@@ -788,12 +844,20 @@ public class FisherQueryProvider : IQueryProvider
                 $"The storage for '{sourceType.Name}' cannot produce a select clause.");
         }
 
-        var parser = new LinqQueryParser(new MemberFactory(_session.Options, mapping));
+        // A join has to be known before the chain is parsed, because it is what decides whether every
+        // locator the parse produces is qualified with a table alias. Cheaper than parsing twice, and
+        // the alternative — qualifying rendered SQL afterwards — is the mistake MemberFactory's own
+        // doc comment records.
+        var joining = ContainsJoin(expression);
+
+        var parser = new LinqQueryParser(
+            new MemberFactory(_session.Options, mapping, joining ? OuterAlias : null));
         parser.Parse(expression);
 
         var statement = new Statement
         {
             FromTable = selectClause.FromObject,
+            FromAlias = joining ? OuterAlias : null,
             SelectColumns = RowProjection.For(parser) is { } projection
                 ? string.Join(", ", projection.Columns)
                 : string.Join(", ", selectClause.SelectFields()),
@@ -808,12 +872,16 @@ public class FisherQueryProvider : IQueryProvider
         statement.Wheres.AddRange(parser.Wheres);
         statement.Havings.AddRange(parser.Havings);
 
-        ApplyTenantFilter(statement, parser, mapping);
-        ApplyMetadataFilters(statement, parser);
-        ApplyHierarchyFilter(statement, mapping, sourceType);
-        ApplySoftDeleteFilters(statement, parser, storage, mapping);
+        var qualifier = joining ? OuterAlias + "." : string.Empty;
 
-        return (ApplyDistinct(statement, parser, selectClause), parser, selectClause);
+        ApplyTenantFilter(statement.Wheres, parser, mapping, qualifier);
+        ApplyMetadataFilters(statement.Wheres, parser, qualifier);
+        ApplyHierarchyFilter(statement.Wheres, mapping, sourceType, qualifier);
+        ApplySoftDeleteFilters(statement.Wheres, parser, mapping, qualifier);
+
+        var join = parser.GroupJoin is null ? null : ApplyJoin(statement, parser.GroupJoin, selectClause);
+
+        return (ApplyDistinct(statement, parser, selectClause), parser, selectClause, join);
     }
 
     /// <summary>
@@ -907,7 +975,8 @@ public class FisherQueryProvider : IQueryProvider
     ///         to each predicate.
     ///     </para>
     /// </remarks>
-    private void ApplyTenantFilter(Statement statement, LinqQueryParser parser, DocumentMapping mapping)
+    private void ApplyTenantFilter(List<ISqlFragment> wheres, LinqQueryParser parser,
+        DocumentMapping mapping, string qualifier)
     {
         if (!mapping.IsConjoined)
         {
@@ -928,11 +997,11 @@ public class FisherQueryProvider : IQueryProvider
         switch (parser.TenantScope)
         {
             case TenantScope.Current:
-                statement.Wheres.Add(new TenantFilterFragment(_session.TenantId));
+                wheres.Add(new TenantFilterFragment(_session.TenantId, qualifier));
                 break;
 
             case TenantScope.NamedTenants:
-                statement.Wheres.Add(new WhereInFilter(StorageConstants.TenantIdColumn,
+                wheres.Add(new WhereInFilter(qualifier + StorageConstants.TenantIdColumn,
                     parser.TenantIds!.Cast<object>().ToList()));
                 break;
 
@@ -951,17 +1020,18 @@ public class FisherQueryProvider : IQueryProvider
     ///     fixed-width UTC form, chosen so a string comparison <em>is</em> an instant comparison. The
     ///     same asymmetry as <c>DeletedSince</c> / <c>DeletedBefore</c>, and for the same reason.
     /// </remarks>
-    private static void ApplyMetadataFilters(Statement statement, LinqQueryParser parser)
+    private static void ApplyMetadataFilters(List<ISqlFragment> wheres, LinqQueryParser parser,
+        string qualifier)
     {
         if (parser.ModifiedSince is { } since)
         {
-            statement.Wheres.Add(new ComparisonFilter("last_modified", ">=",
+            wheres.Add(new ComparisonFilter($"{qualifier}last_modified", ">=",
                 SqliteTimestamp.ToDatabaseValue(since)));
         }
 
         if (parser.ModifiedBefore is { } before)
         {
-            statement.Wheres.Add(new ComparisonFilter("last_modified", "<",
+            wheres.Add(new ComparisonFilter($"{qualifier}last_modified", "<",
                 SqliteTimestamp.ToDatabaseValue(before)));
         }
     }
@@ -982,12 +1052,13 @@ public class FisherQueryProvider : IQueryProvider
     ///         table is one.
     ///     </para>
     /// </remarks>
-    private static void ApplyHierarchyFilter(Statement statement, DocumentMapping mapping, Type queryType)
+    private static void ApplyHierarchyFilter(List<ISqlFragment> wheres, DocumentMapping mapping,
+        Type queryType, string qualifier)
     {
         if (mapping.IsHierarchy && queryType != mapping.DocumentType)
         {
-            statement.Wheres.Add(new LiteralSqlFragment(
-                DocumentHierarchy.FilterSqlFor(mapping, queryType)));
+            wheres.Add(new LiteralSqlFragment(
+                DocumentHierarchy.FilterSqlFor(mapping, queryType, qualifier)));
         }
     }
 
@@ -1000,8 +1071,8 @@ public class FisherQueryProvider : IQueryProvider
     ///     ignored: there is no column to answer from, so <c>IsDeleted()</c> would come back empty and
     ///     <c>MaybeDeleted()</c> would come back complete, both of which look like real answers.
     /// </remarks>
-    private static void ApplySoftDeleteFilters(Statement statement, LinqQueryParser parser,
-        Weasel.Storage.IDocumentStorage storage, DocumentMapping mapping)
+    private static void ApplySoftDeleteFilters(List<ISqlFragment> wheres, LinqQueryParser parser,
+        DocumentMapping mapping, string qualifier)
     {
         if (!mapping.IsSoftDeleted)
         {
@@ -1024,11 +1095,11 @@ public class FisherQueryProvider : IQueryProvider
                 // there rather than from the storage because for a hierarchy sub-class that fragment is
                 // a composite, and the discriminator half is added once per statement above rather than
                 // once per soft-delete scope.
-                statement.Wheres.Add(new LiteralSqlFragment(SoftDelete.NotDeletedSql));
+                wheres.Add(new LiteralSqlFragment(SoftDelete.NotDeletedSqlFor(qualifier)));
                 break;
 
             case SoftDeleteScope.DeletedOnly:
-                statement.Wheres.Add(new LiteralSqlFragment(SoftDelete.DeletedSql));
+                wheres.Add(new LiteralSqlFragment(SoftDelete.DeletedSqlFor(qualifier)));
                 break;
 
             case SoftDeleteScope.LiveAndDeleted:
@@ -1040,13 +1111,13 @@ public class FisherQueryProvider : IQueryProvider
         // these need none of the strftime normalisation a document's own DateTimeOffset member does.
         if (parser.DeletedSince is { } since)
         {
-            statement.Wheres.Add(new ComparisonFilter(SoftDelete.DeletedAtColumn, ">=",
+            wheres.Add(new ComparisonFilter(qualifier + SoftDelete.DeletedAtColumn, ">=",
                 SqliteTimestamp.ToDatabaseValue(since)));
         }
 
         if (parser.DeletedBefore is { } before)
         {
-            statement.Wheres.Add(new ComparisonFilter(SoftDelete.DeletedAtColumn, "<",
+            wheres.Add(new ComparisonFilter(qualifier + SoftDelete.DeletedAtColumn, "<",
                 SqliteTimestamp.ToDatabaseValue(before)));
         }
     }

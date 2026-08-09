@@ -3,8 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **seventeen open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
-**All 28 compliance suites green.** 906 tests green on net9.0
+Status: **sixteen open issues, all enhancements — nothing is broken.** On JasperFx **2.45.0**.
+**All 28 compliance suites green.** 933 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
 Twenty-eight of those twenty-nine came out of a file-by-file comparison against Polecat on 2026-08-08,
@@ -159,6 +159,7 @@ if something is deferred, it is in the list above.
 | Batching and plans (fisher#37) | the DCB batch widened to documents and moved to `Fisher.Batching`, plus `IQueryPlan`, `CheckExistsAsync` and `ToSql` |
 | LINQ paging (fisher#27) | `ToPagedListAsync` with a real total, and keyset paging with a Polecat-compatible cursor |
 | LINQ grouping (fisher#24) | `GroupBy`, a `Select` over the group, `HAVING` from a `Where` after it, and ordering by an aggregate; the expected lax-GROUP-BY hazard is unreachable through the API |
+| LINQ joins (fisher#25) | `Join` and `GroupJoin(...).SelectMany(...)` on the ordinary `Statement`, so counting, paging and `ToSql` serve a join for free; aliases threaded through `MemberFactory` rather than rewritten into rendered SQL |
 | Sessions and enlistment (fisher#30) | `QuerySession()` and `OpenSession(SessionOptions)` on the store, and a session running inside a connection or transaction the caller owns — the other half of the atomicity problem `QueueSqlCommand` answers from one side |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
@@ -324,9 +325,11 @@ argument and it never reaches the expression tree), then
 this file predicted turned out to be unreachable, because a grouped `Select`'s parameter is the
 grouping rather than the document).
 [#26](https://github.com/JasperFx/fisher/issues/26)'s marker operators are independent and mostly
-small. [#25](https://github.com/JasperFx/fisher/issues/25) joins and
-[#27](https://github.com/JasperFx/fisher/issues/27) cursor paging are the two places SQLite is the
-*easiest* of the three dialects, which is unusual enough to be worth spending on.
+small. ~~[#25](https://github.com/JasperFx/fisher/issues/25) joins~~ (**done**) and
+~~[#27](https://github.com/JasperFx/fisher/issues/27) cursor paging~~ (**done**) were the two places
+SQLite is the *easiest* of the three dialects, and both paid out: the join needed no `OPENJSON`, no
+lateral gymnastics and no bespoke statement type, and an expression index from #16 serves either side
+of it.
 
 **Then the document features with the best ratio.**
 [#35](https://github.com/JasperFx/fisher/issues/35) patching is the strongest single case in the whole

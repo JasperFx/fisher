@@ -30,7 +30,12 @@ internal static class DocumentHierarchy
     ///         use. Quotes are still doubled, because an alias can be supplied by a caller.
     ///     </para>
     /// </remarks>
-    internal static string FilterSqlFor(DocumentMapping mapping, Type queryType)
+    /// <param name="mapping">The hierarchy's mapping.</param>
+    /// <param name="queryType">The type being queried for.</param>
+    /// <param name="qualifier">
+    ///     A table alias and its dot, or empty. Non-empty only inside a join (fisher#25).
+    /// </param>
+    internal static string FilterSqlFor(DocumentMapping mapping, Type queryType, string qualifier = "")
     {
         var aliases = new List<string> { mapping.AliasFor(queryType) };
 
@@ -41,7 +46,7 @@ internal static class DocumentHierarchy
         var quoted = aliases.Select(x => $"'{x.Replace("'", "''")}'").ToArray();
 
         return quoted.Length == 1
-            ? $"{DocTypeColumn} = {quoted[0]}"
-            : $"{DocTypeColumn} in ({string.Join(", ", quoted)})";
+            ? $"{qualifier}{DocTypeColumn} = {quoted[0]}"
+            : $"{qualifier}{DocTypeColumn} in ({string.Join(", ", quoted)})";
     }
 }

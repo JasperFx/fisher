@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using Fisher.Linq.Joins;
 using Fisher.Linq.Members;
 using Fisher.Linq.SqlGeneration;
 using Weasel.Core.SqlGeneration;
@@ -25,10 +26,10 @@ internal enum SoftDeleteScope
 /// </summary>
 /// <remarks>
 ///     <para>
-///         A much narrower version of Polecat's parser of the same name, covering the operators Fisher
-///         can answer today: <c>Where</c>, the four ordering operators, <c>Take</c> and <c>Skip</c>.
-///         Grouping, projection and joins are absent because the SQL for them is absent — see
-///         <see cref="Statement" />.
+///         The counterpart of Polecat's parser of the same name: <c>Where</c>, the four ordering
+///         operators, <c>Take</c> and <c>Skip</c>, projection, grouping and the
+///         <c>GroupJoin</c>/<c>SelectMany</c> pair. Anything it cannot translate is refused by name —
+///         see <see cref="Statement" /> for what the SQL side of each looks like.
 ///     </para>
 ///     <para>
 ///         The chain arrives outermost-call-first, so it is walked to the source and then applied in
@@ -126,6 +127,20 @@ internal class LinqQueryParser
     /// <summary>The key <c>DistinctBy</c> deduplicates on, or null.</summary>
     public string? DistinctByLocator { get; private set; }
 
+    /// <summary>
+    ///     The <c>GroupJoin(...).SelectMany(...)</c> pair the chain used, or null (fisher#25).
+    /// </summary>
+    /// <remarks>
+    ///     Captured rather than translated. Resolving any of it needs the <em>inner</em> side's member
+    ///     factory, and the inner document type is only known from the <c>GroupJoin</c> node itself, so
+    ///     the provider does the translating — the same division the parser already keeps for a
+    ///     projection's compiled body.
+    /// </remarks>
+    public GroupJoinData? GroupJoin { get; private set; }
+
+    /// <summary>Whether the chain is past everything that shapes the join's rows.</summary>
+    private bool Joined => GroupJoin is { IsComplete: true };
+
     public void Parse(Expression expression)
     {
         var calls = new List<MethodCallExpression>();
@@ -148,6 +163,62 @@ internal class LinqQueryParser
     {
         switch (call.Method.Name)
         {
+            case "GroupJoin":
+                ApplyGroupJoin(call, grouped: true);
+                break;
+
+            // A plain Join is the same join with no grouping step — what query syntax emits when the
+            // `join` clause has no `into`. Its result selector is already over the two documents, so
+            // there is nothing for a SelectMany to flatten and none may follow.
+            case "Join":
+                ApplyGroupJoin(call, grouped: false);
+                break;
+
+            case "SelectMany" when GroupJoin is { IsGrouped: true, FinalSelector: null }:
+                ApplySelectMany(call);
+                break;
+
+            // Query syntax puts a transparent identifier in a plain Join's result selector whenever
+            // anything follows the join clause, and spells what the caller actually wanted as this
+            // Select. Same two-selector shape a GroupJoin has, one call earlier.
+            case "Select" when GroupJoin is { IsGrouped: false, FinalSelector: null }:
+                GroupJoin.FinalSelector = UnwrapLambda(call);
+                break;
+
+            // Past the SelectMany the element is the projected shape, not a document — so an ordering
+            // key names a member of it and has to be mapped back to whichever document it came from.
+            // Kept as an expression for the provider, which is where the result selector is rewritten.
+            case "OrderBy" when Joined:
+            case "ThenBy" when Joined:
+                GroupJoin!.OrderBys.Add((UnwrapLambda(call), false));
+                break;
+
+            case "OrderByDescending" when Joined:
+            case "ThenByDescending" when Joined:
+                GroupJoin!.OrderBys.Add((UnwrapLambda(call), true));
+                break;
+
+            // A post-join predicate names the joined shape, so like the ordering keys it is kept as an
+            // expression and resolved once the result selector has been rewritten onto the two
+            // documents. It filters joined rows, which is what a `where` after a `join` clause means.
+            case "Where" when Joined:
+                GroupJoin!.Wheres.Add(UnwrapLambda(call));
+                break;
+
+            // Everything else that resolves a member is refused past the join rather than resolved
+            // against the projected shape, which has no columns of its own. Both halves of the join
+            // are still queryable — the outer before the GroupJoin, the inner as the query passed to
+            // it — and that is what the message says.
+            case "Select" when Joined:
+            case "GroupBy" when Joined:
+            case "Distinct" when Joined:
+            case "DistinctBy" when Joined:
+                throw new BadLinqExpressionException(
+                    $"Fisher cannot apply '{call.Method.Name}' to the result of a join: its members "
+                    + "belong to the projected shape rather than to either document, so there is no "
+                    + "column to resolve them to. Filter or project the outer query before the "
+                    + "GroupJoin, or the inner query passed to it.");
+
             // A Where before the GroupBy filters rows; one after it filters groups. The chain is
             // walked source-outward, so which it is falls out of whether the key has been seen yet.
             case "Where" when _grouping is not null:
@@ -303,6 +374,91 @@ internal class LinqQueryParser
         _grouping = new GroupingTranslator(_memberFactory, GroupByLocator);
     }
 
+    /// <summary>
+    ///     <c>GroupJoin(inner, outerKey, innerKey, (outer, group) =&gt; …)</c> — captured whole
+    ///     (fisher#25).
+    /// </summary>
+    private void ApplyGroupJoin(MethodCallExpression call, bool grouped)
+    {
+        if (GroupJoin is not null)
+        {
+            throw new BadLinqExpressionException(
+                $"Fisher supports one join per query. A second '{call.Method.Name}' would join onto the "
+                + "projected shape of the first, which is not a document table.");
+        }
+
+        var arguments = call.Method.GetGenericArguments();
+
+        GroupJoin = new GroupJoinData
+        {
+            InnerSource = call.Arguments[1],
+            OuterKeySelector = LambdaAt(call, 2),
+            InnerKeySelector = LambdaAt(call, 3),
+            IntermediateSelector = LambdaAt(call, 4),
+            IsGrouped = grouped,
+            OuterType = arguments[0],
+            InnerType = arguments[1]
+        };
+    }
+
+    /// <summary>
+    ///     The <c>SelectMany</c> that flattens a <c>GroupJoin</c> back into one row per match — which is
+    ///     the shape a SQL join produces.
+    /// </summary>
+    /// <remarks>
+    ///     The collection selector is where the join's kind is decided and nothing else: a bare
+    ///     <c>temp.group</c> is an inner join and <c>temp.group.DefaultIfEmpty()</c> is a left one.
+    ///     Anything else — a <c>Where</c>, a <c>Take</c>, an ordering over the group — is a question
+    ///     about the rows inside one outer row's group, which a join has already flattened, so it is
+    ///     refused rather than quietly ignored the way Polecat's <c>ContainsDefaultIfEmpty</c> scan
+    ///     would.
+    /// </remarks>
+    private void ApplySelectMany(MethodCallExpression call)
+    {
+        if (call.Arguments.Count != 3)
+        {
+            throw new BadLinqExpressionException(
+                "A GroupJoin must be followed by SelectMany with both a collection selector and a "
+                + "result selector — GroupJoin(...).SelectMany(x => x.Group.DefaultIfEmpty(), "
+                + "(x, inner) => ...).");
+        }
+
+        GroupJoin!.IsLeftJoin = IsDefaultIfEmpty(LambdaAt(call, 1).Body);
+        GroupJoin.FinalSelector = LambdaAt(call, 2);
+    }
+
+    private static bool IsDefaultIfEmpty(Expression collectionSelector)
+    {
+        switch (collectionSelector)
+        {
+            case MemberExpression:
+                return false;
+
+            case MethodCallExpression { Method.Name: "DefaultIfEmpty", Arguments.Count: 1 } call
+                when call.Arguments[0] is MemberExpression:
+                return true;
+
+            default:
+                throw new BadLinqExpressionException(
+                    $"Fisher cannot translate '{collectionSelector}' as a join's collection selector. "
+                    + "It must be the group itself, or the group with DefaultIfEmpty() for a left join; "
+                    + "anything else asks about the rows within one group, which the join has already "
+                    + "flattened.");
+        }
+    }
+
+    private static LambdaExpression LambdaAt(MethodCallExpression call, int index)
+    {
+        var argument = call.Arguments[index];
+
+        while (argument is UnaryExpression { NodeType: ExpressionType.Quote } quote)
+        {
+            argument = quote.Operand;
+        }
+
+        return (LambdaExpression)argument;
+    }
+
     private void ApplySelect(MethodCallExpression call)
     {
         if (_grouping is not null)
@@ -339,6 +495,14 @@ internal class LinqQueryParser
     /// </summary>
     private void ApplyTerminalPredicate(MethodCallExpression call)
     {
+        if (call.Arguments.Count > 1 && Joined)
+        {
+            throw new BadLinqExpressionException(
+                $"'{call.Method.Name}' cannot take a predicate over the result of a join, whose members "
+                + "belong to the projected shape rather than to either document. Filter the outer query "
+                + "before the GroupJoin, or the inner query passed to it.");
+        }
+
         if (call.Arguments.Count > 1)
         {
             Wheres.Add(_whereParser.Parse(UnwrapLambda(call).Body));

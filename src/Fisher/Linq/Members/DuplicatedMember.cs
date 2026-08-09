@@ -24,10 +24,10 @@ internal sealed class DuplicatedMember : IQueryableMember
 {
     private readonly IQueryableMember _inner;
 
-    public DuplicatedMember(IQueryableMember inner, string columnName)
+    public DuplicatedMember(IQueryableMember inner, string columnName, string qualifier = "")
     {
         _inner = inner;
-        TypedLocator = Weasel.Sqlite.SchemaUtils.QuoteName(columnName);
+        TypedLocator = qualifier + Weasel.Sqlite.SchemaUtils.QuoteName(columnName);
     }
 
     /// <summary>

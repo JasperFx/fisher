@@ -34,14 +34,29 @@ namespace Fisher.Linq.SqlGeneration;
 ///         </item>
 ///     </list>
 ///     <para>
-///         DISTINCT, GROUP BY / HAVING and <c>DistinctBy</c>'s <c>ROW_NUMBER()</c> subquery are
-///         deliberately absent. They belong with the projection and grouping work that is deferred
-///         until there are tests driving it; adding them now would be speculative SQL nothing exercises.
+///         Joins live here rather than in a parallel statement type of their own, which is the other
+///         place Polecat diverges — its <c>JoinStatement</c> re-implements the select list, the wheres,
+///         the ordering and the paging, so anything built for one shape has to be built again for the
+///         other. Fisher's <c>Count</c>, <c>Any</c>, paging and <c>ToSql</c> all serve a join without
+///         knowing it is one.
 ///     </para>
 /// </remarks>
 internal class Statement
 {
     public string FromTable { get; set; } = "";
+
+    /// <summary>
+    ///     An alias for <see cref="FromTable" />, set only when the statement joins (fisher#25).
+    /// </summary>
+    /// <remarks>
+    ///     Null everywhere else on purpose: an unjoined query's locators are unqualified, and aliasing
+    ///     the table without a reason would make every rendered statement in every test diff.
+    /// </remarks>
+    public string? FromAlias { get; set; }
+
+    /// <summary>The joined tables, in order. Empty for every query that is not a join.</summary>
+    public List<Joins.JoinClause> Joins { get; } = [];
+
     public string SelectColumns { get; set; } = "data";
     public List<ISqlFragment> Wheres { get; } = [];
     public List<(string Locator, bool Descending)> OrderBys { get; } = [];
@@ -136,6 +151,17 @@ internal class Statement
         else
         {
             builder.Append(FromTable);
+
+            if (FromAlias is not null)
+            {
+                builder.Append(' ');
+                builder.Append(FromAlias);
+            }
+        }
+
+        foreach (var join in Joins)
+        {
+            join.Apply(builder);
         }
 
         AppendWheres(builder);

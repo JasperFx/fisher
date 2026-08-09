@@ -201,15 +201,22 @@ internal sealed class DocumentWhereOperation : Weasel.Storage.IStorageOperation
 internal sealed class TenantFilterFragment : ISqlFragment
 {
     private readonly string _tenantId;
+    private readonly string _qualifier;
 
-    public TenantFilterFragment(string tenantId)
+    /// <param name="tenantId">The tenant to scope to.</param>
+    /// <param name="qualifier">
+    ///     A table alias and its dot, or empty. Non-empty only inside a join (fisher#25), where both
+    ///     sides have a <c>tenant_id</c> and an unqualified one is ambiguous.
+    /// </param>
+    public TenantFilterFragment(string tenantId, string qualifier = "")
     {
         _tenantId = tenantId;
+        _qualifier = qualifier;
     }
 
     public void Apply(ICommandBuilder builder)
     {
-        builder.Append(StorageConstants.TenantIdColumn);
+        builder.Append(_qualifier + StorageConstants.TenantIdColumn);
         builder.Append(" = ");
         builder.AppendParameter(_tenantId);
     }

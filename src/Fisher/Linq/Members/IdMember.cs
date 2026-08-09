@@ -5,14 +5,20 @@ namespace Fisher.Linq.Members;
 /// </summary>
 internal class IdMember : IQueryableMember
 {
-    public IdMember(Type idType)
+    /// <param name="idType">The identity's CLR type.</param>
+    /// <param name="qualifier">
+    ///     A table alias and its dot, or empty. Non-empty only inside a join (fisher#25), where
+    ///     <c>id</c> alone is ambiguous when both sides have one — which every document table does.
+    /// </param>
+    public IdMember(Type idType, string qualifier = "")
     {
         MemberType = idType;
+        TypedLocator = qualifier + "id";
     }
 
     public Type MemberType { get; }
-    public string TypedLocator => "id";
-    public string RawLocator => "id";
+    public string TypedLocator { get; }
+    public string RawLocator => TypedLocator;
     public bool IsBoolean => false;
 
     /// <summary>
