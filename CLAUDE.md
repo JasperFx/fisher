@@ -811,10 +811,23 @@ stitch.
   **by parameter reference, not by type** — a self-join has the same type on both sides.
 - **A member the projection computed is refused rather than sorted or filtered on**, since its value
   exists only after the row is read.
-- Refused by name, each with the alternative: keyset paging, JSON reads, `LastAsync`, the scalar
-  aggregates, `Select`/`GroupBy`/`Distinct`/`DistinctBy` after the join, and a second join.
-  `ToListAsync`, the `First`/`Single` family, `CountAsync`, `AnyAsync`, `ToPagedListAsync` and `ToSql`
-  all work.
+- **The scalar aggregates and `Last` work over a join** (fisher#54), and cost one seam: `JoinPlan.Member`
+  holds the post-join member mapping as a closure, so a terminal reaches the same attribution the
+  `Where` and the `OrderBy` already used rather than re-deriving it. The two aggregate guards are the
+  *resolved member's*, so they apply unchanged. Two SQLite-shaped details:
+  - **The aggregate's paged subquery carries `Joins` and `FromAlias`**, exactly as `WrapAsSubquery`
+    does — a qualified locator inside a subquery that dropped them is `no such column`, which is the
+    one mercy of qualifying: it errors rather than aggregating the outer table alone.
+  - **A paged `Last` cannot reuse `ReverseOverPage`.** That one works unjoined because
+    `json_extract(data, …)` resolves against the subquery's own `data` column; a join's locator says
+    `json_extract(outer_t.data, …)` and the alias does not survive into the enclosing scope. So
+    `ReverseJoinOverPage` aliases each ordering key into the page's select list and orders by the
+    alias — the trick keyset paging already uses. Trailing columns are safe because both selectors
+    read from fixed positions at the front of the row.
+- Refused by name, each with the alternative: keyset paging, JSON reads,
+  `Select`/`GroupBy`/`Distinct`/`DistinctBy` after the join, and a second join
+  ([#55](https://github.com/JasperFx/fisher/issues/55)). `ToListAsync`, the `First`/`Single`/`Last`
+  families, the scalar aggregates, `CountAsync`, `AnyAsync`, `ToPagedListAsync` and `ToSql` all work.
 
 ### LINQ paging
 
@@ -895,6 +908,14 @@ the selector and parses it back out; Fisher's terminal extensions take the selec
 `LinqQueryParser` needed no change at all and stays what its doc comment says it is — a description of
 the operator *chain*. The predicate overloads are `queryable.Where(predicate).XAsync()`, so they
 compose rather than duplicating anything.
+
+**The aggregate builds from the chain's source type, not from its element type** (fisher#54). Both a
+join and a `Select` make the queryable's element type diverge from the document's, and asking the
+schema for a mapping of *that* is an `InvalidOperationException` about identity members — a message
+naming neither the operator nor the reason. Since `SourceTypeFor` already answers the question for
+every other terminal, the aggregates now use it too: a join is answered, and a projection is refused as
+a `BadLinqExpressionException` naming the operator. `an_aggregate_after_a_select_is_refused_by_name`
+pins the second half, which was a real defect rather than a missing feature.
 
 Four things are decisions rather than mechanics:
 

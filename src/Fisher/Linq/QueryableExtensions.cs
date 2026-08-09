@@ -262,7 +262,7 @@ public static class QueryableExtensions
     private static async Task<TResult> Aggregate<T, TResult>(IQueryable<T> queryable,
         AggregateFunction function, LambdaExpression selector, CancellationToken token) where T : notnull
         => (await ProviderFor(queryable)
-            .AggregateAsync<T, TResult>(queryable.Expression, function, selector, token)
+            .AggregateAsync<TResult>(queryable.Expression, function, selector, token)
             .ConfigureAwait(false))!;
 
     private static FisherQueryProvider ProviderFor<T>(IQueryable<T> queryable)

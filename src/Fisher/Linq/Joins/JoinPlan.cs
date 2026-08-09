@@ -1,3 +1,5 @@
+using System.Linq.Expressions;
+using Fisher.Linq.Members;
 using Weasel.Storage;
 
 namespace Fisher.Linq.Joins;
@@ -17,6 +19,17 @@ namespace Fisher.Linq.Joins;
 ///     left join found no match, since every other one can legitimately be null.
 /// </param>
 /// <param name="Project">The caller's result selector, over the two documents.</param>
+/// <param name="Member">
+///     Resolves a lambda written after the join — an aggregate's selector, say — to the document member
+///     behind it, or null when it names no member of either document.
+/// </param>
+/// <remarks>
+///     <see cref="Member" /> is the same mapping the post-join <c>Where</c> and <c>OrderBy</c> go
+///     through, held as a closure so a terminal operator can reach it after the statement has been
+///     built. Without it an aggregate selector would have to re-derive the projection, the two member
+///     factories and the intermediate shape from scratch, which is three chances to disagree with the
+///     clauses already on the statement about which side a member belongs to.
+/// </remarks>
 internal sealed record JoinPlan(
     ISelectClause Outer,
     Type OuterType,
@@ -24,4 +37,5 @@ internal sealed record JoinPlan(
     Type InnerType,
     int InnerOffset,
     int InnerDataOrdinal,
-    Func<object, object?, object?> Project);
+    Func<object, object?, object?> Project,
+    Func<LambdaExpression, IQueryableMember?> Member);

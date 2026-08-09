@@ -429,10 +429,11 @@ public partial class FisherQueryProvider : IQueryProvider
     internal async Task<T?> LastAsync<T>(Expression expression, bool required, CancellationToken token)
         where T : notnull
     {
-        // Refused ahead of Build<T>, which would otherwise ask the schema for a mapping of the join's
-        // result type — a shape that is not a document and never had one.
-        RefuseJoin(expression, "LastAsync",
-            "Order the outer query and take the last of the result in memory.");
+        if (JoinFor(expression) is { } joined)
+        {
+            return await LastJoinedAsync<T>(joined.Statement, joined.Plan, required, token)
+                .ConfigureAwait(false);
+        }
 
         if (ProjectionFor(expression) is { } projected)
         {
@@ -489,6 +490,38 @@ public partial class FisherQueryProvider : IQueryProvider
                 : default;
     }
 
+    /// <summary>
+    ///     <c>Last</c> over a join.
+    /// </summary>
+    /// <remarks>
+    ///     The unpaged half is the ordinary reversal, which works unchanged because a join's ordering
+    ///     locators are already on the statement they are being reversed on. The paged half is not —
+    ///     see <see cref="ReverseJoinOverPage" />.
+    /// </remarks>
+    private async Task<T?> LastJoinedAsync<T>(Statement statement, JoinPlan plan, bool required,
+        CancellationToken token) where T : notnull
+    {
+        if (statement.OrderBys.Count == 0)
+        {
+            throw new BadLinqExpressionException(
+                "LastAsync requires an OrderBy: SQLite has no LAST, so 'last' is only meaningful "
+                + "relative to an ordering. Add an OrderBy, or use FirstAsync against the reverse "
+                + "ordering.");
+        }
+
+        var reversed = statement.Limit.HasValue || statement.Offset.HasValue
+            ? ReverseJoinOverPage(statement)
+            : ReverseInPlace(statement);
+
+        var rows = await JoinListAsync<T>(reversed, plan, token).ConfigureAwait(false);
+
+        return rows.Count > 0
+            ? rows[0]
+            : required
+                ? throw new InvalidOperationException($"The query returned no {typeof(T).Name}.")
+                : default;
+    }
+
     private static Statement ReverseInPlace(Statement statement)
     {
         var reversed = statement.OrderBys.Select(x => (x.Locator, !x.Descending)).ToArray();
@@ -508,6 +541,41 @@ public partial class FisherQueryProvider : IQueryProvider
     }
 
     /// <summary>
+    ///     The same reversal for a paged join, whose ordering keys have to leave the subquery as named
+    ///     columns.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <see cref="ReverseOverPage" /> works for an unjoined query because its locators read
+    ///         <c>json_extract(data, …)</c> and the subquery hands the document's own <c>data</c> column
+    ///         straight out. A join's locators are qualified — <c>json_extract(outer_t.data, …)</c> — and
+    ///         the alias does not survive into the enclosing scope, so the outer statement fails with
+    ///         <c>no such column: outer_t.data</c>. Verified against SQLite 3.51 rather than assumed.
+    ///     </para>
+    ///     <para>
+    ///         So each key is aliased into the page's select list and the outer statement orders by the
+    ///         alias — the same trick keyset paging uses to sort on a locator no member of the result
+    ///         exposes. The extra trailing columns are harmless: both selectors read from fixed
+    ///         positions at the front of the row, and the inner one's offset is counted from the outer
+    ///         side's own column count rather than from the row's width.
+    ///     </para>
+    /// </remarks>
+    private static Statement ReverseJoinOverPage(Statement statement)
+    {
+        var keys = statement.OrderBys
+            .Select((x, i) => (Alias: $"order_key_{i}", x.Locator, x.Descending))
+            .ToArray();
+
+        statement.SelectColumns = string.Join(", ",
+            keys.Select(x => $"{x.Locator} as {x.Alias}").Prepend(statement.SelectColumns));
+
+        var outer = new Statement { Subquery = statement, SelectColumns = "*", Limit = 1 };
+        outer.OrderBys.AddRange(keys.Select(x => (x.Alias, !x.Descending)));
+
+        return outer;
+    }
+
+    /// <summary>
     ///     A scalar aggregate — <c>sum</c>, <c>min</c>, <c>max</c> or <c>avg</c> over one member.
     /// </summary>
     /// <remarks>
@@ -516,16 +584,24 @@ public partial class FisherQueryProvider : IQueryProvider
     ///     sums the page, not the table — except that the subquery has to project the member rather than
     ///     a literal, so it is aliased and the outer aggregates the alias.
     /// </remarks>
-    internal async Task<TResult?> AggregateAsync<T, TResult>(Expression expression,
+    internal async Task<TResult?> AggregateAsync<TResult>(Expression expression,
         AggregateFunction function, LambdaExpression selector, CancellationToken token)
-        where T : notnull
     {
-        RefuseJoin(expression, $"{function}Async",
-            "Aggregate the outer or the inner query on its own, or aggregate the join's result in "
-            + "memory.");
+        // Built non-generically, from the chain's own source type rather than from the terminal's
+        // element type. A join's element type is the caller's result shape and a projection's is
+        // whatever it produced, and neither is a document the schema has a mapping for — asking for one
+        // is what used to fail with a message about identity members instead of about the operator.
+        var (statement, parser, _, join) = BuildStatement(SourceTypeFor(expression), expression);
 
-        var (statement, _) = Build<T>(expression);
-        var locator = AggregateLocatorFor<T>(function, selector);
+        if (RowProjection.For(parser) is not null)
+        {
+            throw new BadLinqExpressionException(
+                $"Fisher cannot answer {function}Async after a Select, whose rows are values rather than "
+                + $"documents with columns to aggregate. Aggregate before the projection — "
+                + $"Query<T>().{function}Async(x => x.Member).");
+        }
+
+        var locator = AggregateLocatorFor(SourceTypeFor(expression), function, selector, join);
 
         if (statement.Limit.HasValue || statement.Offset.HasValue)
         {
@@ -548,10 +624,16 @@ public partial class FisherQueryProvider : IQueryProvider
         var inner = new Statement
         {
             FromTable = statement.FromTable,
+            // Carried for the same reason WrapAsSubquery carries them: aggregating a paged join has to
+            // aggregate the joined rows, and the locator is qualified with an alias that only exists
+            // while the join is in scope. Dropping them would fail with "no such column" for an
+            // inner-side member and silently aggregate the outer table alone for an outer-side one.
+            FromAlias = statement.FromAlias,
             SelectColumns = $"{locator} as agg_value",
             Limit = statement.Limit,
             Offset = statement.Offset
         };
+        inner.Joins.AddRange(statement.Joins);
         inner.Wheres.AddRange(statement.Wheres);
         inner.OrderBys.AddRange(statement.OrderBys);
 
@@ -570,8 +652,14 @@ public partial class FisherQueryProvider : IQueryProvider
     ///     quietly returns 0 rather than failing, so a string-stored enum would report a plausible total
     ///     for a column that has none.
     /// </remarks>
-    private string AggregateLocatorFor<T>(AggregateFunction function, LambdaExpression selector)
-        where T : notnull
+    /// <param name="join">
+    ///     The join, when there is one. Over a join the selector names a member of the caller's result
+    ///     shape rather than of a document, so it goes through the same mapping the post-join
+    ///     <c>Where</c> and <c>OrderBy</c> use — and the two guards below then apply unchanged, because
+    ///     what they ask about is the resolved member and not how it was reached.
+    /// </param>
+    private string AggregateLocatorFor(Type sourceType, AggregateFunction function,
+        LambdaExpression selector, JoinPlan? join)
     {
         var body = selector.Body;
 
@@ -586,7 +674,14 @@ public partial class FisherQueryProvider : IQueryProvider
                 $"{function}Async is only supported over a document member.");
         }
 
-        var member = MemberFactoryFor<T>().ResolveMember(memberExpression);
+        var member = join is null
+            ? new MemberFactory(_session.Options, _session.Options.Schema.MappingFor(sourceType))
+                .ResolveMember(memberExpression)
+            : join.Member(selector)
+              ?? throw new BadLinqExpressionException(
+                  $"Fisher cannot {function.Sql()} '{selector.Body}' over a join. An aggregated value has "
+                  + "to be a member of one of the joined documents, reached either directly or through a "
+                  + "member of the result that came straight from one.");
 
         if (function.RequiresANumber() && !IsNumeric(member.MemberType))
         {
@@ -810,14 +905,15 @@ public partial class FisherQueryProvider : IQueryProvider
         }
 
         // Everything reaching here reads whole documents of one type through one selector, which a
-        // joined row is not. ToListAsync, the First/Single family, CountAsync and AnyAsync each take
-        // the join path before they get here; the rest are refused rather than silently answering
-        // about the outer table alone.
+        // joined row is not. ToListAsync, the First/Single family and LastAsync each take the join path
+        // before they get here, and the aggregates and CountAsync never build a selector at all; the
+        // rest are refused rather than silently answering about the outer table alone.
         if (join is not null)
         {
             throw new BadLinqExpressionException(
                 "Fisher cannot answer this operator over a join. A joined query supports ToListAsync, "
-                + "the First/Single family, CountAsync, AnyAsync, ToPagedListAsync and ToSql.");
+                + "the First/Single/Last families, the scalar aggregates, CountAsync, AnyAsync, "
+                + "ToPagedListAsync and ToSql.");
         }
 
         return (statement, (ISelector<T>)selectClause.BuildSelector(_session));

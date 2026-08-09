@@ -67,26 +67,6 @@ public partial class FisherQueryProvider
         return false;
     }
 
-    /// <summary>
-    ///     Refuse an operator that cannot be answered over a join, before anything asks the schema
-    ///     about the join's result type.
-    /// </summary>
-    /// <remarks>
-    ///     A joined query's element type is whatever the caller's result selector produced — an
-    ///     anonymous type or a record, never a document — so an operator that reaches
-    ///     <see cref="BuildStatement" /> with it asks for a mapping that cannot exist, and fails with a
-    ///     message about identity members rather than about joins.
-    /// </remarks>
-    private void RefuseJoin(Expression expression, string operation, string instead)
-    {
-        if (ContainsJoin(expression))
-        {
-            throw new BadLinqExpressionException(
-                $"Fisher cannot answer {operation} over a join, whose rows hold two documents rather "
-                + $"than one. {instead}");
-        }
-    }
-
     private (Statement Statement, JoinPlan Plan)? JoinFor(Expression expression)
     {
         var (statement, _, _, join) = BuildStatement(SourceTypeFor(expression), expression);
@@ -159,8 +139,25 @@ public partial class FisherQueryProvider
             innerClause, join.InnerType,
             outerFields.Length,
             Array.IndexOf(innerClause.SelectFields(), "data"),
-            Compile(projection, join.OuterType, join.InnerType));
+            Compile(projection, join.OuterType, join.InnerType),
+            lambda => JoinedMember(join, lambda, projection, outerMembers, innerMembers));
     }
+
+    /// <summary>
+    ///     The document member a lambda written after the join names, or null when it names none.
+    /// </summary>
+    /// <remarks>
+    ///     The one place a post-join expression is attributed to a side, shared by the ordering, the
+    ///     aggregates and <see cref="JoinPlan.Member" />. Attribution is <b>by parameter reference, not
+    ///     by type</b>: a self-join has the same document type on both sides, so comparing types would
+    ///     resolve every member against the outer table.
+    /// </remarks>
+    private static IQueryableMember? JoinedMember(GroupJoinData join, LambdaExpression lambda,
+        LambdaExpression projection, MemberFactory outerMembers, MemberFactory innerMembers)
+        => OntoDocuments(join, lambda, projection)
+            is MemberExpression { Expression: ParameterExpression parameter } document
+            ? (parameter == projection.Parameters[0] ? outerMembers : innerMembers).ResolveMember(document)
+            : null;
 
     /// <summary>
     ///     Everything the inner side must satisfy — its own <c>Where</c> clauses and its half of the
@@ -265,26 +262,15 @@ public partial class FisherQueryProvider
 
         foreach (var (key, descending) in join.OrderBys)
         {
-            var body = key.Body;
+            var member = JoinedMember(join, key, projection, outerMembers, innerMembers);
 
-            while (body is UnaryExpression { NodeType: ExpressionType.Convert } unary)
-            {
-                body = unary.Operand;
-            }
-
-            if (OntoDocuments(join, key, projection)
-                is not MemberExpression { Expression: ParameterExpression parameter } document)
+            if (member is null)
             {
                 throw new BadLinqExpressionException(
                     $"Fisher cannot order a join by '{key.Body}'. An ordering key has to be a member of "
                     + "one of the joined documents, reached either directly or through a member of the "
                     + "result that came straight from one.");
             }
-
-            // By parameter identity, not by type: a self-join has the same document type on both
-            // sides, and comparing types there would resolve every key against the outer table.
-            var member = (parameter == projection.Parameters[0] ? outerMembers : innerMembers)
-                .ResolveMember(document);
 
             if (!member.AllowsRangeComparison)
             {

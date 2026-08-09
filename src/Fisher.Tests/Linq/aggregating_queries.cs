@@ -284,6 +284,28 @@ public class aggregating_queries : IAsyncLifetime
             session.Query<Catch>().SumAsync(x => x.Weight * 2, Token));
     }
 
+    /// <summary>
+    ///     An aggregate after a <c>Select</c> is refused as a LINQ error, naming the operator.
+    /// </summary>
+    /// <remarks>
+    ///     It used to fail as an <see cref="InvalidOperationException" /> about identity members, because
+    ///     the aggregate asked the schema for a mapping of the query's <em>element</em> type — which
+    ///     after a projection is whatever the projection produced, and never a document. The aggregates
+    ///     build from the chain's source type now, which is what made the join case answerable at all
+    ///     (fisher#54) and this case reportable.
+    /// </remarks>
+    [Fact]
+    public async Task an_aggregate_after_a_select_is_refused_by_name()
+    {
+        await using var session = Session();
+
+        var exception = await Should.ThrowAsync<BadLinqExpressionException>(() =>
+            session.Query<Catch>().Select(x => new { x.Weight }).SumAsync(x => x.Weight, Token));
+
+        exception.Message.ShouldContain("SumAsync");
+        exception.Message.ShouldContain("Select");
+    }
+
     public enum Rating
     {
         Poor,

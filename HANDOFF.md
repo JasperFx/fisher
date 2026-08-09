@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**933 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
+**943 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
 cross-store compliance tests — which as of 2.45.0 is every event sourcing suite the shared library has.
 
 ## Closed since the comparison
@@ -22,7 +22,8 @@ cross-store compliance tests — which as of 2.45.0 is every event sourcing suit
 **a cross-tenant read (#51)** · the marker operators (#26) · offset and keyset paging (#27) · batching,
 query plans, `CheckExistsAsync`, `ToSql` (#37) · JSON-returning reads (#28) · `Advanced` parity (#42) ·
 patching (#35) · bulk insert (#36) · composite projections (#19) · event body queries (#41) ·
-sessions, `SessionOptions` and enlistment (#30) · **LINQ joins (#25)**.
+sessions, `SessionOptions` and enlistment (#30) · **LINQ joins (#25)** · aggregates and `Last` over a
+join (#54).
 
 ## Sessions and enlistment — the one the ordering called a hard stop
 
@@ -133,11 +134,40 @@ post-join `where` goes in the `WHERE`** — the first says which rows may match,
 rows survive, and on a left join the difference is visible in the answer. Moving the inner-side filters
 to the `WHERE` fails five tests, all of them cases where a left join quietly became an inner one.
 
-Two follow-ups were filed rather than shipped half-done: the scalar aggregates and `LastAsync` over a
-join ([#54](https://github.com/JasperFx/fisher/issues/54) — the pieces exist, they just reach
-`Build<T>` and ask for a mapping of a shape that never had one) and more than one join per query
-([#55](https://github.com/JasperFx/fisher/issues/55) — `Statement.Joins` is already a list, and
-everything above it is written for exactly two sides).
+Two follow-ups were filed rather than shipped half-done. **#54 is now closed** — see below. More than
+one join per query ([#55](https://github.com/JasperFx/fisher/issues/55)) is still open: `Statement.Joins`
+is already a list, and everything above it is written for exactly two sides.
+
+### #54 — the aggregates and `Last` over a join, and the defect underneath them
+
+The issue read as a missing feature and half of it was a **bug on the unjoined path**. Both terminals
+reached `Build<T>`, which asks the schema for a mapping of the query's *element* type — and a join's
+element type is the caller's result shape, a projection's is whatever it produced, and neither is a
+document. So `Select(...).SumAsync(...)` did not refuse: it threw `InvalidOperationException` about
+identity members, naming neither the operator nor the reason. Building from `SourceTypeFor` instead —
+which every other terminal already used — answers the join and refuses the projection by name.
+
+Three things worth carrying:
+
+- **The seam is one closure, not a second resolver.** `JoinPlan.Member` holds the post-join member
+  mapping the `Where` and `OrderBy` already go through, so an aggregate selector cannot disagree with
+  the clauses on the same statement about which side a member belongs to. Re-deriving the projection
+  and the two member factories would have been three chances to.
+- **The two aggregate guards needed nothing.** They ask about the *resolved member* — does it order,
+  is it a number — so they were already right for a joined selector. That is the dividend of fisher#22
+  having made `AggregateFunction` an enum with two distinct guards rather than a SQL string.
+- **A paged `Last` over a join cannot reuse `ReverseOverPage`**, and this is the one genuinely new
+  piece. That wrapper works unjoined because `json_extract(data, …)` resolves against the subquery's
+  own `data` column; a join's locator is `json_extract(outer_t.data, …)` and the alias does not survive
+  into the enclosing scope — `no such column: outer_t.id`, verified by trying it. The keys are aliased
+  into the page's select list and the outer statement orders by the alias, which is what keyset paging
+  already does to sort on a locator no member of the result exposes. Reverting to the in-place reversal
+  answers about the whole join rather than the page; both directions were run.
+
+The aggregate's paged subquery carries `Joins` and `FromAlias` for the reason `WrapAsSubquery`
+documents. Dropping them is `no such column: inner_t.data` rather than a wrong number — which is worth
+saying because it is the *only* place qualification is a mercy: everywhere else in this feature an
+unqualified locator produces valid SQL that reads the wrong table.
 
 Both LINQ spellings are supported, which is more than the issue asked for: query syntax's plain `join`
 clause emits `Queryable.Join` rather than `GroupJoin`, and a `where` or `orderby` after it names the
@@ -958,9 +988,13 @@ Each of these is a decision with a reason, not an oversight:
   disagrees with Fisher.**
 - **Hi-Lo gaps are expected, not a bug.** A process that stops mid-allocation abandons the rest of
   its `MaxLo` range, and `SetFloor` rounds up to a whole page. Both match Marten and Polecat.
-- **No `Select` projections, `GroupBy`, `Include`/joins or `Distinct`.** `session.Query<T>()` covers
-  filtering, ordering and paging; anything else throws by name rather than falling back to
-  client-side evaluation.
+- **The LINQ surface refuses rather than falling back to client-side evaluation**, which is the
+  invariant, not the size of the surface — that has grown a long way past filtering, ordering and
+  paging (`Select` and `Distinct` in #23, `GroupBy` and `HAVING` in #24, joins in #25, the aggregates
+  in #22 and #54, both pagings in #27). What is still refused is refused *by name*, with the
+  alternative: `Include`, a second join per query
+  ([#55](https://github.com/JasperFx/fisher/issues/55)), and everything listed under the join and
+  projection sections above.
 - **No ordering or range comparison on a string-stored enum.** See the LINQ section — the stored form
   is the member's name, so it sorts alphabetically rather than by declared order. Timestamps used to
   be on this list and no longer are (fisher#1).

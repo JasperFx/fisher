@@ -48,14 +48,14 @@ public class joined_queries : IAsyncLifetime
 
         await using (var session = _store.LightweightSession())
         {
-            session.Store(new Angler { Id = FrodoId, Name = "Frodo", Region = "Shire" });
-            session.Store(new Angler { Id = SamId, Name = "Sam", Region = "Shire" });
-            session.Store(new Angler { Id = MerryId, Name = "Merry", Region = "Buckland" });
-            session.Store(new Angler { Id = PippinId, Name = "Pippin", Region = "Buckland" });
+            session.Store(new Angler { Id = FrodoId, Name = "Frodo", Region = "Shire", Licence = 10 });
+            session.Store(new Angler { Id = SamId, Name = "Sam", Region = "Shire", Licence = 20 });
+            session.Store(new Angler { Id = MerryId, Name = "Merry", Region = "Buckland", Licence = 30 });
+            session.Store(new Angler { Id = PippinId, Name = "Pippin", Region = "Buckland", Licence = 40 });
 
-            session.Store(new Catch { AnglerId = FrodoId, Name = "Trout", Weight = 3 });
-            session.Store(new Catch { AnglerId = FrodoId, Name = "Pike", Weight = 11 });
-            session.Store(new Catch { AnglerId = SamId, Name = "Chub", Weight = 2 });
+            session.Store(new Catch { AnglerId = FrodoId, Name = "Trout", Weight = 3, Rating = Rating.Poor });
+            session.Store(new Catch { AnglerId = FrodoId, Name = "Pike", Weight = 11, Rating = Rating.Good });
+            session.Store(new Catch { AnglerId = SamId, Name = "Chub", Weight = 2, Rating = Rating.Good });
 
             session.Store(new Trawler { AnglerId = FrodoId, Name = "Brandywine Belle", Nets = 4 });
             session.Store(new Dinghy { AnglerId = SamId, Name = "Gaffer", HasOars = true });
@@ -526,6 +526,169 @@ public class joined_queries : IAsyncLifetime
         await Task.CompletedTask;
     }
 
+    // ---- the scalar aggregates and Last (fisher#54) ----
+
+    /// <summary>
+    ///     An aggregate over a joined member is the same rewrite the post-join <c>Where</c> and
+    ///     <c>OrderBy</c> go through — the selector names a member of the caller's result shape, which
+    ///     is traced back to the document it came from and resolved against that side's table.
+    /// </summary>
+    [Fact]
+    public async Task the_scalar_aggregates_over_an_inner_side_member()
+    {
+        await using var session = Session();
+
+        Func<IQueryable<JoinedRow>> query = () => session.Query<Angler>()
+            .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
+            .SelectMany(x => x.catches, (x, c) => new JoinedRow(x.a.Name, c.Name, c.Weight));
+
+        (await query().SumAsync(x => x.Weight, Token)).ShouldBe(16);
+        (await query().MinAsync(x => x.Weight, Token)).ShouldBe(2);
+        (await query().MaxAsync(x => x.Weight, Token)).ShouldBe(11);
+        (await query().AverageAsync(x => x.Weight, Token)).ShouldBe(16 / 3d, 0.0001);
+    }
+
+    /// <summary>
+    ///     An outer-side member is counted <em>once per matched row</em>, not once per outer document —
+    ///     Frodo's licence is in the total twice because he has two catches. That is what a join means
+    ///     rather than a Fisher quirk, and it is the number a caller aggregating a join has to expect.
+    /// </summary>
+    [Fact]
+    public async Task an_aggregate_over_the_outer_side_counts_a_row_per_match()
+    {
+        await using var session = Session();
+
+        var total = await session.Query<Angler>()
+            .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
+            .SelectMany(x => x.catches, (x, c) => new { x.a.Licence, c.Weight })
+            .SumAsync(x => x.Licence, Token);
+
+        total.ShouldBe(40);
+    }
+
+    /// <summary>
+    ///     Min and max only need the member to order, so a string member of either side is a real
+    ///     answer — the same rule the unjoined aggregates follow.
+    /// </summary>
+    [Fact]
+    public async Task min_and_max_over_a_string_member_of_either_side()
+    {
+        await using var session = Session();
+
+        Func<IQueryable<JoinedRow>> query = () => session.Query<Angler>()
+            .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
+            .SelectMany(x => x.catches, (x, c) => new JoinedRow(x.a.Name, c.Name, c.Weight));
+
+        (await query().MinAsync(x => x.Angler, Token)).ShouldBe("Frodo");
+        (await query().MaxAsync(x => x.Angler, Token)).ShouldBe("Sam");
+        (await query().MinAsync(x => x.Species, Token)).ShouldBe("Chub");
+    }
+
+    /// <summary>
+    ///     A left join's unmatched rows contribute SQL NULL, which <c>sum</c> and <c>avg</c> skip and
+    ///     <c>count</c> does not — so the two disagree about how many rows there are, correctly.
+    /// </summary>
+    [Fact]
+    public async Task an_aggregate_over_a_left_join_skips_the_unmatched_rows()
+    {
+        await using var session = Session();
+
+        // The selector names c.Weight directly, which a materializing read could not do on a left join
+        // whose unmatched rows have no inner document — an aggregate reads the column instead of
+        // invoking the selector, so the null-guard the other left-join tests carry is not needed here.
+        var query = session.Query<Angler>()
+            .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
+            .SelectMany(x => x.catches.DefaultIfEmpty(), (x, c) => new { x.a.Name, c.Weight });
+
+        (await query.CountAsync(Token)).ShouldBe(5);
+        (await query.SumAsync(x => x.Weight, Token)).ShouldBe(16);
+        (await query.AverageAsync(x => x.Weight, Token)).ShouldBe(16 / 3d, 0.0001);
+    }
+
+    /// <summary>
+    ///     An aggregate over a paged join applies to the page, which needs the join carried into the
+    ///     subquery — the same thing <c>CountAsync</c> needs and for the same reason.
+    /// </summary>
+    [Fact]
+    public async Task an_aggregate_over_a_paged_join_aggregates_the_page()
+    {
+        await using var session = Session();
+
+        Func<IQueryable<JoinedRow>> query = () => session.Query<Angler>()
+            .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
+            .SelectMany(x => x.catches, (x, c) => new JoinedRow(x.a.Name, c.Name, c.Weight));
+
+        // The two lightest of the three catches — 2 and 3, not the 16 the whole join sums to.
+        (await query().OrderBy(x => x.Weight).Take(2).SumAsync(x => x.Weight, Token)).ShouldBe(5);
+
+        // The same page over an outer-side member: Sam's licence and Frodo's. Dropping either the join
+        // or the alias from the subquery makes this "no such column" rather than a wrong number, which
+        // is the one mercy of a qualified locator.
+        var licences = session.Query<Angler>()
+            .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
+            .SelectMany(x => x.catches, (x, c) => new { x.a.Licence, c.Weight })
+            .OrderBy(x => x.Weight).Take(2);
+
+        (await licences.SumAsync(x => x.Licence, Token)).ShouldBe(30);
+    }
+
+    [Fact]
+    public async Task last_over_a_join()
+    {
+        await using var session = Session();
+
+        Func<IQueryable<JoinedRow>> query = () => session.Query<Angler>()
+            .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
+            .SelectMany(x => x.catches, (x, c) => new JoinedRow(x.a.Name, c.Name, c.Weight));
+
+        (await query().OrderBy(x => x.Weight).LastAsync(Token))!.Species.ShouldBe("Pike");
+        (await query().OrderByDescending(x => x.Weight).LastAsync(Token))!.Species.ShouldBe("Chub");
+
+        (await session.Query<Angler>().Where(a => a.Name == "Merry")
+            .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
+            .SelectMany(x => x.catches, (x, c) => new JoinedRow(x.a.Name, c.Name, c.Weight))
+            .OrderBy(x => x.Weight).LastOrDefaultAsync(Token)).ShouldBeNull();
+    }
+
+    /// <summary>
+    ///     <c>Last</c> over a page is the last of <em>that page</em>, so the reversal goes on a statement
+    ///     wrapping it rather than in place. A join cannot reuse the unjoined wrapper: its ordering
+    ///     locators are qualified with a table alias that does not survive into the enclosing scope, so
+    ///     the keys are carried out of the page as named columns instead.
+    /// </summary>
+    [Fact]
+    public async Task last_over_a_paged_join_is_the_last_of_the_page()
+    {
+        await using var session = Session();
+
+        Func<IQueryable<JoinedRow>> query = () => session.Query<Angler>()
+            .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
+            .SelectMany(x => x.catches, (x, c) => new JoinedRow(x.a.Name, c.Name, c.Weight));
+
+        // Chub 2, Trout 3, Pike 11. The last of the first two is Trout; reversing in place would say
+        // Pike, which is the last of all three.
+        (await query().OrderBy(x => x.Weight).Take(2).LastAsync(Token))!.Species.ShouldBe("Trout");
+
+        // Ordering on the outer side through the same wrapper, and descending so the reversal is
+        // exercised in both directions.
+        (await query().OrderByDescending(x => x.Angler).ThenBy(x => x.Weight).Take(2).LastAsync(Token))!
+            .Species.ShouldBe("Trout");
+    }
+
+    [Fact]
+    public async Task last_over_a_join_without_an_ordering_is_refused_by_name()
+    {
+        await using var session = Session();
+
+        var query = session.Query<Angler>()
+            .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
+            .SelectMany(x => x.catches, (x, c) => new JoinedRow(x.a.Name, c.Name, c.Weight));
+
+        var exception = await Should.ThrowAsync<BadLinqExpressionException>(() => query.LastAsync(Token));
+
+        exception.Message.ShouldContain("OrderBy");
+    }
+
     // ---- what is refused, and by name ----
 
     [Fact]
@@ -608,27 +771,54 @@ public class joined_queries : IAsyncLifetime
     }
 
     [Fact]
-    public async Task an_aggregate_over_a_join_is_refused()
+    public async Task an_aggregate_over_a_computed_member_of_the_result_is_refused()
     {
         await using var session = Session();
 
         var query = session.Query<Angler>()
             .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
-            .SelectMany(x => x.catches, (x, c) => new JoinedRow(x.a.Name, c.Name, c.Weight));
+            .SelectMany(x => x.catches, (x, c) => new { Doubled = c.Weight * 2 });
 
         var exception = await Should.ThrowAsync<BadLinqExpressionException>(() =>
-            query.SumAsync(x => x.Weight, Token));
+            query.SumAsync(x => x.Doubled, Token));
 
-        exception.Message.ShouldContain("join");
+        exception.Message.ShouldContain("member of one of the joined documents");
+    }
+
+    /// <summary>
+    ///     The two guards are the resolved member's, not the path's, so they apply to a joined selector
+    ///     exactly as they do to an unjoined one — see <c>aggregating_queries</c> for what each one is
+    ///     protecting against.
+    /// </summary>
+    [Fact]
+    public async Task the_aggregate_guards_still_apply_over_a_join()
+    {
+        await using var session = Session();
+
+        var query = session.Query<Angler>()
+            .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
+            .SelectMany(x => x.catches, (x, c) => new { c.Rating });
+
+        var exception = await Should.ThrowAsync<BadLinqExpressionException>(() =>
+            query.SumAsync(x => (int)x.Rating, Token));
+
+        exception.Message.ShouldContain("not a number");
     }
 
     public record JoinedRow(string Angler, string Species, int Weight);
+
+    public enum Rating
+    {
+        Poor,
+        Good
+    }
 
     public class Angler
     {
         public Guid Id { get; set; }
         public string Name { get; set; } = "";
         public string Region { get; set; } = "";
+        public int Licence { get; set; }
     }
 
     public class Catch
@@ -637,6 +827,7 @@ public class joined_queries : IAsyncLifetime
         public Guid AnglerId { get; set; }
         public string Name { get; set; } = "";
         public int Weight { get; set; }
+        public Rating Rating { get; set; }
     }
 
     public class Vessel
