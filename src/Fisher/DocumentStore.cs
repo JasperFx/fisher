@@ -22,7 +22,11 @@ public partial class DocumentStore : IDocumentStore
         options.AssertValid();
 
         Options = options;
-        Database = new FisherDatabase(options);
+        Tenancy = options.TenantDatabases is { } configured
+            ? new SeparateDatabaseTenancy(options, configured)
+            : new DefaultTenancy(options);
+
+        Database = Tenancy.Default;
         options.StorageDatabase = Database;
 
         // Register the self-aggregating types whose evolvers the source generator emitted, so
@@ -67,8 +71,23 @@ public partial class DocumentStore : IDocumentStore
     public StoreOptions Options { get; }
 
     /// <summary>
-    ///     The database this store reads and writes, and whose schema it manages.
+    ///     Which database a tenant's data lives in (fisher#47).
     /// </summary>
+    /// <remarks>
+    ///     <see cref="DefaultTenancy" /> unless the store called
+    ///     <see cref="StoreOptions.MultiTenantedDatabases" /> — one file for every tenant, which is what
+    ///     conjoined tenancy and single-tenant stores both want.
+    /// </remarks>
+    public ITenancy Tenancy { get; }
+
+    /// <summary>
+    ///     The database a store-level operation uses when no tenant is named.
+    /// </summary>
+    /// <remarks>
+    ///     Under database-per-tenant this is the default tenant's file, and is <em>not</em> every
+    ///     tenant's — reach the rest through <see cref="Tenancy" />. Kept as a property because it is
+    ///     the answer for every store that is not database-per-tenant, which is nearly all of them.
+    /// </remarks>
     public FisherDatabase Database { get; }
 
     /// <summary>
@@ -88,7 +107,7 @@ public partial class DocumentStore : IDocumentStore
     ///     default.
     /// </param>
     public IDocumentSession LightweightSession(string? tenantId = null)
-        => new FisherSession(Options, Database, tenantId ?? StorageConstants.DefaultTenantId);
+        => OpenSession(new SessionOptions { TenantId = tenantId ?? StorageConstants.DefaultTenantId });
 
     /// <summary>
     ///     Open a session with an identity map — a document loaded or stored under an identity is
@@ -139,7 +158,10 @@ public partial class DocumentStore : IDocumentStore
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        return new FisherSession(Options, Database, options);
+        // The database is resolved per session from the tenant, which is the whole of what
+        // database-per-tenant changes about the session path — under DefaultTenancy every tenant
+        // resolves the one database, so nothing moves for a store that did not ask for this.
+        return new FisherSession(Options, Tenancy.DatabaseFor(options.TenantId), options);
     }
 
     /// <summary>
@@ -159,26 +181,67 @@ public partial class DocumentStore : IDocumentStore
     public IQuerySession QuerySession(SessionOptions options) => OpenSession(options);
 
     /// <summary>
-    ///     Apply every configured schema change to the database.
+    ///     Apply every configured schema change to every database this store spans.
     /// </summary>
     /// <remarks>
-    ///     Fisher applies schema changes explicitly rather than lazily on first use. SQLite serializes
-    ///     writers at the file level, so a lazy first-use migration would have every session racing to
-    ///     take the write lock for DDL on startup.
+    ///     <para>
+    ///         Fisher applies schema changes explicitly rather than lazily on first use. SQLite
+    ///         serializes writers at the file level, so a lazy first-use migration would have every
+    ///         session racing to take the write lock for DDL on startup.
+    ///     </para>
+    ///     <para>
+    ///         <b>Under database-per-tenant this migrates N files, and a partial failure is reported per
+    ///         database rather than swallowed</b> (fisher#47). Migrating a hundred tenants and stopping
+    ///         at the fortieth leaves a store in mixed versions either way; what
+    ///         <see cref="TenantMigrationException" /> adds is that the caller is told which tenants are
+    ///         migrated and which are not, instead of one exception naming whichever failed first.
+    ///     </para>
     /// </remarks>
-    public Task ApplyAllConfiguredChangesToDatabaseAsync(CancellationToken token = default)
-        => Database.ApplyAllConfiguredChangesToDatabaseAsync(ct: token);
+    public async Task ApplyAllConfiguredChangesToDatabaseAsync(CancellationToken token = default)
+    {
+        var databases = Tenancy.AllDatabases();
+
+        if (databases.Count == 1)
+        {
+            await databases[0].ApplyAllConfiguredChangesToDatabaseAsync(ct: token).ConfigureAwait(false);
+            return;
+        }
+
+        var migrated = new List<string>();
+        var failures = new Dictionary<string, Exception>();
+
+        // Sequentially, and that is not laziness. Every tenant's migration takes its own file's write
+        // lock, so running them in parallel would win nothing on the DDL itself and would hold N
+        // connections open at once against a pool ceiling that sizes one file.
+        foreach (var database in databases)
+        {
+            try
+            {
+                await database.ApplyAllConfiguredChangesToDatabaseAsync(ct: token).ConfigureAwait(false);
+                migrated.Add(database.Identifier);
+            }
+            catch (Exception e)
+            {
+                failures[database.Identifier] = e;
+            }
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new TenantMigrationException(migrated, failures);
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {
         GC.SuppressFinalize(this);
-        await Database.DisposeAsync().ConfigureAwait(false);
+        await Tenancy.DisposeAsync().ConfigureAwait(false);
     }
 
     /// <inheritdoc cref="Storage.FisherDatabase.Dispose" />
     public void Dispose()
     {
         GC.SuppressFinalize(this);
-        Database.Dispose();
+        Tenancy.Dispose();
     }
 }

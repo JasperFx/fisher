@@ -54,7 +54,7 @@ public partial class DocumentStore : IEventStore
     ///     One SQLite file is one database, and Fisher has no database-per-tenant tenancy, so the
     ///     cardinality is always <see cref="DatabaseCardinality.Single" />.
     /// </summary>
-    DatabaseCardinality IEventStore.DatabaseCardinality => DatabaseCardinality.Single;
+    DatabaseCardinality IEventStore.DatabaseCardinality => Tenancy.Cardinality;
 
     bool IEventStore.HasMultipleTenants => false;
 

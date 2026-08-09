@@ -230,13 +230,16 @@ Working, with tests:
   retry event that says a call waited on the write lock
 - **Multi-store registration** — `AddFisherStore<T>` and `IConfigureFisher`, so several independently
   configured stores live in one container
+- **Database-per-tenant, stage 1** — `ITenancy` and a SQLite file per tenant, with per-database
+  migration; the daemon across them is fisher#57 and runtime tenants are fisher#58
 
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
 
-- **Database-per-tenant** (fisher#47) — the conjoined style works and is pinned by
-  `ConjoinedEventTenancyCompliance`; a file per tenant does not, which is why every `IEventDatabase`
-  parameter in `DocumentStore.Daemon.cs` is ignored.
+- **The async daemon across several tenant databases** (fisher#57) — sessions, schema application and
+  the tooling reads all route per tenant, but `BuildProjectionDaemonAsync` refuses under
+  database-per-tenant rather than projecting one tenant's events into every tenant's documents.
+  Tenants added at runtime are fisher#58.
 - **A message bus** — the side-effect seam exists and the default outbox drops every message. That is
   the end state, not a gap: fisher#8 was closed wontfix, and delivery is a bus integration's job here
   as it is on both siblings.
@@ -1812,6 +1815,50 @@ reintroduce fisher#20's bug one level up, where it is harder to see.
   `the_store_implements_every_interface_member_implicitly` checks the other direction through the
   interface map, so a member satisfied explicitly — compiling fine and then unreachable from the
   concrete type — is caught too.
+
+### Database-per-tenant (stage 1)
+
+`Storage/ITenancy.cs` (fisher#47) — `DefaultTenancy`, `SeparateDatabaseTenancy`, and
+`StoreOptions.MultiTenantedDatabases(...)`. **Conjoined tenancy stays and stays the default**; the two
+are alternatives, as on both siblings.
+
+**Arguably SQLite's best tenancy story rather than its worst.** The usual objection —
+database-per-tenant is heavyweight to provision — inverts here: a tenant is a *file*. Creating one is
+a file plus a migration, deleting one is deleting a file, backing one up is copying it, and one
+tenant's data cannot leak into another's because there is no shared table to leak through. And it
+answers the sharpest structural constraint: under conjoined tenancy every tenant contends for one
+write lock, where under file-per-tenant they write concurrently. That makes it a **performance**
+feature as much as an isolation one, which is not true on either sibling —
+`two_tenants_write_at_the_same_time` pins it by holding one tenant's write lock across the other's
+whole commit.
+
+- **The session path is the whole of what changed.** `OpenSession` resolves its database from
+  `Tenancy.DatabaseFor(options.TenantId)`; under `DefaultTenancy` every tenant resolves the one
+  database, so nothing moves for a store that did not ask for this. `FisherDatabase` already had an
+  internal constructor taking a connection string, which is the seam this needed.
+- **An unknown tenant throws rather than falling back to the default.** Falling back would write one
+  tenant's data into another's file — the one failure this tenancy exists to make impossible, and it
+  would be silent.
+- **Migration is per database with per-database status.** `ApplyAllConfiguredChangesToDatabaseAsync`
+  over a hundred tenants that fails at the fortieth leaves mixed versions whatever it throws;
+  `TenantMigrationException` reports *which* are current. Run sequentially, not in parallel: each
+  migration takes its own file's write lock, so parallelism wins nothing on the DDL and holds N
+  connections against a pool ceiling that sizes one file.
+- **Both file-naming shapes, with the convention as the default.** `InDirectory(...)` + `AddTenants(...)`
+  is what makes a hundred tenants one line and is what stage 3 will need, since a tenant that appears
+  at runtime has no configuration line to carry a path; `AddTenant(id, connectionString)` is the
+  flexible form.
+- **`ATTACH` stays out of it.** It would let one connection see several tenants, but an attachment has
+  per-connection lifecycle to re-establish on every pooled checkout — exactly what `FisherTableNaming`
+  exists to avoid.
+- **WAL, busy timeout and foreign keys are per file for free**, because `SqliteDataSource` applies the
+  PRAGMAs per connection. The cost is that `MaxPoolSize` sizes *each tenant's* pool.
+- **`BuildProjectionDaemonAsync` refuses outright under this tenancy**, and that is the honest answer
+  rather than a gap: every `IEventDatabase` parameter in `DocumentStore.Daemon.cs` is still ignored, so
+  a daemon would read the default tenant's events and write every tenant's documents from them.
+  Routing it per database is **fisher#57**; runtime tenants are **fisher#58**.
+- `StoreOptions.ConnectionString` becomes optional under this tenancy, because there is no store-level
+  file — a store-level connection string would be a database nothing writes to.
 
 ### Multi-store registration
 

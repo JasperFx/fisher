@@ -72,17 +72,30 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         => EventGraph.StreamIdentity == StreamIdentity.AsGuid ? typeof(Guid) : typeof(string);
 
     /// <summary>
-    ///     Expose the one database this store owns, so store-agnostic tooling can reach the
+    ///     Every database this store owns, so store-agnostic tooling can reach the
     ///     <see cref="IEventDatabase" /> reads without knowing Fisher's types.
     /// </summary>
+    /// <remarks>
+    ///     One under every tenancy but database-per-tenant (fisher#47), where it is one per tenant —
+    ///     which is what makes a monitoring console show a hundred tenants' progress rather than one.
+    /// </remarks>
     ValueTask<IReadOnlyList<IEventDatabase>> IEventStore.AllDatabases()
-        => ValueTask.FromResult<IReadOnlyList<IEventDatabase>>([Database]);
+        => ValueTask.FromResult<IReadOnlyList<IEventDatabase>>(Tenancy.AllDatabases().Cast<IEventDatabase>().ToList());
 
     // ---- sessions and loaders ----
 
+    /// <remarks>
+    ///     <b>The <see cref="IEventDatabase" /> parameter is still ignored, and under
+    ///     database-per-tenant that is now a real limitation rather than a fact about SQLite.</b>
+    ///     Routing the daemon per database is fisher#57 — stage 2 of fisher#47 — and every one of these
+    ///     parameters is a site it has to revisit. <c>BuildProjectionDaemonAsync</c> refuses outright
+    ///     under that tenancy rather than projecting one tenant's events into the default file, which is
+    ///     what ignoring the parameter would silently do.
+    /// </remarks>
     IDocumentSession IEventStore<IDocumentSession, IQuerySession>.OpenSession(IEventDatabase database)
         => LightweightSession();
 
+    /// <inheritdoc cref="IEventStore{TOperations,TQuerySession}.OpenSession(IEventDatabase)" />
     IDocumentSession IEventStore<IDocumentSession, IQuerySession>.OpenSession(IEventDatabase database,
         string tenantId) => LightweightSession(tenantId);
 
@@ -286,12 +299,17 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     // ---- building the daemon ----
 
     /// <summary>
-    ///     Build a projection daemon over this store's single database.
+    ///     Build a projection daemon over this store's database.
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         <paramref name="tenantIdOrDatabaseIdentifier" /> is accepted and ignored: Fisher is one
-    ///         file, one database, and has no database-per-tenant tenancy to resolve against.
+    ///         <paramref name="tenantIdOrDatabaseIdentifier" /> is accepted and ignored under every
+    ///         tenancy but database-per-tenant, where there is one database and nothing to resolve
+    ///         against. <b>Under database-per-tenant this refuses outright</b> (fisher#47 stage 1):
+    ///         routing the daemon per database is fisher#57, and until it lands a daemon here would
+    ///         read the default tenant's events and write every tenant's documents from them — silently,
+    ///         and to the one place database-per-tenant exists to keep separate. Refusing is the only
+    ///         answer that is not worse than doing nothing.
     ///     </para>
     ///     <para>
     ///         <strong>WAL is checked here rather than assumed.</strong> The daemon reads while
@@ -307,6 +325,16 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         string? tenantIdOrDatabaseIdentifier = null, ILogger? logger = null)
     {
         logger ??= NullLogger.Instance;
+
+        if (Tenancy is not DefaultTenancy)
+        {
+            throw new NotSupportedException(
+                "The async daemon cannot yet run against a database-per-tenant store. It would read the "
+                + "default tenant's events and write every tenant's documents from them, which is the "
+                + "one outcome file-per-tenant exists to prevent — so it refuses rather than doing that "
+                + "quietly. Running projections across several databases is fisher#57. Until then, use "
+                + "conjoined tenancy for a store that needs the daemon, or run inline projections.");
+        }
 
         WarnIfJournalModeIsNotWal(logger);
 

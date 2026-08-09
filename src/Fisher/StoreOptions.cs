@@ -184,6 +184,34 @@ public class StoreOptions
     public List<ISchemaObject> ExtendedSchemaObjects { get; } = new();
 
     /// <summary>
+    ///     Give each tenant its own SQLite file, rather than a <c>tenant_id</c> column in one
+    ///     (fisher#47).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The alternative to conjoined tenancy, not an addition to it — a store picks one, as it
+    ///         does on both siblings. See <see cref="Storage.ITenancy" /> for why file-per-tenant is
+    ///         arguably SQLite's <em>best</em> tenancy story: a tenant is a file, and tenants write
+    ///         concurrently instead of contending for one write lock.
+    ///     </para>
+    ///     <para>
+    ///         Tenants are fixed at configuration time in this stage. Running the async daemon across
+    ///         several databases is fisher#57 and dynamic tenants are fisher#58.
+    ///     </para>
+    /// </remarks>
+    public void MultiTenantedDatabases(Action<Storage.TenantDatabases> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var databases = new Storage.TenantDatabases();
+        configure(databases);
+
+        TenantDatabases = databases;
+    }
+
+    internal Storage.TenantDatabases? TenantDatabases { get; private set; }
+
+    /// <summary>
     ///     Configuration applied to every document mapping as it is created (fisher#39).
     /// </summary>
     /// <remarks>
@@ -257,10 +285,13 @@ public class StoreOptions
 
     internal void AssertValid()
     {
-        if (string.IsNullOrWhiteSpace(_connectionString))
+        // Under database-per-tenant there is no store-level connection string to set: every tenant
+        // names its own file, and a store-level one would be a database nothing writes to (fisher#47).
+        if (string.IsNullOrWhiteSpace(_connectionString) && TenantDatabases is null)
         {
             throw new InvalidOperationException(
-                "A connection string must be configured. Set StoreOptions.ConnectionString.");
+                "A connection string must be configured. Set StoreOptions.ConnectionString, or name a "
+                + "database per tenant with MultiTenantedDatabases(...).");
         }
     }
 }

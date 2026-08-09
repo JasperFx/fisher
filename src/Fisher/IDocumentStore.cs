@@ -48,6 +48,9 @@ public interface IDocumentStore : IDisposable, IAsyncDisposable
     /// <inheritdoc cref="DocumentStore.Database" />
     FisherDatabase Database { get; }
 
+    /// <inheritdoc cref="DocumentStore.Tenancy" />
+    ITenancy Tenancy { get; }
+
     /// <inheritdoc cref="DocumentStore.Advanced" />
     AdvancedOperations Advanced { get; }
 
