@@ -22,10 +22,14 @@ namespace Fisher.Storage.Metadata;
 /// </remarks>
 public class MetadataColumn
 {
-    internal MetadataColumn(string name, Type memberType)
+    private readonly bool _optional;
+
+    internal MetadataColumn(string name, Type memberType, bool optional = false)
     {
         Name = name;
         MemberType = memberType;
+        _optional = optional;
+        Enabled = !optional;
     }
 
     /// <summary>The column's name on the document table.</summary>
@@ -33,6 +37,39 @@ public class MetadataColumn
 
     /// <summary>The CLR type a member has to have to carry this column's value.</summary>
     internal Type MemberType { get; }
+
+    /// <summary>
+    ///     Whether the document table carries this column at all.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Only the opt-in columns have a switch, and the rest are not given a dead one.</b>
+    ///         Whether <c>guid_version</c>, <c>revision</c>, <c>is_deleted</c> and <c>deleted_at</c>
+    ///         exist is already decided by <c>UseOptimisticConcurrency()</c>,
+    ///         <c>UseNumericRevisions()</c> and <c>SoftDeleted()</c>, and <c>last_modified</c> is always
+    ///         there — so a second flag over any of them would be a knob that silently does nothing.
+    ///         Marten does put <c>Enabled</c> on all of them; here it is settable only on the five
+    ///         fisher#29 added, and <see cref="Enable" /> throws on the others rather than pretending.
+    ///     </para>
+    ///     <para>
+    ///         Off by default for the opt-in columns, so adding the feature does not widen a table
+    ///         nobody asked to widen.
+    ///     </para>
+    /// </remarks>
+    public bool Enabled { get; private set; }
+
+    /// <inheritdoc cref="Enabled" />
+    public void Enable()
+    {
+        if (!_optional)
+        {
+            throw new InvalidOperationException(
+                $"Metadata column '{Name}' is not optional — whether it exists is decided by the "
+                + "document's own configuration, so enabling it here would mean nothing.");
+        }
+
+        Enabled = true;
+    }
 
     /// <summary>
     ///     The document member the column is projected onto, or null when the column is written but
@@ -43,12 +80,22 @@ public class MetadataColumn
     /// <summary>
     ///     Project this column onto a document member.
     /// </summary>
+    /// <remarks>
+    ///     <b>Mapping an optional column enables it.</b> The column would otherwise not exist to be
+    ///     read, so the mapping would be configuration that silently does nothing — and asking for the
+    ///     value on a member is a clearer statement of intent than the flag is.
+    /// </remarks>
     public void MapTo(MemberInfo member)
     {
         ArgumentNullException.ThrowIfNull(member);
 
         AssertCanCarry(member);
         Member = member;
+
+        if (_optional)
+        {
+            Enabled = true;
+        }
     }
 
     /// <summary>

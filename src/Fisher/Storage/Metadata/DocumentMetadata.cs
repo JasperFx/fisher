@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using Fisher.Attributes;
+using JasperFx;
 using JasperFx.Metadata;
 
 namespace Fisher.Storage.Metadata;
@@ -64,6 +65,65 @@ public class DocumentMetadata
     public MetadataColumn DeletedAt { get; } = new(SoftDelete.DeletedAtColumn, typeof(DateTimeOffset?));
 
     /// <summary>
+    ///     <c>created_at</c> — when the row first appeared, and the one column here that an ordinary
+    ///     write must never touch (fisher#29).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>It is filled by the column's own DEFAULT and read back, never written.</b> That is
+    ///         what keeps it from being clobbered on every save: Fisher's upsert assigns every column
+    ///         in its write list from <c>excluded.*</c>, and a column no write binder contributes is
+    ///         not in that list at all. So the rule the rest of the descriptor follows needs no
+    ///         exception — which is worth saying, because the obvious implementation is to add a write
+    ///         binder and then carve <c>created_at</c> out of the <c>do update set</c> clause.
+    ///     </para>
+    ///     <para>
+    ///         <c>last_modified</c> answers "when was this last written"; without this there was no way
+    ///         to ask when it first appeared.
+    ///     </para>
+    /// </remarks>
+    public MetadataColumn CreatedAt { get; } = new("created_at", typeof(DateTimeOffset), optional: true);
+
+    /// <summary>
+    ///     <c>correlation_id</c> — the session's correlation id, copied onto every row it writes.
+    /// </summary>
+    /// <remarks>
+    ///     The document-side counterpart of what <c>AppendPlanner.ApplySessionMetadata</c> already does
+    ///     for events, and from the same source: <c>FisherSession</c> seeds correlation and causation
+    ///     from <c>Activity.Current</c> at construction, so a document and an event written in one unit
+    ///     of work carry identical values with no application code. There is deliberately no second
+    ///     source for it.
+    /// </remarks>
+    public MetadataColumn CorrelationId { get; } = new("correlation_id", typeof(string), optional: true);
+
+    /// <inheritdoc cref="CorrelationId" />
+    public MetadataColumn CausationId { get; } = new("causation_id", typeof(string), optional: true);
+
+    /// <summary>
+    ///     <c>last_modified_by</c> — the session's <c>CurrentUserName</c> at the time of the write.
+    /// </summary>
+    public MetadataColumn LastModifiedBy { get; } = new("last_modified_by", typeof(string), optional: true);
+
+    /// <summary>
+    ///     <c>headers</c> — the session's header dictionary, as JSON TEXT.
+    /// </summary>
+    public MetadataColumn Headers { get; }
+        = new("headers", typeof(Dictionary<string, object>), optional: true);
+
+    /// <summary>
+    ///     <c>tenant_id</c> — read back onto a member, on a conjoined table.
+    /// </summary>
+    /// <remarks>
+    ///     Read-only, like <see cref="CreatedAt" /> but for a different reason: the column is part of
+    ///     the primary key and the storage operations bind it inline ahead of the binder loop, so a
+    ///     write binder would be a second writer of a value that already has one. Enabling it does not
+    ///     create the column either — <c>MultiTenanted()</c> does that — so this one only ever decides
+    ///     whether the value is projected back onto a member.
+    /// </remarks>
+    public MetadataColumn TenantId { get; }
+        = new(StorageConstants.TenantIdColumn, typeof(string), optional: true);
+
+    /// <summary>
     ///     Every mappable column, in a stable order. Not the read order — that is decided by the binder
     ///     array, which only holds the columns a type actually has.
     /// </summary>
@@ -74,6 +134,12 @@ public class DocumentMetadata
         yield return LastModified;
         yield return IsSoftDeleted;
         yield return DeletedAt;
+        yield return CreatedAt;
+        yield return CorrelationId;
+        yield return CausationId;
+        yield return LastModifiedBy;
+        yield return Headers;
+        yield return TenantId;
     }
 
     /// <summary>

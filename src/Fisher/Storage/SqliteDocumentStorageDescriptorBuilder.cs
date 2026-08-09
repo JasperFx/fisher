@@ -132,6 +132,74 @@ internal static class SqliteDocumentStorageDescriptorBuilder
             AddIfMapped(readBinders, deletedAtBinder, metadata.DeletedAt);
         }
 
+        // The session-sourced columns (fisher#29). Each contributes one client-side slot, appended
+        // after every existing one, so nothing above it shifts — the whole reason they go last rather
+        // than in the order DocumentMetadata lists them.
+        //
+        // The values come off the session, which is what makes a document and an event written in the
+        // same unit of work carry the same correlation id: FisherSession seeds both from
+        // Activity.Current, and AppendPlanner.ApplySessionMetadata reads the same fields.
+        if (metadata.CorrelationId.Enabled)
+        {
+            var binder = new DocumentCorrelationIdBinder<TDoc>(
+                metadata.CorrelationId.Name, dialect, metadata.CorrelationId.Member);
+
+            writeBinders.Add(binder);
+            AddIfMapped(readBinders, binder, metadata.CorrelationId);
+        }
+
+        if (metadata.CausationId.Enabled)
+        {
+            var binder = new DocumentCausationIdBinder<TDoc>(
+                metadata.CausationId.Name, dialect, metadata.CausationId.Member);
+
+            writeBinders.Add(binder);
+            AddIfMapped(readBinders, binder, metadata.CausationId);
+        }
+
+        if (metadata.LastModifiedBy.Enabled)
+        {
+            var binder = new DocumentLastModifiedByBinder<TDoc>(
+                metadata.LastModifiedBy.Name, dialect, metadata.LastModifiedBy.Member);
+
+            writeBinders.Add(binder);
+            AddIfMapped(readBinders, binder, metadata.LastModifiedBy);
+        }
+
+        if (metadata.Headers.Enabled)
+        {
+            var binder = new DocumentHeadersBinder<TDoc>(
+                metadata.Headers.Name, dialect, metadata.Headers.Member);
+
+            writeBinders.Add(binder);
+            AddIfMapped(readBinders, binder, metadata.Headers);
+        }
+
+        // The two read-only columns, in readBinders and never in writeBinders — which is not tidiness
+        // in either case but the mechanism.
+        //
+        // created_at is filled by its column DEFAULT, and staying out of the write list is exactly what
+        // stops the upsert's `do update set … = excluded.*` from moving it forward on every save. So
+        // the "assign every column from excluded" rule needs no carve-out, which is the shape the
+        // obvious implementation would have needed.
+        //
+        // tenant_id is bound inline by the storage operations ahead of the binder loop, being part of
+        // the primary key, so a write binder would be a second writer of a value that already has one.
+        if (metadata.CreatedAt.Enabled)
+        {
+            AddIfMapped(readBinders,
+                new DocumentCreatedAtBinder<TDoc>(metadata.CreatedAt.Name, metadata.CreatedAt.Member,
+                    SqliteTimestamp.NowExpression),
+                metadata.CreatedAt);
+        }
+
+        if (mapping.IsConjoined)
+        {
+            AddIfMapped(readBinders,
+                new DocumentTenantIdBinder<TDoc>(metadata.TenantId.Name, metadata.TenantId.Member),
+                metadata.TenantId);
+        }
+
         var writeArray = writeBinders.ToArray();
         var readArray = readBinders.ToArray();
         var clientSide = writeArray.Where(x => !x.IsServerSide).ToArray();

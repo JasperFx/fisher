@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**955 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
+**968 tests green on net9.0 and net10.0**, with no known intermittent failures. 230 of them are shared
 cross-store compliance tests — which as of 2.45.0 is every event sourcing suite the shared library has.
 
 ## Closed since the comparison
@@ -23,7 +23,53 @@ cross-store compliance tests — which as of 2.45.0 is every event sourcing suit
 query plans, `CheckExistsAsync`, `ToSql` (#37) · JSON-returning reads (#28) · `Advanced` parity (#42) ·
 patching (#35) · bulk insert (#36) · composite projections (#19) · event body queries (#41) ·
 sessions, `SessionOptions` and enlistment (#30) · **LINQ joins (#25)** · aggregates and `Last` over a
-join (#54).
+join (#54) · `IgnoreDuplicates` (#53) · patch `Insert` at an index (#52) · **document metadata and
+`MetadataForAsync` (#29)**.
+
+## Document metadata — the wiring that was already there
+
+**#29 asked for five columns Polecat has and Fisher did not, and Weasel.Storage already had a binder
+for every one of them.** `DocumentCreatedAtBinder`, `DocumentCorrelationIdBinder`,
+`DocumentCausationIdBinder`, `DocumentLastModifiedByBinder`, `DocumentHeadersBinder` and
+`DocumentTenantIdBinder` were all sitting unused. The issue's step 3 said to check upstream first and
+that if the binders existed this would be wiring; they did, and it was.
+
+**The one thing the issue predicted wrongly is worth reading before touching the descriptor.** It
+expected `created_at` to need a deliberate exception to the "assign every column from `excluded.*`"
+rule — "that is exactly the kind of thing a later cleanup would simplify away". It needs none. The
+upsert's set clause is built from the *write list*, so a column no write binder contributes is not in
+it: `created_at` is filled by its own parenthesized DEFAULT and its binder goes into `readBinders`
+alone. Making it a write binder is what breaks the test, verified by doing it. The rule stands
+unqualified, which is a better outcome than a documented carve-out.
+
+`tenant_id` is read-only too, for a different reason — it is part of the primary key and the storage
+operations bind it inline ahead of the binder loop, so a write binder would be a second writer.
+
+Three decisions that are about not shipping dead knobs:
+
+- **Only the opt-in columns have an `Enabled` flag.** Whether `guid_version`, `revision`, `is_deleted`
+  and `deleted_at` exist is decided by `UseOptimisticConcurrency()`, `UseNumericRevisions()` and
+  `SoftDeleted()`; `last_modified` is always there. Marten puts `Enabled` on all of them, which here
+  would be a knob doing nothing four times over — so `OptionalMetadataColumnExpression` is a separate
+  type and `MetadataColumn.Enable()` throws on the rest.
+- **Mapping an optional column enables it**, for the same reason in the other direction: a mapping
+  onto a column that would not exist is configuration that silently does nothing.
+- **Turning one back off throws.** Creating a column is a migration and so is dropping one, and the
+  second has data in it.
+
+`MetadataForAsync` is the other half, and like bulk insert's duplicate probe it is **deliberately not
+routed through the LINQ path** — that path applies the soft-delete filter, and "when was this deleted"
+is one of the questions this method exists to answer. It is the second place in Fisher where going
+around an implicit filter is correct; both are now written down, because the default is the opposite.
+
+Its return type is `StoredDocumentMetadata`, not `DocumentMetadata` as on both siblings. Fisher already
+has a `DocumentMetadata` one namespace away meaning the configuration rather than the values, and two
+same-named types with opposite jobs is a collision only noticed by whoever imports the wrong one.
+
+One gap this closed on the way past: **`IDocumentSession` did not declare `CorrelationId`,
+`CausationId`, `CurrentUserName` or `Headers` at all.** They were public on `FisherSession` and on no
+interface, so Fisher's own tests set them by casting to an internal type. Tolerable while only events
+read them; wrong the moment a document does.
 
 ## Sessions and enlistment — the one the ordering called a hard stop
 
@@ -1062,10 +1108,12 @@ Each of these is a decision with a reason, not an oversight:
   concurrent-queueing shape that bug lived in.
 - **No natural keys** ([#40](https://github.com/JasperFx/fisher/issues/40)) — the last stated partial
   on `IEventStoreOperations`. Bulk insert used to be on this line and is done (#36, #53).
-- **`dotnet_type` is the one metadata column with nowhere to go.** The other four are projected back
-  onto document members (fisher#11); Weasel's `DocumentDotNetTypeBinder` takes no member where every
-  other binder does, so `DocumentMetadata` omits it rather than offering a mapping that would
-  silently do nothing. That is an upstream gap, not a Fisher decision.
+- **`dotnet_type` is the one metadata column with nowhere to go.** Every other one is projectable onto
+  a document member (fisher#11, widened by fisher#29); Weasel's `DocumentDotNetTypeBinder` takes no
+  member where every other binder does, so `DocumentMetadata` omits it rather than offering a mapping
+  that would silently do nothing. That is an upstream gap, not a Fisher decision — and
+  `MetadataForAsync` reads the column regardless, so the value is reachable even though no member can
+  hold it.
 - **Multi-tenancy stops at the conjoined style.** One database sliced by a tenant id column, which
   works and is now pinned cross-store by `ConjoinedEventTenancyCompliance`. What is absent is
   database-per-tenant, which is why every `IEventDatabase` parameter in `DocumentStore.Daemon.cs` is

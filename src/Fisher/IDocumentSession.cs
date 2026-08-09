@@ -107,6 +107,42 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
     Task<string?> LoadJsonAsync<T>(long id, CancellationToken token = default) where T : class;
 
     /// <summary>
+    ///     What a document's metadata columns hold, without loading the document (fisher#29). Null when
+    ///     there is no such row.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The counterpart to mapping a column onto a member: mapping is for when the document
+    ///         wants to carry the value, this is for when a caller wants to ask. It reads only the
+    ///         columns the type actually has — an unenabled one comes back null rather than being
+    ///         selected and failing.
+    ///     </para>
+    ///     <para>
+    ///         <b>A soft-deleted document has metadata, and this returns it.</b> The read carries the
+    ///         tenant scope but deliberately not the soft-delete filter, since "was this deleted, and
+    ///         when" is one of the questions it exists to answer and no ordinary load can.
+    ///     </para>
+    /// </remarks>
+    Task<Metadata.StoredDocumentMetadata?> MetadataForAsync<T>(T document, CancellationToken token = default)
+        where T : notnull;
+
+    /// <inheritdoc cref="MetadataForAsync{T}(T,CancellationToken)" />
+    Task<Metadata.StoredDocumentMetadata?> MetadataForAsync<T>(Guid id, CancellationToken token = default)
+        where T : notnull;
+
+    /// <inheritdoc cref="MetadataForAsync{T}(T,CancellationToken)" />
+    Task<Metadata.StoredDocumentMetadata?> MetadataForAsync<T>(string id, CancellationToken token = default)
+        where T : notnull;
+
+    /// <inheritdoc cref="MetadataForAsync{T}(T,CancellationToken)" />
+    Task<Metadata.StoredDocumentMetadata?> MetadataForAsync<T>(int id, CancellationToken token = default)
+        where T : notnull;
+
+    /// <inheritdoc cref="MetadataForAsync{T}(T,CancellationToken)" />
+    Task<Metadata.StoredDocumentMetadata?> MetadataForAsync<T>(long id, CancellationToken token = default)
+        where T : notnull;
+
+    /// <summary>
     ///     Run a query plan against this session.
     /// </summary>
     Task<T> QueryByPlanAsync<T>(Batching.IQueryPlan<T> plan, CancellationToken token = default);
@@ -153,6 +189,37 @@ public interface IDocumentSession : IQuerySession, JasperFx.Events.IStorageOpera
     ///     The event store write surface for this session.
     /// </summary>
     EventOperations Events { get; }
+
+    /// <summary>
+    ///     The correlation id stamped onto everything this unit of work writes.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Seeded from <c>Activity.Current.RootId</c> when the session is created, so tracing
+    ///         context reaches the store with no application code; assigning here wins over that.
+    ///     </para>
+    ///     <para>
+    ///         <b>One value, two destinations.</b> It reaches appended events when
+    ///         <c>StoreOptions.Events.EnableCorrelationId</c> is on, and documents whose type enabled the
+    ///         <c>correlation_id</c> metadata column (fisher#29) — so a document and an event written in
+    ///         the same unit of work carry the same value, because there is only one source for it.
+    ///     </para>
+    /// </remarks>
+    string? CorrelationId { get; set; }
+
+    /// <inheritdoc cref="CorrelationId" />
+    /// <remarks>Seeded from <c>Activity.Current.ParentId</c>.</remarks>
+    string? CausationId { get; set; }
+
+    /// <inheritdoc cref="CorrelationId" />
+    /// <remarks>Not seeded from anything — an application that wants it sets it.</remarks>
+    string? CurrentUserName { get; set; }
+
+    /// <inheritdoc cref="CorrelationId" />
+    Dictionary<string, object>? Headers { get; }
+
+    /// <inheritdoc cref="CorrelationId" />
+    void SetHeader(string key, object value);
 
     /// <summary>
     ///     Queue a document to be written on the next <see cref="SaveChangesAsync" />, inserting or

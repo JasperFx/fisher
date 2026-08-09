@@ -699,11 +699,11 @@ internal partial class FisherSession : IDocumentSession, IStorageSession, IAsync
         QueueOperation(new Operations.ExecuteSqlStorageOperation(sql, placeholder, parameterValues));
     }
 
-    /// <summary>
-    ///     Set a header value carried on every event appended in this unit of work.
-    /// </summary>
+    /// <inheritdoc />
     public void SetHeader(string key, object value)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
         Headers ??= new Dictionary<string, object>();
         Headers[key] = value;
     }

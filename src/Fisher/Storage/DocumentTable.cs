@@ -85,8 +85,62 @@ internal class DocumentTable : Table
             AddColumn(SoftDelete.DeletedAtColumn, "TEXT").AllowNulls();
         }
 
+        AddOptionalMetadata(mapping);
         AddDuplicatedFields(mapping);
         AddDeclaredIndexes(mapping);
+    }
+
+    /// <summary>
+    ///     The columns fisher#29 added, each present only once something has asked for it.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Opt-in so that adding the feature does not widen a table nobody asked to widen — a
+    ///         document type configured before this existed keeps exactly the columns it had.
+    ///     </para>
+    ///     <para>
+    ///         <c>created_at</c> is the one with a DEFAULT, and it is the whole mechanism by which the
+    ///         column is filled: no write binder contributes it, so it appears in no INSERT column list
+    ///         and in no <c>do update set</c> clause, and an update therefore cannot move it. The
+    ///         expression is <b>parenthesized</b> by <c>NowDefaultExpression</c> — a bare
+    ///         <c>DEFAULT strftime(...)</c> is a CREATE TABLE syntax error.
+    ///     </para>
+    ///     <para>
+    ///         <c>tenant_id</c> is absent here on purpose: <c>MultiTenanted()</c> creates it above, and
+    ///         its metadata column only decides whether the value is read back onto a member.
+    ///     </para>
+    /// </remarks>
+    private void AddOptionalMetadata(DocumentMapping mapping)
+    {
+        var metadata = mapping.Metadata;
+
+        if (metadata.CreatedAt.Enabled)
+        {
+            AddColumn(metadata.CreatedAt.Name, "TEXT")
+                .NotNull()
+                .DefaultValueByExpression(SqliteTimestamp.NowDefaultExpression);
+        }
+
+        if (metadata.CorrelationId.Enabled)
+        {
+            AddColumn(metadata.CorrelationId.Name, "TEXT").AllowNulls();
+        }
+
+        if (metadata.CausationId.Enabled)
+        {
+            AddColumn(metadata.CausationId.Name, "TEXT").AllowNulls();
+        }
+
+        if (metadata.LastModifiedBy.Enabled)
+        {
+            AddColumn(metadata.LastModifiedBy.Name, "TEXT").AllowNulls();
+        }
+
+        // TEXT holding JSON, as data does — SQLite's json1 reads TEXT directly and there is no jsonb.
+        if (metadata.Headers.Enabled)
+        {
+            AddColumn(metadata.Headers.Name, "TEXT").AllowNulls();
+        }
     }
 
     /// <summary>

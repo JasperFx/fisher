@@ -1324,6 +1324,56 @@ reserved and Fisher was passing null — so this is dialect SQL plus wiring, not
 `0` means auto — increment whatever is stored — which is the sentinel the shared operations bind when
 no revision was named, and why every guard starts with `? = 0 or`.
 
+### Session metadata on documents, and `MetadataForAsync`
+
+`Storage/Metadata/` gained five opt-in columns and `IQuerySession.MetadataForAsync` (fisher#29). The
+event store already copied the session's correlation id, causation id and user name onto every
+appended event; a document written in the same unit of work got none of it, so an application could
+answer "which request wrote this event" and not "which request wrote this document".
+
+**Weasel.Storage already had every binder** — `DocumentCreatedAtBinder`, `DocumentCorrelationIdBinder`,
+`DocumentCausationIdBinder`, `DocumentLastModifiedByBinder`, `DocumentHeadersBinder`,
+`DocumentTenantIdBinder`. This is wiring, not machinery, which is what the issue hoped and rarely is.
+
+- **`created_at` needs no exception to the `excluded.*` rule, and the obvious implementation does.**
+  The upsert's `do update set` assigns every column in the *write list* from `excluded.*`, so a
+  `created_at` contributed by a write binder moves forward on every save. Adding it and then carving
+  it out of the set clause is the shape that suggests itself; instead the column is filled by its own
+  parenthesized `NowDefaultExpression` DEFAULT and the binder is added to `readBinders` only. It is
+  then in no INSERT column list and no set clause, and nothing has to remember why.
+  `created_at_survives_an_update_and_last_modified_does_not` fails when it is made a write binder,
+  which was verified.
+- **`tenant_id` is read-only for a different reason**: it is part of the primary key and the storage
+  operations bind it inline ahead of the binder loop, so a write binder would be a second writer of a
+  value that already has one. Enabling its metadata column creates nothing — `MultiTenanted()` does
+  that — so it decides only whether the value is projected back onto a member.
+- **The four session-sourced binders are appended after every existing write binder**, which is what
+  keeps the positional `?` contract intact: a new client-side slot at the end shifts nothing above it.
+- **Only the opt-in columns get an `Enabled` flag, and `MetadataColumn.Enable` throws on the others.**
+  Whether `guid_version`, `revision`, `is_deleted` and `deleted_at` exist is already decided by
+  `UseOptimisticConcurrency()`, `UseNumericRevisions()` and `SoftDeleted()`, and `last_modified` is
+  always there — so a second flag over any of them would be a knob that silently does nothing. Marten
+  puts `Enabled` on all of them; `OptionalMetadataColumnExpression` is what keeps the DSL from
+  offering it where it would mean nothing. **Mapping an optional column enables it**, since a mapping
+  onto a column that would not exist is configuration that silently does nothing too.
+- **Turning an enabled column back off throws.** A column is created by the migration and dropping one
+  that may hold data is a migration, not a configuration flag.
+- **`MetadataForAsync` is hand-built rather than routed through LINQ**, which is the second place in
+  Fisher where going around the implicit filters is correct (bulk insert's duplicate probe is the
+  other). The LINQ path applies the soft-delete filter, and a soft-deleted row's metadata is exactly
+  what a caller asking "when was this deleted" wants — no ordinary load can answer it. The tenant term
+  stays. Columns are chosen from the mapping rather than selected blindly, because naming one the
+  table does not have is `no such column` rather than a null.
+- **The returned type is `Fisher.Metadata.StoredDocumentMetadata`**, not `DocumentMetadata` as on both
+  siblings: Fisher already has a `DocumentMetadata` one namespace away doing the opposite job (which
+  columns are mapped onto which members), and two same-named types with opposite jobs is a collision
+  that only gets noticed by whoever imports the wrong one. Every optional value on it is nullable,
+  where Polecat's constructor requires `CreatedAt` — here null means "the column is not on this table",
+  and a default `DateTimeOffset` would be indistinguishable from a real one.
+- **`IDocumentSession` now declares `CorrelationId` / `CausationId` / `CurrentUserName` / `Headers` /
+  `SetHeader`.** They were public on `FisherSession` and on no interface, so setting one meant casting
+  to an internal type — tolerable while only events read them, wrong once a document does.
+
 ### Document metadata member mapping
 
 `Storage/Metadata/` — which of a document's own members Fisher's metadata columns are projected onto
