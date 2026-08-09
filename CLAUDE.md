@@ -232,10 +232,16 @@ Working, with tests:
   configured stores live in one container
 - **Database-per-tenant, stage 1** — `ITenancy` and a SQLite file per tenant, with per-database
   migration; the daemon across them is fisher#57 and runtime tenants are fisher#58
+- **Transaction participants** — `ITransactionParticipant`, so an application's own writes commit in
+  Fisher's transaction rather than contending with it for the file's one write lock
 
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
 
+- **`Fisher.AspNetCore`** (fisher#49) and **`Fisher.EntityFrameworkCore`** (fisher#50) — neither
+  package exists. `ITransactionParticipant`, which fisher#50 asks for first and in the core package, is
+  done; the EF-backed `DbContextTransactionParticipant` and the EF projection storages are not, and
+  neither are the ASP.NET Core streaming results and health check.
 - **The async daemon across several tenant databases** (fisher#57) — sessions, schema application and
   the tooling reads all route per tenant, but `BuildProjectionDaemonAsync` refuses under
   database-per-tenant rather than projecting one tenant's events into every tenant's documents.
@@ -1815,6 +1821,38 @@ reintroduce fisher#20's bug one level up, where it is harder to see.
   `the_store_implements_every_interface_member_implicitly` checks the other direction through the
   interface map, so a member satisfied explicitly — compiling fine and then unreachable from the
   concrete type — is caught too.
+
+### Transaction participants
+
+`ITransactionParticipant` and `IDocumentSession.AddTransactionParticipant` (fisher#50, half one) —
+something else writing on Fisher's connection, inside Fisher's transaction, committed with it.
+
+**More important on SQLite than on either sibling, and structurally so.** One writer per database
+file. An application using Fisher for its events and something else — EF Core, Dapper, hand-written
+ADO.NET — for its relational tables, in the same file, which is the natural thing to do with an
+embedded database, cannot write both atomically without this. Worse, it cannot write both *at all*
+without contending against itself: the two transactions are two writers on one file, and one waits or
+fails with `SQLITE_BUSY`. On PostgreSQL the equivalent is a nicety.
+
+- **The inverse of enlistment, and both are worth having.** `SessionOptions.ForTransaction` lets a
+  caller hand Fisher a transaction they own; this lets a participant join one Fisher owns. Which fits
+  depends on the participant — a component whose "save" is a method call rather than a connection to
+  borrow (`DbContext.SaveChangesAsync`) is far easier this way round.
+- **A participant must write on the connection it is handed, not merely to the same file.** Two
+  connections to one file are two writers, and the second blocks on the first *from inside the first's
+  transaction* — a genuine self-deadlock that presents as a hang rather than an error. That is the
+  single most likely way to build one wrong, and it is why the connection is a parameter rather than
+  something the participant is expected to find.
+- **The hook is the last thing inside the transaction**, the position `IMessageBatch.BeforeCommitAsync`
+  already occupies — so its visibility semantics are the ones fisher#4 pinned, and
+  `a_participants_write_is_invisible_until_the_commit` re-probes them over a separate connection.
+- **There is no after-commit hook, deliberately.** A participant wanting one is asking for a
+  post-commit side effect, which is `IDocumentSessionListener`'s job (fisher#32) — and that one already
+  gets "everyone can see this now" right, including not firing for an enlisted session.
+- A participant added through a tenant scope lands on the parent, for the same reason its boundaries
+  and metadata do: there is one transaction.
+
+**`Fisher.EntityFrameworkCore` is not built** — see fisher#50 for what remains.
 
 ### Database-per-tenant (stage 1)
 

@@ -260,6 +260,24 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
 
     private void ClearBoundaries() => _boundaries?.Clear();
 
+    private List<ITransactionParticipant>? _participants;
+
+    /// <inheritdoc cref="IDocumentSession.AddTransactionParticipant" />
+    public void AddTransactionParticipant(ITransactionParticipant participant)
+    {
+        ArgumentNullException.ThrowIfNull(participant);
+
+        // On the parent, so a participant added through a tenant scope joins the one transaction that
+        // exists — the same reasoning the scope's boundaries and metadata follow.
+        if (_parent is not null)
+        {
+            _parent.AddTransactionParticipant(participant);
+            return;
+        }
+
+        (_participants ??= []).Add(participant);
+    }
+
     /// <summary>
     ///     Fail the commit if any event matching a tracked boundary's query has been appended since the
     ///     boundary was read.
@@ -628,6 +646,17 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         if (_messageBatch is not null)
         {
             await _messageBatch.BeforeCommitAsync(token).ConfigureAwait(false);
+        }
+
+        // And anything else that wants to write with us, on our connection and in our transaction.
+        // Same position, and the same visibility semantics fisher#4 pinned: nothing here is visible to
+        // anyone else until the commit, and throwing rolls Fisher's work back with the participant's.
+        if (_participants is { Count: > 0 })
+        {
+            foreach (var participant in _participants)
+            {
+                await participant.BeforeCommitAsync(connection, transaction, token).ConfigureAwait(false);
+            }
         }
     }
 

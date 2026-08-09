@@ -503,6 +503,16 @@ public interface IDocumentSession : IDocumentOperations, JasperFx.Events.IStorag
     void EjectAllPendingChanges();
 
     /// <summary>
+    ///     Have something else write inside this unit of work's transaction (fisher#50).
+    /// </summary>
+    /// <remarks>
+    ///     See <see cref="ITransactionParticipant" /> for why this matters more on SQLite than on
+    ///     either sibling — and for the trap that a participant must write on the connection it is
+    ///     handed rather than merely to the same file.
+    /// </remarks>
+    void AddTransactionParticipant(ITransactionParticipant participant);
+
+    /// <summary>
     ///     Commit every queued operation in a single transaction.
     /// </summary>
     Task SaveChangesAsync(CancellationToken token = default);
