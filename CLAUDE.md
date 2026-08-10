@@ -230,8 +230,8 @@ Working, with tests:
   retry event that says a call waited on the write lock
 - **Multi-store registration** — `AddFisherStore<T>` and `IConfigureFisher`, so several independently
   configured stores live in one container
-- **Database-per-tenant, stage 1** — `ITenancy` and a SQLite file per tenant, with per-database
-  migration; the daemon across them is fisher#57 and runtime tenants are fisher#58
+- **Database-per-tenant** — `ITenancy` and a SQLite file per tenant, with per-database migration and
+  the async daemon routed per database; runtime tenants are fisher#58
 - **Transaction participants** — `ITransactionParticipant`, so an application's own writes commit in
   Fisher's transaction rather than contending with it for the file's one write lock
 - **`Fisher.AspNetCore`** — streaming `IResult` types over the JSON reads, ETag/`304` handling, event
@@ -242,10 +242,10 @@ Working, with tests:
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
 
-- **The async daemon across several tenant databases** (fisher#57) — sessions, schema application and
-  the tooling reads all route per tenant, but `BuildProjectionDaemonAsync` refuses under
-  database-per-tenant rather than projecting one tenant's events into every tenant's documents.
-  Tenants added at runtime are fisher#58.
+- **Tenants added or removed at runtime** (fisher#58) — `SeparateDatabaseTenancy` takes its tenants at
+  configuration time and `DatabaseFor` throws `UnknownTenantException` for anything else. A tenant
+  appearing without a restart, a database created and migrated on first use, and enabled/disabled
+  tenants are all that issue.
 - **A message bus** — the side-effect seam exists and the default outbox drops every message. That is
   the end state, not a gap: fisher#8 was closed wontfix, and delivery is a bus integration's job here
   as it is on both siblings.
@@ -355,9 +355,12 @@ Five things that are decisions rather than mechanics:
   It honours `SkipUnknownEvents` and otherwise throws `UnknownEventTypeException`, which implements
   JasperFx's `IEventFailureContext` so the shard failure can be classified without knowing Fisher's
   exception types.
-- **The generic interface's `IEventDatabase` parameter is ignored throughout.** Marten and Polecat
-  resolve a connection string off it because they can be database-per-tenant; a SQLite store is one
-  file. Separate-database tenancy is what would make those parameters start mattering.
+- **The generic interface's `IEventDatabase` parameter carries the answer** (fisher#57), where for a
+  long time every one of them was ignored on the true-enough grounds that a Fisher store was one file.
+  Under database-per-tenant it is not, and ignoring it would read one tenant's events and write every
+  tenant's documents from them. `DocumentStore.DatabaseFrom` is the single place that resolution
+  happens; a null falls back to the default database, which is right for every store that is not
+  database-per-tenant.
 - **Rebuild teardown checks for the table in C#, not in SQL.** SQLite resolves a table name when it
   *prepares* a statement, so a `where exists (select 1 from sqlite_master ...)` guard on the delete
   fails before the guard runs. Names come back from `sqlite_master` first and missing tables are
@@ -1906,10 +1909,20 @@ whole commit.
   exists to avoid.
 - **WAL, busy timeout and foreign keys are per file for free**, because `SqliteDataSource` applies the
   PRAGMAs per connection. The cost is that `MaxPoolSize` sizes *each tenant's* pool.
-- **`BuildProjectionDaemonAsync` refuses outright under this tenancy**, and that is the honest answer
-  rather than a gap: every `IEventDatabase` parameter in `DocumentStore.Daemon.cs` is still ignored, so
-  a daemon would read the default tenant's events and write every tenant's documents from them.
-  Routing it per database is **fisher#57**; runtime tenants are **fisher#58**.
+- **The daemon runs one instance per tenant database** (fisher#57). `BuildProjectionDaemonAsync(tenantId)`
+  builds one; `BuildProjectionDaemonsAsync()` builds them all, and is what `AddAsyncDaemon` hosts —
+  the single-daemon overload with no argument projects the default file and says nothing about the
+  others. **N daemons over N files do not contend**, which is the same property that makes this
+  tenancy a performance feature; under conjoined tenancy the same N projections queue behind one write
+  lock. Runtime tenants are **fisher#58**.
+- **Shard names did not have to become (projection, tenant)**, which fisher#57 expected they would.
+  `fi_event_progression` lives in each tenant's own file, so every database already has its own
+  high-water mark and its own progress row per shard — two tenants running one projection are two
+  daemons writing the same shard name to two different tables. A second key would have drawn a
+  distinction the file boundary already draws.
+- **Cleaning spans every database.** `ResetAllDataAsync` and the whole `IDocumentCleaner` surface loop
+  `Tenancy.AllDatabases()`; cleaning only the default would leave every other tenant's data behind
+  while reporting success, and the caller most likely to hit that is a test fixture.
 - `StoreOptions.ConnectionString` becomes optional under this tenancy, because there is no store-level
   file — a store-level connection string would be a database nothing writes to.
 

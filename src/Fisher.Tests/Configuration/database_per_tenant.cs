@@ -3,6 +3,7 @@ using Fisher.Storage;
 using JasperFx;
 using JasperFx.Descriptors;
 using JasperFx.Events;
+using JasperFx.Events.Projections;
 using Microsoft.Data.Sqlite;
 
 namespace Fisher.Tests.Configuration;
@@ -273,25 +274,176 @@ public class database_per_tenant : IAsyncLifetime
         (await explorer.AllDatabases()).Count.ShouldBe(2);
     }
 
+    // ---- fisher#57: the daemon, per database ----
+
     /// <summary>
-    ///     The daemon refuses rather than projecting one tenant's events into every tenant's documents.
+    ///     Each tenant's events are projected into that tenant's own file, and nowhere else.
     /// </summary>
     /// <remarks>
-    ///     Stage 2 (fisher#57) is what routes it per database. Until then, ignoring the
-    ///     <c>IEventDatabase</c> parameter — which every one of those methods still does — would read
-    ///     the default tenant's events and write documents from them, silently and to the one place
-    ///     this tenancy exists to keep separate.
+    ///     <para>
+    ///         <b>The property stage 1 refused rather than risk getting wrong.</b> Every
+    ///         <c>IEventDatabase</c> parameter in <c>DocumentStore.Daemon.cs</c> used to be ignored on
+    ///         the grounds that a Fisher store was one file; under this tenancy that would have read the
+    ///         default tenant's events and written every tenant's documents from them — silently, and
+    ///         into the one place file-per-tenant exists to keep separate.
+    ///     </para>
+    ///     <para>
+    ///         Asserted in <em>both</em> directions on both tenants, which is the discipline
+    ///         <c>ConjoinedEventTenancyCompliance</c> established: a daemon that projected across
+    ///         tenants would still give the right answer for whichever tenant owned the data, and be
+    ///         wrong only for the other one.
+    ///     </para>
     /// </remarks>
     [Fact]
-    public async Task the_daemon_refuses_under_database_per_tenant()
+    public async Task each_tenants_events_are_projected_into_its_own_database()
     {
-        await using var store = StoreFor();
+        await using var store = StoreForProjecting();
         await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
 
-        var ex = await Should.ThrowAsync<NotSupportedException>(async ()
-            => await store.BuildProjectionDaemonAsync());
+        await AppendSightingsAsync(store, "north", "Osprey", "Kite");
+        await AppendSightingsAsync(store, "south", "Petrel");
 
-        ex.Message.ShouldContain("fisher#57");
+        var daemons = await store.BuildProjectionDaemonsAsync();
+        daemons.Count.ShouldBe(2);
+
+        try
+        {
+            foreach (var daemon in daemons)
+            {
+                await daemon.StartAllAsync();
+            }
+
+            foreach (var database in store.Tenancy.AllDatabases())
+            {
+                await database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+            }
+
+            // North saw two events, south one — and neither file holds the other's tally.
+            (await TallyAsync(store, "north")).ShouldBe(2);
+            (await TallyAsync(store, "south")).ShouldBe(1);
+
+            (await CountAsync(Path.Combine(_directory, "north.db"), "fi_doc_sightingtally")).ShouldBe(1);
+            (await CountAsync(Path.Combine(_directory, "south.db"), "fi_doc_sightingtally")).ShouldBe(1);
+        }
+        finally
+        {
+            foreach (var daemon in daemons)
+            {
+                await daemon.StopAllAsync();
+                daemon.Dispose();
+            }
+        }
+    }
+
+    /// <remarks>
+    ///     Progress is per file, which is why shard identity did <em>not</em> have to become
+    ///     (projection, tenant) as fisher#57 expected: <c>fi_event_progression</c> lives in each tenant's
+    ///     own database, so two tenants running the same projection write the same shard name to two
+    ///     different tables and nothing collides.
+    /// </remarks>
+    [Fact]
+    public async Task progress_is_recorded_per_tenant_database()
+    {
+        await using var store = StoreForProjecting();
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        await AppendSightingsAsync(store, "north", "Osprey");
+
+        var daemon = await store.BuildProjectionDaemonAsync("north");
+
+        try
+        {
+            await daemon.StartAllAsync();
+            await store.Tenancy.DatabaseFor("north")
+                .WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+
+            var north = await store.Tenancy.DatabaseFor("north").AllProjectionProgress(Token);
+            var south = await store.Tenancy.DatabaseFor("south").AllProjectionProgress(Token);
+
+            north.ShouldContain(x => x.ShardName.StartsWith("SightingTally", StringComparison.Ordinal));
+
+            // South's daemon was never built, so its file records nothing — the progress rows are not
+            // shared, and a shard advancing in one tenant says nothing about the other.
+            south.ShouldBeEmpty();
+        }
+        finally
+        {
+            await daemon.StopAllAsync();
+            daemon.Dispose();
+        }
+    }
+
+    /// <remarks>
+    ///     Named without a tenant, the daemon projects the default database only and says nothing about
+    ///     the others — which is why <c>BuildProjectionDaemonsAsync</c> exists and is what
+    ///     <c>AddAsyncDaemon</c> hosts.
+    /// </remarks>
+    [Fact]
+    public async Task a_named_tenants_daemon_is_built_against_that_tenants_database()
+    {
+        await using var store = StoreForProjecting();
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        var daemon = await store.BuildProjectionDaemonAsync("south");
+
+        try
+        {
+            // The shard's own progress lands in south's file and not north's, which is the observable
+            // form of "this daemon is built against that tenant's database".
+            await daemon.StartAllAsync();
+            await store.Tenancy.DatabaseFor("south")
+                .WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+
+            (await store.Tenancy.DatabaseFor("north").AllProjectionProgress(Token)).ShouldBeEmpty();
+        }
+        finally
+        {
+            daemon.Dispose();
+        }
+    }
+
+    /// <remarks>
+    ///     An unknown tenant still throws rather than quietly projecting the default file, which is the
+    ///     same rule <c>DatabaseFor</c> follows for a session.
+    /// </remarks>
+    [Fact]
+    public async Task a_daemon_for_an_unknown_tenant_is_refused()
+    {
+        await using var store = StoreForProjecting();
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        await Should.ThrowAsync<UnknownTenantException>(async ()
+            => await store.BuildProjectionDaemonAsync("east"));
+    }
+
+    private DocumentStore StoreForProjecting()
+        => DocumentStore.For(options =>
+        {
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Schema.For<Sighting>();
+            options.Projections.Snapshot<SightingTally>(SnapshotLifecycle.Async);
+
+            options.MultiTenantedDatabases(databases
+                => databases.InDirectory(_directory).AddTenants("north", "south"));
+        });
+
+    private async Task AppendSightingsAsync(DocumentStore store, string tenantId, params string[] species)
+    {
+        await using var session = store.LightweightSession(tenantId);
+
+        session.Events.StartStream<SightingTally>(Guid.NewGuid(),
+            species.Select(object (x) => new SightingRecorded(x)).ToArray());
+
+        await session.SaveChangesAsync(Token);
+    }
+
+    private async Task<int> TallyAsync(DocumentStore store, string tenantId)
+    {
+        await using var session = store.LightweightSession(tenantId);
+
+        var tallies = await session.Query<SightingTally>().ToListAsync(Token);
+
+        return tallies.Sum(x => x.Count);
     }
 
     private async Task<long> CountAsync(string path, string table)
@@ -306,6 +458,16 @@ public class database_per_tenant : IAsyncLifetime
 
         return Convert.ToInt64(await command.ExecuteScalarAsync(Token));
     }
+}
+
+public record SightingRecorded(string Species);
+
+public class SightingTally
+{
+    public Guid Id { get; set; }
+    public int Count { get; set; }
+
+    public void Apply(SightingRecorded _) => Count++;
 }
 
 public class Sighting

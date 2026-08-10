@@ -27,10 +27,18 @@ namespace Fisher;
 ///         it lands on the store's own public API. Application code never calls these; the daemon does.
 ///     </para>
 ///     <para>
-///         Fisher has exactly one database per store, so every member that takes an
-///         <see cref="IEventDatabase" /> ignores it and works against <see cref="Database" />. Marten and
-///         Polecat resolve a connection string off that parameter because they can be
-///         database-per-tenant; a SQLite store is one file.
+///         <b>Every member taking an <see cref="IEventDatabase" /> resolves against it</b> (fisher#57).
+///         For a long time they all ignored it, on the true-enough grounds that a Fisher store was one
+///         file; under database-per-tenant (fisher#47) it is not, and ignoring it would read one tenant's
+///         events and write every tenant's documents from them. <see cref="DatabaseFrom" /> is the single
+///         place that resolution happens.
+///     </para>
+///     <para>
+///         <b>A daemon is per database, and shard names did not have to change.</b>
+///         <c>fi_event_progression</c> lives in each tenant's own file, so two tenants running the same
+///         projection are two daemons writing the same shard name to two different tables. Making shard
+///         identity (projection, tenant) — which fisher#57 expected — would have been a second key for a
+///         distinction the file boundary already draws.
 ///     </para>
 /// </remarks>
 public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession>,
@@ -84,20 +92,35 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
 
     // ---- sessions and loaders ----
 
+    /// <summary>
+    ///     A session on the database a shard is running against.
+    /// </summary>
     /// <remarks>
-    ///     <b>The <see cref="IEventDatabase" /> parameter is still ignored, and under
-    ///     database-per-tenant that is now a real limitation rather than a fact about SQLite.</b>
-    ///     Routing the daemon per database is fisher#57 — stage 2 of fisher#47 — and every one of these
-    ///     parameters is a site it has to revisit. <c>BuildProjectionDaemonAsync</c> refuses outright
-    ///     under that tenancy rather than projecting one tenant's events into the default file, which is
-    ///     what ignoring the parameter would silently do.
+    ///     <b>The <see cref="IEventDatabase" /> parameter carries the answer now (fisher#57), where for
+    ///     a long time it was ignored on the grounds that a Fisher store was one file.</b> Under
+    ///     database-per-tenant it is not, and ignoring it here is precisely what would have read one
+    ///     tenant's events and written every tenant's documents from them. Every member of this
+    ///     interface taking one now resolves through <see cref="DatabaseFrom" />.
     /// </remarks>
     IDocumentSession IEventStore<IDocumentSession, IQuerySession>.OpenSession(IEventDatabase database)
-        => LightweightSession();
+        => OpenSessionOn(DatabaseFrom(database));
 
     /// <inheritdoc cref="IEventStore{TOperations,TQuerySession}.OpenSession(IEventDatabase)" />
     IDocumentSession IEventStore<IDocumentSession, IQuerySession>.OpenSession(IEventDatabase database,
-        string tenantId) => LightweightSession(tenantId);
+        string tenantId) => OpenSessionOn(DatabaseFrom(database), tenantId);
+
+    /// <summary>
+    ///     The <see cref="FisherDatabase" /> behind an <see cref="IEventDatabase" /> the daemon hands
+    ///     back.
+    /// </summary>
+    /// <remarks>
+    ///     Always one of this store's own — the daemon only ever passes back a database it was given by
+    ///     <see cref="IEventStore.AllDatabases" /> or by the detector. A null falls back to
+    ///     <see cref="Database" /> rather than throwing, because JasperFx has paths that pass none and
+    ///     the default database is the right answer for every store that is not database-per-tenant.
+    /// </remarks>
+    private FisherDatabase DatabaseFrom(IEventDatabase? database)
+        => database as FisherDatabase ?? Database;
 
     /// <summary>
     ///     Build the loader one shard pages its events through.
@@ -110,8 +133,12 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     /// </remarks>
     IEventLoader IEventStore<IDocumentSession, IQuerySession>.BuildEventLoader(IEventDatabase database,
         ILogger loggerFactory, EventFilterable filtering, AsyncOptions shardOptions)
-        => new ResilientEventLoader(Options.ResiliencePipeline, new FisherEventLoader(Database, Options, filtering),
-            Database);
+    {
+        var target = DatabaseFrom(database);
+
+        return new ResilientEventLoader(Options.ResiliencePipeline,
+            new FisherEventLoader(target, Options, filtering), target);
+    }
 
     /// <summary>
     ///     Open one transaction's worth of projection work.
@@ -126,7 +153,7 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
             IEventDatabase database, ShardExecutionMode mode, AsyncOptions projectionOptions,
             CancellationToken token)
     {
-        var batch = new FisherProjectionBatch(this, EventGraph);
+        var batch = new FisherProjectionBatch(this, EventGraph, DatabaseFrom(database));
         await batch.RecordProgress(range).ConfigureAwait(false);
 
         return batch;
@@ -156,16 +183,16 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     Task IEventStore<IDocumentSession, IQuerySession>.RewindSubscriptionProgressAsync(IEventDatabase database,
         string subscriptionName, CancellationToken token, long? sequenceFloor)
         => sequenceFloor is null or 0
-            ? DeleteProgressionRowsAsync(subscriptionName, token)
-            : WriteProgressionRowAsync(subscriptionName, sequenceFloor.Value, token);
+            ? DeleteProgressionRowsAsync(DatabaseFrom(database), subscriptionName, token)
+            : WriteProgressionRowAsync(DatabaseFrom(database), subscriptionName, sequenceFloor.Value, token);
 
     Task IEventStore<IDocumentSession, IQuerySession>.RewindAgentProgressAsync(IEventDatabase database,
         string shardName, CancellationToken token, long sequenceFloor)
-        => WriteProgressionRowAsync(shardName, sequenceFloor, token);
+        => WriteProgressionRowAsync(DatabaseFrom(database), shardName, sequenceFloor, token);
 
     Task IEventStore<IDocumentSession, IQuerySession>.DeleteProjectionProgressAsync(IEventDatabase database,
         string subscriptionName, CancellationToken token)
-        => DeleteProgressionRowsAsync(subscriptionName, token);
+        => DeleteProgressionRowsAsync(DatabaseFrom(database), subscriptionName, token);
 
     /// <summary>
     ///     Drop a projection's progress <em>and</em> the documents it published, which is what a rebuild
@@ -180,10 +207,11 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         IEventDatabase database, string subscriptionName, CancellationToken token)
     {
         var tables = PublishedTableNamesFor(subscriptionName);
+        var target = DatabaseFrom(database);
 
         await Options.ResiliencePipeline.ExecuteAsync(async ct =>
         {
-            await using var connection = await Database.OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var connection = await target.OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var transaction = (Microsoft.Data.Sqlite.SqliteTransaction)await connection
                 .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
 
@@ -273,11 +301,12 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         return names;
     }
 
-    private async Task DeleteProgressionRowsAsync(string subscriptionName, CancellationToken token)
+    private async Task DeleteProgressionRowsAsync(FisherDatabase database, string subscriptionName,
+        CancellationToken token)
     {
         await Options.ResiliencePipeline.ExecuteAsync(async ct =>
         {
-            await using var connection = await Database.OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var connection = await database.OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
             command.CommandText = $"delete from {EventGraph.ProgressionTableName} where name like @name";
             command.Parameters.AddWithValue("@name", subscriptionName + "%");
@@ -285,11 +314,12 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         }, token).ConfigureAwait(false);
     }
 
-    private async Task WriteProgressionRowAsync(string shardIdentity, long sequence, CancellationToken token)
+    private async Task WriteProgressionRowAsync(FisherDatabase database, string shardIdentity, long sequence,
+        CancellationToken token)
     {
         await Options.ResiliencePipeline.ExecuteAsync(async ct =>
         {
-            await using var connection = await Database.OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var connection = await database.OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
             command.CommandText = $"""
                                    insert into {EventGraph.ProgressionTableName} (name, last_seq_id, last_updated)
@@ -313,11 +343,18 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     ///     <para>
     ///         <paramref name="tenantIdOrDatabaseIdentifier" /> is accepted and ignored under every
     ///         tenancy but database-per-tenant, where there is one database and nothing to resolve
-    ///         against. <b>Under database-per-tenant this refuses outright</b> (fisher#47 stage 1):
-    ///         routing the daemon per database is fisher#57, and until it lands a daemon here would
-    ///         read the default tenant's events and write every tenant's documents from them — silently,
-    ///         and to the one place database-per-tenant exists to keep separate. Refusing is the only
-    ///         answer that is not worse than doing nothing.
+    ///         against. <b>Under database-per-tenant it names which tenant's file this daemon projects</b>
+    ///         (fisher#57), and defaults to the default tenant's — so a store spanning several tenants
+    ///         wants <see cref="BuildProjectionDaemonsAsync" />, or <c>AddAsyncDaemon</c>, which hosts one
+    ///         per database.
+    ///     </para>
+    ///     <para>
+    ///         <b>A daemon is per database, and shard names did not have to change</b>, which fisher#57
+    ///         expected they would. <c>fi_event_progression</c> lives in each tenant's own file, so every
+    ///         database already has its own high-water mark and its own progress row per shard — two
+    ///         tenants running the same projection are two daemons writing the same shard name to two
+    ///         different tables, and nothing collides. Making shard identity (projection, tenant) would
+    ///         have been a second key for a distinction the file boundary already draws.
     ///     </para>
     ///     <para>
     ///         <strong>WAL is checked here rather than assumed.</strong> The daemon reads while
@@ -334,38 +371,71 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     {
         logger ??= NullLogger.Instance;
 
-        if (Tenancy is not DefaultTenancy)
+        var target = tenantIdOrDatabaseIdentifier is null
+            ? Database
+            : Tenancy.DatabaseFor(tenantIdOrDatabaseIdentifier);
+
+        return await BuildDaemonForAsync(target, logger).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     One daemon per database this store spans (fisher#57).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         One under every tenancy but database-per-tenant, where it is one per tenant file. This is
+    ///         what <c>AddAsyncDaemon</c> hosts, and what a consumer building a daemon by hand should
+    ///         reach for if the store is database-per-tenant — the single-daemon overload projects one
+    ///         file and says nothing about the others.
+    ///     </para>
+    ///     <para>
+    ///         <b>N daemons over N files do not contend</b>, which is the same property that makes stage
+    ///         1 a performance feature: each writes to its own file and therefore holds its own write
+    ///         lock. Under conjoined tenancy the same N projections would queue behind one.
+    ///     </para>
+    /// </remarks>
+    public async ValueTask<IReadOnlyList<IProjectionDaemon>> BuildProjectionDaemonsAsync(ILogger? logger = null)
+    {
+        logger ??= NullLogger.Instance;
+
+        var daemons = new List<IProjectionDaemon>();
+
+        foreach (var database in Tenancy.AllDatabases())
         {
-            throw new NotSupportedException(
-                "The async daemon cannot yet run against a database-per-tenant store. It would read the "
-                + "default tenant's events and write every tenant's documents from them, which is the "
-                + "one outcome file-per-tenant exists to prevent — so it refuses rather than doing that "
-                + "quietly. Running projections across several databases is fisher#57. Until then, use "
-                + "conjoined tenancy for a store that needs the daemon, or run inline projections.");
+            daemons.Add(await BuildDaemonForAsync(database, logger).ConfigureAwait(false));
         }
 
-        WarnIfJournalModeIsNotWal(logger);
+        return daemons;
+    }
 
-        await Database.EnsureStorageExistsAsync(typeof(IEvent), CancellationToken.None).ConfigureAwait(false);
+    private async ValueTask<IProjectionDaemon> BuildDaemonForAsync(FisherDatabase database, ILogger logger)
+    {
+        // Per database, because the journal mode is a property of the file. A store with one tenant
+        // configured without WAL is exactly the case the warning exists for, and warning once for the
+        // store would miss it.
+        WarnIfJournalModeIsNotWal(database, logger);
 
-        return new FisherProjectionDaemon(this, Database, logger,
-            new FisherHighWaterDetector(Database, EventGraph));
+        await database.EnsureStorageExistsAsync(typeof(IEvent), CancellationToken.None).ConfigureAwait(false);
+
+        return new FisherProjectionDaemon(this, database, logger,
+            new FisherHighWaterDetector(database, EventGraph));
     }
 
     ValueTask<IProjectionDaemon> IEventStore.BuildProjectionDaemonAsync(DatabaseId id)
-        => BuildProjectionDaemonAsync();
+        => BuildProjectionDaemonAsync(id.Name);
 
-    private void WarnIfJournalModeIsNotWal(ILogger logger)
+    private void WarnIfJournalModeIsNotWal(FisherDatabase database, ILogger logger)
     {
         var journalMode = Options.PragmaSettings.JournalMode;
 
         if (journalMode != Weasel.Sqlite.JournalMode.WAL)
         {
             logger.LogWarning(
-                "The Fisher async projection daemon is starting against a database whose journal mode is "
-                + "{JournalMode} rather than WAL. Without WAL, SQLite blocks readers while a writer holds the "
-                + "database, so the daemon and every application session will serialize against each other. "
-                + "Set StoreOptions.PragmaSettings.JournalMode to Wal.", journalMode);
+                "The Fisher async projection daemon is starting against database {Database} whose journal "
+                + "mode is {JournalMode} rather than WAL. Without WAL, SQLite blocks readers while a writer "
+                + "holds the database, so the daemon and every application session will serialize against "
+                + "each other. Set StoreOptions.PragmaSettings.JournalMode to Wal.",
+                database.Identifier, journalMode);
         }
     }
 
@@ -398,7 +468,7 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         Subscriptions.ISubscription subscription, IEventDatabase database, EventRange range,
         ShardExecutionMode mode, CancellationToken token)
     {
-        await using var batch = new FisherProjectionBatch(this, EventGraph);
+        await using var batch = new FisherProjectionBatch(this, EventGraph, DatabaseFrom(database));
 
         await batch.RecordProgress(range).ConfigureAwait(false);
 

@@ -45,22 +45,33 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
     // Streams a projection raised events onto, planned at commit rather than when recorded.
     private readonly List<StreamAction> _raisedStreams = [];
 
-    internal FisherProjectionBatch(DocumentStore store, EventGraph events)
+    private readonly Fisher.Storage.FisherDatabase _database;
+
+    internal FisherProjectionBatch(DocumentStore store, EventGraph events, Fisher.Storage.FisherDatabase database)
     {
         _store = store;
         _events = events;
+        _database = database;
     }
 
     /// <summary>
     ///     A session for one tenant's slice of this batch.
     /// </summary>
     /// <remarks>
-    ///     Thread-safe because a composite projection may ask for sessions concurrently, which is why
-    ///     the backing collection is a <see cref="ConcurrentBag{T}" /> rather than a list.
+    ///     <para>
+    ///         Thread-safe because a composite projection may ask for sessions concurrently, which is why
+    ///         the backing collection is a <see cref="ConcurrentBag{T}" /> rather than a list.
+    ///     </para>
+    ///     <para>
+    ///         <b>Pinned to the batch's own database rather than resolved from the tenant id</b>
+    ///         (fisher#57). The two agree under every tenancy but database-per-tenant, where resolving
+    ///         would send a slice's documents to whichever file the tenant id names — which for a
+    ///         batch's default-tenant slices is not the file its events came from.
+    ///     </para>
     /// </remarks>
     public IDocumentSession SessionForTenant(string tenantId)
     {
-        var session = _store.LightweightSession(tenantId);
+        var session = _store.OpenSessionOn(_database, tenantId);
         _sessions.Add(session);
         return session;
     }
@@ -99,7 +110,7 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
             {
                 if (_store.Options.Schema.HasMappingFor(documentType!))
                 {
-                    await _store.Database.EnsureDocumentTableAsync(documentType!, token).ConfigureAwait(false);
+                    await _database.EnsureDocumentTableAsync(documentType!, token).ConfigureAwait(false);
                 }
             }
         }
@@ -122,7 +133,7 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
 
         await _store.Options.ResiliencePipeline.ExecuteAsync(async ct =>
         {
-            await using var connection = await _store.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var connection = await _database.OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var transaction = (SqliteTransaction)await connection
                 .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
 

@@ -109,7 +109,7 @@ public sealed class SeparateDatabaseTenancy : ITenancy
 
         foreach (var (tenantId, connectionString) in configured.Resolve(options))
         {
-            _databases[tenantId] = new FisherDatabase(options, connectionString, tenantId);
+            _databases[tenantId] = new FisherDatabase(options, connectionString, tenantId, tenantId);
         }
 
         // The store still needs a database for operations that name no tenant — applying the schema

@@ -464,9 +464,11 @@ internal sealed class FisherInitialDataActivator : IHostedService
 /// </summary>
 /// <remarks>
 ///     <para>
-///         One daemon, stopped before the host finishes shutting down. A second daemon over the same
-///         file would mean two writers contending for one write lock and two shards replaying the same
-///         range, which is why this holds the instance rather than building one per call.
+///         <b>One daemon per database</b> — one under every tenancy but database-per-tenant, where it is
+///         one per tenant file (fisher#57). A second daemon over the <em>same</em> file would mean two
+///         writers contending for one write lock and two shards replaying the same range, which is why
+///         this holds the instances rather than building them per call; N daemons over N files is the
+///         opposite situation, and they do not contend at all.
 ///     </para>
 ///     <para>
 ///         <b>The WAL check runs here, and this is the point of putting it here.</b>
@@ -482,7 +484,7 @@ internal sealed class FisherDaemonHostedService : IHostedService, IDisposable
 {
     private readonly IDocumentStore _store;
     private readonly ILogger<FisherDaemonHostedService> _logger;
-    private IProjectionDaemon? _daemon;
+    private IReadOnlyList<IProjectionDaemon> _daemons = [];
 
     public FisherDaemonHostedService(IDocumentStore store, ILogger<FisherDaemonHostedService>? logger = null)
     {
@@ -492,22 +494,30 @@ internal sealed class FisherDaemonHostedService : IHostedService, IDisposable
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        _daemon = await _store.BuildProjectionDaemonAsync(logger: _logger).ConfigureAwait(false);
-        await _daemon.StartAllAsync().ConfigureAwait(false);
+        _daemons = await _store.BuildProjectionDaemonsAsync(_logger).ConfigureAwait(false);
+
+        foreach (var daemon in _daemons)
+        {
+            await daemon.StartAllAsync().ConfigureAwait(false);
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (_daemon is not null)
+        foreach (var daemon in _daemons)
         {
-            await _daemon.StopAllAsync().ConfigureAwait(false);
+            await daemon.StopAllAsync().ConfigureAwait(false);
         }
     }
 
     /// <inheritdoc cref="Storage.FisherDatabase.Dispose" />
     public void Dispose()
     {
-        _daemon?.Dispose();
-        _daemon = null;
+        foreach (var daemon in _daemons)
+        {
+            daemon.Dispose();
+        }
+
+        _daemons = [];
     }
 }

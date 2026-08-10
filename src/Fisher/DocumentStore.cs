@@ -165,6 +165,34 @@ public partial class DocumentStore : IDocumentStore
     }
 
     /// <summary>
+    ///     A session pinned to one database rather than resolved from a tenant id (fisher#57).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The daemon's direction of travel is the opposite of an application's. An application says
+    ///         "this tenant" and the store finds the file; a shard already <em>is</em> a file — it read
+    ///         its events from one and must write its documents to the same one — and needs a session
+    ///         there. Resolving through <see cref="ITenancy.DatabaseFor" /> would round-trip through a
+    ///         tenant id that, under <see cref="DefaultTenancy" />, does not identify a database at all.
+    ///     </para>
+    ///     <para>
+    ///         The tenant is the database's own under database-per-tenant, so a projection's writes are
+    ///         stamped for the tenant whose events produced them. Under every other tenancy the database
+    ///         knows no tenant and the caller's answer stands — which is what keeps a conjoined store's
+    ///         shard writing per tenant as it always did.
+    ///     </para>
+    /// </remarks>
+    internal IDocumentSession OpenSessionOn(FisherDatabase database, string? tenantId = null)
+    {
+        var options = new SessionOptions
+        {
+            TenantId = database.TenantId ?? tenantId ?? StorageConstants.DefaultTenantId
+        };
+
+        return new FisherSession(Options, database, options);
+    }
+
+    /// <summary>
     ///     Open a read-only session.
     /// </summary>
     /// <remarks>

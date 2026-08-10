@@ -113,7 +113,10 @@ internal sealed class FisherDocumentCleaner : IDocumentCleaner
 
         // The tables are gone, so the database's "already created this one" bookkeeping is now a lie —
         // the next Store would otherwise skip the migration and write to a table that no longer exists.
-        _store.Database.ForgetEnsuredTables();
+        foreach (var database in _store.Tenancy.AllDatabases())
+        {
+            database.ForgetEnsuredTables();
+        }
     }
 
     /// <summary>
@@ -128,20 +131,27 @@ internal sealed class FisherDocumentCleaner : IDocumentCleaner
     private async Task ExecuteAgainstOrderedTablesAsync(IReadOnlyList<string> ordered,
         Func<string, string> sqlFor, CancellationToken token)
     {
-        await _store.Options.ResiliencePipeline.ExecuteAsync(async ct =>
+        // Every database the store spans, which is one unless it is database-per-tenant (fisher#57).
+        // Cleaning only the default there would leave every other tenant's data behind while reporting
+        // success, and the caller most likely to notice is a test fixture.
+        foreach (var database in _store.Tenancy.AllDatabases())
         {
-            await using var connection = await _store.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
-
-            var existing = new HashSet<string>(await ReadTableNamesAsync(connection, ct).ConfigureAwait(false),
-                StringComparer.OrdinalIgnoreCase);
-
-            foreach (var table in ordered.Where(existing.Contains))
+            await _store.Options.ResiliencePipeline.ExecuteAsync(async ct =>
             {
-                await using var command = connection.CreateCommand();
-                command.CommandText = sqlFor(table);
-                await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            }
-        }, token).ConfigureAwait(false);
+                await using var connection = await database.OpenConnectionAsync(ct).ConfigureAwait(false);
+
+                var existing = new HashSet<string>(
+                    await ReadTableNamesAsync(connection, ct).ConfigureAwait(false),
+                    StringComparer.OrdinalIgnoreCase);
+
+                foreach (var table in ordered.Where(existing.Contains))
+                {
+                    await using var command = connection.CreateCommand();
+                    command.CommandText = sqlFor(table);
+                    await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                }
+            }, token).ConfigureAwait(false);
+        }
     }
 
     private Task ExecuteAgainstTablesAsync(Func<string, bool> matches, Func<string, string> sqlFor,
@@ -152,25 +162,28 @@ internal sealed class FisherDocumentCleaner : IDocumentCleaner
         Func<SqliteConnection, List<string>, CancellationToken, Task<List<string>>>? order,
         CancellationToken token)
     {
-        await _store.Options.ResiliencePipeline.ExecuteAsync(async ct =>
+        foreach (var database in _store.Tenancy.AllDatabases())
         {
-            await using var connection = await _store.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
-
-            var tables = await ReadTableNamesAsync(connection, ct).ConfigureAwait(false);
-            var matching = tables.Where(matches).ToList();
-
-            if (order is not null)
+            await _store.Options.ResiliencePipeline.ExecuteAsync(async ct =>
             {
-                matching = await order(connection, matching, ct).ConfigureAwait(false);
-            }
+                await using var connection = await database.OpenConnectionAsync(ct).ConfigureAwait(false);
 
-            foreach (var table in matching)
-            {
-                await using var command = connection.CreateCommand();
-                command.CommandText = sqlFor(table);
-                await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            }
-        }, token).ConfigureAwait(false);
+                var tables = await ReadTableNamesAsync(connection, ct).ConfigureAwait(false);
+                var matching = tables.Where(matches).ToList();
+
+                if (order is not null)
+                {
+                    matching = await order(connection, matching, ct).ConfigureAwait(false);
+                }
+
+                foreach (var table in matching)
+                {
+                    await using var command = connection.CreateCommand();
+                    command.CommandText = sqlFor(table);
+                    await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                }
+            }, token).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

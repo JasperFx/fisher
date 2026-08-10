@@ -32,7 +32,8 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
     {
     }
 
-    internal FisherDatabase(StoreOptions options, string connectionString, string identifier)
+    internal FisherDatabase(StoreOptions options, string connectionString, string identifier,
+        string? tenantId = null)
         : base(
             new DefaultMigrationLogger(),
             options.AutoCreateSchemaObjects,
@@ -43,7 +44,28 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
         _options = options;
         _events = options.EventGraph;
         _dataSource = new SqliteDataSource(connectionString, options.PragmaSettings);
+        TenantId = tenantId;
     }
+
+    /// <summary>
+    ///     The tenant whose data this file holds, under database-per-tenant; null otherwise.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         What the daemon needs and could not previously ask for (fisher#57). A shard's work is
+    ///         addressed by <em>database</em> — that is what the <c>IEventDatabase</c> parameters
+    ///         throughout <c>DocumentStore.Daemon.cs</c> carry — but every session, document write and
+    ///         event append is stamped with a <em>tenant</em>. This is the one place the two are tied
+    ///         together, so a batch opened for a database writes as the tenant that database belongs to.
+    ///     </para>
+    ///     <para>
+    ///         Null rather than the default tenant id under <see cref="DefaultTenancy" />, deliberately:
+    ///         there the database says nothing about tenancy — a conjoined store's tenant is a column
+    ///         value and a single-tenant store has none — so answering "default" would be a claim rather
+    ///         than a fact, and the daemon would start overriding a session's tenant with it.
+    ///     </para>
+    /// </remarks>
+    internal string? TenantId { get; }
 
     internal EventGraph Events => _events;
 

@@ -78,4 +78,7 @@ public interface IDocumentStore : IDisposable, IAsyncDisposable
     /// <inheritdoc cref="DocumentStore.BuildProjectionDaemonAsync" />
     ValueTask<IProjectionDaemon> BuildProjectionDaemonAsync(
         string? tenantIdOrDatabaseIdentifier = null, ILogger? logger = null);
+
+    /// <inheritdoc cref="DocumentStore.BuildProjectionDaemonsAsync" />
+    ValueTask<IReadOnlyList<IProjectionDaemon>> BuildProjectionDaemonsAsync(ILogger? logger = null);
 }
