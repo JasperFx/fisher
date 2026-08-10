@@ -99,6 +99,24 @@ public static class JsonQueryExtensions
         await destination.WriteAsync(Encoding.UTF8.GetBytes(json), token).ConfigureAwait(false);
     }
 
+    /// <summary>
+    ///     A keyset page whose items are the stored JSON rather than materialized documents
+    ///     (fisher#27's JSON variant, which fisher#49 is the consumer for).
+    /// </summary>
+    /// <remarks>
+    ///     Same cursor rules as <see cref="QueryableExtensions.ToCursorPageAsync{T}" /> — it shares
+    ///     the preparation rather than repeating it, because the ordering validation, the decode and
+    ///     the seek predicate are subtle enough that a second copy would drift, and a drift there is a
+    ///     pager that silently skips or repeats rows.
+    /// </remarks>
+    public static Task<Pagination.CursorPage<string>> ToJsonCursorPageAsync<T>(this IQueryable<T> queryable,
+        int pageSize, string? cursor = null, CancellationToken token = default) where T : notnull
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(pageSize, 1);
+
+        return ProviderFor(queryable).CursorPageJsonAsync<T>(queryable.Expression, pageSize, cursor, token);
+    }
+
     private static FisherQueryProvider ProviderFor<T>(IQueryable<T> queryable)
         => queryable.Provider as FisherQueryProvider
            ?? throw new InvalidOperationException(

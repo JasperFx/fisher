@@ -264,6 +264,58 @@ public partial class FisherQueryProvider : IQueryProvider
     internal async Task<Pagination.CursorPage<T>> CursorPageAsync<T>(Expression expression,
         int pageSize, string? cursor, CancellationToken token) where T : notnull
     {
+        var prepared = PrepareCursorPage<T>(expression, pageSize, cursor);
+
+        var selector = (ISelector<T>)prepared.SelectClause.BuildSelector(_session);
+        var items = new List<T>();
+        object?[]? lastKeys = null;
+
+        await using (var reader = await ExecuteReaderAsync(prepared.Statement, token).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                items.Add(await selector.ResolveAsync(reader, token).ConfigureAwait(false));
+                lastKeys = prepared.ReadKeys(reader);
+            }
+        }
+
+        return new Pagination.CursorPage<T>(items, prepared.NextCursor(items.Count, lastKeys));
+    }
+
+    /// <summary>
+    ///     A keyset page whose items are the stored JSON rather than materialized documents
+    ///     (fisher#28 + fisher#27, reached from fisher#49).
+    /// </summary>
+    /// <remarks>
+    ///     <b>The same preparation as <see cref="CursorPageAsync{T}" />, deliberately shared.</b> The
+    ///     cursor's validation, decode, seek predicate and "a short page is the last page" rule are
+    ///     subtle enough that two copies would drift — and a drift here is a pager that silently skips
+    ///     or repeats rows. Only the select list and the row read differ: <c>data</c> instead of the
+    ///     storage's fields, and a string instead of a materialized document.
+    /// </remarks>
+    internal async Task<Pagination.CursorPage<string>> CursorPageJsonAsync<T>(Expression expression,
+        int pageSize, string? cursor, CancellationToken token) where T : notnull
+    {
+        var prepared = PrepareCursorPage<T>(expression, pageSize, cursor, jsonOnly: true);
+
+        var items = new List<string>();
+        object?[]? lastKeys = null;
+
+        await using (var reader = await ExecuteReaderAsync(prepared.Statement, token).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                items.Add(reader.GetString(0));
+                lastKeys = prepared.ReadKeys(reader);
+            }
+        }
+
+        return new Pagination.CursorPage<string>(items, prepared.NextCursor(items.Count, lastKeys));
+    }
+
+    private PreparedCursorPage PrepareCursorPage<T>(Expression expression, int pageSize, string? cursor,
+        bool jsonOnly = false) where T : notnull
+    {
         var (statement, parser, selectClause, join) = BuildStatement(SourceTypeFor(expression), expression);
 
         if (RowProjection.For(parser) is not null)
@@ -288,41 +340,43 @@ public partial class FisherQueryProvider : IQueryProvider
                 parser.OrderBys, CursorPagination.Decode(cursor, parser.OrderByMembers)));
         }
 
-        var fields = selectClause.SelectFields();
+        var fields = jsonOnly ? ["data"] : selectClause.SelectFields();
         var keys = parser.OrderBys.Select(x => x.Locator).ToArray();
 
         statement.SelectColumns = string.Join(", ", fields.Concat(keys));
         statement.Limit = pageSize;
         statement.Offset = null;
 
-        var selector = (ISelector<T>)selectClause.BuildSelector(_session);
-        var items = new List<T>();
-        object?[]? lastKeys = null;
-
-        await using (var reader = await ExecuteReaderAsync(statement, token).ConfigureAwait(false))
-        {
-            while (await reader.ReadAsync(token).ConfigureAwait(false))
+        return new PreparedCursorPage(statement, selectClause, fields.Length, keys.Length, pageSize,
+            reader =>
             {
-                items.Add(await selector.ResolveAsync(reader, token).ConfigureAwait(false));
+                var read = new object?[keys.Length];
 
-                lastKeys = new object?[keys.Length];
                 for (var i = 0; i < keys.Length; i++)
                 {
                     var ordinal = fields.Length + i;
-                    lastKeys[i] = reader.IsDBNull(ordinal)
+                    read[i] = reader.IsDBNull(ordinal)
                         ? null
                         : CoerceTo(reader.GetValue(ordinal), parser.OrderByMembers[i]!.MemberType);
                 }
-            }
-        }
 
-        // A short page is the last page. A full one may or may not be, and issuing a cursor for an
-        // empty next page is cheaper than the extra row-read it would take to know.
-        var next = items.Count == pageSize && lastKeys is not null
-            ? CursorPagination.Encode(lastKeys)
-            : null;
+                return read;
+            });
+    }
 
-        return new Pagination.CursorPage<T>(items, next);
+    /// <summary>
+    ///     Everything a keyset page needs that does not depend on how its rows are materialized.
+    /// </summary>
+    private sealed record PreparedCursorPage(Statement Statement, ISelectClause SelectClause,
+        int FieldCount, int KeyCount, int PageSize,
+        Func<System.Data.Common.DbDataReader, object?[]> ReadKeys)
+    {
+        /// <remarks>
+        ///     A short page is the last page. A full one may or may not be, and issuing a cursor for an
+        ///     empty next page is cheaper than the extra row-read it would take to know.
+        /// </remarks>
+        internal string? NextCursor(int count, object?[]? lastKeys)
+            => count == PageSize && lastKeys is not null ? CursorPagination.Encode(lastKeys) : null;
     }
 
     /// <summary>

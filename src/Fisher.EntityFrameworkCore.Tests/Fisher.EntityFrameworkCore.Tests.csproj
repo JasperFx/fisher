@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <IsPackable>false</IsPackable>
+        <OutputType>Exe</OutputType>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Shouldly" />
+        <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
+        <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" />
+        <PackageReference Include="xunit.v3" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="Xunit" />
+        <Using Include="Shouldly" />
+        <Using Include="Fisher.TestUtils" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Fisher.EntityFrameworkCore\Fisher.EntityFrameworkCore.csproj" />
+        <ProjectReference Include="..\Fisher.TestUtils\Fisher.TestUtils.csproj" />
+    </ItemGroup>
+
+</Project>

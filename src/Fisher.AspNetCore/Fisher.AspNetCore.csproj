@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <Description>ASP.NET Core helpers for Fisher-backed applications</Description>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <RootNamespace>Fisher.AspNetCore</RootNamespace>
+        <!-- AOT pillar, extension-package coverage, matching Polecat.AspNetCore's audit. Any of
+             these in this project's compilation surface fails the build rather than being carried
+             to a consumer. -->
+        <IsAotCompatible>true</IsAotCompatible>
+        <WarningsAsErrors>IL2026;IL2046;IL2055;IL2065;IL2067;IL2070;IL2072;IL2075;IL2090;IL2091;IL2111;IL3050;IL3051</WarningsAsErrors>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Fisher\Fisher.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    </ItemGroup>
+
+</Project>

@@ -22,6 +22,19 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
     string TenantId { get; }
 
     /// <summary>
+    ///     The event store surface for this session.
+    /// </summary>
+    /// <remarks>
+    ///     <b>On the read interface, even though <see cref="EventOperations" /> can also append.</b>
+    ///     Marten and Polecat narrow theirs to a read-only event surface here; Fisher does not, for the
+    ///     same reason <see cref="IQuerySession" /> is itself a convention rather than a guarantee — a
+    ///     second event-operations type would exist only to express a distinction the session does not
+    ///     make. What it buys is that an endpoint or a report taking an <c>IQuerySession</c> can read
+    ///     streams, which it could not before (fisher#49).
+    /// </remarks>
+    EventOperations Events { get; }
+
+    /// <summary>
     ///     Start a LINQ query over a document type.
     /// </summary>
     /// <remarks>
@@ -220,11 +233,6 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
 /// </remarks>
 public interface IDocumentOperations : IQuerySession
 {
-    /// <summary>
-    ///     The event store write surface for this session.
-    /// </summary>
-    EventOperations Events { get; }
-
     /// <summary>
     ///     The correlation id stamped onto everything this unit of work writes.
     /// </summary>

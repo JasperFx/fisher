@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <Description>Entity Framework Core integration for Fisher</Description>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <RootNamespace>Fisher.EntityFrameworkCore</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Fisher\Fisher.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Relational only. Which EF provider a DbContext uses is the application's decision, and
+             a Fisher package that referenced Microsoft.EntityFrameworkCore.Sqlite would be making
+             it for them — even though, on SQLite, it is nearly always the right one. -->
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    </ItemGroup>
+
+</Project>

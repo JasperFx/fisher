@@ -35,6 +35,16 @@
         <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
         <PackageVersion Include="Polly.Core" Version="8.6.5" />
 
+        <!-- EF Core, for Fisher.EntityFrameworkCore. Pinned to the 9.x line rather than 10.x
+             because the package multi-targets net9.0 and net10.0 as everything here does, and EF
+             Core 10 is net10-only. 9.x targets net8.0, so it loads on both. Relational only in the
+             package itself — the provider is the application's choice, and forcing
+             Microsoft.EntityFrameworkCore.Sqlite on a consumer would be Fisher deciding which EF
+             provider their DbContext uses. The tests reference the Sqlite provider because a test
+             needs a real one. -->
+        <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.14" />
+        <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.14" />
+
         <!-- Testing -->
         <PackageVersion Include="NSubstitute" Version="5.3.0" />
         <PackageVersion Include="Shouldly" Version="4.3.0" />

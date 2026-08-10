@@ -234,14 +234,17 @@ Working, with tests:
   migration; the daemon across them is fisher#57 and runtime tenants are fisher#58
 - **Transaction participants** — `ITransactionParticipant`, so an application's own writes commit in
   Fisher's transaction rather than contending with it for the file's one write lock
+- **`Fisher.AspNetCore`** — streaming `IResult` types over the JSON reads, ETag/`304` handling, event
+  stream results, and a high-water health check
+- **`Fisher.EntityFrameworkCore`** — a `DbContext` saving inside Fisher's transaction
 
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
 
-- **`Fisher.AspNetCore`** (fisher#49) and **`Fisher.EntityFrameworkCore`** (fisher#50) — neither
-  package exists. `ITransactionParticipant`, which fisher#50 asks for first and in the core package, is
-  done; the EF-backed `DbContextTransactionParticipant` and the EF projection storages are not, and
-  neither are the ASP.NET Core streaming results and health check.
+- **EF-backed projection storage** (fisher#50) — a projection writing into EF entities rather than
+  into Fisher documents. The transaction half of that package is done; the four `EfCore*Projection`
+  shapes are not. **MCP endpoints** (fisher#49) are deliberately not ported: that surface is moving
+  upstream.
 - **The async daemon across several tenant databases** (fisher#57) — sessions, schema application and
   the tooling reads all route per tenant, but `BuildProjectionDaemonAsync` refuses under
   database-per-tenant rather than projecting one tenant's events into every tenant's documents.
@@ -2692,6 +2695,74 @@ produced it. `inline_event_projections` covers it directly — note that a conve
 projection class must be declared `partial`, because the dispatcher is source-generated into it and
 there is no runtime fallback.
 
+## The companion packages
+
+Two, both modelled on Polecat's and Marten's, both multi-targeting net9.0/net10.0 as the core does.
+
+### `Fisher.AspNetCore` (fisher#49)
+
+Streaming `IResult` types, ETag handling, event-stream results and a high-water health check.
+
+**The streaming results are worth more here than on either sibling, and the reason is structural.**
+They exist to skip a deserialize-then-reserialize round trip. On Marten and Polecat that saves CPU for
+data that already crossed a network from a database server, so it is a fraction of the cost. **Fisher's
+database is the web process**, so the round trip *is* the cost — an endpoint reading a document and
+returning it goes from "parse JSON, build an object, serialize an object" to "copy bytes".
+
+- **`StreamMany<T>` diverges from Polecat's, and that is the point.** Polecat's materializes objects
+  and calls `JsonSerializer.SerializeToUtf8Bytes`, which throws away the saving the type exists for.
+  Fisher's uses fisher#28's `ToJsonArrayAsync`, which concatenates the stored `data` columns in .NET —
+  nothing parsed, nothing re-rendered, and no `json_group_array` (that function re-parses and reorders
+  object keys).
+- **The bytes are exactly what was stored**, and `stream_one_writes_the_stored_bytes` asserts against
+  the serializer's own output rather than a literal. Neither sibling can promise this: `jsonb`
+  normalises whitespace and key order, `nvarchar` needs an encoding decision.
+- **`StreamPaged`'s total is a header and a second statement**, not an envelope and not
+  `count(*) over ()` — the window function returns no row for a page past the end, which is when a
+  pager most needs the total. Same reasoning fisher#27 and the explorer's paging both record.
+- **`StreamAggregate` reads the ETag before folding.** A stream's version moves if and only if an
+  event was appended, so a matching `If-None-Match` answers `304` having read one row of `fi_streams`
+  and folded nothing. For a long stream that is the whole value.
+- **`ToJsonCursorPageAsync` shares its preparation with the typed `ToCursorPageAsync`** rather than
+  repeating it. The ordering validation, the decode and the seek predicate are subtle enough that two
+  copies would drift, and a drift there is a pager that silently skips or repeats rows.
+- **`IQuerySession` gained `Events`.** An endpoint or a report taking a read session could not read
+  streams before. Marten and Polecat narrow theirs to a read-only event surface; Fisher does not, for
+  the same reason `IQuerySession` is itself a convention rather than a guarantee.
+- **The health check has an argument of its own.** Fisher's daemon *warns* rather than refuses when
+  the journal mode is not WAL, because that misconfiguration presents as a slow projection; this is how
+  an operator finds out the warning mattered. Its stuck-mark message says so.
+- **MCP endpoints are deliberately not ported.** That surface is moving upstream, and porting it
+  speculatively would mean maintaining a copy of something about to change.
+- Tested against a `DefaultHttpContext` with a `MemoryStream` body rather than through a test host: an
+  `IResult`'s whole job is what it writes to a response, and a host would add a pipeline none of the
+  assertions are about.
+
+### `Fisher.EntityFrameworkCore` (fisher#50)
+
+`DbContextTransactionParticipant<TContext>` over the `ITransactionParticipant` seam in the core.
+
+**Verified before anything was built on it**, the discipline fisher#38 and fisher#2 both followed.
+Against EF Core 9.0.14 and Microsoft.Data.Sqlite 10.0.9: `Database.UseTransaction` enlists,
+`SaveChangesAsync` writes inside the transaction, another connection sees nothing until the commit,
+and a rollback takes EF's write with it. All four are what the seam needs and none was safe to assume.
+
+- **The safe constructor takes a factory over the connection Fisher supplies**, so the trap is not
+  expressible. The one taking a built context checks `Database.GetDbConnection()` **by reference** —
+  two connections to one file have the same connection string and are still two writers, so comparing
+  strings would pass the exact case the check exists to catch.
+- **That trap is a self-deadlock, not a slow path.** EF's write on a second connection blocks on
+  Fisher's write lock *from inside Fisher's own transaction*, so it hangs rather than failing and
+  nothing ever reports it. Refusing before the write beats a timeout, which beats a deadlock.
+- **The package references `Microsoft.EntityFrameworkCore.Relational` only.** Which EF provider a
+  `DbContext` uses is the application's decision; referencing the Sqlite provider would be Fisher
+  making it for them, even though on SQLite it is nearly always the right one.
+- **Pinned to EF Core 9.x, not 10.x**, because the package multi-targets net9.0 and net10.0 and EF
+  Core 10 is net10-only. 9.x targets net8.0, so it loads on both.
+- **`CompletelyRemoveAllAsync` leaves EF's tables alone**, because it filters by the `fi_` prefix.
+  Correct — Fisher owning the file does not make it Fisher's to clear — and pinned so nobody "fixes" it.
+- **EF-backed projection storage is not built.** See fisher#50 for what remains.
+
 ## Conventions
 
 - Test files and classes are `snake_case` (`appending_events.cs`). CS8981 is suppressed repo-wide.
@@ -2716,6 +2787,12 @@ there is no runtime fallback.
   `TemporaryDatabase.Dispose` clears only its own connection string's pool.
 
 ## Related codebases
+
+### Repository layout
+
+`src/Fisher` is the store. `src/Fisher.AspNetCore` and `src/Fisher.EntityFrameworkCore` are the
+companion packages, each with its own test project; `Fisher.Tests` covers the core. All six build for
+both TFMs and `dotnet test fisher.slnx` runs all of them.
 
 | Codebase | Path | Use |
 |---|---|---|
