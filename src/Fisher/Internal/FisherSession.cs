@@ -279,6 +279,17 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     }
 
     /// <summary>
+    ///     Everything that has asked to write inside this unit of work's transaction.
+    /// </summary>
+    /// <remarks>
+    ///     Exposed for <c>FisherProjectionBatch</c>, whose transaction is the one a projection's
+    ///     participants have to join — the batch owns the connection and the transaction there, so it
+    ///     rather than the session is what invokes them.
+    /// </remarks>
+    internal IReadOnlyList<ITransactionParticipant> Participants
+        => _participants ?? (IReadOnlyList<ITransactionParticipant>)[];
+
+    /// <summary>
     ///     Fail the commit if any event matching a tracked boundary's query has been appended since the
     ///     boundary was read.
     /// </summary>
@@ -516,8 +527,30 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
 
                 NotifyAppendObserver(streams);
             }, token).ConfigureAwait(false);
+
+            // Outside the pipeline, so it fires once for a transaction that committed rather than
+            // once per attempt — and not at all above, where the caller owns the commit. See
+            // ITransactionParticipant.AfterCommitAsync.
+            await NotifyParticipantsOfCommitAsync(token).ConfigureAwait(false);
         }
 
+    }
+
+    /// <summary>
+    ///     Tell every participant the write is durable, so one holding its work replayable across
+    ///     retries can stop.
+    /// </summary>
+    private async Task NotifyParticipantsOfCommitAsync(CancellationToken token)
+    {
+        if (_participants is not { Count: > 0 })
+        {
+            return;
+        }
+
+        foreach (var participant in _participants)
+        {
+            await participant.AfterCommitAsync(token).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

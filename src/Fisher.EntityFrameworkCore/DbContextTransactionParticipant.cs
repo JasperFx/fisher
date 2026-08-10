@@ -77,7 +77,21 @@ public sealed class DbContextTransactionParticipant<TContext> : ITransactionPart
             // EF's own transaction handling steps aside: from here its SaveChangesAsync writes into
             // Fisher's transaction and does not commit.
             await context.Database.UseTransactionAsync(transaction, token).ConfigureAwait(false);
-            await context.SaveChangesAsync(token).ConfigureAwait(false);
+
+            // acceptAllChangesOnSuccess: false is load-bearing, and only for a context this did not
+            // create. EF's default accepts the changes the moment its own command succeeds — which is
+            // *not* the moment Fisher commits. Verified: an entity goes Added -> Unchanged at
+            // SaveChangesAsync and stays Unchanged through a rollback of the enclosing transaction. So
+            // under the default, a retried SQLITE_BUSY re-invokes this against a context that believes
+            // it has already saved, writes nothing, and lets Fisher commit without EF's rows — silent,
+            // and only under contention. Leaving the changes pending is what makes the second attempt
+            // write them; AfterCommitAsync is what stops them being pending forever.
+            //
+            // The factory form needs none of this: a retry runs the factory again, so the caller's
+            // lambda builds a fresh context and re-adds its entities. That is the shape fisher#12's
+            // rule asks for, reached without having to think about it.
+            await context.SaveChangesAsync(acceptAllChangesOnSuccess: _context is null, token)
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -87,6 +101,17 @@ public sealed class DbContextTransactionParticipant<TContext> : ITransactionPart
                 await context.DisposeAsync().ConfigureAwait(false);
             }
         }
+    }
+
+    /// <inheritdoc />
+    public Task AfterCommitAsync(CancellationToken token)
+    {
+        // The other half of the retry rule above: the write is durable, so the entities EF is still
+        // holding as pending are now what the database says. Only for a context this did not create —
+        // the factory's is disposed and its changes were accepted on the way through.
+        _context?.ChangeTracker.AcceptAllChanges();
+
+        return Task.CompletedTask;
     }
 
     /// <remarks>

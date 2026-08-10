@@ -113,6 +113,10 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
             .Select(session => (Session: session, Operations: session.TakePendingOperations()))
             .ToArray();
 
+        // Gathered here rather than read inside the delegate for the same reason as the operations
+        // above — everything the delegate consumes has to survive being read twice.
+        var participants = sessions.SelectMany(session => session.Participants).ToArray();
+
         Diagnostics.DaemonTrace.Record("batch.taken", null,
             pending.Sum(x => x.Operations.Count), _progress.Count, sessions.Length);
 
@@ -143,6 +147,15 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
                 await _messageBatch.BeforeCommitAsync(ct).ConfigureAwait(false);
             }
 
+            // And anything a projection asked to write with us, on the batch's connection and in the
+            // batch's transaction — the same position and the same visibility semantics
+            // FisherSession.SaveChangesAsync gives a participant, so a projection that enlists one
+            // does not have to know which of the two commit paths it is running under.
+            foreach (var participant in participants)
+            {
+                await participant.BeforeCommitAsync(connection, transaction, ct).ConfigureAwait(false);
+            }
+
             await transaction.CommitAsync(ct).ConfigureAwait(false);
         }, token).ConfigureAwait(false);
 
@@ -152,6 +165,13 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
         if (_messageBatch is not null)
         {
             await _messageBatch.AfterCommitAsync(token).ConfigureAwait(false);
+        }
+
+        // Same position and the same reason — a participant holding its work replayable across
+        // attempts is told once that the write is durable.
+        foreach (var participant in participants)
+        {
+            await participant.AfterCommitAsync(token).ConfigureAwait(false);
         }
     }
 

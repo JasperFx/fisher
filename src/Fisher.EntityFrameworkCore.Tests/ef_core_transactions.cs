@@ -240,6 +240,84 @@ public class ef_core_transactions : IAsyncLifetime
         (await LedgerNotesAsync()).ShouldBe(["survives"]);
     }
 
+    /// <summary>
+    ///     A retried <c>SQLITE_BUSY</c> re-executes the write delegate, so the second attempt has to
+    ///     write EF's rows too.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>This was a real defect, and a silent one.</b> EF's <c>SaveChangesAsync</c> accepts its
+    ///         changes when its own command succeeds, not when the enclosing transaction commits —
+    ///         probed directly: an entity goes <c>Added</c> to <c>Unchanged</c> at the save and stays
+    ///         <c>Unchanged</c> through a rollback. So under the default, attempt two found a context
+    ///         that believed it had already saved, wrote nothing, and let Fisher commit without EF's
+    ///         rows. Fisher's own work committed either way, which is what made it invisible.
+    ///     </para>
+    ///     <para>
+    ///         The busy is planted by a second participant rather than by contending two real writers,
+    ///         for the reason <c>tracing.a_busy_retry_is_recorded_on_the_span_it_contended</c> records:
+    ///         real contention waits on the connection string's <c>Default Timeout</c> and never
+    ///         reaches the retry. Registration order is the point — the EF participant runs first, so
+    ///         it has already saved when the throw rolls the attempt back.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_retried_write_still_writes_efs_rows()
+    {
+        await using var connection = new SqliteConnection(_database.ConnectionString);
+        await connection.OpenAsync(Token);
+
+        await using var context = ContextFor(connection);
+        context.Ledgers.Add(new Ledger { Note = "survives the retry" });
+
+        var thrower = new BusyOnce();
+
+        await using (var session = _store.OpenSession(SessionOptions.ForConnection(connection)))
+        {
+            session.Store(new Shipment { Id = Guid.NewGuid(), Reference = "SHP-6" });
+            session.UseDbContext(context);
+            session.AddTransactionParticipant(thrower);
+
+            await session.SaveChangesAsync(Token);
+        }
+
+        thrower.Attempts.ShouldBe(2);
+
+        // Exactly once: written on the second attempt, and the first attempt's write rolled back with
+        // its transaction rather than surviving as a duplicate.
+        (await LedgerNotesAsync()).ShouldBe(["survives the retry"]);
+    }
+
+    /// <remarks>
+    ///     The other half of the retry rule. The changes are held pending across attempts, so once the
+    ///     commit is durable something has to say so — otherwise a context reused by its DI scope would
+    ///     re-insert every row on its own next save.
+    /// </remarks>
+    [Fact]
+    public async Task a_committed_context_has_its_changes_accepted()
+    {
+        await using var connection = new SqliteConnection(_database.ConnectionString);
+        await connection.OpenAsync(Token);
+
+        await using var context = ContextFor(connection);
+        context.Ledgers.Add(new Ledger { Note = "accepted" });
+
+        await using (var session = _store.OpenSession(SessionOptions.ForConnection(connection)))
+        {
+            session.UseDbContext(context);
+            session.Store(new Shipment { Id = Guid.NewGuid(), Reference = "SHP-7" });
+
+            await session.SaveChangesAsync(Token);
+        }
+
+        context.ChangeTracker.Entries().ShouldAllBe(x => x.State == EntityState.Unchanged);
+
+        // And saving the same context again is a no-op rather than a second insert.
+        await context.SaveChangesAsync(Token);
+
+        (await LedgerNotesAsync()).ShouldBe(["accepted"]);
+    }
+
     private async Task<List<string>> LedgerNotesAsync()
     {
         await using var connection = new SqliteConnection(_database.ConnectionString);
@@ -257,6 +335,26 @@ public class ef_core_transactions : IAsyncLifetime
         }
 
         return notes;
+    }
+}
+
+/// <summary>
+///     A participant that fails its first invocation with a transient busy, so the store's own
+///     resilience pipeline retries the whole unit of work.
+/// </summary>
+public class BusyOnce : ITransactionParticipant
+{
+    public int Attempts { get; private set; }
+
+    public Task BeforeCommitAsync(SqliteConnection connection, SqliteTransaction transaction,
+        CancellationToken token)
+    {
+        if (++Attempts == 1)
+        {
+            throw new SqliteException("database is locked", 5, 5);
+        }
+
+        return Task.CompletedTask;
     }
 }
 

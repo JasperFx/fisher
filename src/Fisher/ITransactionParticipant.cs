@@ -47,11 +47,42 @@ public interface ITransactionParticipant
     ///         along with the participant's.
     ///     </para>
     ///     <para>
-    ///         <b>There is no after-commit hook, deliberately.</b> A participant that wants one is
-    ///         asking for a post-commit side effect, which is what <c>IDocumentSessionListener</c>
-    ///         (fisher#32) is for — and that one already gets the "everyone can see this now" semantics
-    ///         right, including not firing for an enlisted session.
+    ///         <b>This may be called more than once for one unit of work</b>, and a participant has to
+    ///         survive it. A retried <c>SQLITE_BUSY</c> re-executes the whole write delegate — the
+    ///         property fisher#12 established for the projection batch's own input and fisher#4 for the
+    ///         outbox — so whatever this writes must still be pending on the second attempt. The failed
+    ///         attempt's transaction rolled back, so re-writing is correct; <em>not</em> re-writing is
+    ///         the silent failure, because Fisher's own work commits either way. See
+    ///         <see cref="AfterCommitAsync" /> for the other half of that.
     ///     </para>
     /// </remarks>
     Task BeforeCommitAsync(SqliteConnection connection, SqliteTransaction transaction, CancellationToken token);
+
+    /// <summary>
+    ///     Reconcile whatever <see cref="BeforeCommitAsync" /> left pending, now that the write is
+    ///     durable. Does nothing unless a participant overrides it.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>This is not a post-commit side-effect hook</b>, and a participant wanting one of those
+    ///         should still use <c>IDocumentSessionListener</c> (fisher#32), which gets the "everyone
+    ///         can see this now" semantics right and is the application's seam rather than a
+    ///         participant's. This exists for the narrower job the retry rule above creates: a
+    ///         participant that has to keep its writes replayable across attempts needs one place to
+    ///         stop keeping them, and only Fisher knows when the commit happened.
+    ///     </para>
+    ///     <para>
+    ///         Runs <b>outside</b> <c>StoreOptions.ResiliencePipeline</c>, so it fires once for a
+    ///         transaction that committed rather than once per attempt.
+    ///     </para>
+    ///     <para>
+    ///         <b>It does not fire for an enlisted session</b>, which is the same rule the outbox's
+    ///         after-commit hook and the append observer follow: under
+    ///         <c>SessionOptions.ForTransaction</c> the commit is the caller's and Fisher is never told
+    ///         it happened. A participant enlisted that way is invoked exactly once — there is no retry
+    ///         either — so it has nothing to reconcile until its caller commits, and reconciling before
+    ///         that would claim a durability Fisher cannot see.
+    ///     </para>
+    /// </remarks>
+    Task AfterCommitAsync(CancellationToken token) => Task.CompletedTask;
 }

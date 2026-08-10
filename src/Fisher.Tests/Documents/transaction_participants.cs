@@ -1,4 +1,6 @@
 using JasperFx;
+using JasperFx.Events.Daemon;
+using JasperFx.Events.Projections;
 using Microsoft.Data.Sqlite;
 
 namespace Fisher.Tests.Documents;
@@ -71,6 +73,55 @@ public class transaction_participants : IAsyncLifetime
         (await query.LoadAsync<Invoice>(id, Token)).ShouldNotBeNull();
 
         (await LedgerNotesAsync()).ShouldBe(["posted"]);
+    }
+
+    /// <summary>
+    ///     fisher#50, step 2 — a participant enlisted from inside the async daemon writes in the
+    ///     <em>batch's</em> transaction, alongside the projection's documents and the progression row.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Both of Fisher's commit paths bracket their transaction identically, and this is the half
+    ///         that was missing: without it a projection or subscription enlisting a participant got
+    ///         nothing at all, silently, because <c>FisherProjectionBatch</c> simply never looked. That
+    ///         is the "absent rather than broken" shape the subscription runner had before fisher#21.
+    ///     </para>
+    ///     <para>
+    ///         Reached through a subscription because that is the shortest route to the batch's own
+    ///         session — <c>ISubscription.ProcessEventsAsync</c> is handed one, and a write through it
+    ///         already commits with the progression row.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_participant_enlisted_in_a_projection_batch_writes_in_its_transaction()
+    {
+        var participant = new LedgerWriter("from the daemon");
+
+        await using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = _database.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Projections.Subscribe(new EnlistingSubscription(participant));
+        });
+
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        await using (var session = store.LightweightSession())
+        {
+            session.Events.StartStream(Guid.NewGuid(), new LedgerEntryPosted("one"));
+            await session.SaveChangesAsync(Token);
+        }
+
+        using var daemon = await store.BuildProjectionDaemonAsync();
+        await daemon.StartAllAsync();
+        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await daemon.StopAllAsync();
+
+        (await LedgerNotesAsync()).ShouldBe(["from the daemon"]);
+
+        // Once per committed transaction, not once per attempt — the after-commit hook runs outside
+        // the resilience pipeline in the batch exactly as it does in the session.
+        participant.Commits.ShouldBe(1);
     }
 
     /// <remarks>
@@ -226,6 +277,19 @@ public class transaction_participants : IAsyncLifetime
         private readonly string _note;
         private readonly bool _thenThrow;
 
+        /// <summary>
+        ///     How many times Fisher said the write was durable — once per committed transaction,
+        ///     however many attempts it took.
+        /// </summary>
+        internal int Commits { get; private set; }
+
+        public Task AfterCommitAsync(CancellationToken token)
+        {
+            Commits++;
+
+            return Task.CompletedTask;
+        }
+
         internal LedgerWriter(string note, bool thenThrow = false)
         {
             _note = note;
@@ -265,4 +329,27 @@ public class Invoice
 {
     public Guid Id { get; set; }
     public string Reference { get; set; } = string.Empty;
+}
+
+public record LedgerEntryPosted(string Note);
+
+/// <summary>
+///     A subscription whose only job is to enlist a participant in the batch it is handed.
+/// </summary>
+internal sealed class EnlistingSubscription : Fisher.Subscriptions.SubscriptionBase
+{
+    private readonly ITransactionParticipant _participant;
+
+    internal EnlistingSubscription(ITransactionParticipant participant) => _participant = participant;
+
+    public override Task<IDaemonChangeListener> ProcessEventsAsync(
+        EventRange page,
+        ISubscriptionController controller,
+        IDocumentSession operations,
+        CancellationToken cancellationToken)
+    {
+        operations.AddTransactionParticipant(_participant);
+
+        return Task.FromResult<IDaemonChangeListener>(NullDaemonChangeListener.Instance);
+    }
 }
