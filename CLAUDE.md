@@ -236,15 +236,12 @@ Working, with tests:
   Fisher's transaction rather than contending with it for the file's one write lock
 - **`Fisher.AspNetCore`** — streaming `IResult` types over the JSON reads, ETag/`304` handling, event
   stream results, and a high-water health check
-- **`Fisher.EntityFrameworkCore`** — a `DbContext` saving inside Fisher's transaction
+- **`Fisher.EntityFrameworkCore`** — a `DbContext` saving inside Fisher's transaction, and projections
+  whose documents are EF entities
 
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
 
-- **EF-backed projection storage** (fisher#50) — a projection writing into EF entities rather than
-  into Fisher documents. The transaction half of that package is done; the four `EfCore*Projection`
-  shapes are not. **MCP endpoints** (fisher#49) are deliberately not ported: that surface is moving
-  upstream.
 - **The async daemon across several tenant databases** (fisher#57) — sessions, schema application and
   the tooling reads all route per tenant, but `BuildProjectionDaemonAsync` refuses under
   database-per-tenant rather than projecting one tenant's events into every tenant's documents.
@@ -1849,13 +1846,28 @@ fails with `SQLITE_BUSY`. On PostgreSQL the equivalent is a nicety.
 - **The hook is the last thing inside the transaction**, the position `IMessageBatch.BeforeCommitAsync`
   already occupies — so its visibility semantics are the ones fisher#4 pinned, and
   `a_participants_write_is_invisible_until_the_commit` re-probes them over a separate connection.
-- **There is no after-commit hook, deliberately.** A participant wanting one is asking for a
-  post-commit side effect, which is `IDocumentSessionListener`'s job (fisher#32) — and that one already
-  gets "everyone can see this now" right, including not firing for an enlisted session.
+- **Both commit paths invoke participants**, `FisherSession.SaveChangesAsync` and
+  `FisherProjectionBatch.ExecuteAsync` alike, so a projection or subscription that enlists one does not
+  have to know which it is running under. The batch gathers them *before* the resilience pipeline for
+  fisher#12's reason — everything the delegate consumes has to survive being read twice.
+- **`BeforeCommitAsync` can be called more than once for one unit of work, and that was a real silent
+  bug.** A retried `SQLITE_BUSY` re-executes the whole write delegate. EF Core's `SaveChangesAsync`
+  accepts its changes when *its own command* succeeds, not when Fisher commits — probed directly: an
+  entity goes `Added` → `Unchanged` at the save and stays `Unchanged` through a rollback of the
+  enclosing transaction. So attempt two found a `DbContext` that believed it had already saved, wrote
+  nothing, and let Fisher commit without EF's rows, invisibly, because Fisher's own work committed
+  either way. The factory form was safe by construction (a retry runs the factory again, so the
+  caller's lambda rebuilds and re-adds); only an already-built context was exposed, and it now saves
+  with `acceptAllChangesOnSuccess: false`.
+- **`AfterCommitAsync` is the other half of that, and it is *not* a post-commit side-effect hook.**
+  `IDocumentSessionListener` (fisher#32) is still the seam for those. This one exists for the narrower
+  job the retry rule creates: a participant holding its writes replayable across attempts needs one
+  place to stop, and only Fisher knows when the commit happened. Default-implemented, so a participant
+  that does not need it declares one member as before. Runs outside the resilience pipeline in both
+  paths, and **not at all for an enlisted session** — where the commit is the caller's and there is no
+  retry either, so there is nothing to reconcile until they commit.
 - A participant added through a tenant scope lands on the parent, for the same reason its boundaries
   and metadata do: there is one transaction.
-
-**`Fisher.EntityFrameworkCore` is not built** — see fisher#50 for what remains.
 
 ### Database-per-tenant (stage 1)
 
@@ -2761,7 +2773,51 @@ and a rollback takes EF's write with it. All four are what the seam needs and no
   Core 10 is net10-only. 9.x targets net8.0, so it loads on both.
 - **`CompletelyRemoveAllAsync` leaves EF's tables alone**, because it filters by the `fi_` prefix.
   Correct — Fisher owning the file does not make it Fisher's to clear — and pinned so nobody "fixes" it.
-- **EF-backed projection storage is not built.** See fisher#50 for what remains.
+
+**Projections whose documents are EF entities** — `options.ProjectToEfCore<TDoc, TId, TContext>(table,
+factory)`, over `Projections.StorageProviders` in the core.
+
+- **The registration is the whole seam, and that is the divergence from Polecat.** An ordinary
+  `SingleStreamProjection<TDoc, TId>` or `MultiStreamProjection<TDoc, TId>` with conventional `Apply`
+  methods writes into EF without knowing it does; the projection never mentions EF. Polecat's EF path
+  is reachable only by deriving from `EfCoreSingleStreamProjection`/`EfCoreMultiStreamProjection`,
+  which makes every EF-backed projection a different *kind* of projection. Fisher's one base class,
+  `EfCoreEventProjection<TContext>`, exists for the per-event shape — which genuinely needs one,
+  having no storage indirection to swap — and `EfCoreContext<TDoc, TId, TContext>()` on the identity
+  setter is the escape hatch for an `Apply` that wants the context.
+- **The context reads on its own connection and is moved onto Fisher's to write**, and both halves are
+  forced rather than chosen. A projection's storage is resolved *before* the batch has opened the
+  connection it will commit on, so there is nothing to build against; and the storage reads — every
+  slice loads its current aggregate — long before there is a transaction to read in. **Verified
+  against EF Core 9.0.14 and Microsoft.Data.Sqlite 10.0.9 before anything was built on it**, the
+  discipline fisher#38 and fisher#2 both followed: a context that has already queried through its own
+  connection accepts `SetDbConnection` onto another and writes through it, and a read on EF's own
+  connection does not block against a `BEGIN IMMEDIATE` held elsewhere on the file. The second is the
+  one that would have turned an EF-backed projection into a hang.
+- **Nothing is written until the batch commits**, which is the same discipline `FisherProjectionStorage`
+  follows by queueing operations. Here it is not merely tidy: writing as it went would be a second
+  connection writing while the batch holds the file's one write lock.
+- **The batch disposes the participants it was given**, because an EF-backed projection's `DbContext`
+  is created per batch and cannot dispose itself — it has to outlive the apply that created it *and*
+  survive a retried commit. Disposing at the batch boundary covers the failed batch too, which is the
+  case that would otherwise leak a context per attempt behind a persistently failing shard.
+- **A registered type is deliberately not mapped**, so `Snapshot<T>` skips its mapping and the type
+  gets no `fi_doc_*` table. That is what makes registration-before-projection load-bearing, and it is
+  checked rather than documented — the same "this line has to come first" shape fisher#39 gave
+  `SeedInitialDataOnStartup`.
+- **Rebuild teardown reads the table name off the registry**, because the sweep that finds a
+  projection's tables looks at *mapped* types. **This is the flat-table lesson one layer over** — the
+  same gap `IPublishesTables` closes, reached from the other direction, and without it a rebuild
+  replays onto the rows the previous run left. Pinned with a row the replay cannot recreate.
+- **Fisher does not create the EF table.** Fisher owns the shape of tables it prefixes `fi_`; an
+  entity's shape is the `DbContext`'s, so creating it is EF's job. Same reasoning that keeps
+  `CompletelyRemoveAllAsync` from dropping them.
+- `LoadManyAsync` is `FindAsync` per id rather than one `Contains` query, because Find answers from the
+  change tracker first — so a slice whose entity this batch already touched comes back as the **same
+  instance**, where a query would materialise a second one and the two would race at commit.
+- Registering a bare `IProjection` now wraps it in JasperFx's `ProjectionWrapper`, which Fisher had no
+  path for before: `Projections.Add(ProjectionBase, ...)` assumed every projection base was also an
+  `IProjectionSource`. Polecat wraps in the same place.
 
 ## Conventions
 

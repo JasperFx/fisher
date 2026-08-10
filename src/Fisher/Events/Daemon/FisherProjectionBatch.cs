@@ -377,6 +377,29 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
     {
         _messageBatchGate.Dispose();
 
+        // Participants first, because one may still be holding something that writes on a session's
+        // connection. A participant enlisted for a batch is scoped to that batch — an EF-backed
+        // projection's DbContext is created per batch and cannot dispose itself, since it has to
+        // outlive the apply that created it and survive a retry of the commit. Disposing here covers
+        // the failed batch as well as the committed one, which is the case that would otherwise leak a
+        // context per attempt behind a persistently failing shard.
+        foreach (var session in _sessions.OfType<FisherSession>())
+        {
+            foreach (var participant in session.Participants)
+            {
+                switch (participant)
+                {
+                    case IAsyncDisposable asyncDisposable:
+                        await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+                        break;
+
+                    case IDisposable disposable:
+                        disposable.Dispose();
+                        break;
+                }
+            }
+        }
+
         foreach (var session in _sessions)
         {
             await session.DisposeAsync().ConfigureAwait(false);

@@ -1066,6 +1066,14 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         JasperFx.Events.IStorageOperations.FetchProjectionStorageAsync<TDoc, TId>(
             string tenantId, CancellationToken cancellationToken)
     {
+        // Before anything Fisher-shaped: a registered provider means this type's rows are not in a
+        // Fisher document table, so there is no table to create and no document storage to resolve —
+        // asking for either would create a mapping and then a table nothing ever writes to.
+        if (Options.Projections.StorageProviders.TryResolve<TDoc, TId>(this, tenantId) is { } registered)
+        {
+            return registered;
+        }
+
         await FisherDatabase.EnsureDocumentTableAsync(typeof(TDoc), cancellationToken).ConfigureAwait(false);
 
         var storage = (Weasel.Storage.IDocumentStorage<TDoc, TId>)StorageFor<TDoc>();

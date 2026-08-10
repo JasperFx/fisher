@@ -33,6 +33,10 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     internal FisherProjectionOptions(EventGraph events) : base(events, "fisher")
     {
         _events = events;
+
+        // The schema is asked lazily rather than captured, because it is created after this is — and a
+        // registration's ordering check is the whole reason it needs to ask at all.
+        StorageProviders = new ProjectionStorageRegistry(type => _events.Options.Schema.HasMappingFor(type));
     }
 
     /// <summary>
@@ -92,7 +96,12 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
         source.AssembleAndAssertValidity();
 
         // The snapshot needs somewhere to live; registering the mapping puts its table in the schema.
-        _events.Options.Schema.MappingFor(typeof(T));
+        // Unless it already has somewhere else to live, in which case mapping it would put a second,
+        // empty table in the migration and leave the reader wondering which one the projection uses.
+        if (!StorageProviders.HasProviderFor(typeof(T)))
+        {
+            _events.Options.Schema.MappingFor(typeof(T));
+        }
 
         Add((IProjectionSource<IDocumentSession, IQuerySession>)source, projectionLifecycle);
     }
@@ -134,18 +143,46 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     /// <summary>
     ///     Register an already-built projection.
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Most projection base classes are their own <see cref="IProjectionSource{T,T}" /> — an
+    ///         aggregation projection knows what it publishes and how to slice for it. A bare
+    ///         <see cref="IProjection" /> is not: it is a lump of code that applies events and nothing
+    ///         more, so it is wrapped in JasperFx's <c>ProjectionWrapper</c> to give it the shard and
+    ///         lifecycle plumbing. Polecat wraps in the same place and for the same reason.
+    ///     </para>
+    ///     <para>
+    ///         A wrapped projection publishes no types, so nothing is mapped for it — which is correct
+    ///         rather than a shortcoming: what such a projection writes, and where, is its own business,
+    ///         and Fisher only creates tables for types it was told about.
+    ///     </para>
+    /// </remarks>
     public void Add(ProjectionBase projection, ProjectionLifecycle lifecycle)
     {
         projection.Lifecycle = lifecycle;
         projection.AssembleAndAssertValidity();
 
-        foreach (var published in projection.As<IProjectionSource<IDocumentSession, IQuerySession>>()
-                     .PublishedTypes())
+        if (projection is not IProjectionSource<IDocumentSession, IQuerySession> source)
+        {
+            if (projection is not IProjection bare)
+            {
+                throw new ArgumentOutOfRangeException(nameof(projection),
+                    $"'{projection.GetType().Name}' is neither an IProjectionSource nor a Fisher "
+                    + "IProjection, so there is nothing for the daemon to run. Derive from one of the "
+                    + "projection base classes, or implement Fisher.Projections.IProjection.");
+            }
+
+            Add(new ProjectionWrapper<IDocumentSession, IQuerySession>(bare, lifecycle), lifecycle);
+
+            return;
+        }
+
+        foreach (var published in source.PublishedTypes())
         {
             _events.Options.Schema.MappingFor(published);
         }
 
-        Add((IProjectionSource<IDocumentSession, IQuerySession>)projection, lifecycle);
+        Add(source, lifecycle);
     }
 
     /// <summary>
@@ -183,6 +220,16 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     public void Subscribe<T>(Action<ISubscriptionOptions>? configure = null)
         where T : Subscriptions.ISubscription, new()
         => Subscribe(new T(), configure);
+
+    /// <summary>
+    ///     Projection document types whose storage is something other than a Fisher document table
+    ///     (fisher#50).
+    /// </summary>
+    /// <remarks>
+    ///     Empty for every store that has not asked for one, and consulted before Fisher's own document
+    ///     storage is built — see <see cref="ProjectionStorageRegistry" />.
+    /// </remarks>
+    public ProjectionStorageRegistry StorageProviders { get; }
 
     /// <summary>
     ///     Every natural key declared by a registered aggregate projection (fisher#40).

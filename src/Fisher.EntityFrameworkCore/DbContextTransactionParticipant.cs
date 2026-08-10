@@ -33,7 +33,7 @@ namespace Fisher.EntityFrameworkCore;
 ///         and refuses by name.
 ///     </para>
 /// </remarks>
-public sealed class DbContextTransactionParticipant<TContext> : ITransactionParticipant
+public sealed class DbContextTransactionParticipant<TContext> : ITransactionParticipant, IAsyncDisposable
     where TContext : DbContext
 {
     private readonly Func<SqliteConnection, TContext>? _factory;
@@ -61,6 +61,43 @@ public sealed class DbContextTransactionParticipant<TContext> : ITransactionPart
     public DbContextTransactionParticipant(TContext context)
         => _context = context ?? throw new ArgumentNullException(nameof(context));
 
+    private DbContextTransactionParticipant(TContext context, bool movesOntoFishersConnection)
+    {
+        _context = context;
+        _movesOntoFishersConnection = movesOntoFishersConnection;
+    }
+
+    private readonly bool _movesOntoFishersConnection;
+
+    /// <summary>
+    ///     A context that reads on its own connection and is moved onto Fisher's to write.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         What EF-backed projection storage needs, and the one case where a context legitimately
+    ///         starts on a different connection. A projection's storage is resolved before the batch has
+    ///         opened the connection it will commit on, so the context cannot be built against it; and
+    ///         the storage has to <em>read</em> — loading each slice's current aggregate — long before
+    ///         there is a transaction to read in.
+    ///     </para>
+    ///     <para>
+    ///         <b>Verified against EF Core 9.0.14 and Microsoft.Data.Sqlite 10.0.9 before this was
+    ///         built on</b>, as fisher#38 and fisher#2 both did: a context that has already queried
+    ///         through its own connection accepts <c>SetDbConnection</c> onto another and writes through
+    ///         it, and a read on EF's own connection does not block against a
+    ///         <c>BEGIN IMMEDIATE</c> held elsewhere on the file. Neither was safe to assume — the
+    ///         second is the one that would have turned an EF-backed projection into a hang.
+    ///     </para>
+    ///     <para>
+    ///         Reads therefore see <em>committed</em> state, which is what a projection wants: the
+    ///         aggregate as of the last batch. Anything this batch has already changed is served from
+    ///         EF's change tracker rather than from the database, so a slice never has to read its own
+    ///         uncommitted write.
+    ///     </para>
+    /// </remarks>
+    public static DbContextTransactionParticipant<TContext> MovingOntoFishersConnection(TContext context)
+        => new(context ?? throw new ArgumentNullException(nameof(context)), movesOntoFishersConnection: true);
+
     /// <inheritdoc />
     public async Task BeforeCommitAsync(SqliteConnection connection, SqliteTransaction transaction,
         CancellationToken token)
@@ -72,7 +109,16 @@ public sealed class DbContextTransactionParticipant<TContext> : ITransactionPart
 
         try
         {
-            AssertSameConnection(context, connection);
+            if (_movesOntoFishersConnection)
+            {
+                // The whole point of the mode: it read on its own connection, and it writes on ours.
+                // Moved here rather than at construction because ours did not exist until now.
+                context.Database.SetDbConnection(connection);
+            }
+            else
+            {
+                AssertSameConnection(context, connection);
+            }
 
             // EF's own transaction handling steps aside: from here its SaveChangesAsync writes into
             // Fisher's transaction and does not commit.
@@ -100,6 +146,24 @@ public sealed class DbContextTransactionParticipant<TContext> : ITransactionPart
             {
                 await context.DisposeAsync().ConfigureAwait(false);
             }
+        }
+    }
+
+    /// <summary>
+    ///     Dispose the context, but only in the mode where Fisher was given it to own for a batch.
+    /// </summary>
+    /// <remarks>
+    ///     Called by <c>FisherProjectionBatch</c> when the batch ends, committed or not. The context of
+    ///     a moving-mode participant is created per batch by whoever registered the projection and
+    ///     cannot dispose itself — it has to outlive the apply that created it and survive a retried
+    ///     commit. A context handed over through the plain constructor belongs to its caller's scope and
+    ///     is left alone, which is the same rule <see cref="BeforeCommitAsync" /> already follows.
+    /// </remarks>
+    public async ValueTask DisposeAsync()
+    {
+        if (_movesOntoFishersConnection && _context is not null)
+        {
+            await _context.DisposeAsync().ConfigureAwait(false);
         }
     }
 

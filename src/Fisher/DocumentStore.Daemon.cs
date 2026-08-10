@@ -238,6 +238,14 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
             .Select(x => Options.Schema.MappingFor(x).TableName.Name)
             .ToList();
 
+        // A type stored outside Fisher (fisher#50) is deliberately not mapped, so the sweep above
+        // cannot see it — the same gap IPublishesTables closes for a flat table, reached from the other
+        // direction. Without this a rebuild replays onto the rows the previous run left behind.
+        tables.AddRange(source.PublishedTypes()
+            .Select(Options.Projections.StorageProviders.TableNameFor)
+            .Where(x => x is not null)
+            .Select(x => x!));
+
         if (source is Projections.Flattened.IPublishesTables publisher)
         {
             tables.AddRange(publisher.PublishedTableNames());

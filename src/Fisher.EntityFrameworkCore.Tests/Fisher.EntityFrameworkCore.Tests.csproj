@@ -22,6 +22,11 @@
     <ItemGroup>
         <ProjectReference Include="..\Fisher.EntityFrameworkCore\Fisher.EntityFrameworkCore.csproj" />
         <ProjectReference Include="..\Fisher.TestUtils\Fisher.TestUtils.csproj" />
+        <!-- The conventional Apply/Create/ShouldDelete dispatcher is source-generated and has no
+             runtime fallback, and the generator runs in the assembly that DEFINES the aggregate — so
+             an EF entity projected into here needs it as much as an aggregate in Fisher.Tests does. -->
+        <PackageReference Include="JasperFx.Events.SourceGenerator" OutputItemType="Analyzer"
+                          ReferenceOutputAssembly="false" />
     </ItemGroup>
 
 </Project>
