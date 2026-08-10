@@ -195,8 +195,8 @@ public class StoreOptions
     ///         concurrently instead of contending for one write lock.
     ///     </para>
     ///     <para>
-    ///         Tenants are fixed at configuration time in this stage. Running the async daemon across
-    ///         several databases is fisher#57 and dynamic tenants are fisher#58.
+    ///         Tenants are fixed at configuration time here. For a set that changes while the store is
+    ///         running, use <see cref="MultiTenantedDatabasesFrom" /> (fisher#58).
     ///     </para>
     /// </remarks>
     public void MultiTenantedDatabases(Action<Storage.TenantDatabases> configure)
@@ -210,6 +210,39 @@ public class StoreOptions
     }
 
     internal Storage.TenantDatabases? TenantDatabases { get; private set; }
+
+    /// <summary>
+    ///     A database file per tenant, with the set of tenants asked for rather than declared
+    ///     (fisher#58).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         A tenant that did not exist when the store was built resolves anyway, and its file and
+    ///         schema are created the first time anything connects to it — which is only a reasonable
+    ///         offer because provisioning here is a file plus a migration rather than a
+    ///         <c>CREATE DATABASE</c>.
+    ///     </para>
+    ///     <para>
+    ///         <see cref="Storage.DirectoryTenantSource" /> is the convention form and needs no
+    ///         registration step at all; <see cref="Storage.InMemoryTenantSource" /> is for an
+    ///         application pushing its own tenants table in. A source reading that table directly is an
+    ///         application's to write — <see cref="Storage.ITenantSource" /> is two members so that it
+    ///         can be.
+    ///     </para>
+    /// </remarks>
+    public void MultiTenantedDatabasesFrom(Storage.ITenantSource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        TenantSource = source;
+    }
+
+    /// <inheritdoc cref="MultiTenantedDatabasesFrom(Storage.ITenantSource)" />
+    /// <param name="directory">Where the tenant files live, named <c>&lt;tenantId&gt;.db</c>.</param>
+    public void MultiTenantedDatabasesInDirectory(string directory)
+        => MultiTenantedDatabasesFrom(new Storage.DirectoryTenantSource(directory));
+
+    internal Storage.ITenantSource? TenantSource { get; private set; }
 
     /// <summary>
     ///     Configuration applied to every document mapping as it is created (fisher#39).
@@ -287,11 +320,11 @@ public class StoreOptions
     {
         // Under database-per-tenant there is no store-level connection string to set: every tenant
         // names its own file, and a store-level one would be a database nothing writes to (fisher#47).
-        if (string.IsNullOrWhiteSpace(_connectionString) && TenantDatabases is null)
+        if (string.IsNullOrWhiteSpace(_connectionString) && TenantDatabases is null && TenantSource is null)
         {
             throw new InvalidOperationException(
                 "A connection string must be configured. Set StoreOptions.ConnectionString, or name a "
-                + "database per tenant with MultiTenantedDatabases(...).");
+                + "database per tenant with MultiTenantedDatabases(...) or MultiTenantedDatabasesFrom(...).");
         }
     }
 }

@@ -22,9 +22,14 @@ public partial class DocumentStore : IDocumentStore
         options.AssertValid();
 
         Options = options;
-        Tenancy = options.TenantDatabases is { } configured
-            ? new SeparateDatabaseTenancy(options, configured)
-            : new DefaultTenancy(options);
+        Tenancy = options switch
+        {
+            // Dynamic first: a source is a strictly later-binding answer than a fixed list, so a store
+            // configured with both meant the one that can still change its mind.
+            { TenantSource: { } source } => new DynamicTenancy(options, source),
+            { TenantDatabases: { } configured } => new SeparateDatabaseTenancy(options, configured),
+            _ => new DefaultTenancy(options)
+        };
 
         Database = Tenancy.Default;
         options.StorageDatabase = Database;
@@ -182,6 +187,17 @@ public partial class DocumentStore : IDocumentStore
     ///         shard writing per tenant as it always did.
     ///     </para>
     /// </remarks>
+    /// <summary>
+    ///     Pull in tenants that have appeared since the store was built (fisher#58).
+    /// </summary>
+    /// <remarks>
+    ///     A no-op under every tenancy but <see cref="DynamicTenancy" />, where the set of tenants is
+    ///     asked for rather than declared. Sessions do not need it — a tenant resolves the moment it is
+    ///     named — so this is for the callers that enumerate: the startup migration and the daemon.
+    /// </remarks>
+    internal ValueTask RefreshTenantsAsync(CancellationToken token = default)
+        => Tenancy is DynamicTenancy dynamic ? dynamic.RefreshAsync(token) : ValueTask.CompletedTask;
+
     internal IDocumentSession OpenSessionOn(FisherDatabase database, string? tenantId = null)
     {
         var options = new SessionOptions
@@ -227,6 +243,11 @@ public partial class DocumentStore : IDocumentStore
     /// </remarks>
     public async Task ApplyAllConfiguredChangesToDatabaseAsync(CancellationToken token = default)
     {
+        // Under dynamic tenancy the store has resolved nothing yet, so without this a startup migration
+        // would find no databases and report success. A tenant that appears later migrates itself on
+        // first connection, which is what makes this a starting point rather than the whole story.
+        await RefreshTenantsAsync(token).ConfigureAwait(false);
+
         var databases = Tenancy.AllDatabases();
 
         if (databases.Count == 1)

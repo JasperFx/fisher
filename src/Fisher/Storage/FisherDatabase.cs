@@ -105,7 +105,75 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
     ///     Open and return a connection with this store's PRAGMAs already applied.
     /// </summary>
     internal async ValueTask<SqliteConnection> OpenConnectionAsync(CancellationToken token = default)
-        => (SqliteConnection)await _dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
+    {
+        if (MigratesOnFirstUse)
+        {
+            await EnsureMigratedAsync(token).ConfigureAwait(false);
+        }
+
+        return (SqliteConnection)await _dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Whether this database migrates itself the first time anything opens a connection to it
+    ///     (fisher#58).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Set only for a tenant database that appeared at runtime, where there was no
+    ///         <c>ApplyAllConfiguredChangesToDatabaseAsync</c> at startup to have created its tables — a
+    ///         tenant that shows up after the store was built has, by definition, missed it.
+    ///     </para>
+    ///     <para>
+    ///         <b>Hung off the connection rather than off tenant resolution, because resolution is
+    ///         synchronous and a migration is not.</b> <see cref="ITenancy.DatabaseFor" /> is reached from
+    ///         <c>OpenSession</c>, which has no <c>await</c> to offer; opening a connection is the first
+    ///         genuinely asynchronous thing that happens to a new tenant's file, and it happens before
+    ///         any statement can run against it. Blocking on the migration inside <c>DatabaseFor</c>
+    ///         would have been sync-over-async on the session path.
+    ///     </para>
+    /// </remarks>
+    internal bool MigratesOnFirstUse { get; init; }
+
+    private Task? _firstUseMigration;
+    private readonly SemaphoreSlim _firstUseGate = new(1, 1);
+
+    [ThreadStatic] private static bool _migrating;
+
+    private async Task EnsureMigratedAsync(CancellationToken token)
+    {
+        // The migration opens connections of its own, so without this it would recurse into itself.
+        // Thread-static rather than an instance flag because the guard is about re-entrancy on one call
+        // stack, not about two callers racing — the semaphore below is what handles those.
+        if (_migrating || _firstUseMigration?.IsCompletedSuccessfully == true)
+        {
+            return;
+        }
+
+        await _firstUseGate.WaitAsync(token).ConfigureAwait(false);
+
+        try
+        {
+            if (_firstUseMigration?.IsCompletedSuccessfully == true)
+            {
+                return;
+            }
+
+            _migrating = true;
+
+            // Not cached until it succeeds: a migration that failed must be retried by the next caller
+            // rather than remembered as done, or one transient failure leaves the tenant permanently
+            // unusable with nothing to say why.
+            _firstUseMigration = ApplyAllConfiguredChangesToDatabaseAsync(ct: token);
+
+            await _firstUseMigration.ConfigureAwait(false);
+        }
+        finally
+        {
+            _migrating = false;
+            _firstUseGate.Release();
+        }
+    }
 
     private readonly HashSet<Type> _ensuredDocumentTables = new();
     private ClosedShape.DocumentProviderRegistry? _providers;

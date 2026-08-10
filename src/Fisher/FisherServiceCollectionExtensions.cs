@@ -1,5 +1,6 @@
 using Fisher.Internal;
 using JasperFx;
+using JasperFx.Descriptors;
 using JasperFx.Events.Daemon;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -484,7 +485,11 @@ internal sealed class FisherDaemonHostedService : IHostedService, IDisposable
 {
     private readonly IDocumentStore _store;
     private readonly ILogger<FisherDaemonHostedService> _logger;
-    private IReadOnlyList<IProjectionDaemon> _daemons = [];
+    private readonly List<IProjectionDaemon> _daemons = [];
+    private readonly HashSet<string> _running = new(StringComparer.OrdinalIgnoreCase);
+
+    private CancellationTokenSource? _polling;
+    private Task? _poller;
 
     public FisherDaemonHostedService(IDocumentStore store, ILogger<FisherDaemonHostedService>? logger = null)
     {
@@ -492,18 +497,92 @@ internal sealed class FisherDaemonHostedService : IHostedService, IDisposable
         _logger = logger ?? NullLogger<FisherDaemonHostedService>.Instance;
     }
 
+    /// <summary>
+    ///     How often to look for tenant databases that have appeared since startup (fisher#58).
+    /// </summary>
+    /// <remarks>
+    ///     Polling rather than a notification, because the set of tenants belongs to the application and
+    ///     Fisher is not told when it changes — an <c>ITenantSource</c> is asked, never pushed. A minute
+    ///     is chosen so a new tenant's projections start without anyone waiting on them; a tenant's
+    ///     <em>sessions</em> work immediately either way, because resolution does not go through here.
+    ///     Only runs when the store's tenancy can actually gain a database.
+    /// </remarks>
+    public static TimeSpan TenantPollingInterval { get; set; } = TimeSpan.FromMinutes(1);
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        _daemons = await _store.BuildProjectionDaemonsAsync(_logger).ConfigureAwait(false);
+        await StartAnyNewDaemonsAsync().ConfigureAwait(false);
 
-        foreach (var daemon in _daemons)
+        if (_store.Tenancy.Cardinality != DatabaseCardinality.DynamicMultiple)
         {
+            return;
+        }
+
+        _polling = new CancellationTokenSource();
+        _poller = PollForNewTenantsAsync(_polling.Token);
+    }
+
+    private async Task StartAnyNewDaemonsAsync()
+    {
+        foreach (var daemon in await _store.BuildProjectionDaemonsAsync(_logger).ConfigureAwait(false))
+        {
+            // Keyed by database, because starting a second daemon over one file is two writers
+            // contending for one write lock and two shards replaying the same range. The database is
+            // on the concrete daemon rather than on IProjectionDaemon, hence the cast.
+            var identifier = ((Events.Daemon.FisherProjectionDaemon)daemon).Database.Identifier;
+
+            if (!_running.Add(identifier))
+            {
+                daemon.Dispose();
+                continue;
+            }
+
+            _daemons.Add(daemon);
             await daemon.StartAllAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async Task PollForNewTenantsAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(TenantPollingInterval, token).ConfigureAwait(false);
+                await StartAnyNewDaemonsAsync().ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception e)
+            {
+                // A tenant whose database cannot be reached must not take down the daemons already
+                // running for every other tenant. Logged and retried on the next tick.
+                _logger.LogError(e, "Fisher could not start projections for a newly discovered tenant.");
+            }
         }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        if (_polling is not null)
+        {
+            await _polling.CancelAsync().ConfigureAwait(false);
+        }
+
+        if (_poller is not null)
+        {
+            try
+            {
+                await _poller.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected: that is how the loop ends.
+            }
+        }
+
         foreach (var daemon in _daemons)
         {
             await daemon.StopAllAsync().ConfigureAwait(false);
@@ -513,11 +592,14 @@ internal sealed class FisherDaemonHostedService : IHostedService, IDisposable
     /// <inheritdoc cref="Storage.FisherDatabase.Dispose" />
     public void Dispose()
     {
+        _polling?.Dispose();
+
         foreach (var daemon in _daemons)
         {
             daemon.Dispose();
         }
 
-        _daemons = [];
+        _daemons.Clear();
+        _running.Clear();
     }
 }

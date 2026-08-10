@@ -398,6 +398,10 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     {
         logger ??= NullLogger.Instance;
 
+        // Tenants that appeared since the store was built are found here rather than assumed absent
+        // (fisher#58); a no-op under every other tenancy.
+        await RefreshTenantsAsync().ConfigureAwait(false);
+
         var daemons = new List<IProjectionDaemon>();
 
         foreach (var database in Tenancy.AllDatabases())

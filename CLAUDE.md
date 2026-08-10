@@ -230,8 +230,8 @@ Working, with tests:
   retry event that says a call waited on the write lock
 - **Multi-store registration** — `AddFisherStore<T>` and `IConfigureFisher`, so several independently
   configured stores live in one container
-- **Database-per-tenant** — `ITenancy` and a SQLite file per tenant, with per-database migration and
-  the async daemon routed per database; runtime tenants are fisher#58
+- **Database-per-tenant** — `ITenancy` and a SQLite file per tenant, with per-database migration, the
+  async daemon routed per database, and tenants that appear, suspend and resume at runtime
 - **Transaction participants** — `ITransactionParticipant`, so an application's own writes commit in
   Fisher's transaction rather than contending with it for the file's one write lock
 - **`Fisher.AspNetCore`** — streaming `IResult` types over the JSON reads, ETag/`304` handling, event
@@ -242,10 +242,6 @@ Working, with tests:
 Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
 most likely to be assumed present:
 
-- **Tenants added or removed at runtime** (fisher#58) — `SeparateDatabaseTenancy` takes its tenants at
-  configuration time and `DatabaseFor` throws `UnknownTenantException` for anything else. A tenant
-  appearing without a restart, a database created and migrated on first use, and enabled/disabled
-  tenants are all that issue.
 - **A message bus** — the side-effect seam exists and the default outbox drops every message. That is
   the end state, not a gap: fisher#8 was closed wontfix, and delivery is a bus integration's job here
   as it is on both siblings.
@@ -1871,6 +1867,55 @@ fails with `SQLITE_BUSY`. On PostgreSQL the equivalent is a nicety.
   retry either, so there is nothing to reconcile until they commit.
 - A participant added through a tenant scope lands on the parent, for the same reason its boundaries
   and metadata do: there is one transaction.
+
+### Runtime tenants
+
+`Storage/ITenantSource.cs` and `DynamicTenancy` (fisher#58) — `MultiTenantedDatabasesInDirectory(...)`
+or `MultiTenantedDatabasesFrom(source)`, so the set of tenants is *asked for* rather than declared.
+`SeparateDatabaseTenancy` (fisher#47) stays for a fixed set; the two are alternatives.
+
+**Viable here in a way it is not on either sibling.** Provisioning a tenant is a file plus a
+migration, cheap enough to do on first use — which is what makes "a tenant appears without a restart"
+a reasonable offer rather than an operational event. On PostgreSQL or SQL Server the same act is a
+`CREATE DATABASE`, which is why Marten's and Polecat's equivalents lean on a master table an operator
+populates deliberately.
+
+- **The first-use migration hangs off `OpenConnectionAsync`, not off tenant resolution, and that is
+  forced.** `ITenancy.DatabaseFor` is reached from `OpenSession`, which is synchronous and has no
+  `await` to offer; a migration is asynchronous. Opening a connection is the first genuinely
+  asynchronous thing that happens to a new tenant's file, and it happens before any statement can run
+  against it. Blocking inside `DatabaseFor` would have been sync-over-async on the session path.
+  Re-entrancy is guarded with a `[ThreadStatic]`, because the migration opens connections of its own;
+  the semaphore beside it is for two callers racing, which is a different question. **The result is
+  not cached until it succeeds** — a transient failure remembered as done would leave the tenant
+  permanently unusable with nothing to say why.
+- **`ITenantSource.TryFind` is synchronous and `AllAsync` is not**, for the same reason. The hot path
+  has to answer without I/O, which the directory convention manages trivially (a tenant id maps to a
+  path); enumerating every tenant is a startup and daemon concern where an `await` is available.
+- **`DirectoryTenantSource` resolves *any* tenant id**, whether its file exists yet or not, which is
+  what makes a new tenant work with no registration step. Enumeration reports only the files that are
+  there. `InMemoryTenantSource` is the opposite — it refuses what it was not told about, which is the
+  difference an application pushing its own tenants table wants.
+- **A source has to answer for the default tenant**, read while the store is being built rather than
+  lazily, so a source that cannot says so at construction instead of at the first store-level
+  operation. There is no store-level file under this tenancy for it to fall back on.
+- **Suspension, never deletion**, and this is the decision fisher#58 asked to be made rather than
+  defaulted. Deleting a tenant here means deleting a file — the cheapest deprovisioning of any Critter
+  Stack store, and the most irreversible — and Fisher cannot know whether that file is backed up. So
+  the API suspends or forgets and an operator removes the file themselves.
+  **`DisabledTenantException` is distinct from `UnknownTenantException`** because "switched off" and
+  "never heard of it" are different operational situations and an application handling one should not
+  have to guess which it got.
+- **The daemon polls for new tenants**, at `FisherDaemonHostedService.TenantPollingInterval` (one
+  minute), and only under `DynamicMultiple`. Polling rather than notification because the set of
+  tenants belongs to the application and Fisher is never pushed to. A new tenant's *sessions* work
+  immediately either way — resolution does not go through the hosted service. Daemons are keyed by
+  database identifier, since a second daemon over one file is two writers contending for one write
+  lock.
+- **Databases are cached and never evicted**, which is a known bound rather than an oversight:
+  `MaxPoolSize` sizes each tenant's pool. Evicting an idle one means disposing a `FisherDatabase`
+  whose connections may still be in use, which is a worse failure than the memory it saves — so it is
+  [fisher#59](https://github.com/JasperFx/fisher/issues/59), to be measured before it is built.
 
 ### Database-per-tenant (stage 1)
 

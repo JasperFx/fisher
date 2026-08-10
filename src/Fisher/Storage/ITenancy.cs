@@ -159,6 +159,156 @@ public sealed class SeparateDatabaseTenancy : ITenancy
 }
 
 /// <summary>
+///     Tenants that come and go while the store is running (fisher#58, stage 3).
+/// </summary>
+/// <remarks>
+///     <para>
+///         <b>The shape stage 1 was built towards.</b> <see cref="SeparateDatabaseTenancy" /> takes its
+///         tenants at configuration time and refuses everything else; this asks an
+///         <see cref="ITenantSource" /> instead, so a tenant that did not exist when the store was built
+///         resolves anyway — and its file and schema are created the first time anything connects to it.
+///     </para>
+///     <para>
+///         <b>Viable here in a way it is not on either sibling.</b> Provisioning is a file plus a
+///         migration; on PostgreSQL or SQL Server the same act is a CREATE DATABASE, which is why
+///         Marten's and Polecat's equivalents lean on a master table an operator populates deliberately.
+///     </para>
+///     <para>
+///         <b>Databases are cached and never evicted, and that is a known bound rather than an
+///         oversight.</b> <see cref="StoreOptions.MaxPoolSize" /> sizes <em>each</em> tenant's pool, so a
+///         process that has served a thousand tenants holds a thousand pools. Evicting an idle one means
+///         disposing a <see cref="FisherDatabase" /> whose connections may still be in use, which is a
+///         worse failure than the memory it saves — so it is measured and filed
+///         (<see href="https://github.com/JasperFx/fisher/issues/59">fisher#59</see>) rather than
+///         guessed at.
+///     </para>
+/// </remarks>
+public sealed class DynamicTenancy : ITenancy
+{
+    private readonly StoreOptions _options;
+    private readonly ITenantSource _source;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, FisherDatabase> _databases =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    internal DynamicTenancy(StoreOptions options, ITenantSource source)
+    {
+        _options = options;
+        _source = source;
+    }
+
+    public DatabaseCardinality Cardinality => DatabaseCardinality.DynamicMultiple;
+
+    /// <summary>
+    ///     The database a store-level operation uses when no tenant is named.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The default tenant's, resolved like any other — there is no store-level file under this
+    ///         tenancy, so a store-level connection string would name a database nothing writes to.
+    ///     </para>
+    ///     <para>
+    ///         <b>A source therefore has to be able to answer for the default tenant</b>, and this is
+    ///         read while the store is being built rather than lazily, so a source that cannot says so
+    ///         at construction instead of at the first store-level operation.
+    ///         <see cref="DirectoryTenantSource" /> answers for any tenant id and needs nothing;
+    ///         <see cref="InMemoryTenantSource" /> has to have it registered.
+    ///     </para>
+    /// </remarks>
+    public FisherDatabase Default
+    {
+        get
+        {
+            if (_source.TryFind(StorageConstants.DefaultTenantId, out var registration))
+            {
+                return Register(registration);
+            }
+
+            throw new InvalidOperationException(
+                $"This store's ITenantSource does not know the default tenant '{StorageConstants.DefaultTenantId}', "
+                + "and a database-per-tenant store has no store-level file to fall back on — so there is "
+                + "nothing for an operation that names no tenant to run against. Register it "
+                + $"(source.Add(\"{StorageConstants.DefaultTenantId}\", connectionString)), or use "
+                + "MultiTenantedDatabasesInDirectory(...), whose convention answers for any tenant id.");
+        }
+    }
+
+    /// <remarks>
+    ///     An unknown tenant still throws, and a suspended one throws something different. Falling back
+    ///     to another tenant's file is the one failure this tenancy exists to make impossible, and the
+    ///     two failures are told apart because "switched off" and "never heard of it" are different
+    ///     operational situations.
+    /// </remarks>
+    public FisherDatabase DatabaseFor(string tenantId)
+    {
+        if (_databases.TryGetValue(tenantId, out var cached))
+        {
+            return cached;
+        }
+
+        if (!_source.TryFind(tenantId, out var registration))
+        {
+            throw new UnknownTenantException(tenantId, _databases.Keys);
+        }
+
+        if (!registration.IsActive)
+        {
+            throw new DisabledTenantException(tenantId);
+        }
+
+        return Register(registration);
+    }
+
+    /// <summary>
+    ///     Pull every tenant the source knows about into this store, creating a database for each.
+    /// </summary>
+    /// <remarks>
+    ///     What the daemon calls to find tenants that have appeared since it started, and what
+    ///     <c>AllDatabases</c> reports from. Sessions do not need it — <see cref="DatabaseFor" /> resolves
+    ///     a tenant the moment it is asked for.
+    /// </remarks>
+    public async ValueTask RefreshAsync(CancellationToken token = default)
+    {
+        foreach (var registration in await _source.AllAsync(token).ConfigureAwait(false))
+        {
+            if (registration.IsActive)
+            {
+                Register(registration);
+            }
+        }
+    }
+
+    private FisherDatabase Register(TenantRegistration registration)
+        => _databases.GetOrAdd(registration.TenantId, _ => new FisherDatabase(_options,
+            registration.ConnectionString, registration.TenantId, registration.TenantId)
+        {
+            // Nothing applied this file's schema at startup, because it may not have existed then.
+            MigratesOnFirstUse = true
+        });
+
+    /// <remarks>
+    ///     Only the tenants this store has actually resolved. <see cref="RefreshAsync" /> is what makes
+    ///     that the whole set the source knows about.
+    /// </remarks>
+    public IReadOnlyList<FisherDatabase> AllDatabases() => _databases.Values.ToList();
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var database in _databases.Values)
+        {
+            await database.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    public void Dispose()
+    {
+        foreach (var database in _databases.Values)
+        {
+            database.Dispose();
+        }
+    }
+}
+
+/// <summary>
 ///     A tenant this store has no database for.
 /// </summary>
 public class UnknownTenantException : Exception
