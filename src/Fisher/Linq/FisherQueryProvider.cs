@@ -444,10 +444,24 @@ public partial class FisherQueryProvider : IQueryProvider
     }
 
     /// <summary>
-    ///     Whether the queried type carries a <c>guid_version</c> column to read back.
+    ///     Which concurrency column the queried type carries, if either.
     /// </summary>
-    internal bool HasVersionColumn<T>() where T : notnull
-        => _session.Options.Schema.MappingFor(typeof(T)).UseOptimisticConcurrency;
+    /// <remarks>
+    ///     The two are alternatives rather than a pair — see
+    ///     <c>DocumentMapping.AssertConcurrencyIsCoherent</c> — so this is a choice of one, and the
+    ///     optimistic-concurrency arm is tested first only because it is the older default.
+    /// </remarks>
+    internal DocumentVersionSource VersionSourceFor<T>() where T : notnull
+    {
+        var mapping = _session.Options.Schema.MappingFor(typeof(T));
+
+        if (mapping.UseOptimisticConcurrency)
+        {
+            return DocumentVersionSource.GuidVersion;
+        }
+
+        return mapping.UseNumericRevisions ? DocumentVersionSource.NumericRevision : DocumentVersionSource.None;
+    }
 
     internal async Task<bool> AnyAsync<T>(Expression expression, CancellationToken token)
         where T : notnull

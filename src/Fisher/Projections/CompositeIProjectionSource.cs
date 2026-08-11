@@ -47,6 +47,28 @@ internal class CompositeIProjectionSource :
         {
             Version = att.Version;
         }
+
+        // fisher#63: adopt the wrapped projection's options, the way JasperFx's ProjectionWrapper and
+        // ScopedProjectionWrapper both do. Without it this wrapper keeps the empty AsyncOptions it was
+        // constructed with, and the rebuild teardown — which asks each composite member what it
+        // publishes — enumerates nothing for this one. The progression rows are still deleted, so the
+        // rebuild restarts from zero and replays on top of the previous run's documents.
+        //
+        // Name and Version are deliberately NOT adopted: they compose this member's shard identity, and
+        // changing them would orphan every progression row already written under the old one.
+        //
+        // A raw IProjection that is not a ProjectionBase declares neither its storage nor its teardown,
+        // and there is nothing here to invent one from — FisherCompositeProjection.Add's configure
+        // overload is where that is said instead.
+        if (projection is ProjectionBase source)
+        {
+            replaceOptions(source.Options);
+
+            foreach (var publishedType in source.PublishedTypes())
+            {
+                RegisterPublishedType(publishedType);
+            }
+        }
     }
 
     public SubscriptionType Type => SubscriptionType.EventProjection;

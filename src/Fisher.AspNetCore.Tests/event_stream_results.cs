@@ -265,16 +265,25 @@ public class event_stream_results : IAsyncLifetime
     ///     threshold, not before.
     /// </summary>
     /// <remarks>
-    ///     Two readings, because one is not enough: a single reading says the daemon is behind, which
-    ///     is normal, and only two identical readings separated by the threshold say it has stopped.
-    ///     Driven with a fake clock rather than by waiting, so the test does not take thirty seconds
-    ///     and does not go intermittent under load.
+    ///     <para>
+    ///         Two readings, because one is not enough: a single reading says the daemon is behind,
+    ///         which is normal, and only two identical readings separated by the threshold say it has
+    ///         stopped. Driven with a fake clock rather than by waiting, so the test does not take
+    ///         thirty seconds and does not go intermittent under load.
+    ///     </para>
+    ///     <para>
+    ///         <b>The liveness touch is turned off here on purpose</b> (fisher#60). It is the primary
+    ///         signal and would answer first, and this test is about the secondary one — the gap
+    ///         heuristic, which is all that is left for a store that would rather its daemon never
+    ///         wrote periodically. The primary signal has its own tests in
+    ///         <c>high_water_health_check</c>.
+    ///     </para>
     /// </remarks>
     [Fact]
     public async Task the_health_check_is_unhealthy_when_the_mark_is_stuck()
     {
         await using var database = TemporaryDatabase.Create("aspnet-health-stalled");
-        await using var store = StoreWithAsyncProjection(database);
+        await using var store = StoreWithAsyncProjection(database, TimeSpan.Zero);
 
         // The daemon runs once so a high-water row exists, then stops while events keep arriving.
         using (var daemon = await store.BuildProjectionDaemonAsync())
@@ -316,7 +325,7 @@ public class event_stream_results : IAsyncLifetime
         stalled.Description.ShouldContain("WAL");
     }
 
-    private DocumentStore StoreWithAsyncProjection(TemporaryDatabase database)
+    private DocumentStore StoreWithAsyncProjection(TemporaryDatabase database, TimeSpan? livenessInterval = null)
     {
         var store = DocumentStore.For(options =>
         {
@@ -324,6 +333,11 @@ public class event_stream_results : IAsyncLifetime
             options.AutoCreateSchemaObjects = AutoCreate.All;
             options.DaemonSettings.AsyncMode = DaemonMode.Solo;
             options.Projections.Snapshot<Voyage>(SnapshotLifecycle.Async);
+
+            if (livenessInterval is { } interval)
+            {
+                options.Events.HighWaterLivenessInterval = interval;
+            }
         });
 
         store.ApplyAllConfiguredChangesToDatabaseAsync(Token).GetAwaiter().GetResult();

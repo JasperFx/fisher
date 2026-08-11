@@ -101,7 +101,28 @@ internal static class CursorPagination
                 + "was issued against a different ordering.", nameof(cursor));
         }
 
-        return slots.Select((slot, i) => ConvertSlot(slot, members[i]!.MemberType)).ToArray();
+        var values = new object?[slots.Length];
+
+        for (var i = 0; i < slots.Length; i++)
+        {
+            // fisher#62, the marten#5029 class. The payload's *shape* is checked above; binding each
+            // slot to its ordering key's type is a second way a client-supplied cursor can be wrong,
+            // and JsonElement reports that as an InvalidOperationException — which an endpoint has no
+            // reason to read as anything but a fault of its own. A cursor is request input, so every
+            // way of malforming it has to arrive as the same kind of error.
+            try
+            {
+                values[i] = ConvertSlot(slots[i], members[i]!.MemberType);
+            }
+            catch (Exception e) when (e is InvalidOperationException or FormatException or OverflowException)
+            {
+                throw new ArgumentException(
+                    $"This cursor's key {i} does not bind to '{members[i]!.MemberType.Name}'. It was issued "
+                    + "against a different ordering, or has been tampered with.", nameof(cursor), e);
+            }
+        }
+
+        return values;
     }
 
     /// <summary>

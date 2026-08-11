@@ -405,6 +405,29 @@ public class EventStoreOptions : IEventStoreInstrumentation
     /// </summary>
     public bool EnableExtendedProgressionTracking { get; set; }
 
+    /// <summary>
+    ///     How often an idle high-water agent re-stamps <c>last_updated</c> on its progression row to
+    ///     show its poll loop is still cycling. Five seconds by default; zero or less turns it off.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         fisher#60. The mark's <c>last_updated</c> otherwise moves only when the mark
+    ///         <em>advances</em>, so a quiet store is indistinguishable from a dead daemon and the
+    ///         high-water health check has nothing but the sequence-gap heuristic to go on. This is what
+    ///         makes the column an honest liveness signal, and it needs no extra column and no dependency
+    ///         on <see cref="EnableExtendedProgressionTracking" /> — which does not help here anyway, as
+    ///         JasperFx's progression writer drops high-water states outright.
+    ///     </para>
+    ///     <para>
+    ///         <b>It is a periodic write, and on SQLite that means the file's one write lock.</b> Small
+    ///         and brief, but the reason it is throttled rather than done on every poll: at the daemon's
+    ///         default one-second idle cadence an otherwise read-only store would become a permanent
+    ///         1 Hz writer. Keep it comfortably below the health check's staleness threshold — the
+    ///         defaults are five seconds against thirty.
+    ///     </para>
+    /// </remarks>
+    public TimeSpan HighWaterLivenessInterval { get; set; } = TimeSpan.FromSeconds(5);
+
     bool IEventStoreInstrumentation.ExtendedProgressionEnabled
     {
         get => EnableExtendedProgressionTracking;

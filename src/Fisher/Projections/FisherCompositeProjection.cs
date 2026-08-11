@@ -37,6 +37,20 @@ public class FisherCompositeProjection : CompositeProjection<IDocumentSession, I
     }
 
     /// <summary>
+    ///     What this composite writes: every stage member's published types, plus the composite's own.
+    /// </summary>
+    /// <remarks>
+    ///     fisher#63, the second half of marten#5175's branch. JasperFx's
+    ///     <c>CompositeProjection.PublishedTypes()</c> overrides the base to return the stages' types,
+    ///     which drops the <c>Options.StorageTypes</c> the base would have contributed — so
+    ///     <c>composite.Options.DeleteViewTypeOnTeardown&lt;T&gt;()</c> was a rule the rebuild teardown
+    ///     never saw. It is the composite's own rule and belongs to no member, so there is nowhere else
+    ///     it could be picked up.
+    /// </remarks>
+    public override IEnumerable<Type> PublishedTypes()
+        => base.PublishedTypes().Concat(Options.StorageTypes).Distinct();
+
+    /// <summary>
     ///     Add an already-built projection to a stage.
     /// </summary>
     public void Add(IProjectionSource<IDocumentSession, IQuerySession> projection, int stageNumber = 1)
@@ -65,6 +79,28 @@ public class FisherCompositeProjection : CompositeProjection<IDocumentSession, I
         ArgumentNullException.ThrowIfNull(projection);
 
         StageFor(stageNumber).Add(new CompositeIProjectionSource(projection));
+    }
+
+    /// <summary>
+    ///     Add a bare <see cref="IProjection" /> to a stage, saying what it writes so a rebuild can
+    ///     clear that data before replaying.
+    /// </summary>
+    /// <remarks>
+    ///     fisher#63. A raw <see cref="IProjection" /> that is not a <c>ProjectionBase</c> describes
+    ///     neither its storage nor its teardown, and a composite cannot invent either — so without this
+    ///     its documents survive a rebuild and the replay writes on top of them. Typically
+    ///     <c>options =&gt; options.DeleteViewTypeOnTeardown&lt;MyView&gt;()</c>. A projection that
+    ///     <em>is</em> a <c>ProjectionBase</c> needs no help: the wrapper adopts its options.
+    /// </remarks>
+    public void Add(IProjection projection, Action<AsyncOptions> configure, int stageNumber = 1)
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var wrapper = new CompositeIProjectionSource(projection);
+        configure(wrapper.Options);
+
+        StageFor(stageNumber).Add(wrapper);
     }
 
     /// <inheritdoc cref="Add(IProjectionSource{IDocumentSession,IQuerySession},int)" />

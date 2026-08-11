@@ -152,6 +152,27 @@ Fixed upstream by [weasel#424](https://github.com/JasperFx/weasel/pull/424) and 
 **Weasel.Sqlite 9.23.2**. The shim is gone; `FisherSession` uses `Weasel.Sqlite.CommandBuilder`
 directly. Do not reintroduce it.
 
+### One command per operation, and what that immunizes
+
+`FisherSession.ExecuteBatchAsync` compiles and executes each queued operation as **its own command
+with its own reader**, sharing only the transaction. The reasons are in its remarks — operations bind
+by position, and Fisher's append ends in a SELECT — and the consequence is worth stating separately,
+because it is what a whole class of bug needs (fisher#66).
+
+Marten concatenates a unit of work into one command and walks the result sets with `NextResultAsync`,
+skipping the advance for an operation marked `Weasel.Storage.NoDataReturnedCall`. marten#5210 was an
+operation carrying that marker whose SQL *did* return a row, so the reader stayed one result set
+behind and **every operation after it in the batch postprocessed against somebody else's rows** —
+silently, with the symptom surfacing nowhere near the cause. Fisher has no `NextResult` walk to fall
+behind, so a mislabelled operation costs nothing;
+`no_data_returned_operations.a_mislabelled_operation_cannot_misalign_the_batch` plants exactly that
+shape rather than leaving the immunity to be inferred.
+
+The marker is still audited — it is a claim a reader would trust, and the execution strategy could
+change — by *executing* each marked operation's compiled SQL and asserting it returns no columns. The
+audit is a claim about the statement, not its spelling: what would go wrong is a `returning` clause
+added to a statement whose operation still declares no-data.
+
 ## Current state
 
 Working, with tests:
@@ -363,6 +384,21 @@ Five things that are decisions rather than mechanics:
   skipped. Both halves of teardown — progression and documents — run in one transaction, because
   clearing progress without clearing documents replays a projection on top of rows it already wrote.
 
+- **The high-water agent re-stamps `last_updated` on an idle cycle, and that is the only liveness
+  signal there is** (fisher#60, sibling of marten#5181). The mark's row moves when the mark
+  *advances*, which is a different question from whether the loop is *running* — a quiet store
+  advances nothing and would otherwise be indistinguishable from a dead daemon. **The extended
+  progression `heartbeat` column does not answer it either**: JasperFx's `ExtendedProgressionWriter.OnNext`
+  returns early for `ShardState.HighWaterMark`, so nothing ever writes it for that row, and a health
+  check reading it looks like it has a signal it does not have. `a_running_daemon_never_writes_the_heartbeat_column`
+  pins the premise against a daemon that has genuinely run, because Marten's equivalent tests passed
+  for years by seeding the column with raw SQL.
+  **Throttled where Marten's per-tenant equivalent writes on every cycle**, and that difference is
+  SQLite's: a write takes the file's one write lock, so touching at `SlowPollingTime` would make an
+  otherwise read-only store a permanent 1 Hz writer with a WAL to check point.
+  `EventStoreOptions.HighWaterLivenessInterval` bounds it (five seconds; zero turns it off and leaves
+  the health check on the gap heuristic alone).
+
 WAL is what lets the daemon read while a session writes. It is on by default via
 `SqlitePragmaSettings.Default`; `BuildProjectionDaemonAsync` warns when it is not, because without it
 the daemon and every writer serialize against each other and that presents as a slow projection
@@ -420,6 +456,26 @@ the next reader does not have to rediscover it.
   earlier stages and leave the later ones writing into a disposed session.
 - A document a bare `IProjection` stores still needs a registered mapping, since Fisher only creates
   tables for types the schema has mapped. That is the ordinary on-demand rule, not a composite quirk.
+- **A member held by the wrapper has to be asked what it publishes, or a rebuild replays onto its
+  surviving rows** (fisher#63, sibling of marten#5175). `CompositeProjection.PublishedTypes()` walks
+  its stages' members, and `CompositeIProjectionSource` was constructed with a fresh, empty
+  `AsyncOptions` and never told what the projection inside it writes — so teardown saw the wrapper and
+  enumerated nothing, while the progression rows were deleted anyway. It now adopts a `ProjectionBase`
+  projection's options and published types, exactly as JasperFx's own `ProjectionWrapper` does.
+  **`Name` and `Version` are deliberately not adopted**: they compose the member's shard identity, and
+  changing them orphans every progression row already written.
+- **A raw `IProjection` that is not a `ProjectionBase` declares nothing, and the composite cannot
+  invent it** — `Add(projection, options => options.DeleteViewTypeOnTeardown<T>())` is where that is
+  said. Its rows otherwise survive a rebuild, which is pinned as a decision rather than left to look
+  like the bug above.
+- **The composite's own `Options` are its own, and were being dropped.** JasperFx's override returns
+  the stages' types and therefore loses the `Options.StorageTypes` the base would have contributed, so
+  `composite.Options.DeleteViewTypeOnTeardown<T>()` was a silent no-op;
+  `FisherCompositeProjection.PublishedTypes()` puts them back.
+- **An ordinary rebuild test cannot catch any of this.** A replay rewrites every row it can still
+  produce, so a surviving row is invisible except where the replay *cannot* recreate it —
+  `composite_member_teardown` plants one against an id no event mentions. Same discipline the
+  flat-table (`IPublishesTables`) and EF Core teardowns each had to learn.
 
 ### Subscriptions
 
@@ -2666,6 +2722,8 @@ coalescing on purpose. Do not present it as a performance feature.
 **Fisher is enrolled, in full.** `JasperFx.Events.ComplianceTests` is referenced unconditionally —
 the old `$(EnableComplianceTests)` gate is gone. **All 28 suites, 230 tests, are live**, as of 2.45.0
 — which is the whole library, since 2.45.0 emptied the upstream event sourcing compliance backlog.
+**2.46.0 added no suite and no test** (fisher#64): the counts were re-verified against it rather than
+carried over, since "still 28" is exactly the claim a bump can quietly falsify.
 The four that arrived in 2.40.0/2.41.0 — `StringStreamIdentityCompliance`,
 `SnapshotLifecycleCompliance`, `MultiStreamProjectionCompliance`, `FlatTableProjectionCompliance` —
 went in on the same bump.
@@ -2839,7 +2897,26 @@ returning it goes from "parse JSON, build an object, serialize an object" to "co
   the same reason `IQuerySession` is itself a convention rather than a guarantee.
 - **The health check has an argument of its own.** Fisher's daemon *warns* rather than refuses when
   the journal mode is not WAL, because that misconfiguration presents as a slow projection; this is how
-  an operator finds out the warning mattered. Its stuck-mark message says so.
+  an operator finds out the warning mattered. Its stuck-mark message says so. What it *reads* is the
+  poll-cycle age, with the gap heuristic as the secondary — see the async daemon's
+  `HighWaterLivenessInterval` note for why the heartbeat column is not an option (fisher#60).
+- **`StreamOne` serves a numeric-revisioned document from its `revision`** (fisher#62, the
+  marten#5120 class). The two concurrency styles are alternatives, and a revision validates a cached
+  representation exactly as well as a Guid version — refusing one of them left the whole revisioned
+  half of a store unable to emit an ETag, with a message recommending the wrong setting.
+  **Two read methods where Marten widened one**, because the flavors are two physical columns here
+  (`guid_version` and `revision`) rather than one `mt_version` read at either width; `VersionSourceFor<T>()`
+  is how a caller asks which applies, and no fail-fast guard against both was needed —
+  `AssertConcurrencyIsCoherent` already refuses that pair at configuration time.
+- **Three of marten#5157/#5158/#5166's hardening did not reproduce, for structural reasons rather
+  than luck**, and `streaming_hardening` pins each so it stays that way. A 304 already returned before
+  the write; a JSON read names its columns (`data, guid_version`) instead of aliasing whatever the
+  storage selected, so neither a `Select` projection nor a tracking session can move the payload —
+  marten#5166 was a 200 whose body was the document's id, through exactly that positional assumption.
+- **A cursor whose key does not bind to its ordering member is an `ArgumentException`** (fisher#62,
+  the marten#5029 class), not the `InvalidOperationException` `JsonElement` raises. The payload's
+  shape was already checked; the per-key *bind* was not, so one way of malforming a client-supplied
+  cursor produced a 400 and another a 500.
 - **MCP endpoints are deliberately not ported.** That surface is moving upstream, and porting it
   speculatively would mean maintaining a copy of something about to change.
 - Tested against a `DefaultHttpContext` with a `MemoryStream` body rather than through a test host: an

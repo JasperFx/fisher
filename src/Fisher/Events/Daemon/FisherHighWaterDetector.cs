@@ -56,11 +56,14 @@ internal sealed class FisherHighWaterDetector : IHighWaterDetector
 {
     private readonly FisherDatabase _database;
     private readonly EventGraph _events;
+    private readonly TimeProvider _timeProvider;
+    private DateTimeOffset? _lastLivenessTouch;
 
-    internal FisherHighWaterDetector(FisherDatabase database, EventGraph events)
+    internal FisherHighWaterDetector(FisherDatabase database, EventGraph events, TimeProvider? timeProvider = null)
     {
         _database = database;
         _events = events;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public Uri DatabaseUri => _database.DatabaseUri;
@@ -75,6 +78,8 @@ internal sealed class FisherHighWaterDetector : IHighWaterDetector
         var lastMark = await _database.ProjectionProgressFor(HighWaterShard, token).ConfigureAwait(false);
         var highest = await _database.FetchHighestEventSequenceNumber(token).ConfigureAwait(false);
 
+        var now = _timeProvider.GetUtcNow();
+
         var statistics = new HighWaterStatistics
         {
             LastMark = lastMark,
@@ -83,16 +88,67 @@ internal sealed class FisherHighWaterDetector : IHighWaterDetector
             // Contiguous sequences, so everything committed is safe to read.
             CurrentMark = highest,
             SafeStartMark = highest,
-            Timestamp = DateTimeOffset.UtcNow
+            Timestamp = now
         };
 
         if (statistics.HasChanged)
         {
             await MarkAsync(highest, token).ConfigureAwait(false);
             statistics.LastUpdated = statistics.Timestamp;
+            _lastLivenessTouch = now;
+
+            return statistics;
+        }
+
+        if (IsLivenessTouchDue(now))
+        {
+            await TouchAsync(token).ConfigureAwait(false);
+            statistics.LastUpdated = now;
+            _lastLivenessTouch = now;
         }
 
         return statistics;
+    }
+
+    /// <summary>
+    ///     Whether the mark's <c>last_updated</c> is due to be re-stamped purely to say the poll loop is
+    ///     still cycling (fisher#60).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The high-water row's <c>last_updated</c> moves whenever the mark <em>advances</em>, which
+    ///         is not the same question as whether the daemon is <em>alive</em> — a quiet store advances
+    ///         nothing and would otherwise look identical to a dead one. So the loop re-stamps the row
+    ///         on a cycle where nothing changed, and the age of that column becomes an honest liveness
+    ///         signal that costs no extra column and does not depend on extended progression tracking.
+    ///     </para>
+    ///     <para>
+    ///         <b>Throttled, where Marten's per-tenant equivalent writes on every cycle.</b> That
+    ///         difference is SQLite's: a write takes the database file's one write lock, so an idle
+    ///         daemon touching the row at <c>SlowPollingTime</c> — a second by default — would make an
+    ///         otherwise read-only store a permanent 1 Hz writer, appending to the WAL and forcing
+    ///         checkpoints on a database nothing else is touching. The throttle bounds that to one small
+    ///         write per <see cref="Fisher.EventStoreOptions.HighWaterLivenessInterval" /> while keeping
+    ///         the signal's resolution well inside any sane staleness threshold.
+    ///     </para>
+    ///     <para>
+    ///         Setting the interval to zero or less turns the touch off, which leaves the health check on
+    ///         the sequence-gap heuristic alone — a store that would rather have no daemon writes at all
+    ///         than a periodic one.
+    ///     </para>
+    /// </remarks>
+    private bool IsLivenessTouchDue(DateTimeOffset now)
+    {
+        var interval = _events.HighWaterLivenessInterval;
+
+        if (interval <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        // Nothing recorded yet means this process has not stamped the row; do it now, so an agent that
+        // starts against an already-advanced store still proves it is alive.
+        return _lastLivenessTouch is not { } last || now - last >= interval;
     }
 
     /// <summary>
@@ -123,6 +179,31 @@ internal sealed class FisherHighWaterDetector : IHighWaterDetector
                                """;
         command.Parameters.AddWithValue("@name", ShardState.HighWaterMark);
         command.Parameters.AddWithValue("@seq", sequence);
+
+        await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Re-stamp the mark's <c>last_updated</c> without moving the mark — see
+    ///     <see cref="IsLivenessTouchDue" />.
+    /// </summary>
+    /// <remarks>
+    ///     An <c>update</c> rather than the upsert <see cref="MarkAsync" /> uses: with no row there is no
+    ///     poll cycle to attest to yet, and inserting one at sequence zero would tell a reader the daemon
+    ///     had processed up to zero rather than that it had not run. A store where nothing has ever been
+    ///     appended therefore reports no high-water row at all, which the health check already reads as
+    ///     "the daemon has not started here" rather than as a fault.
+    /// </remarks>
+    private async Task TouchAsync(CancellationToken token)
+    {
+        await using var connection = await _database.OpenConnectionAsync(token).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"""
+                               update {_events.ProgressionTableName}
+                                  set last_updated = {SqliteTimestamp.NowExpression}
+                                where name = @name;
+                               """;
+        command.Parameters.AddWithValue("@name", ShardState.HighWaterMark);
 
         await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
     }

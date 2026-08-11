@@ -125,6 +125,57 @@ public class projections_that_raise_events : IAsyncLifetime
     ///     invisible to every async projection — the failure mode <c>AUTOINCREMENT</c> on
     ///     <c>fi_events.seq_id</c> exists to prevent.
     /// </remarks>
+    /// <summary>
+    ///     A projection raising events onto a stream it has already projected — the branch that reaches
+    ///     <c>QuickAppendEvents</c> rather than <c>QuickAppendEventWithVersion</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         fisher#61, the sibling of polecat#420, where all three of these members were stubbed empty
+    ///         and every raised event was dropped with no error and no log. Fisher's are real, but only
+    ///         one of the two branches JasperFx's <c>EventSlice.BuildOperations</c> can take was pinned:
+    ///         it calls <c>QuickAppendEventWithVersion</c> per event followed by
+    ///         <c>UpdateStreamVersion</c> <b>only</b> for a single-stream slice whose action type is
+    ///         <c>Start</c>, and <c>QuickAppendEvents</c> for everything else — every multi-stream slice,
+    ///         and every single-stream slice for a stream some earlier batch already saw.
+    ///     </para>
+    ///     <para>
+    ///         Two daemon passes are what tell them apart. The first sees the stream start; the second
+    ///         sees only the event appended afterwards, so its slice is an <c>Append</c>. Stubbing
+    ///         <c>QuickAppendEvents</c> alone leaves the other three tests here green.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_raised_event_lands_when_the_slice_is_not_a_stream_start()
+    {
+        var streamId = Guid.NewGuid();
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.StartStream<AuditedQuest>(streamId, new QuestStarted("Destroy the ring"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await RunDaemonAsync();
+
+        // Pass two: the projection has already seen this stream, so the slice is an Append.
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.Append(streamId, new MonsterSlain("Balrog"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+
+        await using var query = _store.LightweightSession();
+        var events = await query.Events.FetchStreamAsync(streamId, token: TestContext.Current.CancellationToken);
+
+        // Started, audited by pass one, slain, audited by pass two.
+        events.Select(x => x.Version).ShouldBe([1, 2, 3, 4]);
+        events.Count(x => x.Data is QuestAudited).ShouldBe(2);
+        events[3].Data.ShouldBeOfType<QuestAudited>();
+    }
+
     [Fact]
     public async Task a_raised_event_takes_the_next_sequence()
     {

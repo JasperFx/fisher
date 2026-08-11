@@ -80,16 +80,24 @@ public sealed class StreamOne<T> : IResult, IEndpointMetadataProvider where T : 
 
         // The JSON and the version in one read, so a 304 needs no second query and a 200 streams the
         // stored bytes.
-        var result = await _queryable.ToJsonFirstWithVersionAsync(httpContext.RequestAborted)
-            .ConfigureAwait(false);
+        //
+        // fisher#62 (the marten#5120 class): a numeric-revisioned document is served from its
+        // `revision` rather than refused. The two concurrency styles are alternatives, and a revision
+        // validates a cached representation exactly as well as a Guid version does — refusing one of
+        // them left the whole revisioned half of a store unable to emit an ETag at all.
+        var (json, etag) = _queryable.VersionSourceFor() switch
+        {
+            DocumentVersionSource.NumericRevision => Unpack(
+                await _queryable.ToJsonFirstWithRevisionAsync(httpContext.RequestAborted).ConfigureAwait(false)),
+            _ => Unpack(
+                await _queryable.ToJsonFirstWithVersionAsync(httpContext.RequestAborted).ConfigureAwait(false))
+        };
 
-        if (result is null)
+        if (json is null || etag is null)
         {
             httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
             return;
         }
-
-        var etag = ETagHelpers.Format(result.Version);
 
         if (ETagHelpers.IfNoneMatchMatches(httpContext, etag))
         {
@@ -101,8 +109,16 @@ public sealed class StreamOne<T> : IResult, IEndpointMetadataProvider where T : 
 
         httpContext.Response.Headers.ETag = etag;
 
-        await WriteAsync(httpContext, result.Json).ConfigureAwait(false);
+        await WriteAsync(httpContext, json).ConfigureAwait(false);
     }
+
+    /// <summary>The stored JSON and the ETag its version reads as, or two nulls for no match.</summary>
+    private static (string? Json, string? ETag) Unpack(DocumentJsonWithVersion? result)
+        => result is null ? (null, null) : (result.Json, ETagHelpers.Format(result.Version));
+
+    /// <inheritdoc cref="Unpack(DocumentJsonWithVersion?)" />
+    private static (string? Json, string? ETag) Unpack(DocumentJsonWithRevision? result)
+        => result is null ? (null, null) : (result.Json, ETagHelpers.Format(result.Revision));
 
     [RequiresDynamicCode("Routes through Fisher's LINQ provider, which closes generic types over T.")]
     [RequiresUnreferencedCode("Routes through Fisher's LINQ provider, which reflects over T.")]

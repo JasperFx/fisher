@@ -88,6 +88,47 @@ public partial class FisherDatabase : IEventDatabase
     }
 
     /// <summary>
+    ///     The high-water row, with the time its poll loop last stamped it — or null when the daemon has
+    ///     never run against this database.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         fisher#60. Separate from <see cref="AllProjectionProgress" /> for two reasons.
+    ///         <see cref="ShardState" /> has no field for <c>last_updated</c>, so that read cannot carry
+    ///         the only signal a liveness check can use; and it returns every shard's row to keep one.
+    ///     </para>
+    ///     <para>
+    ///         The age of <c>last_updated</c> is a liveness signal precisely because
+    ///         <c>FisherHighWaterDetector</c> re-stamps it on an idle cycle — see
+    ///         <see cref="EventStoreOptions.HighWaterLivenessInterval" />. With that turned off it moves
+    ///         only when the mark advances, which says nothing about whether the loop is running.
+    ///     </para>
+    /// </remarks>
+    public async Task<HighWaterStatus?> FetchHighWaterStatusAsync(CancellationToken token = default)
+    {
+        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"""
+                                   select last_seq_id, last_updated
+                                   from {_events.ProgressionTableName}
+                                   where name = @name
+                                   """;
+            command.Parameters.AddWithValue("@name", ShardState.HighWaterMark);
+
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+            if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            return new HighWaterStatus(reader.GetInt64(0), SqliteTimestamp.FromDatabaseValue(reader.GetString(1)));
+        }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
     ///     Drop one shard's progress row by its exact identity.
     /// </summary>
     /// <remarks>
@@ -390,3 +431,14 @@ public partial class FisherDatabase : IEventDatabase
         }, token).ConfigureAwait(false);
     }
 }
+
+/// <summary>
+///     Where the high-water mark stands, and when its agent last said so (fisher#60).
+/// </summary>
+/// <param name="Sequence">The highest event sequence the daemon has marked as safe to read.</param>
+/// <param name="LastUpdated">
+///     When the row was last written. Moves on every idle poll cycle while
+///     <see cref="EventStoreOptions.HighWaterLivenessInterval" /> is positive, and only on an advance
+///     otherwise.
+/// </param>
+public sealed record HighWaterStatus(long Sequence, DateTimeOffset LastUpdated);

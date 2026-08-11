@@ -82,6 +82,12 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     public bool EnableExtendedProgressionTracking => _options.Events.EnableExtendedProgressionTracking;
 
     /// <summary>
+    ///     How often an idle high-water agent re-stamps its progression row's <c>last_updated</c>.
+    /// </summary>
+    /// <remarks>See <see cref="EventStoreOptions.HighWaterLivenessInterval" /> — fisher#60.</remarks>
+    public TimeSpan HighWaterLivenessInterval => _options.Events.HighWaterLivenessInterval;
+
+    /// <summary>
     ///     Process projection side effects when running projections under the Inline lifecycle.
     /// </summary>
     public bool EnableSideEffectsOnInlineProjections => _options.Events.EnableSideEffectsOnInlineProjections;

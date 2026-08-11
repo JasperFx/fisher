@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace Fisher.Linq;
@@ -64,12 +65,13 @@ public static class JsonQueryExtensions
     {
         var provider = ProviderFor(queryable);
 
-        if (!provider.HasVersionColumn<T>())
+        if (provider.VersionSourceFor<T>() != DocumentVersionSource.GuidVersion)
         {
             throw new InvalidOperationException(
                 $"'{typeof(T).Name}' has no guid_version column, so there is no version to report. "
                 + "Register it with Schema.For<T>().UseOptimisticConcurrency() — or implement "
-                + "JasperFx.Metadata.IVersioned, which turns it on — if it should have one.");
+                + "JasperFx.Metadata.IVersioned, which turns it on — if it should have one. A type "
+                + "using numeric revisions is read with ToJsonFirstWithRevisionAsync instead.");
         }
 
         var rows = await provider
@@ -77,6 +79,48 @@ public static class JsonQueryExtensions
             .ConfigureAwait(false);
 
         return rows.Count == 0 ? null : new DocumentJsonWithVersion(rows[0], Guid.Parse(rows[1]));
+    }
+
+    /// <summary>
+    ///     The first matching document's JSON and its numeric revision, for an ETag response.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         fisher#62, the marten#5120 class. The counterpart of
+    ///         <see cref="ToJsonFirstWithVersionAsync{T}" /> for a type registered with
+    ///         <c>UseNumericRevisions()</c> — the alternative concurrency style, not a lesser one, and a
+    ///         revision is exactly as good a cache validator as a Guid version.
+    ///     </para>
+    ///     <para>
+    ///         <b>Two methods where Marten widened one</b>, because the two flavors are two physical
+    ///         columns here — <c>guid_version</c> and <c>revision</c>, of different types — rather than
+    ///         one <c>mt_version</c> read at either width. A type carries one or the other and never
+    ///         both; <c>AssertConcurrencyIsCoherent</c> refuses that pair at configuration time, so
+    ///         there is no ambiguity for a caller to resolve. Use
+    ///         <see cref="QueryableVersionSourceExtensions.VersionSourceFor{T}" /> to ask which applies.
+    ///     </para>
+    /// </remarks>
+    public static async Task<DocumentJsonWithRevision?> ToJsonFirstWithRevisionAsync<T>(
+        this IQueryable<T> queryable, CancellationToken token = default) where T : notnull
+    {
+        var provider = ProviderFor(queryable);
+
+        if (provider.VersionSourceFor<T>() != DocumentVersionSource.NumericRevision)
+        {
+            throw new InvalidOperationException(
+                $"'{typeof(T).Name}' has no revision column, so there is no revision to report. "
+                + "Register it with Schema.For<T>().UseNumericRevisions() — or implement "
+                + "JasperFx.IRevisioned, which turns it on — if it should have one. A type using "
+                + "optimistic concurrency is read with ToJsonFirstWithVersionAsync instead.");
+        }
+
+        var rows = await provider
+            .JsonRowsAsync<T>(queryable.Expression, $"data, {Storage.NumericRevision.Column}", limit: 1, token)
+            .ConfigureAwait(false);
+
+        return rows.Count == 0
+            ? null
+            : new DocumentJsonWithRevision(rows[0], int.Parse(rows[1], CultureInfo.InvariantCulture));
     }
 
     /// <summary>
@@ -127,3 +171,50 @@ public static class JsonQueryExtensions
 ///     A document's stored JSON and the version it was read at.
 /// </summary>
 public sealed record DocumentJsonWithVersion(string Json, Guid Version);
+
+/// <summary>
+///     A document's stored JSON and the numeric revision it was read at (fisher#62).
+/// </summary>
+public sealed record DocumentJsonWithRevision(string Json, int Revision);
+
+/// <summary>
+///     Which concurrency column, if either, a document type carries.
+/// </summary>
+/// <remarks>
+///     The two are alternatives — a type has <c>guid_version</c> or <c>revision</c> or neither, never
+///     both. A caller that wants an ETag without knowing which style a type was registered with asks
+///     this first; see <see cref="QueryableVersionSourceExtensions.VersionSourceFor{T}" />.
+/// </remarks>
+public enum DocumentVersionSource
+{
+    /// <summary>Neither column: there is no version to report.</summary>
+    None,
+
+    /// <summary>A <c>guid_version</c> column, from <c>UseOptimisticConcurrency()</c>.</summary>
+    GuidVersion,
+
+    /// <summary>A <c>revision</c> column, from <c>UseNumericRevisions()</c>.</summary>
+    NumericRevision
+}
+
+/// <summary>
+///     Asking a query which version column its document type carries.
+/// </summary>
+public static class QueryableVersionSourceExtensions
+{
+    /// <summary>
+    ///     Which concurrency column the queried document type carries, so a caller can choose between
+    ///     <see cref="JsonQueryExtensions.ToJsonFirstWithVersionAsync{T}" /> and
+    ///     <see cref="JsonQueryExtensions.ToJsonFirstWithRevisionAsync{T}" /> without knowing how the
+    ///     type was registered.
+    /// </summary>
+    public static DocumentVersionSource VersionSourceFor<T>(this IQueryable<T> queryable) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(queryable);
+
+        return queryable.Provider is FisherQueryProvider provider
+            ? provider.VersionSourceFor<T>()
+            : throw new InvalidOperationException(
+                "This operator only works on a query created by Fisher's session.Query<T>().");
+    }
+}

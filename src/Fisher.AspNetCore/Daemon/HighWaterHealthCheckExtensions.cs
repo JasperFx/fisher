@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using JasperFx.Events;
 using JasperFx.Events.Daemon;
+using Fisher.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -20,9 +21,34 @@ namespace Fisher.AspNetCore.Daemon;
 ///         reporting the daemon falling behind is how an operator finds out that warning mattered.
 ///     </para>
 ///     <para>
-///         Ported from Polecat's, including the two distinct staleness signals — a stalled liveness
-///         heartbeat and a mark stuck while events pile up behind it — because they fail differently
-///         and only one of them is visible without a heartbeat.
+///         Two staleness signals, because they fail differently:
+///     </para>
+///     <list type="number">
+///         <item>
+///             <description>
+///                 <b>Poll-cycle age (primary).</b> The high-water agent re-stamps <c>last_updated</c>
+///                 on its progression row on an idle cycle as well as on an advance — see
+///                 <see cref="EventStoreOptions.HighWaterLivenessInterval" />. Its age therefore says
+///                 the loop is <em>cycling</em>, whether or not the mark <em>advances</em>, so a quiet
+///                 store never trips it.
+///             </description>
+///         </item>
+///         <item>
+///             <description>
+///                 <b>Sequence gap (secondary).</b> The mark sitting unchanged while later events pile
+///                 up past it. The only signal available when the liveness touch is turned off, and it
+///                 cannot tell a stopped daemon from an idle one.
+///             </description>
+///         </item>
+///     </list>
+///     <para>
+///         <b>The extended-progression <c>heartbeat</c> column is deliberately not consulted</b>
+///         (fisher#60, sibling of marten#5181). It is never written for a high-water row —
+///         JasperFx's <c>ExtendedProgressionWriter.OnNext</c> returns early for
+///         <c>ShardState.HighWaterMark</c> — so reading it made this check look like it had a signal it
+///         did not have, and every real deployment silently fell through to the gap heuristic. Marten's
+///         own tests passed only because they seeded the column with raw SQL, which is why the test
+///         behind this one drives a running daemon instead.
 ///     </para>
 /// </remarks>
 public static class HighWaterHealthCheckExtensions
@@ -32,8 +58,11 @@ public static class HighWaterHealthCheckExtensions
     /// </summary>
     /// <param name="builder">The health checks builder.</param>
     /// <param name="staleThreshold">
-    ///     How long a stalled mark or a silent heartbeat may go before the check is unhealthy. 30
-    ///     seconds by default.
+    ///     How long the agent may go without completing a poll cycle — or, on the gap path, how long
+    ///     the mark may sit unchanged while behind — before the check is unhealthy. 30 seconds by
+    ///     default. Keep it comfortably above
+    ///     <see cref="EventStoreOptions.HighWaterLivenessInterval" /> (five seconds by default), or a
+    ///     healthy agent reports unhealthy between two of its own touches.
     /// </param>
     /// <param name="minimumGap">
     ///     How far behind the mark may sit before it counts as behind at all. One, by default:
@@ -76,12 +105,11 @@ public static class HighWaterHealthCheckExtensions
     /// <inheritdoc cref="AddFisherHighWaterHealthCheck" />
     public sealed class HighWaterHealthCheck : IHealthCheck
     {
-        private const string HighWaterMarkShard = "HighWaterMark";
-
         private readonly IDocumentStore _store;
         private readonly TimeProvider _timeProvider;
         private readonly HighWaterHealthCheckSettings _settings;
         private readonly HighWaterStateTracker _tracker;
+        private readonly TimeSpan _livenessInterval;
 
         /// <summary>Construct the check from the registered store and its settings.</summary>
         public HighWaterHealthCheck(IDocumentStore store, HighWaterHealthCheckSettings settings,
@@ -91,6 +119,7 @@ public static class HighWaterHealthCheckExtensions
             _settings = settings;
             _timeProvider = timeProvider;
             _tracker = tracker;
+            _livenessInterval = store.Options.Events.HighWaterLivenessInterval;
         }
 
         /// <inheritdoc />
@@ -137,9 +166,13 @@ public static class HighWaterHealthCheckExtensions
 
         private async Task<HealthCheckResult> CheckAsync(IEventDatabase database, CancellationToken token)
         {
-            var progress = await database.AllProjectionProgress(token).ConfigureAwait(false);
-            var highWater = progress.FirstOrDefault(x => string.Equals(HighWaterMarkShard, x.ShardName,
-                StringComparison.Ordinal));
+            // Read straight from the progression row rather than through AllProjectionProgress: that
+            // returns every shard's row to keep one, and ShardState has no field for last_updated — so
+            // it cannot carry the only signal a liveness check can use. A database Fisher did not
+            // create is not one this check knows how to read.
+            var highWater = database is FisherDatabase fisher
+                ? await fisher.FetchHighWaterStatusAsync(token).ConfigureAwait(false)
+                : null;
 
             if (highWater is null)
             {
@@ -151,21 +184,22 @@ public static class HighWaterHealthCheckExtensions
 
             var now = _timeProvider.GetUtcNow();
 
-            // A heartbeat is the stronger signal when the daemon supplies one: it says the poll loop is
-            // cycling, whether or not the mark has moved. Preferred over the two-reading comparison
-            // because a quiet store's mark legitimately does not move.
-            if (highWater.LastHeartbeat is { } heartbeat)
+            // The primary signal: the agent re-stamps this on an idle poll cycle, not only when the
+            // mark advances, so its age says the loop is cycling rather than that events are arriving.
+            // A quiet store therefore never trips it — which is exactly what the gap heuristic below
+            // cannot promise.
+            if (_livenessInterval > TimeSpan.Zero)
             {
                 _tracker.Readings.TryRemove(database.Identifier, out _);
 
-                var age = now - heartbeat;
+                var age = now - highWater.LastUpdated;
 
                 return age < _settings.StaleThreshold
                     ? HealthCheckResult.Healthy("Healthy.")
                     : HealthCheckResult.Unhealthy(
-                        $"The high-water agent for '{database.Identifier}' last reported {age.TotalSeconds:F0}s "
-                        + $"ago (at {heartbeat:O}), past the {_settings.StaleThreshold} threshold. Its poll "
-                        + "loop has stopped cycling.");
+                        $"The high-water agent for '{database.Identifier}' last completed a poll cycle "
+                        + $"{age.TotalSeconds:F0}s ago (at {highWater.LastUpdated:O}), past the "
+                        + $"{_settings.StaleThreshold} threshold. Its poll loop has stopped cycling.");
             }
 
             var highest = await database.FetchHighestEventSequenceNumber(token).ConfigureAwait(false);

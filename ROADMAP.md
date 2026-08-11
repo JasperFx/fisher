@@ -3,14 +3,16 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **eight open issues**, seven of them filed 2026-08-10 and not yet triaged — several are
-upstream-parity audits (#60–#63, #66) rather than enhancements, so "nothing is broken" is no longer a
-claim this line can make. On JasperFx **2.45.0**, with **#64** proposing 2.46.0 / Weasel 9.24.0.
-**All 28 compliance suites green.** 1165 tests green on net9.0
-and net10.0, with **no known intermittents**.
+Status: **two open issues** — [#55](https://github.com/JasperFx/fisher/issues/55) (a second LINQ join)
+and [#67](https://github.com/JasperFx/fisher/issues/67) (a load-sensitive intermittent in one
+fisher#59 test). The 2026-08-10 wave (#60–#66) is closed: two of those audits found real defects
+(#60's dead heartbeat branch, #63's composite teardown), #62's ported matrix found two more, and #61
+and #66 confirmed Fisher was already correct and now pin it. On JasperFx **2.46.0** / Weasel
+**9.24.0**. **All 28 compliance suites, 230 tests, green** — 2.46.0 added neither. 1189 tests green on
+net9.0 and net10.0.
 
-Twenty-eight of those twenty-nine came out of a file-by-file comparison against Polecat on 2026-08-08,
-which filed [#22](https://github.com/JasperFx/fisher/issues/22) through
+Most of the issues this file tracks came out of a file-by-file comparison against Polecat on
+2026-08-08, which filed [#22](https://github.com/JasperFx/fisher/issues/22) through
 [#50](https://github.com/JasperFx/fisher/issues/50) and is indexed in
 [polecat-gaps.md](polecat-gaps.md) — that document also records what SQLite has no equivalent for and
 never will. It is context; the issues are the tracking.
@@ -97,7 +99,14 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 | ~~[fisher#16](https://github.com/JasperFx/fisher/issues/16)~~ | **Closed.** User-declared indexes, as SQLite expression indexes over the member's `TypedLocator` — no column materialised, so cheaper here than on either sibling. |
 | ~~[fisher#17](https://github.com/JasperFx/fisher/issues/17)~~ | **Closed.** Document hierarchies on a `doc_type` alias column. This issue's premise was wrong: `dotnet_type` cannot be the discriminator, so it needed a schema change after all. |
 | ~~[fisher#18](https://github.com/JasperFx/fisher/issues/18)~~ | **Closed.** Numeric revisions, following Marten's strictly-greater rule. The difficulty was the positional slot contract, not the SQL. |
-| [fisher#19](https://github.com/JasperFx/fisher/issues/19) | **Open.** `CompositeProjection` — the one projection shape Fisher does not support. Possibly close to free, but nobody has tried it. |
+| ~~[fisher#19](https://github.com/JasperFx/fisher/issues/19)~~ | **Closed.** `CompositeProjection` — ordered stages under one shard, close to free as the issue guessed. What a composite shares across stages is the aggregate cache, not a database read. |
+| ~~[fisher#60](https://github.com/JasperFx/fisher/issues/60)~~ | **Closed.** The high-water health check preferred a heartbeat nothing writes for that row, so it silently degraded to the gap heuristic. The agent now re-stamps `last_updated` on an idle cycle — throttled, because on SQLite a periodic write is the file's one write lock. |
+| ~~[fisher#61](https://github.com/JasperFx/fisher/issues/61)~~ | **Closed.** Verify-first: the three raised-event members are real, not polecat#420's stubs. One of JasperFx's two branches was unpinned, and now is. |
+| ~~[fisher#62](https://github.com/JasperFx/fisher/issues/62)~~ | **Closed.** Marten's streaming/ETag hardening matrix. Two reproduced — a revisioned document could emit no ETag at all, and a cursor whose key would not bind was a 500. Three did not, for structural reasons, and are pinned. |
+| ~~[fisher#63](https://github.com/JasperFx/fisher/issues/63)~~ | **Closed.** A composite member held by the wrapper published nothing, so a rebuild replayed onto its surviving rows. The composite's own teardown rules were dropped too. |
+| ~~[fisher#64](https://github.com/JasperFx/fisher/issues/64)~~ | **Closed.** JasperFx 2.46.0 + Weasel 9.24.0. No new compliance suites, and the 28/230 counts were re-verified rather than carried over. |
+| ~~[fisher#65](https://github.com/JasperFx/fisher/issues/65)~~ | **Closed.** The README's "what is not there" paragraph was stale in four ways, not one. |
+| ~~[fisher#66](https://github.com/JasperFx/fisher/issues/66)~~ | **Closed.** Preventive audit: Fisher runs one command per operation, so marten#5210's batch misalignment cannot occur. Pinned, along with the marker's own claim. |
 | [#22–#50](https://github.com/JasperFx/fisher/issues/22) | **In progress**, #45 closed. The Polecat comparison backlog — LINQ, sessions, document storage, the event store's remaining surface, and two satellite packages. Indexed with rationale in [polecat-gaps.md](polecat-gaps.md); listed individually below rather than repeated here. |
 | ~~[fisher#20](https://github.com/JasperFx/fisher/issues/20)~~ | **Closed.** `AddFisher(...)`, scoped sessions, hosted services. Surfaced a real bug: everything a container disposes was `IAsyncDisposable` only, which made a scoped session unusable. |
 | ~~[fisher#21](https://github.com/JasperFx/fisher/issues/21)~~ | **Closed.** Subscriptions — `ISubscriptionRunner<ISubscription>`, the session taken from the batch so writes commit with the progression row. |
