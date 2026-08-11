@@ -1912,10 +1912,48 @@ populates deliberately.
   immediately either way — resolution does not go through the hosted service. Daemons are keyed by
   database identifier, since a second daemon over one file is two writers contending for one write
   lock.
-- **Databases are cached and never evicted**, which is a known bound rather than an oversight:
-  `MaxPoolSize` sizes each tenant's pool. Evicting an idle one means disposing a `FisherDatabase`
-  whose connections may still be in use, which is a worse failure than the memory it saves — so it is
-  [fisher#59](https://github.com/JasperFx/fisher/issues/59), to be measured before it is built.
+- **Databases are cached and never evicted, and the measurement says that is right** (fisher#59). A
+  tenant resolved but never used costs no measurable memory and no file handles at all, so there is
+  nothing for eviction to reclaim. What costs is a tenant that has been *used* — see "Releasing pooled
+  connections" below. `ForgetTenantAsync` is the explicit release for a tenant a process is finished
+  with.
+
+### Releasing pooled connections
+
+`FisherDatabase.ReleasePooledConnections` and `DynamicTenancy.ForgetTenantAsync` (fisher#59).
+
+**The issue was filed about caching `FisherDatabase` objects, and measuring said that was the wrong
+thing to worry about.** 200 tenant databases resolved but never used cost no measurable memory and
+opened no files — a `SqliteDataSource` is a *factory*, not a pool, building a fresh `SqliteConnection`
+on every open. What costs is a tenant that has been **used**: Microsoft.Data.Sqlite keeps a pooled
+connection per connection string, worth three file handles (`.db`, `-wal`, `-shm`), in a
+**process-wide** registry that nothing Fisher disposed ever touched. 50 used tenants held 3.4 handles
+apiece and still held them after the store was disposed.
+
+So the fix is not eviction, and **it was leaking for every store rather than only a multi-tenant
+one**: disposing a Fisher store left its pooled connections behind.
+
+- **This is `SqliteConnection.ClearPool(connection)`, not `ClearAllPools()`, and the distinction is
+  the whole reason it is safe.** The banned one disposes every pooled connection in the process, so
+  one store's cleanup takes out another's — which is why the conventions forbid it and why
+  `TemporaryDatabase.Dispose` already uses the targeted form. This one names a connection string and
+  touches only that pool.
+- **A connection currently checked out is unharmed.** Verified against Microsoft.Data.Sqlite 10.0.9:
+  it goes on reading and writing after its pool is cleared, and is discarded rather than re-pooled
+  when it closes. That is what makes forgetting a tenant safe while a session is mid-request, and it
+  is the property whose absence would have made this an `ObjectDisposedException` generator.
+- **Eviction on idleness is deliberately absent.** A timer cannot tell a tenant that is finished from
+  one that is merely quiet, re-resolving one is nearly free, and the thing it would reclaim costs
+  nothing until the tenant is used. `ForgetTenantAsync` leaves the judgement with the caller who
+  actually knows. Nothing breaks if it is never called.
+- **Two stores over one file share the pool**, so disposing one releases the other's *idle*
+  connections. Harmless — they reopen on demand — and pinned, because it is the bounded version of the
+  thing `ClearAllPools` is forbidden for.
+- **Tested through SQLite's own `-wal` and `-shm` sidecars rather than by counting file descriptors.**
+  SQLite deletes them when the last connection closes, so their presence is an exact, *file-local*
+  statement about whether anything still holds the database open. A `/dev/fd` count answers the same
+  question process-wide, which under xUnit's parallel collections is the intermittent tracing already
+  learned to avoid.
 
 ### Database-per-tenant (stage 1)
 

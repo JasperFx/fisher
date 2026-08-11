@@ -291,6 +291,45 @@ public sealed class DynamicTenancy : ITenancy
     /// </remarks>
     public IReadOnlyList<FisherDatabase> AllDatabases() => _databases.Values.ToList();
 
+    /// <summary>
+    ///     Release a tenant this process is finished with, returning its pooled connections to the
+    ///     operating system (fisher#59).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Explicit rather than automatic, and the measurement is why.</b> A tenant resolved but
+    ///         never used costs no memory and no file handles — so evicting on idleness would buy
+    ///         nothing for the case it was imagined for. What does cost is a tenant that has been
+    ///         <em>used</em>: Microsoft.Data.Sqlite keeps a pooled connection per connection string, and
+    ///         that is three file handles apiece (<c>.db</c>, <c>-wal</c>, <c>-shm</c>). A process
+    ///         serving thousands of tenants over its lifetime accumulates them.
+    ///     </para>
+    ///     <para>
+    ///         A timer cannot know whether a tenant is finished or merely quiet, and re-resolving one is
+    ///         nearly free, so the judgement is left with the caller who actually knows — the shape
+    ///         fisher#59 called option two. Nothing breaks if it is never called: this is a way to
+    ///         return resources early, not a requirement.
+    ///     </para>
+    ///     <para>
+    ///         <b>Safe against a session still using the tenant.</b> Disposal clears that connection
+    ///         string's pool, which leaves a checked-out connection working and merely stops it being
+    ///         re-pooled — see <see cref="FisherDatabase.Dispose" />. The tenant resolves again on the
+    ///         next request; its file and data are untouched, as they are everywhere else here.
+    ///     </para>
+    /// </remarks>
+    /// <returns>False when this store had not resolved that tenant.</returns>
+    public async ValueTask<bool> ForgetTenantAsync(string tenantId)
+    {
+        if (!_databases.TryRemove(tenantId, out var database))
+        {
+            return false;
+        }
+
+        await database.DisposeAsync().ConfigureAwait(false);
+
+        return true;
+    }
+
     public async ValueTask DisposeAsync()
     {
         foreach (var database in _databases.Values)
