@@ -3,7 +3,9 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **one open issue, an enhancement — nothing is broken.** On JasperFx **2.45.0**.
+Status: **eight open issues**, seven of them filed 2026-08-10 and not yet triaged — several are
+upstream-parity audits (#60–#63, #66) rather than enhancements, so "nothing is broken" is no longer a
+claim this line can make. On JasperFx **2.45.0**, with **#64** proposing 2.46.0 / Weasel 9.24.0.
 **All 28 compliance suites green.** 1165 tests green on net9.0
 and net10.0, with **no known intermittents**.
 
