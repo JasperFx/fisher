@@ -4,15 +4,26 @@
         <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <Version>0.1.0-alpha</Version>
+        <Version>0.5.0</Version>
         <LangVersion>latest</LangVersion>
         <Authors>Jeremy D. Miller</Authors>
+        <PackageIcon>logo.png</PackageIcon>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <PackageProjectUrl>https://fisher.jasperfx.net/</PackageProjectUrl>
+        <PackageTags>sqlite;event-sourcing;document-database;critter-stack;cqrs</PackageTags>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <!-- 8981: the test suites use snake_case type names by house convention, which the compiler
              otherwise warns may become language-reserved. -->
         <NoWarn>1570;1571;1572;1573;1574;1587;1591;1701;1702;1711;1735;0618;8981</NoWarn>
         <RepositoryUrl>https://github.com/JasperFX/fisher</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
     </PropertyGroup>
+
+    <!-- Packed into every package. Harmless in the test projects, which are never packed. -->
+    <ItemGroup>
+        <None Include="$(MSBuildThisFileDirectory)logo.png" Pack="true" PackagePath="" Visible="false" />
+        <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="" Visible="false" />
+    </ItemGroup>
 
     <!--
       Microsoft Testing Platform, matching Polecat's repo-wide setup. These are deliberately

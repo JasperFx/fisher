@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "scripts": {
+    "docs": "vitepress dev docs --port 5173 --open",
+    "docs-build": "vitepress build docs",
+    "docs-preview": "vitepress preview docs"
+  },
+  "devDependencies": {
+    "markdown-it-block-embed": "^0.0.3",
+    "vitepress": "1.6.4",
+    "vitepress-plugin-llms": "^1.5.1",
+    "vitepress-plugin-mermaid": "^2.0.17",
+    "wrangler": "^4.0.0"
+  }
+}

@@ -1,0 +1,89 @@
+name: Publish to NuGet
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version (e.g. 0.5.0). Leave blank to use the version from Directory.Build.props.'
+        required: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Both runtimes, matching the test workflow: the 10.0 SDK builds either target framework, but
+      # the packages multi-target net9.0 as well.
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.version }}" ]]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${{ github.ref_name }}"
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore
+        run: dotnet restore fisher.slnx
+
+      - name: Build
+        run: dotnet build fisher.slnx -c Release --no-restore
+
+      # The suites are the release gate. No database service to stand up — Fisher creates throwaway
+      # SQLite files — so running them here costs a few minutes and catches a tag cut from a broken
+      # commit before anything reaches NuGet.
+      - name: Test
+        run: |
+          set +e
+          status=0
+          for project in \
+            src/Fisher.Tests/Fisher.Tests.csproj \
+            src/Fisher.AspNetCore.Tests/Fisher.AspNetCore.Tests.csproj \
+            src/Fisher.EntityFrameworkCore.Tests/Fisher.EntityFrameworkCore.Tests.csproj
+          do
+            dir=$(dirname "$project")
+            assembly=$(basename "$project" .csproj)
+            for tfm in net9.0 net10.0; do
+              echo "::group::$assembly ($tfm)"
+              "$dir/bin/Release/$tfm/$assembly"
+              code=$?
+              echo "::endgroup::"
+              if [ $code -ne 0 ]; then status=$code; fi
+            done
+          done
+          exit $status
+
+      - name: Pack
+        run: |
+          VERSION_ARG=""
+          if [[ -n "${{ steps.version.outputs.version }}" ]]; then
+            VERSION_ARG="-p:Version=${{ steps.version.outputs.version }}"
+          fi
+          dotnet pack src/Fisher/Fisher.csproj -c Release --no-build -o ./artifacts $VERSION_ARG
+          dotnet pack src/Fisher.AspNetCore/Fisher.AspNetCore.csproj -c Release --no-build -o ./artifacts $VERSION_ARG
+          dotnet pack src/Fisher.EntityFrameworkCore/Fisher.EntityFrameworkCore.csproj -c Release --no-build -o ./artifacts $VERSION_ARG
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: ./artifacts/*.nupkg
+
+      - name: Push to NuGet
+        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

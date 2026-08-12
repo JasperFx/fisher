@@ -18,9 +18,6 @@ jobs:
         # suites share database files; naming one framework per job sidesteps that entirely.
         tfm: [ net9.0, net10.0 ]
 
-    env:
-      TEST_PROJECT_PATH: src/Fisher.Tests/Fisher.Tests.csproj
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -34,16 +31,18 @@ jobs:
             9.0.x
             10.0.x
 
+      # The whole solution, so the two companion packages and their suites are built and run here
+      # too rather than in workflows of their own.
       - name: Restore
-        run: dotnet restore ${{ env.TEST_PROJECT_PATH }}
+        run: dotnet restore fisher.slnx
 
       - name: Build
-        run: dotnet build ${{ env.TEST_PROJECT_PATH }} -c Release -f ${{ matrix.tfm }} --no-restore
+        run: dotnet build fisher.slnx -c Release -f ${{ matrix.tfm }} --no-restore
 
       # No database service. Fisher is SQLite-backed and the suites create throwaway database files
       # under the runner's temp directory, so there is nothing to spin up or wait for.
 
-      # Runs the Microsoft Testing Platform executable directly rather than through `dotnet test`.
+      # Runs the Microsoft Testing Platform executables directly rather than through `dotnet test`.
       # An xUnit v3 project builds as its own MTP executable, and invoking it is the only way to get
       # a TRX report out. `dotnet test` does not work here, and two of the three failure modes are
       # silent:
@@ -53,13 +52,31 @@ jobs:
       #   dotnet test ... -- --report-trx      arguments are swallowed. Tests run, exit 0, no TRX.
       #   dotnet test ... --report-trx         MSBuild rejects it: MSB1001 Unknown switch.
       #
-      # The TRX lands in <project>/bin/Release/<tfm>/TestResults/, which the reporter glob matches.
+      # The suites run sequentially and in one step, because they are all writing SQLite files under
+      # the same temp directory. `set +e` plus an accumulated exit code is what makes a failure in
+      # the first suite still let the others run — otherwise a red core suite hides whether the
+      # companion packages are also broken.
+      #
+      # Each TRX lands in <project>/bin/Release/<tfm>/TestResults/, which the reporter glob matches.
       - name: Test
         run: |
-          PROJECT_DIR=$(dirname "${{ env.TEST_PROJECT_PATH }}")
-          ASSEMBLY=$(basename "${{ env.TEST_PROJECT_PATH }}" .csproj)
-          "$PROJECT_DIR/bin/Release/${{ matrix.tfm }}/$ASSEMBLY" \
-            --report-trx --report-trx-filename test-results-${{ matrix.tfm }}.trx
+          set +e
+          status=0
+          for project in \
+            src/Fisher.Tests/Fisher.Tests.csproj \
+            src/Fisher.AspNetCore.Tests/Fisher.AspNetCore.Tests.csproj \
+            src/Fisher.EntityFrameworkCore.Tests/Fisher.EntityFrameworkCore.Tests.csproj
+          do
+            dir=$(dirname "$project")
+            assembly=$(basename "$project" .csproj)
+            echo "::group::$assembly (${{ matrix.tfm }})"
+            "$dir/bin/Release/${{ matrix.tfm }}/$assembly" \
+              --report-trx --report-trx-filename "$assembly-${{ matrix.tfm }}.trx"
+            code=$?
+            echo "::endgroup::"
+            if [ $code -ne 0 ]; then status=$code; fi
+          done
+          exit $status
 
       - name: Report results
         uses: dorny/test-reporter@v3
