@@ -75,7 +75,16 @@ public partial class EventOperations : IEventStoreOperations
     /// <summary>
     ///     Every stream touched in this unit of work, keyed by stream id or key.
     /// </summary>
-    internal IReadOnlyCollection<StreamAction> PendingStreams => _streams.Values;
+    /// <remarks>
+    ///     Public because an integration has to read it <b>before</b> the commit. Wolverine's fast event
+    ///     forwarding publishes appended events as messages from an
+    ///     <c>IDocumentSessionListener.BeforeSaveChangesAsync</c>, and its append tracking notifies the
+    ///     runtime observer from the same hook; both need the pending streams, and
+    ///     <see cref="Services.IChangeSet.GetStreams" /> only exists afterwards. Marten and Polecat both
+    ///     expose the equivalent, which is what let wolverine#3907 port the two listeners unchanged.
+    ///     Reading it does not commit or clear anything.
+    /// </remarks>
+    public IReadOnlyCollection<StreamAction> PendingStreams => _streams.Values;
 
     internal void ClearPendingStreams() => _streams.Clear();
 
