@@ -29,6 +29,12 @@ namespace Fisher.Tests.Configuration;
 ///         <c>/dev/fd</c> gives the same answer and is process-wide, which under xUnit's parallel
 ///         collections is the intermittent that tracing already learned to avoid.
 ///     </para>
+///     <para>
+///         <b>The sidecar measurement is file-local but not instantaneous</b>, which is fisher#67 and is
+///         why the release assertions go through <see cref="ShouldCloseAsync" /> rather than reading the
+///         file once. See its remarks for the measurement and for why the bound does not hide a real
+///         leak.
+///     </para>
 /// </remarks>
 public class pooled_connection_release : IAsyncLifetime
 {
@@ -59,6 +65,51 @@ public class pooled_connection_release : IAsyncLifetime
     ///     Whether anything still holds this tenant's database open.
     /// </summary>
     private bool IsOpen(string tenantId) => File.Exists(Path.Combine(_directory, $"{tenantId}.db-wal"));
+
+    /// <summary>
+    ///     Wait for this tenant's database to actually be closed — promptly, but not necessarily by the
+    ///     time the releasing call returns (fisher#67).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>The claim being tested is "released", and the honest adverb is "promptly" rather than
+    ///         "synchronously".</b> <c>SqliteConnection.ClearPool</c> disposes the pool's <em>idle</em>
+    ///         connections inline, but a connection that is <em>checked out</em> at that instant is only
+    ///         marked not-to-be-pooled and is disposed when it is returned. So the release is synchronous
+    ///         for the pool and a beat behind for anything still in flight, and the sidecar is the last
+    ///         thing to go.
+    ///     </para>
+    ///     <para>
+    ///         Measured rather than assumed, which is what fisher#67 asked for: under full-suite load
+    ///         roughly one disposal in 250–300 still had the sidecar at the instant the assertion ran,
+    ///         and <b>every one of them cleared</b> — a forced GC cleared them immediately and left alone
+    ///         they cleared within 25–175 ms. None of ~2000 measured disposals left one behind. It never
+    ///         happened at all for a plain single-file store (250 for 250, both TFMs), and no
+    ///         <see cref="SqliteConnection" /> Fisher had opened was still open at that moment — so it is
+    ///         not Fisher failing to dispose one.
+    ///     </para>
+    ///     <para>
+    ///         <b>The bound does not weaken the test into hiding the other possibility.</b> fisher#67's
+    ///         worry was that a tolerance would mask <c>ReleasePooledConnections</c> genuinely not
+    ///         releasing under contention — but that failure leaves the sidecar there <em>forever</em>,
+    ///         and a wait that gives up still fails. What the bound removes is only the claim the test was
+    ///         never entitled to make: that the operating system has caught up by the time the method
+    ///         returns.
+    ///     </para>
+    /// </remarks>
+    private async Task ShouldCloseAsync(string tenantId)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+
+        while (IsOpen(tenantId) && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(20, Token);
+        }
+
+        IsOpen(tenantId).ShouldBeFalse(
+            $"'{tenantId}' was never released. A pooled connection that is merely slow to be returned "
+            + "clears in milliseconds; one still held after ten seconds is a leak.");
+    }
 
     private DocumentStore StoreFor()
         => DocumentStore.For(options =>
@@ -121,8 +172,8 @@ public class pooled_connection_release : IAsyncLifetime
 
         await store.DisposeAsync();
 
-        IsOpen("one").ShouldBeFalse();
-        IsOpen("two").ShouldBeFalse();
+        await ShouldCloseAsync("one");
+        await ShouldCloseAsync("two");
     }
 
     /// <summary>
@@ -143,7 +194,7 @@ public class pooled_connection_release : IAsyncLifetime
         (await tenancy.ForgetTenantAsync("going")).ShouldBeTrue();
 
         tenancy.AllDatabases().Select(x => x.Identifier).ShouldNotContain("going");
-        IsOpen("going").ShouldBeFalse();
+        await ShouldCloseAsync("going");
 
         // And nobody else's connections went with it.
         IsOpen("staying").ShouldBeTrue();
