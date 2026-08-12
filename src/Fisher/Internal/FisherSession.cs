@@ -386,10 +386,20 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         }
 
         if (PendingOperationCount == 0 && Events.PendingStreams.Count == 0
-            && TenantScopes.All(x => x.Events.PendingStreams.Count == 0))
+            && TenantScopes.All(x => x.Events.PendingStreams.Count == 0)
+            && _participants is not { Count: > 0 })
         {
             // Nothing to do, and therefore no listeners either — Marten's rule, and without it every
             // no-op save would run every registered listener.
+            //
+            // A queued ITransactionParticipant is NOT nothing, though, and the participant clause above
+            // is why. A participant's whole purpose is to write rows Fisher does not know about, so
+            // "Fisher has no documents and no events" says nothing about whether there is work to do.
+            // Wolverine hits this directly: a handler that only schedules or cascades a message writes
+            // no document and appends no event, and enlists a participant to write its envelope row
+            // inside this transaction. Returning early there dropped the envelope silently - the send
+            // looked successful and the message never existed. Polecat fixed the same defect in
+            // polecat#161. wolverine#3907.
             return;
         }
 

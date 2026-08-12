@@ -76,6 +76,38 @@ public class transaction_participants : IAsyncLifetime
     }
 
     /// <summary>
+    ///     A participant runs even when Fisher's own unit of work is <b>empty</b>.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <c>SaveChangesAsync</c> short-circuits when there is nothing queued, so that a no-op save
+    ///         does not fire every registered listener. A queued participant is not nothing: its entire
+    ///         purpose is to write rows Fisher does not know about, so "no documents and no events" says
+    ///         nothing about whether there is work to do.
+    ///     </para>
+    ///     <para>
+    ///         Found building <c>Wolverine.Fisher</c> (wolverine#3907). A Wolverine handler that only
+    ///         schedules or cascades a message writes no document and appends no event, and enlists a
+    ///         participant to write its envelope row inside this transaction — so the early return
+    ///         dropped the envelope <em>silently</em>: the send looked successful and the message never
+    ///         existed. Polecat fixed the same defect in polecat#161.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_participant_runs_when_the_unit_of_work_is_otherwise_empty()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            // No Store(), no event append - the participant is the only work in this transaction
+            session.AddTransactionParticipant(new LedgerWriter("empty unit of work"));
+
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await LedgerNotesAsync()).ShouldBe(["empty unit of work"]);
+    }
+
+    /// <summary>
     ///     fisher#50, step 2 — a participant enlisted from inside the async daemon writes in the
     ///     <em>batch's</em> transaction, alongside the projection's documents and the progression row.
     /// </summary>
