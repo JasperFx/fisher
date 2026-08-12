@@ -265,6 +265,17 @@ public sealed class FisherStoreConfigurationExpression<T> where T : class, IDocu
 
     internal FisherStoreConfigurationExpression(IServiceCollection services) => _services = services;
 
+    /// <summary>
+    ///     The service collection <c>AddFisherStore&lt;T&gt;</c> was called against.
+    /// </summary>
+    /// <remarks>
+    ///     Exposed so an integration package can keep registering against the same container after the
+    ///     Fisher call — <c>services.AddFisher(...).IntegrateWithWolverine()</c> being the case that
+    ///     asked for it. Marten's and Polecat's equivalent expressions both surface this; without it an
+    ///     integration has to make the caller pass the collection a second time.
+    /// </remarks>
+    public IServiceCollection Services => _services;
+
     /// <inheritdoc cref="FisherConfigurationExpression.ApplyAllDatabaseChangesOnStartup" />
     public FisherStoreConfigurationExpression<T> ApplyAllDatabaseChangesOnStartup()
     {
@@ -323,6 +334,17 @@ public sealed class FisherConfigurationExpression
     private readonly IServiceCollection _services;
 
     internal FisherConfigurationExpression(IServiceCollection services) => _services = services;
+
+    /// <summary>
+    ///     The service collection <c>AddFisher</c> was called against.
+    /// </summary>
+    /// <remarks>
+    ///     Exposed so an integration package can keep registering against the same container after the
+    ///     Fisher call — <c>services.AddFisher(...).IntegrateWithWolverine()</c> being the case that
+    ///     asked for it. Marten's and Polecat's equivalent expressions both surface this; without it an
+    ///     integration has to make the caller pass the collection a second time.
+    /// </remarks>
+    public IServiceCollection Services => _services;
 
     /// <summary>
     ///     Apply every configured schema change when the host starts.
