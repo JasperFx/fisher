@@ -38,13 +38,14 @@ public record InvoicePaid(decimal AmountPaid, DateTimeOffset PaidAt);
 
 await using var session = store.LightweightSession();
 
-var streamId = session.Events.StartStream<Invoice>(
+// StartStream hands back a StreamAction; its Id is the stream's identity.
+var stream = session.Events.StartStream<Invoice>(
     new InvoiceCreated(100m, "Acme Corp"),
     new InvoicePaid(100m, DateTimeOffset.UtcNow));
 
 await session.SaveChangesAsync();
 
-var invoice = await session.Events.AggregateStreamAsync<Invoice>(streamId);
+var invoice = await session.Events.AggregateStreamAsync<Invoice>(stream.Id);
 ```
 
 See the [Quick Start](/events/quickstart) for a complete walkthrough.

@@ -21,10 +21,18 @@ dotnet test fisher.slnx -f net10.0         # one TFM
 
 # One test class or method (Microsoft Testing Platform — note the bare `--`)
 dotnet test src/Fisher.Tests/Fisher.Tests.csproj -f net10.0 -- --filter-method "*appending_events*"
+
+# The documentation site
+npm install
+npm run docs                               # mdsnippets + dev server on :5173
+npm run docs-build                         # a dead internal link fails the build
 ```
 
 No database server is required — tests create throwaway SQLite files via
 `TemporaryDatabase.Create()`.
+
+Documentation code samples are compiled — see "The documentation site" below before editing a page's
+code block.
 
 ## Architecture
 
@@ -3149,6 +3157,64 @@ factory)`, over `Projections.StorageProviders` in the core.
   process, and xUnit runs test collections in parallel — one test's cleanup will take out another
   with `ObjectDisposedException: SQLitePCL.sqlite3`, intermittently enough to look like a flake.
   `TemporaryDatabase.Dispose` clears only its own connection string's pool.
+
+## The documentation site
+
+`docs/` is a [VitePress](https://vitepress.dev) site, published to
+[fisher.jasperfx.net](https://fisher.jasperfx.net/) by `.github/workflows/docs.yml`. Set up the way
+Polecat's is: same config shape, same sidebar/nav/footer, `vitepress-plugin-llms`, and the aside info
+boxes.
+
+```bash
+npm install
+npm run docs          # mdsnippets + dev server on :5173
+npm run docs-build    # mdsnippets + build; a dead internal link fails the build
+```
+
+`docs/.vitepress/theme/custom.css` maps the logo's palette — `#2F4739` ground, `#9CBE84` accent,
+`#F2F1ED` paper, `#3A3A38` ink, `#4A7343` for links on light — onto VitePress's own tokens **and
+nothing else**. Hand-painting the nav bar and the code blocks in the ground colour was tried and
+reverted: the nav's background does not span the sidebar column, and a dark code background leaves
+the light theme's syntax colours unreadable against it. The file says so, so nobody retries it.
+
+### Documentation samples come from compiled code
+
+**Every code sample a reader would copy lives in a `#region sample_*` in real, compiled source and is
+pulled into the markdown by [mdsnippets](https://github.com/SimonCropp/MarkdownSnippets).** A sample
+that stops compiling then fails the build, rather than going stale in a page nobody rebuilds. This is
+Marten's and Polecat's convention and Fisher follows it.
+
+The mechanics:
+
+- Samples live in `src/Fisher.Tests/Documentation/*_samples.cs`, one file per docs page or area, and
+  are compiled by `dotnet build fisher.slnx` like any other test code. `mdsnippets.json` at the repo
+  root configures the scan.
+- Markdown carries `<!-- snippet: sample_name -->` / `<!-- endSnippet -->`; the tool fills the block
+  **in place** and appends a source link back to the file and line on GitHub.
+- `mdsnippets` runs as part of both `npm run docs` and `npm run docs-build`, and CI installs
+  `MarkdownSnippets.Tool` before building the site. Committing the filled markdown is normal — the
+  tool rewrites it either way.
+- **Both scripts chain with `&&`, not through `concurrently` as Polecat's do.** Polecat runs
+  `concurrently --group mdsnippets "vitepress build docs"`, which starts the fill and the build at the
+  same time — so whether a snippet edit reaches the rendered page is a race it happens to win on a
+  warm machine. Sequential costs nothing here and removes the question, along with the dependency.
+
+**What stays an inline fence**, deliberately:
+
+- Single-expression fragments shown in a list, where the surrounding method would be noise —
+  `.Where(x => x.MaybeDeleted())` in the LINQ operator tables is the archetype.
+- SQL, shell, and rendered DDL. There is nothing to compile.
+- A contract Fisher does not own, quoted to show its shape.
+
+**A contract Fisher *does* own is snipped from the real source file**, not retyped. `src/Fisher` is in
+the mdsnippets scan for exactly this: put a `#region sample_*` around the interface and reference it,
+so an interface that gains a member cannot silently disagree with the page that documents it. That is
+the case where inline quoting rots most quietly, because nothing fails.
+
+**This is worth more than it looks.** The first sample converted — the getting-started event round
+trip — did not compile: `StartStream` returns a `StreamAction`, not the stream's `Guid`, and the
+hand-written version had been copied into five more pages and the README before anything checked it.
+That is the whole argument for the convention, and it was found within a minute of turning it on.
 
 ## Related codebases
 

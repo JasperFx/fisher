@@ -95,19 +95,21 @@ Other event options worth knowing:
 
 `opts.Schema.For<T>()` returns a `DocumentMappingExpression<T>`:
 
+<!-- snippet: sample_documents_schema_dsl -->
+<a id='snippet-sample_documents_schema_dsl'></a>
 ```cs
-opts.Schema.For<Order>()
-    .DocumentAlias("orders")
+opts.Schema.For<Catch>()
+    .DocumentAlias("catches")
     .SoftDeleted()
     .UseOptimisticConcurrency()
     .MultiTenanted()
-    .Duplicate(x => x.CustomerId)
-    .Index(x => x.PlacedAt)
-    .UniqueIndex(x => x.Reference)
-    .ForeignKey<Customer>(x => x.CustomerId)
-    .AddSubClass<RushOrder>()
-    .Metadata(m => m.LastModified.MapTo(x => x.LastModified));
+    .Duplicate(x => x.Species)
+    .Index(x => x.Landed)
+    .UniqueIndex(x => x.Tag)
+    .ForeignKey<Angler>(x => x.AnglerId);
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L134-L144' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_schema_dsl' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 Each is documented in its own page: [soft delete](/documents/deletes),
 [concurrency](/documents/concurrency), [multi-tenancy](/documents/multi-tenancy),
@@ -132,13 +134,23 @@ the DSL runs afterwards.
 
 ### Store policies
 
+<!-- snippet: sample_documents_store_policies -->
+<a id='snippet-sample_documents_store_policies'></a>
 ```cs
 opts.Policies.AllDocumentsAreMultiTenanted();
 opts.Policies.AllDocumentsSoftDeleted();
+opts.Policies.AllDocumentsUseOptimisticConcurrency();
+
+// A policy configures the DocumentMapping directly rather than through the Schema.For<T>()
+// expression, so it sets properties rather than calling the DSL methods.
 opts.Policies.ForAllDocuments(m => m.UseOptimisticConcurrency = true);
 
-opts.Policies.ForDocument<IHaveTenant>(m => m.MultiTenanted());
+// ForDocument<T> does *not* create the mapping — a type nothing ever stores stays
+// unmapped and gets no table. It means "if you store one of these, store it like so".
+opts.Policies.ForDocument<Catch>(m => m.TenancyStyle = TenancyStyle.Conjoined);
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L149-L161' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_store_policies' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ::: tip
 `ForDocument<T>` is **not** `Schema.For<T>()`: it does not create the mapping. A type nothing ever

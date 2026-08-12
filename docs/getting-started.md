@@ -32,31 +32,40 @@ dotnet add package Fisher.EntityFrameworkCore # a DbContext inside Fisher's tran
 
 In your application startup, call `AddFisher()`:
 
+<!-- snippet: sample_getting_started_add_fisher -->
+<a id='snippet-sample_getting_started_add_fisher'></a>
 ```cs
-builder.Services.AddFisher(options =>
-{
-    // Any Microsoft.Data.Sqlite connection string. This one is a file beside the application.
-    options.Connection("Data Source=app.db");
+services.AddFisher(options =>
+    {
+        // Any Microsoft.Data.Sqlite connection string. This one is a file beside the
+        // application.
+        options.Connection("Data Source=app.db");
 
-    // SQLite has no schemas, so this folds into the table *prefix* instead:
-    // "main" gives fi_events, anything else gives <name>_fi_events.
-    options.DatabaseSchemaName = "main";
-})
-// Run the Weasel migration at startup so the tables exist before the first session.
-.ApplyAllDatabaseChangesOnStartup();
+        // SQLite has no schemas, so this folds into the table *prefix* instead:
+        // "main" gives fi_events, anything else gives <name>_fi_events.
+        options.DatabaseSchemaName = "main";
+    })
+    // Run the Weasel migration at startup so the tables exist before the first session.
+    .ApplyAllDatabaseChangesOnStartup();
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/getting_started_samples.cs#L57-L70' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_getting_started_add_fisher' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 If you have async projections registered, opt the daemon into the host as well:
 
+<!-- snippet: sample_getting_started_add_daemon -->
+<a id='snippet-sample_getting_started_add_daemon'></a>
 ```cs
-builder.Services.AddFisher(options =>
-{
-    options.Connection("Data Source=app.db");
-    options.Projections.Snapshot<Order>(SnapshotLifecycle.Async);
-})
-.ApplyAllDatabaseChangesOnStartup()
-.AddAsyncDaemon(DaemonMode.Solo);
+services.AddFisher(options =>
+    {
+        options.Connection("Data Source=app.db");
+        options.Projections.Snapshot<Order>(SnapshotLifecycle.Async);
+    })
+    .ApplyAllDatabaseChangesOnStartup()
+    .AddAsyncDaemon(DaemonMode.Solo);
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/getting_started_samples.cs#L75-L83' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_getting_started_add_daemon' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 See [Bootstrapping Fisher](/configuration/hostbuilder) for every overload.
 
@@ -91,6 +100,8 @@ production code should never do `new SqliteConnection(...)` of its own.
 
 Define a document type:
 
+<!-- snippet: sample_getting_started_document_type -->
+<a id='snippet-sample_getting_started_document_type'></a>
 ```cs
 public class User
 {
@@ -100,60 +111,77 @@ public class User
     public bool Internal { get; set; }
 }
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/getting_started_samples.cs#L17-L25' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_getting_started_document_type' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 *For more on identity, see [Document Identity](/documents/identity).*
 
-Use `IDocumentSession` to store and query:
+Use `IDocumentSession` to store:
 
+<!-- snippet: sample_getting_started_store_a_document -->
+<a id='snippet-sample_getting_started_store_a_document'></a>
 ```cs
-// Store a document
-app.MapPost("/user", async (CreateUserRequest create, IDocumentSession session) =>
-{
-    var user = new User
-    {
-        FirstName = create.FirstName,
-        LastName = create.LastName,
-        Internal = create.Internal
-    };
+var user = new User { FirstName = "Jane", LastName = "Doe", Internal = true };
 
-    session.Store(user);
-    await session.SaveChangesAsync();
-});
-
-// Query with LINQ
-app.MapGet("/users", async (bool internalOnly, IQuerySession session, CancellationToken ct) =>
-{
-    return await session.Query<User>()
-        .Where(x => x.Internal == internalOnly)
-        .OrderBy(x => x.LastName)
-        .ToListAsync(ct);
-});
-
-// Load by id
-app.MapGet("/user/{id:guid}", async (Guid id, IQuerySession session, CancellationToken ct) =>
-{
-    return await session.LoadAsync<User>(id, ct);
-});
+session.Store(user);
+await session.SaveChangesAsync(token);
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/getting_started_samples.cs#L88-L93' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_getting_started_store_a_document' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+to query:
+
+<!-- snippet: sample_getting_started_query_documents -->
+<a id='snippet-sample_getting_started_query_documents'></a>
+```cs
+var internalUsers = await session.Query<User>()
+    .Where(x => x.Internal)
+    .OrderBy(x => x.LastName)
+    .ToListAsync(token);
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/getting_started_samples.cs#L95-L100' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_getting_started_query_documents' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+and to load by id:
+
+<!-- snippet: sample_getting_started_load_by_id -->
+<a id='snippet-sample_getting_started_load_by_id'></a>
+```cs
+var loaded = await session.LoadAsync<User>(user.Id, token);
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/getting_started_samples.cs#L102-L104' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_getting_started_load_by_id' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 See [Querying Documents](/documents/querying/) for the whole surface.
 
 ## Working with Events
 
+<!-- snippet: sample_getting_started_events -->
+<a id='snippet-sample_getting_started_events'></a>
 ```cs
 public record OrderPlaced(string Customer, decimal Total);
-public record OrderShipped(DateTimeOffset ShippedAt);
 
+public record OrderShipped(DateTimeOffset ShippedAt);
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/getting_started_samples.cs#L27-L31' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_getting_started_events' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+<!-- snippet: sample_getting_started_events_round_trip -->
+<a id='snippet-sample_getting_started_events_round_trip'></a>
+```cs
 await using var session = store.LightweightSession();
 
-var streamId = session.Events.StartStream<Order>(
+// StartStream hands back a StreamAction; its Id is the stream's identity.
+var stream = session.Events.StartStream<Order>(
     new OrderPlaced("Acme Corp", 199.95m),
     new OrderShipped(DateTimeOffset.UtcNow));
 
-await session.SaveChangesAsync();
+await session.SaveChangesAsync(token);
 
-var order = await session.Events.AggregateStreamAsync<Order>(streamId);
+var order = await session.Events.AggregateStreamAsync<Order>(stream.Id, token: token);
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/getting_started_samples.cs#L112-L123' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_getting_started_events_round_trip' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 See the [Event Store quick start](/events/quickstart) for a complete walkthrough.
 
@@ -161,22 +189,30 @@ See the [Event Store quick start](/events/quickstart) for a complete walkthrough
 
 You do not need a host at all:
 
+<!-- snippet: sample_getting_started_standalone_store -->
+<a id='snippet-sample_getting_started_standalone_store'></a>
 ```cs
 await using var store = DocumentStore.For("Data Source=app.db");
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/getting_started_samples.cs#L130-L132' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_getting_started_standalone_store' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 Or with full configuration:
 
+<!-- snippet: sample_getting_started_standalone_store_configured -->
+<a id='snippet-sample_getting_started_standalone_store_configured'></a>
 ```cs
-await using var store = DocumentStore.For(opts =>
+await using var configured = DocumentStore.For(opts =>
 {
     opts.Connection("Data Source=app.db");
     opts.DatabaseSchemaName = "reporting";
     opts.AutoCreateSchemaObjects = AutoCreate.CreateOrUpdate;
 });
 
-await store.ApplyAllConfiguredChangesToDatabaseAsync();
+await configured.ApplyAllConfiguredChangesToDatabaseAsync(token);
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/getting_started_samples.cs#L134-L143' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_getting_started_standalone_store_configured' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ::: tip
 `DocumentStore` implements both `IDisposable` and `IAsyncDisposable`. Disposing it also releases the

@@ -2,14 +2,47 @@
 
 A base type and its sub-classes can share one table and one identity space.
 
+<!-- snippet: sample_documents_hierarchy -->
+<a id='snippet-sample_documents_hierarchy'></a>
+```cs
+public abstract class Vehicle
+{
+    public Guid Id { get; set; }
+    public string Registration { get; set; } = "";
+}
+
+public class Car : Vehicle
+{
+    public int Doors { get; set; }
+}
+
+public class Truck : Vehicle
+{
+    public decimal PayloadTonnes { get; set; }
+}
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L97-L113' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_hierarchy' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+<!-- snippet: sample_documents_add_subclass -->
+<a id='snippet-sample_documents_add_subclass'></a>
 ```cs
 opts.Schema.For<Vehicle>()
     .AddSubClass<Car>()
     .AddSubClass<Truck>("lorry");     // an explicit alias
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L198-L202' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_add_subclass' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
-// Or sweep an assembly
+Or sweep an assembly:
+
+<!-- snippet: sample_documents_add_subclass_hierarchy -->
+<a id='snippet-sample_documents_add_subclass_hierarchy'></a>
+```cs
 opts.Schema.For<Vehicle>().AddSubClassHierarchy();
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L204-L206' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_add_subclass_hierarchy' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ```cs
 session.Store(new Car { … });                     // lands in fi_doc_vehicle
@@ -77,10 +110,15 @@ where a document load has one right answer.
 
 ## AddSubClassHierarchy
 
+<!-- snippet: sample_documents_add_subclass_hierarchy -->
+<a id='snippet-sample_documents_add_subclass_hierarchy'></a>
 ```cs
-opts.Schema.For<Vehicle>().AddSubClassHierarchy();              // the calling assembly
-opts.Schema.For<Vehicle>().AddSubClassHierarchy(myAssembly);
+opts.Schema.For<Vehicle>().AddSubClassHierarchy();
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L204-L206' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_add_subclass_hierarchy' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+An overload takes the assembly to sweep, where the no-argument form uses the calling one.
 
 ::: tip
 It orders by **full name, not by reflection order**. Two sub-classes whose default aliases collide

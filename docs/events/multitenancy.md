@@ -20,10 +20,10 @@ so two tenants may reuse a stream id.
 ```cs
 await using var session = store.LightweightSession("acme");
 
-var streamId = session.Events.StartStream<Order>(new OrderPlaced(…));
+var stream = session.Events.StartStream<Order>(new OrderPlaced(…));
 await session.SaveChangesAsync();
 
-var events = await session.Events.FetchStreamAsync(streamId);   // acme's only
+var events = await session.Events.FetchStreamAsync(stream.Id);   // acme's only
 ```
 
 ::: tip

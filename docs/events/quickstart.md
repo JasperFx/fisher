@@ -53,11 +53,12 @@ builder.Services.AddFisher(opts =>
 ```cs
 app.MapPost("/orders", async (PlaceOrder command, IDocumentSession session) =>
 {
-    var streamId = session.Events.StartStream<Order>(
+    // StartStream hands back a StreamAction; its Id is the stream's identity.
+    var stream = session.Events.StartStream<Order>(
         new OrderPlaced(command.Customer, command.Total));
 
     await session.SaveChangesAsync();
-    return Results.Ok(streamId);
+    return Results.Ok(stream.Id);
 });
 ```
 

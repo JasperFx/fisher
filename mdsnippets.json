@@ -1,0 +1,7 @@
+{
+    "Convention": "InPlaceOverwrite",
+    "LinkFormat": "GitHub",
+    "UrlPrefix": "https://github.com/JasperFx/fisher/blob/main",
+    "ExcludeDirectories": ["node_modules", "bin", "obj", "docs/.vitepress/dist"],
+    "TreatMissingAsWarning": false
+}

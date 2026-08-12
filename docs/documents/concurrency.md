@@ -10,20 +10,29 @@ refused at configuration time rather than letting the storage descriptor pick on
 
 ## Guid versions
 
+<!-- snippet: sample_documents_optimistic_concurrency -->
+<a id='snippet-sample_documents_optimistic_concurrency'></a>
 ```cs
-opts.Schema.For<Order>().UseOptimisticConcurrency();
-opts.Policies.AllDocumentsUseOptimisticConcurrency();
+opts.Schema.For<VersionedOrder>().UseOptimisticConcurrency();
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L211-L213' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_optimistic_concurrency' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+Or store-wide with `opts.Policies.AllDocumentsUseOptimisticConcurrency()`.
 
 Or by implementing `IVersioned`:
 
+<!-- snippet: sample_documents_versioned -->
+<a id='snippet-sample_documents_versioned'></a>
 ```cs
-public class Order : IVersioned
+public class VersionedOrder : JasperFx.Metadata.IVersioned
 {
     public Guid Id { get; set; }
     public Guid Version { get; set; }
 }
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L81-L87' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_versioned' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ::: tip
 `IVersioned` **turns optimistic concurrency on**, as on both siblings — with it off the column is
@@ -42,19 +51,27 @@ Verified against SQLite 3.51 before anything was built on it.
 
 ## Numeric revisions
 
+<!-- snippet: sample_documents_numeric_revisions -->
+<a id='snippet-sample_documents_numeric_revisions'></a>
 ```cs
-opts.Schema.For<Order>().UseNumericRevisions();
+opts.Schema.For<RevisionedOrder>().UseNumericRevisions();
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L215-L217' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_numeric_revisions' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 Or by implementing `JasperFx.IRevisioned`:
 
+<!-- snippet: sample_documents_revisioned -->
+<a id='snippet-sample_documents_revisioned'></a>
 ```cs
-public class Order : IRevisioned
+public class RevisionedOrder : IRevisioned
 {
     public Guid Id { get; set; }
     public int Version { get; set; }
 }
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L89-L95' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_revisioned' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ```cs
 session.Store(doc, revision: 4);       // fails unless 4 > the stored revision

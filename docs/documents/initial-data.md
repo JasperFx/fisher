@@ -2,6 +2,8 @@
 
 Seed reference data when the application starts.
 
+<!-- snippet: sample_documents_initial_data -->
+<a id='snippet-sample_documents_initial_data'></a>
 ```cs
 public class SeedCountries : IInitialData
 {
@@ -16,6 +18,8 @@ public class SeedCountries : IInitialData
     }
 }
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L115-L128' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_initial_data' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ```cs
 builder.Services.AddFisher(opts =>

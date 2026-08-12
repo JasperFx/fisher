@@ -1,14 +1,26 @@
 # Declared Indexes
 
+<!-- snippet: sample_documents_duplicate_and_index -->
+<a id='snippet-sample_documents_duplicate_and_index'></a>
 ```cs
 opts.Schema.For<Catch>()
-    .Index(x => x.Species)
+    .Duplicate(x => x.Species)      // generated column + index
+    .Index(x => x.Landed)           // expression index only — no column at all
     .UniqueIndex(x => x.Tag);
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L166-L171' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_duplicate_and_index' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
-// Composite
+A composite index over several members, in the order given:
+
+<!-- snippet: sample_documents_composite_index -->
+<a id='snippet-sample_documents_composite_index'></a>
+```cs
 opts.Schema.For<Catch>()
     .Index([x => (object?)x.Species, x => (object?)x.Landed]);
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L173-L176' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_composite_index' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ```cs
 public class Catch

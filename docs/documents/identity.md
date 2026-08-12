@@ -42,14 +42,22 @@ Fisher converts on every write path it owns. The one place it can reach you is
 
 A numeric identity is assigned from a Hi-Lo sequence held in `fi_hilo` — one row per sequence.
 
+<!-- snippet: sample_documents_hilo -->
+<a id='snippet-sample_documents_hilo'></a>
 ```cs
 // Per document type. Schema.For<T>() returns an expression; the mapping hangs off it.
-opts.Schema.For<Invoice>().Mapping.HiloSettings = new HiloSettings { MaxLo = 100 };
+opts.Schema.For<Invoice>().Mapping.HiloSettings =
+    new Weasel.Core.Sequences.HiloSettings { MaxLo = 100 };
 
 // Or store-wide, for every type with no settings of its own
 opts.HiloSequenceDefaults.MaxLo = 100;
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L245-L252' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_hilo' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
-// Or declaratively
+Or declaratively:
+
+```cs
 [HiloSequence(MaxLo = 100, SequenceName = "shared")]
 public class Invoice { public int Id { get; set; } }
 ```
@@ -80,15 +88,19 @@ table creation would be far too late. `AutoCreate.None` is honoured in both plac
 A wrapper struct or class standing in for one of the four types works as both an aggregate's identity
 and a document's:
 
+<!-- snippet: sample_documents_strong_typed_id -->
+<a id='snippet-sample_documents_strong_typed_id'></a>
 ```cs
-public readonly record struct OrderId(Guid Value);
+public readonly record struct CatchId(Guid Value);
 
-public class Order
+public class TaggedCatch
 {
-    public OrderId Id { get; set; }
-    // …
+    public CatchId Id { get; set; }
+    public string Species { get; set; } = "";
 }
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L30-L38' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_strong_typed_id' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 The shape is JasperFx's, described by `ValueTypeInfo`: one public gettable property, plus a matching
 constructor or a static builder.

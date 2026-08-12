@@ -3,8 +3,9 @@
 ## Starting a stream
 
 ```cs
-// Fisher assigns the id
-var streamId = session.Events.StartStream<Order>(new OrderPlaced(…), new OrderLineAdded(…));
+// Fisher assigns the id. StartStream returns a StreamAction — its Id is the stream's identity.
+var stream = session.Events.StartStream<Order>(new OrderPlaced(…), new OrderLineAdded(…));
+var streamId = stream.Id;
 
 // Or you name it
 session.Events.StartStream<Order>(orderId, new OrderPlaced(…));

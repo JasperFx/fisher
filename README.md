@@ -55,10 +55,10 @@ await session.SaveChangesAsync();
 var users = await session.Query<User>().Where(x => x.LastName == "Doe").ToListAsync();
 
 // Events
-var streamId = session.Events.StartStream<Order>(new OrderPlaced("Acme", 199.95m));
+var stream = session.Events.StartStream<Order>(new OrderPlaced("Acme", 199.95m));
 await session.SaveChangesAsync();
 
-var order = await session.Events.AggregateStreamAsync<Order>(streamId);
+var order = await session.Events.AggregateStreamAsync<Order>(stream.Id);
 ```
 
 See [Getting Started](https://fisher.jasperfx.net/getting-started) for the full walkthrough, and

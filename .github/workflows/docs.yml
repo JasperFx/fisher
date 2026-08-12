@@ -21,6 +21,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      # mdsnippets is a .NET global tool, and `npm run docs-build` invokes it alongside the
+      # VitePress build to fill every `<!-- snippet: … -->` block from the compiled source.
+      - name: Install .NET 10.0.x
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install mdsnippets
+        run: dotnet tool install -g MarkdownSnippets.Tool
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:

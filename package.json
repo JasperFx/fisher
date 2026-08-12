@@ -1,8 +1,8 @@
 {
   "private": true,
   "scripts": {
-    "docs": "vitepress dev docs --port 5173 --open",
-    "docs-build": "vitepress build docs",
+    "docs": "mdsnippets && vitepress dev docs --port 5173 --open",
+    "docs-build": "mdsnippets && vitepress build docs",
     "docs-preview": "vitepress preview docs"
   },
   "devDependencies": {

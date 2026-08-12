@@ -2,14 +2,25 @@
 
 A real, enforced foreign key between two document tables.
 
+<!-- snippet: sample_documents_foreign_key -->
+<a id='snippet-sample_documents_foreign_key'></a>
 ```cs
 opts.Schema.For<Catch>()
     .ForeignKey<Angler>(x => x.AnglerId);
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L185-L188' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_foreign_key' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
-// With a cascade, and a column name of your own
+With a cascade, and a column name of your own:
+
+<!-- snippet: sample_documents_foreign_key_cascade -->
+<a id='snippet-sample_documents_foreign_key_cascade'></a>
+```cs
 opts.Schema.For<Catch>()
     .ForeignKey<Angler>(x => x.AnglerId, CascadeAction.Cascade, columnName: "angler_id");
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L190-L193' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_foreign_key_cascade' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ## SQLite supports this completely
 

@@ -14,16 +14,26 @@ duplicates.
 SQLite has indexed expressions (since 3.9) and `VIRTUAL` generated columns, so nothing has to be
 *written* to be indexed.
 
+<!-- snippet: sample_documents_schema_dsl -->
+<a id='snippet-sample_documents_schema_dsl'></a>
 ```cs
 opts.Schema.For<Catch>()
-    .Duplicate(x => x.Species)     // generated column + index
-    .Index(x => x.Landed)          // expression index only
+    .DocumentAlias("catches")
+    .SoftDeleted()
+    .UseOptimisticConcurrency()
+    .MultiTenanted()
+    .Duplicate(x => x.Species)
+    .Index(x => x.Landed)
     .UniqueIndex(x => x.Tag)
     .ForeignKey<Angler>(x => x.AnglerId);
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L134-L144' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_schema_dsl' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 Or declaratively:
 
+<!-- snippet: sample_documents_indexing_attributes -->
+<a id='snippet-sample_documents_indexing_attributes'></a>
 ```cs
 public class Catch
 {
@@ -32,8 +42,14 @@ public class Catch
     [DuplicateField] public string Species { get; set; } = "";
     [Index] public DateTimeOffset Landed { get; set; }
     [UniqueIndex] public string Tag { get; set; } = "";
+
+    public Guid AnglerId { get; set; }
+    public Guid WaterId { get; set; }
+    public decimal Weight { get; set; }
 }
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L51-L64' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_indexing_attributes' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ::: tip
 Members sharing an `IndexName` become **one composite index**, in declaration order. That is the only

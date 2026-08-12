@@ -22,8 +22,10 @@ of them can be projected back onto members of the document.
 
 ## Enabling the opt-in columns
 
+<!-- snippet: sample_documents_enable_metadata_columns -->
+<a id='snippet-sample_documents_enable_metadata_columns'></a>
 ```cs
-opts.Schema.For<Order>().Metadata(m =>
+opts.Schema.For<AuditedOrder>().Metadata(m =>
 {
     m.CreatedAt.Enabled = true;
     m.CorrelationId.Enabled = true;
@@ -32,6 +34,8 @@ opts.Schema.For<Order>().Metadata(m =>
     m.Headers.Enabled = true;
 });
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L222-L231' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_enable_metadata_columns' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 They are filled from the session, so the same request that wrote an event and a document can be
 identified from either:
@@ -102,8 +106,10 @@ meaning something else.
 
 ### 2. Attributes
 
+<!-- snippet: sample_documents_metadata_attributes -->
+<a id='snippet-sample_documents_metadata_attributes'></a>
 ```cs
-public class Order
+public class AuditedOrder
 {
     public Guid Id { get; set; }
 
@@ -113,23 +119,26 @@ public class Order
     [CorrelationIdMetadata] public string? CorrelationId { get; set; }
     [CausationIdMetadata] public string? CausationId { get; set; }
     [LastModifiedByMetadata] public string? UpdatedBy { get; set; }
-    [HeadersMetadata] public Dictionary<string, object>? Headers { get; set; }
     [TenantIdMetadata] public string? TenantId { get; set; }
-    [IsSoftDeletedMetadata] public bool Deleted { get; set; }
-    [DeletedAtMetadata] public DateTimeOffset? DeletedAt { get; set; }
 }
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L66-L79' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_metadata_attributes' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ### 3. The DSL
 
+<!-- snippet: sample_documents_map_metadata -->
+<a id='snippet-sample_documents_map_metadata'></a>
 ```cs
-opts.Schema.For<Order>().Metadata(m =>
+opts.Schema.For<AuditedOrder>().Metadata(m =>
 {
     m.Version.MapTo(x => x.Version);
     m.LastModified.MapTo(x => x.UpdatedAt);
     m.CreatedAt.MapTo(x => x.CreatedAt);
 });
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L233-L240' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_map_metadata' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ::: tip
 **Mapping an optional column enables it.** A mapping onto a column that would not exist is

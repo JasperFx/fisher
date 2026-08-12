@@ -3,11 +3,16 @@
 `Duplicate` lifts a member into a column of its own and indexes it, so a predicate against that
 member is a range scan rather than `json_extract` per row.
 
+<!-- snippet: sample_documents_duplicate_and_index -->
+<a id='snippet-sample_documents_duplicate_and_index'></a>
 ```cs
 opts.Schema.For<Catch>()
-    .Duplicate(x => x.Species)
-    .Duplicate(x => x.Landed);
+    .Duplicate(x => x.Species)      // generated column + index
+    .Index(x => x.Landed)           // expression index only — no column at all
+    .UniqueIndex(x => x.Tag);
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L166-L171' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_duplicate_and_index' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ```cs
 [DuplicateField]
@@ -57,9 +62,13 @@ The default column name is **snake case**: `LandedAt` becomes `landed_at`, `Wate
 `water_name`. Marten simply lowercases; every other column on a Fisher document table is snake case,
 and a duplicated column sits among them.
 
+<!-- snippet: sample_documents_duplicate_named_column -->
+<a id='snippet-sample_documents_duplicate_named_column'></a>
 ```cs
-opts.Schema.For<Catch>().Duplicate(x => x.LandedAt, columnName: "landed");
+opts.Schema.For<Catch>().Duplicate(x => x.Landed, columnName: "landed");
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L178-L180' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_duplicate_named_column' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ::: warning
 A name Fisher owns (`id`, `data`, `last_modified`, …) is **refused at configuration time**, because
