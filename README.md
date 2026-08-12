@@ -10,6 +10,8 @@ SQLite-backed Event Store and Document Database inside the Critter Stack.
     <img src="./logo.png" alt="Fisher logo" width="40%">
 </div>
 
+_Sorry, we don't have the documentation published **yet**, but we'll get there soon!_
+
 **Documentation: [fisher.jasperfx.net](https://fisher.jasperfx.net/)**
 
 Fisher is [Marten](https://martendb.io) and [Polecat](https://polecat.jasperfx.net) for SQLite —
