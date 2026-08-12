@@ -3,16 +3,24 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **three open issues** — [#55](https://github.com/JasperFx/fisher/issues/55) (a second LINQ
-join), [#67](https://github.com/JasperFx/fisher/issues/67) (a load-sensitive intermittent in one
-fisher#59 test) and [#68](https://github.com/JasperFx/fisher/issues/68), whose **first half is done**:
-Fisher implements the JasperFx document persistence abstractions and is enrolled in the four document
-compliance suites that came with them. Its second half is `Wolverine.Fisher`, which is built in the
-wolverine repo rather than here. The 2026-08-10 wave (#60–#66) is closed: two of those audits found
-real defects (#60's dead heartbeat branch, #63's composite teardown), #62's ported matrix found two
-more, and #61 and #66 confirmed Fisher was already correct and now pin it. On JasperFx **2.47.0** /
-Weasel **9.24.0**. **All 32 compliance suites, 272 tests, green** — 28 event suites and 230 tests,
-plus 2.47.0's four document suites and 42 tests. 1232 tests green on net9.0 and net10.0.
+Status: **one open issue**, [#68](https://github.com/JasperFx/fisher/issues/68), whose **first half is
+done** — Fisher implements the JasperFx document persistence abstractions and is enrolled in the four
+document compliance suites that came with them. Its second half is `Wolverine.Fisher`, which is built
+in the wolverine repo rather than here, so nothing about it is actionable from this repository.
+
+The 2026-08-12 wave closed the rest. [#67](https://github.com/JasperFx/fisher/issues/67) was
+diagnosed rather than papered over: the pooled-connection release is prompt but not synchronous, which
+is the first of the two possibilities that issue laid out and not the second.
+[#69](https://github.com/JasperFx/fisher/issues/69) was found while investigating it — a
+`[ThreadStatic]` re-entrancy guard held across an `await`, filed with the honest note that neither of
+its failure modes ever reproduced. [#55](https://github.com/JasperFx/fisher/issues/55) landed a chain
+of joins, which cost one new type and made the rest of the join code shorter.
+
+Before that, the 2026-08-10 wave (#60–#66): two of those audits found real defects (#60's dead
+heartbeat branch, #63's composite teardown), #62's ported matrix found two more, and #61 and #66
+confirmed Fisher was already correct and now pin it. On JasperFx **2.47.0** / Weasel **9.24.0**.
+**All 32 compliance suites, 272 tests, green** — 28 event suites and 230 tests, plus 2.47.0's four
+document suites and 42 tests. 1241 tests green on net9.0 and net10.0.
 
 Most of the issues this file tracks came out of a file-by-file comparison against Polecat on
 2026-08-08, which filed [#22](https://github.com/JasperFx/fisher/issues/22) through
@@ -189,7 +197,7 @@ if something is deferred, it is in the list above.
 | Batching and plans (fisher#37) | the DCB batch widened to documents and moved to `Fisher.Batching`, plus `IQueryPlan`, `CheckExistsAsync` and `ToSql` |
 | LINQ paging (fisher#27) | `ToPagedListAsync` with a real total, and keyset paging with a Polecat-compatible cursor |
 | LINQ grouping (fisher#24) | `GroupBy`, a `Select` over the group, `HAVING` from a `Where` after it, and ordering by an aggregate; the expected lax-GROUP-BY hazard is unreachable through the API |
-| LINQ joins (fisher#25) | `Join` and `GroupJoin(...).SelectMany(...)` on the ordinary `Statement`, so counting, paging and `ToSql` serve a join for free; aliases threaded through `MemberFactory` rather than rewritten into rendered SQL. One follow-up still open: [#55](https://github.com/JasperFx/fisher/issues/55), more than one join |
+| LINQ joins (fisher#25) | `Join` and `GroupJoin(...).SelectMany(...)` on the ordinary `Statement`, so counting, paging and `ToSql` serve a join for free; aliases threaded through `MemberFactory` rather than rewritten into rendered SQL. Chained across any number of tables by [#55](https://github.com/JasperFx/fisher/issues/55), which cost one type (`JoinShape`) and made the rest shorter |
 | Join aggregates (fisher#54) | the scalar aggregates and `Last` over a join, from the chain's source type rather than its element type — which also fixed a real defect, an aggregate after a `Select` throwing about identity members instead of refusing by name |
 | Natural keys (fisher#40) | `fi_natural_key_<alias>`, written inside the append's transaction and resolved through a join to `fi_streams` — which is also why there is no `is_archived` column to keep in sync, and so no rebuild path. Closes the last partial member on `IEventStoreOperations` |
 | Document metadata (fisher#29) | five opt-in columns — `created_at`, `correlation_id`, `causation_id`, `last_modified_by`, `headers` — plus `tenant_id` read back onto a member, and `MetadataForAsync`. Every binder was already in Weasel.Storage, so it was wiring; and `created_at` needed no exception to the `excluded.*` rule after all, because a read-only binder never enters the write list |

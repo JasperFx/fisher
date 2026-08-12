@@ -262,9 +262,16 @@ post-join `where` goes in the `WHERE`** — the first says which rows may match,
 rows survive, and on a left join the difference is visible in the answer. Moving the inner-side filters
 to the `WHERE` fails five tests, all of them cases where a left join quietly became an inner one.
 
-Two follow-ups were filed rather than shipped half-done. **#54 is now closed** — see below. More than
-one join per query ([#55](https://github.com/JasperFx/fisher/issues/55)) is still open: `Statement.Joins`
-is already a list, and everything above it is written for exactly two sides.
+Two follow-ups were filed rather than shipped half-done, and **both are now closed** — #54 below, and
+more than one join per query ([#55](https://github.com/JasperFx/fisher/issues/55)). #55's premise was
+right: `Statement.Joins` was already a list and everything above it was written for exactly two sides.
+What it cost in the end was one type. A second join is written against the *shape* the first produced,
+so its outer key names no document until that shape is resolved back to one; `JoinShape` composes that
+rung by rung, and the outer/inner pair everywhere else became a list of `JoinSide` without any new
+idea. Two things only appear past the second join: a shape has to be carried whole as well as member by
+member (a `GroupJoin`'s own selector names the entire previous rung), and a *third* join's shape holds
+the second's shape, so a member access on it has to be folded or it lands on an anonymous-type
+construction that evaluates in memory and translates to nothing.
 
 ### #54 — the aggregates and `Last` over a join, and the defect underneath them
 
@@ -1148,10 +1155,9 @@ Each of these is a decision with a reason, not an oversight:
 - **The LINQ surface refuses rather than falling back to client-side evaluation**, which is the
   invariant, not the size of the surface — that has grown a long way past filtering, ordering and
   paging (`Select` and `Distinct` in #23, `GroupBy` and `HAVING` in #24, joins in #25, the aggregates
-  in #22 and #54, both pagings in #27). What is still refused is refused *by name*, with the
-  alternative: `Include`, a second join per query
-  ([#55](https://github.com/JasperFx/fisher/issues/55)), and everything listed under the join and
-  projection sections above.
+  in #22 and #54, both pagings in #27, chained joins in #55). What is still refused is refused *by
+  name*, with the alternative: `Include`, and everything listed under the join and projection sections
+  above.
 - **No ordering or range comparison on a string-stored enum.** See the LINQ section — the stored form
   is the member's name, so it sorts alphabetically rather than by declared order. Timestamps used to
   be on this list and no longer are (fisher#1).
