@@ -196,7 +196,8 @@ Working, with tests:
 - `DocumentStore : IEventStore` — the explorer reads (`GetRecentStreamsAsync`,
   `GetStreamMetadataAsync`) and `TryCreateUsage`; see below
 - **LINQ** — `session.Query<T>()` over `json_extract`: where, ordering, paging, projections, grouping,
-  aggregates and **joins** (`Join` / `GroupJoin(...).SelectMany(...)`), with async terminals
+  aggregates and **joins** (`Join` / `GroupJoin(...).SelectMany(...)`, chained across any number of
+  tables), with async terminals
 - **DCB tags** — tag tables, tagged appends, `QueryByTagsAsync`, `EventsExistAsync`,
   `AssignTagWhere`, `AggregateByTagsAsync`, `FetchForWritingByTags` with its consistency guard, and
   batched queries
@@ -844,7 +845,9 @@ both test classes.
 
 ### LINQ joins
 
-`Join` and `GroupJoin(...).SelectMany(...)` across two document tables (fisher#25) — `Linq/Joins/`.
+`Join` and `GroupJoin(...).SelectMany(...)` across document tables — `Linq/Joins/`. One join is
+fisher#25; a chain of them is fisher#55, and the difference between the two is one type
+(`JoinShape`).
 **This is the LINQ tier where SQLite is the easiest of the three dialects rather than the hardest**: a
 join between two document tables is `join fi_doc_catch inner_t on outer_t.id =
 json_extract(inner_t.data, '$.anglerId')`, with no `OPENJSON`, no lateral join, and an expression index
@@ -912,10 +915,34 @@ stitch.
     `ReverseJoinOverPage` aliases each ordering key into the page's select list and orders by the
     alias — the trick keyset paging already uses. Trailing columns are safe because both selectors
     read from fixed positions at the front of the row.
-- Refused by name, each with the alternative: keyset paging, JSON reads,
-  `Select`/`GroupBy`/`Distinct`/`DistinctBy` after the join, and a second join
-  ([#55](https://github.com/JasperFx/fisher/issues/55)). `ToListAsync`, the `First`/`Single`/`Last`
-  families, the scalar aggregates, `CountAsync`, `AnyAsync`, `ToPagedListAsync` and `ToSql` all work.
+- **More than one join per query works** (fisher#55), and what a chain needed was one idea rather than a
+  rewrite. `Statement.Joins` was already a list that rendered in order; what a second join could not do
+  was resolve its *outer key*, because it is written against the **shape the previous join produced** —
+  `x => x.catch.WaterId` names no document until that shape is resolved back to one. `JoinShape` is
+  that: per rung, each member of the shape as an expression over the sides' parameters, composed
+  forward. Everything that looked like it would need generalising — the offsets, the left-join null
+  check, the result selector's arity — turned out to be the same code already written for a list that
+  happened to have two entries, so `JoinPlan` holding an outer and an inner became `JoinPlan` holding
+  `JoinSide`s.
+  - **A shape has to be carried as a whole as well as member by member.** A `GroupJoin`'s own selector
+    writes `(y, waters) => new { y, waters }`, where `y` is the *entire* previous rung rather than a
+    member of it — so `JoinShape.Body` is mapped directly and member accesses go through the map.
+  - **Third and later joins need member folding; the second does not.** A second join's shape holds
+    documents, so `x.c.WaterId` resolves to a plain `inner_t.WaterId`. A third join's shape holds the
+    *second's shape*, so `z.y.a.Name` would otherwise resolve to `new { a = t0, c = t1 }.a.Name` — a
+    legal expression tree that evaluates correctly in memory and is not a member chain rooted at a
+    parameter, which is the only thing the member factories and the where parser translate.
+  - **The group stays unmapped, and that is what refuses a question about it.** Dropping a
+    `GroupJoin`'s group from the shape's members leaves an expression naming it still rooted at the
+    shape's own parameter after the rewrite, which is exactly the condition reported as untranslatable.
+    Mapping it would silently turn `x.catches.Count()` into a count of the one matched row.
+  - **`outer_t` and `inner_t` are kept rather than renumbered to `t0`/`t1`**, with a chain numbering
+    from `inner_t2` on. `ToSql` exists to be read, one join is overwhelmingly the common case, and the
+    two names say which side is which where a number does not.
+- Refused by name, each with the alternative: keyset paging, JSON reads, and
+  `Select`/`GroupBy`/`Distinct`/`DistinctBy` after the join. `ToListAsync`, the `First`/`Single`/`Last`
+  families, the scalar aggregates, `CountAsync`, `AnyAsync`, `ToPagedListAsync` and `ToSql` all work,
+  over a chain as well as over one join.
 
 ### LINQ paging
 

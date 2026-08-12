@@ -8,11 +8,12 @@ namespace Fisher.Linq.Joins;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         A predicate written after a join can name members of both documents in one expression —
-///         <c>angler.Region == "Shire" &amp;&amp; landed.Weight &gt; 5</c> — so the where parser needs a
-///         resolver that answers for either table. Which side a member belongs to is decided by the
-///         parameter its chain is rooted at, by reference: a self-join has the same document type on
-///         both sides, so comparing types would resolve every member against the outer one.
+///         A predicate written after a join can name members of every joined document in one expression
+///         — <c>angler.Region == "Shire" &amp;&amp; landed.Weight &gt; 5 &amp;&amp; water.Name != ""</c>
+///         — so the where parser needs a resolver that answers for any of them. Which side a member
+///         belongs to is decided by the parameter its chain is rooted at, <b>by reference</b>: a
+///         self-join has the same document type on more than one side, so comparing types would resolve
+///         every member against the first.
 ///     </para>
 ///     <para>
 ///         That the seam is a single-method interface is what makes this cheap. It is the same reason
@@ -22,16 +23,11 @@ namespace Fisher.Linq.Joins;
 /// </remarks>
 internal sealed class JoinMemberResolver : IMemberResolver
 {
-    private readonly ParameterExpression _outerParameter;
-    private readonly IMemberResolver _outer;
-    private readonly IMemberResolver _inner;
+    private readonly IReadOnlyDictionary<ParameterExpression, IMemberResolver> _sides;
 
-    public JoinMemberResolver(ParameterExpression outerParameter, IMemberResolver outer,
-        IMemberResolver inner)
+    public JoinMemberResolver(IEnumerable<JoinSide> sides)
     {
-        _outerParameter = outerParameter;
-        _outer = outer;
-        _inner = inner;
+        _sides = sides.ToDictionary(side => side.Parameter, IMemberResolver (side) => side.Members);
     }
 
     public IQueryableMember ResolveMember(MemberExpression expression)
@@ -43,13 +39,13 @@ internal sealed class JoinMemberResolver : IMemberResolver
             current = member.Expression;
         }
 
-        if (current is not ParameterExpression parameter)
+        if (current is not ParameterExpression parameter || !_sides.TryGetValue(parameter, out var side))
         {
             throw new BadLinqExpressionException(
-                $"Fisher cannot resolve '{expression}' against either side of the join. A member has to "
-                + "belong to one of the two joined documents.");
+                $"Fisher cannot resolve '{expression}' against any side of the join. A member has to "
+                + "belong to one of the joined documents.");
         }
 
-        return (parameter == _outerParameter ? _outer : _inner).ResolveMember(expression);
+        return side.ResolveMember(expression);
     }
 }

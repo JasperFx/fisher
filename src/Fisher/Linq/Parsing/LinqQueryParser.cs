@@ -128,18 +128,30 @@ internal class LinqQueryParser
     public string? DistinctByLocator { get; private set; }
 
     /// <summary>
-    ///     The <c>GroupJoin(...).SelectMany(...)</c> pair the chain used, or null (fisher#25).
+    ///     The <c>GroupJoin(...).SelectMany(...)</c> pairs the chain used, in the order they were
+    ///     written (fisher#25, extended to a chain by fisher#55).
     /// </summary>
     /// <remarks>
-    ///     Captured rather than translated. Resolving any of it needs the <em>inner</em> side's member
-    ///     factory, and the inner document type is only known from the <c>GroupJoin</c> node itself, so
-    ///     the provider does the translating — the same division the parser already keeps for a
-    ///     projection's compiled body.
+    ///     <para>
+    ///         Captured rather than translated. Resolving any of it needs each <em>inner</em> side's
+    ///         member factory, and an inner document type is only known from its own <c>GroupJoin</c>
+    ///         node, so the provider does the translating — the same division the parser already keeps
+    ///         for a projection's compiled body.
+    ///     </para>
+    ///     <para>
+    ///         <b>A list rather than one, and order is the whole of what it carries.</b> Each join after
+    ///         the first is written against the shape the one before it produced, so a post-join
+    ///         <c>Where</c> or <c>OrderBy</c> means whichever shape was current where it was written —
+    ///         which is why they hang off the join they follow rather than off the parser.
+    ///     </para>
     /// </remarks>
-    public GroupJoinData? GroupJoin { get; private set; }
+    public List<GroupJoinData> Joins { get; } = [];
 
-    /// <summary>Whether the chain is past everything that shapes the join's rows.</summary>
-    private bool Joined => GroupJoin is { IsComplete: true };
+    /// <summary>The join the chain is currently adding clauses to, or null before the first.</summary>
+    private GroupJoinData? CurrentJoin => Joins.Count == 0 ? null : Joins[^1];
+
+    /// <summary>Whether the chain is past everything that shapes the current join's rows.</summary>
+    private bool Joined => CurrentJoin is { IsComplete: true };
 
     public void Parse(Expression expression)
     {
@@ -174,15 +186,15 @@ internal class LinqQueryParser
                 ApplyGroupJoin(call, grouped: false);
                 break;
 
-            case "SelectMany" when GroupJoin is { IsGrouped: true, FinalSelector: null }:
+            case "SelectMany" when CurrentJoin is { IsGrouped: true, FinalSelector: null }:
                 ApplySelectMany(call);
                 break;
 
             // Query syntax puts a transparent identifier in a plain Join's result selector whenever
             // anything follows the join clause, and spells what the caller actually wanted as this
             // Select. Same two-selector shape a GroupJoin has, one call earlier.
-            case "Select" when GroupJoin is { IsGrouped: false, FinalSelector: null }:
-                GroupJoin.FinalSelector = UnwrapLambda(call);
+            case "Select" when CurrentJoin is { IsGrouped: false, FinalSelector: null }:
+                CurrentJoin.FinalSelector = UnwrapLambda(call);
                 break;
 
             // Past the SelectMany the element is the projected shape, not a document — so an ordering
@@ -190,19 +202,19 @@ internal class LinqQueryParser
             // Kept as an expression for the provider, which is where the result selector is rewritten.
             case "OrderBy" when Joined:
             case "ThenBy" when Joined:
-                GroupJoin!.OrderBys.Add((UnwrapLambda(call), false));
+                CurrentJoin!.OrderBys.Add((UnwrapLambda(call), false));
                 break;
 
             case "OrderByDescending" when Joined:
             case "ThenByDescending" when Joined:
-                GroupJoin!.OrderBys.Add((UnwrapLambda(call), true));
+                CurrentJoin!.OrderBys.Add((UnwrapLambda(call), true));
                 break;
 
             // A post-join predicate names the joined shape, so like the ordering keys it is kept as an
             // expression and resolved once the result selector has been rewritten onto the two
             // documents. It filters joined rows, which is what a `where` after a `join` clause means.
             case "Where" when Joined:
-                GroupJoin!.Wheres.Add(UnwrapLambda(call));
+                CurrentJoin!.Wheres.Add(UnwrapLambda(call));
                 break;
 
             // Everything else that resolves a member is refused past the join rather than resolved
@@ -380,16 +392,20 @@ internal class LinqQueryParser
     /// </summary>
     private void ApplyGroupJoin(MethodCallExpression call, bool grouped)
     {
-        if (GroupJoin is not null)
+        // fisher#55: a second join is joined onto the shape the first produced, not onto a document
+        // table, so its outer key selector names a member of that shape. Resolving it is the provider's
+        // job — see JoinShape — and all the parser has to do is keep them in order.
+        if (CurrentJoin is { IsComplete: false })
         {
             throw new BadLinqExpressionException(
-                $"Fisher supports one join per query. A second '{call.Method.Name}' would join onto the "
-                + "projected shape of the first, which is not a document table.");
+                $"A GroupJoin must be followed by SelectMany before a second '{call.Method.Name}'. "
+                + "Without it the first join still yields a grouping per outer row, and there is no "
+                + "one-row-per-match shape for the second to join onto.");
         }
 
         var arguments = call.Method.GetGenericArguments();
 
-        GroupJoin = new GroupJoinData
+        Joins.Add(new GroupJoinData
         {
             InnerSource = call.Arguments[1],
             OuterKeySelector = LambdaAt(call, 2),
@@ -398,7 +414,7 @@ internal class LinqQueryParser
             IsGrouped = grouped,
             OuterType = arguments[0],
             InnerType = arguments[1]
-        };
+        });
     }
 
     /// <summary>
@@ -423,8 +439,8 @@ internal class LinqQueryParser
                 + "(x, inner) => ...).");
         }
 
-        GroupJoin!.IsLeftJoin = IsDefaultIfEmpty(LambdaAt(call, 1).Body);
-        GroupJoin.FinalSelector = LambdaAt(call, 2);
+        CurrentJoin!.IsLeftJoin = IsDefaultIfEmpty(LambdaAt(call, 1).Body);
+        CurrentJoin.FinalSelector = LambdaAt(call, 2);
     }
 
     private static bool IsDefaultIfEmpty(Expression collectionSelector)

@@ -1039,7 +1039,7 @@ public partial class FisherQueryProvider : IQueryProvider
         ApplyHierarchyFilter(statement.Wheres, mapping, sourceType, qualifier);
         ApplySoftDeleteFilters(statement.Wheres, parser, mapping, qualifier);
 
-        var join = parser.GroupJoin is null ? null : ApplyJoin(statement, parser.GroupJoin, selectClause);
+        var join = parser.Joins.Count == 0 ? null : ApplyJoin(statement, parser.Joins, selectClause);
 
         return (ApplyDistinct(statement, parser, selectClause), parser, selectClause, join);
     }
