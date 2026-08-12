@@ -337,8 +337,9 @@ doing the work.
 
 Like 2.43.0 and 2.44.0 this is a compliance-tests-only release — the core assemblies are unchanged and
 the whole diff is the two suite files, three seam additions and the version. **With it the upstream ES
-compliance backlog is empty**, so twenty-eight suites is where the library sits until a new one is
-filed.
+compliance backlog is empty**, so twenty-eight is where the *event* half sits until a new one is
+filed. 2.47.0 opened a second half rather than a twenty-ninth event suite — see the document contract
+below.
 
 ## The 2.44.0 bump cost nothing whatever
 
@@ -440,9 +441,15 @@ Three of the six turned up a real defect or a wrong premise, which is the useful
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.45.0 ships **28 suites, 230 tests**. Fisher passes **all 230,
-all 28 suites**. Every suite compiles; every one is also subclassed and running. With 2.45.0 the
-upstream event sourcing backlog is empty, so this is the whole library rather than a snapshot of it.
+`JasperFx.Events.ComplianceTests` 2.47.0 ships **32 suites, 272 tests**. Fisher passes **all 272,
+all 32 suites**. Every suite compiles; every one is also subclassed and running.
+
+The library is now two halves. The **event sourcing** half is 28 suites and 230 tests, and its
+upstream backlog has been empty since 2.45.0 — that is the whole of it rather than a snapshot. The
+**document** half arrived in 2.47.0 (jasperfx#647): four suites, 42 tests, over the store-agnostic
+document contract Fisher implements for fisher#68. That half exists because the document side had no
+shared definition at all — Fisher's document parity with Polecat was established by the one-time
+hand-comparison that filed #22–#50, and enrolling replaces it with something standing.
 
 The ten suites added since 2.39.5 divided cleanly into "already true" and "had to be built", and the
 ratio is worth noticing — eight of the ten cost nothing, because they arrived after Fisher had already
@@ -462,10 +469,23 @@ been built to the sibling's shape:
 | `ConjoinedEventTenancyCompliance` | 2.45.0 | One seam member, no production change. 8 tests green on the bump — and the first suite to test a Fisher feature nothing cross-store had covered. |
 | `SubscriptionCompliance` | 2.45.0 | One registrar member and a small partial, no production change. 6 tests green on the bump; fisher#21 had already built it to the shape. |
 
-**Green on all twenty-eight is not the same as feature-complete.** The suites cover what is portable
+| `DocumentQueryCompliance` | 2.47.0 | Nothing beyond the contract binding below. 17 tests green on the first run. **Deliberately not a LINQ conformance suite** — it pins the minimum translatable set `Query<T>()` promises, and upstream's position that LINQ is out of shared-compliance scope permanently is unchanged. |
+| `DocumentDeleteCompliance` | 2.47.0 | Nothing. 10 tests, first run. |
+| `DocumentLoadAndStoreCompliance` | 2.47.0 | Nothing. 8 tests, first run. |
+| `DocumentSessionCompliance` | 2.47.0 | Nothing. 7 tests, first run. |
+
+The four document suites shared one cost between them rather than each paying: four interface
+declarations, one partial class on the query provider, and one constraint widening — Fisher's
+by-identity document read surface was `where T : class` where the contract is `where T : notnull`.
+Widening it removed an inconsistency rather than creating one, since `Store`, `Delete`, `DeleteWhere`
+and `Query<T>` were already `notnull`. See "The store-agnostic document contract" in CLAUDE.md.
+
+**Green on all thirty-two is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 28 suites, 230 tests
+### Green — 32 suites, 272 tests
+
+Event sourcing — 28 suites, 230 tests:
 
 | Suite | Tests |
 |---|---|
@@ -497,6 +517,15 @@ across stores; "Deliberate gaps" below is still the honest list of what Fisher d
 | `EventProjectionEnrichmentCompliance` | 3 |
 | `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
+
+Documents — 4 suites, 42 tests, through `FisherDocumentComplianceFixture`:
+
+| Suite | Tests |
+|---|---|
+| `DocumentQueryCompliance` | 17 |
+| `DocumentDeleteCompliance` | 10 |
+| `DocumentLoadAndStoreCompliance` | 8 |
+| `DocumentSessionCompliance` | 7 |
 
 ### Nothing in the fixture throws any more
 

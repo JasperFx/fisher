@@ -414,86 +414,86 @@ internal partial class FisherSession
     /// <summary>
     ///     Load a document by its identity, or null when there is none.
     /// </summary>
-    public Task<T?> LoadAsync<T>(Guid id, CancellationToken token = default) where T : class
+    public Task<T?> LoadAsync<T>(Guid id, CancellationToken token = default) where T : notnull
         => LoadByIdAsync<T, Guid>(id, token);
 
     /// <inheritdoc cref="LoadAsync{T}(Guid,CancellationToken)" />
-    public Task<T?> LoadAsync<T>(string id, CancellationToken token = default) where T : class
+    public Task<T?> LoadAsync<T>(string id, CancellationToken token = default) where T : notnull
         => LoadByIdAsync<T, string>(id, token);
 
     /// <inheritdoc cref="LoadAsync{T}(Guid,CancellationToken)" />
-    public Task<T?> LoadAsync<T>(int id, CancellationToken token = default) where T : class
+    public Task<T?> LoadAsync<T>(int id, CancellationToken token = default) where T : notnull
         => LoadByIdAsync<T, int>(id, token);
 
     /// <inheritdoc cref="LoadAsync{T}(Guid,CancellationToken)" />
-    public Task<T?> LoadAsync<T>(long id, CancellationToken token = default) where T : class
+    public Task<T?> LoadAsync<T>(long id, CancellationToken token = default) where T : notnull
         => LoadByIdAsync<T, long>(id, token);
 
     /// <inheritdoc cref="IDocumentSession.LoadAsync{T,TId}" />
     public Task<T?> LoadAsync<T, TId>(TId id, CancellationToken token = default)
-        where T : class where TId : notnull
+        where T : notnull where TId : notnull
         => LoadByIdAsync<T, TId>(id, token);
 
     private Task<T?> LoadByIdAsync<T, TId>(TId id, CancellationToken token)
-        where T : class where TId : notnull
+        where T : notnull where TId : notnull
         => ((Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>()).LoadAsync(id, this, token);
 
     /// <summary>
     ///     Load several documents by identity. Missing ids are simply absent from the result, which is
     ///     therefore not necessarily as long as the input.
     /// </summary>
-    public Task<IReadOnlyList<T>> LoadManyAsync<T>(params Guid[] ids) where T : class
+    public Task<IReadOnlyList<T>> LoadManyAsync<T>(params Guid[] ids) where T : notnull
         => LoadManyByIdAsync<T, Guid>(ids, CancellationToken.None);
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
-    public Task<IReadOnlyList<T>> LoadManyAsync<T>(params string[] ids) where T : class
+    public Task<IReadOnlyList<T>> LoadManyAsync<T>(params string[] ids) where T : notnull
         => LoadManyByIdAsync<T, string>(ids, CancellationToken.None);
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
-    public Task<IReadOnlyList<T>> LoadManyAsync<T>(params int[] ids) where T : class
+    public Task<IReadOnlyList<T>> LoadManyAsync<T>(params int[] ids) where T : notnull
         => LoadManyByIdAsync<T, int>(ids, CancellationToken.None);
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
-    public Task<IReadOnlyList<T>> LoadManyAsync<T>(params long[] ids) where T : class
+    public Task<IReadOnlyList<T>> LoadManyAsync<T>(params long[] ids) where T : notnull
         => LoadManyByIdAsync<T, long>(ids, CancellationToken.None);
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
-    public Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params Guid[] ids) where T : class
+    public Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params Guid[] ids) where T : notnull
         => LoadManyByIdAsync<T, Guid>(ids, token);
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
-    public Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params string[] ids) where T : class
+    public Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params string[] ids) where T : notnull
         => LoadManyByIdAsync<T, string>(ids, token);
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
-    public Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params int[] ids) where T : class
+    public Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params int[] ids) where T : notnull
         => LoadManyByIdAsync<T, int>(ids, token);
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
-    public Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params long[] ids) where T : class
+    public Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params long[] ids) where T : notnull
         => LoadManyByIdAsync<T, long>(ids, token);
 
     /// <inheritdoc cref="IDocumentSession.LoadManyAsync{T,TId}" />
     public Task<IReadOnlyList<T>> LoadManyAsync<T, TId>(TId[] ids, CancellationToken token = default)
-        where T : class where TId : notnull
+        where T : notnull where TId : notnull
         => LoadManyByIdAsync<T, TId>(ids, token);
 
     private Task<IReadOnlyList<T>> LoadManyByIdAsync<T, TId>(TId[] ids, CancellationToken token)
-        where T : class where TId : notnull
+        where T : notnull where TId : notnull
         => ((Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>()).LoadManyAsync(ids, this, token);
 
     // ---- existence, plans and diagnostics (fisher#37) ----
 
-    public Task<bool> CheckExistsAsync<T>(Guid id, CancellationToken token = default) where T : class
+    public Task<bool> CheckExistsAsync<T>(Guid id, CancellationToken token = default) where T : notnull
         => CheckExistsAsync<T, Guid>(id, token);
 
-    public Task<bool> CheckExistsAsync<T>(string id, CancellationToken token = default) where T : class
+    public Task<bool> CheckExistsAsync<T>(string id, CancellationToken token = default) where T : notnull
         => CheckExistsAsync<T, string>(id, token);
 
-    public Task<bool> CheckExistsAsync<T>(int id, CancellationToken token = default) where T : class
+    public Task<bool> CheckExistsAsync<T>(int id, CancellationToken token = default) where T : notnull
         => CheckExistsAsync<T, int>(id, token);
 
-    public Task<bool> CheckExistsAsync<T>(long id, CancellationToken token = default) where T : class
+    public Task<bool> CheckExistsAsync<T>(long id, CancellationToken token = default) where T : notnull
         => CheckExistsAsync<T, long>(id, token);
 
     /// <remarks>
@@ -504,14 +504,14 @@ internal partial class FisherSession
     ///     place, and this is a fourth caller that would otherwise have to remember all of them.
     /// </remarks>
     private Task<bool> CheckExistsAsync<T, TId>(TId id, CancellationToken token)
-        where T : class where TId : notnull
+        where T : notnull where TId : notnull
         => Linq.QueryableExtensions.AnyAsync(Query<T>().Where(ByIdPredicate<T, TId>(id)), token);
 
     /// <summary>
     ///     <c>x =&gt; x.Id == id</c>, built for whichever member the mapping calls the identity.
     /// </summary>
     private System.Linq.Expressions.Expression<Func<T, bool>> ByIdPredicate<T, TId>(TId id)
-        where T : class where TId : notnull
+        where T : notnull where TId : notnull
     {
         var mapping = Options.Schema.MappingFor(typeof(T));
         var parameter = System.Linq.Expressions.Expression.Parameter(typeof(T), "x");
@@ -523,16 +523,16 @@ internal partial class FisherSession
             parameter);
     }
 
-    public Task<string?> LoadJsonAsync<T>(Guid id, CancellationToken token = default) where T : class
+    public Task<string?> LoadJsonAsync<T>(Guid id, CancellationToken token = default) where T : notnull
         => LoadJsonAsync<T, Guid>(id, token);
 
-    public Task<string?> LoadJsonAsync<T>(string id, CancellationToken token = default) where T : class
+    public Task<string?> LoadJsonAsync<T>(string id, CancellationToken token = default) where T : notnull
         => LoadJsonAsync<T, string>(id, token);
 
-    public Task<string?> LoadJsonAsync<T>(int id, CancellationToken token = default) where T : class
+    public Task<string?> LoadJsonAsync<T>(int id, CancellationToken token = default) where T : notnull
         => LoadJsonAsync<T, int>(id, token);
 
-    public Task<string?> LoadJsonAsync<T>(long id, CancellationToken token = default) where T : class
+    public Task<string?> LoadJsonAsync<T>(long id, CancellationToken token = default) where T : notnull
         => LoadJsonAsync<T, long>(id, token);
 
     /// <remarks>
@@ -540,7 +540,7 @@ internal partial class FisherSession
     ///     inherits the tenant, soft-delete and hierarchy filters rather than restating them.
     /// </remarks>
     private async Task<string?> LoadJsonAsync<T, TId>(TId id, CancellationToken token)
-        where T : class where TId : notnull
+        where T : notnull where TId : notnull
     {
         var rows = await ((Linq.FisherQueryProvider)Query<T>().Provider)
             .JsonRowsAsync<T>(Query<T>().Where(ByIdPredicate<T, TId>(id)).Expression, "data", 1, token)

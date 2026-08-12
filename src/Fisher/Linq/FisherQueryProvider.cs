@@ -73,7 +73,6 @@ public partial class FisherQueryProvider : IQueryProvider
     // ---- async execution ----
 
     internal async Task<IReadOnlyList<T>> ToListAsync<T>(Expression expression, CancellationToken token)
-        where T : notnull
     {
         if (JoinFor(expression) is { } joined)
         {
@@ -135,7 +134,6 @@ public partial class FisherQueryProvider : IQueryProvider
     /// <param name="token">Cancellation.</param>
     internal async Task<T?> FirstAsync<T>(Expression expression, bool enforceSingle, bool required,
         CancellationToken token)
-        where T : notnull
     {
         if (JoinFor(expression) is { } joined)
         {
@@ -194,7 +192,6 @@ public partial class FisherQueryProvider : IQueryProvider
     }
 
     internal async Task<long> CountAsync<T>(Expression expression, CancellationToken token)
-        where T : notnull
     {
         var (statement, parser, _, _) = BuildStatement(SourceTypeFor(expression), expression);
 
@@ -464,7 +461,6 @@ public partial class FisherQueryProvider : IQueryProvider
     }
 
     internal async Task<bool> AnyAsync<T>(Expression expression, CancellationToken token)
-        where T : notnull
     {
         // Built non-generically so it answers a projected query too — whether any row exists does not
         // depend on what the rows are shaped into.

@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Fisher.Events;
+using JasperFx.Events.Documents;
 
 namespace Fisher;
 
@@ -7,14 +8,32 @@ namespace Fisher;
 ///     A read-only Fisher session.
 /// </summary>
 /// <remarks>
-///     <b>Read-only here is a convention rather than a guarantee.</b> Fisher has no query-only session
-///     type — this is the read half of <see cref="IDocumentSession" />, and every session the store
-///     hands out implements both — so an injected <see cref="IQuerySession" /> can be cast back to a
-///     working write handle. A separate type would cost a connection per scope to express a
-///     distinction the store does not make. Declare this where a piece of code only reads, to say so;
-///     do not rely on it to stop code that means otherwise.
+///     <para>
+///         <b>Read-only here is a convention rather than a guarantee.</b> Fisher has no query-only
+///         session type — this is the read half of <see cref="IDocumentSession" />, and every session
+///         the store hands out implements both — so an injected <see cref="IQuerySession" /> can be
+///         cast back to a working write handle. A separate type would cost a connection per scope to
+///         express a distinction the store does not make. Declare this where a piece of code only
+///         reads, to say so; do not rely on it to stop code that means otherwise.
+///     </para>
+///     <para>
+///         <b>fisher#68 / jasperfx#647.</b> This is the tier <see cref="IDocumentReadOperations" />
+///         binds to — the store-agnostic document contract behind the Wolverine aggregate-handler
+///         unification. Every member it asks for already existed here with a matching signature once
+///         the by-identity read surface was widened from <c>where T : class</c> to
+///         <c>where T : notnull</c>, which is the contract's constraint and was already what
+///         <c>Store</c>, <c>Delete</c> and <c>Query&lt;T&gt;</c> carried. So the binding is a
+///         declaration rather than an adapter, and there is one execution path rather than two that
+///         can drift.
+///     </para>
+///     <para>
+///         Fisher's <c>Query&lt;T&gt;()</c> already returns a plain <see cref="IQueryable{T}" />,
+///         where Marten and Polecat return their own narrower queryable and need a default interface
+///         implementation to forward it. That is the one place this binding is cheaper here than on
+///         either sibling.
+///     </para>
 /// </remarks>
-public interface IQuerySession : IAsyncDisposable, IDisposable
+public interface IQuerySession : IAsyncDisposable, IDisposable, IDocumentReadOperations
 {
     /// <summary>
     ///     The tenant every operation in this session is scoped to.
@@ -47,16 +66,16 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
     /// <summary>
     ///     Load a document by its identity, or null when there is none.
     /// </summary>
-    Task<T?> LoadAsync<T>(Guid id, CancellationToken token = default) where T : class;
+    Task<T?> LoadAsync<T>(Guid id, CancellationToken token = default) where T : notnull;
 
     /// <inheritdoc cref="LoadAsync{T}(Guid,CancellationToken)" />
-    Task<T?> LoadAsync<T>(string id, CancellationToken token = default) where T : class;
+    Task<T?> LoadAsync<T>(string id, CancellationToken token = default) where T : notnull;
 
     /// <inheritdoc cref="LoadAsync{T}(Guid,CancellationToken)" />
-    Task<T?> LoadAsync<T>(int id, CancellationToken token = default) where T : class;
+    Task<T?> LoadAsync<T>(int id, CancellationToken token = default) where T : notnull;
 
     /// <inheritdoc cref="LoadAsync{T}(Guid,CancellationToken)" />
-    Task<T?> LoadAsync<T>(long id, CancellationToken token = default) where T : class;
+    Task<T?> LoadAsync<T>(long id, CancellationToken token = default) where T : notnull;
 
     /// <summary>
     ///     Load a document by a strong-typed identity, or null when there is none.
@@ -68,7 +87,7 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
     ///     through here too, and reach exactly the same code.
     /// </remarks>
     Task<T?> LoadAsync<T, TId>(TId id, CancellationToken token = default)
-        where T : class where TId : notnull;
+        where T : notnull where TId : notnull;
 
     /// <summary>
     ///     Run your own SQL through this session and get typed results back.
@@ -89,16 +108,16 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
     ///     alternative — <c>LoadAsync(id) is not null</c> — reads and deserializes a whole document to
     ///     learn a boolean.
     /// </remarks>
-    Task<bool> CheckExistsAsync<T>(Guid id, CancellationToken token = default) where T : class;
+    Task<bool> CheckExistsAsync<T>(Guid id, CancellationToken token = default) where T : notnull;
 
     /// <inheritdoc cref="CheckExistsAsync{T}(Guid,CancellationToken)" />
-    Task<bool> CheckExistsAsync<T>(string id, CancellationToken token = default) where T : class;
+    Task<bool> CheckExistsAsync<T>(string id, CancellationToken token = default) where T : notnull;
 
     /// <inheritdoc cref="CheckExistsAsync{T}(Guid,CancellationToken)" />
-    Task<bool> CheckExistsAsync<T>(int id, CancellationToken token = default) where T : class;
+    Task<bool> CheckExistsAsync<T>(int id, CancellationToken token = default) where T : notnull;
 
     /// <inheritdoc cref="CheckExistsAsync{T}(Guid,CancellationToken)" />
-    Task<bool> CheckExistsAsync<T>(long id, CancellationToken token = default) where T : class;
+    Task<bool> CheckExistsAsync<T>(long id, CancellationToken token = default) where T : notnull;
 
     /// <summary>
     ///     A document's stored JSON, exactly as it was written, or null when there is none.
@@ -108,16 +127,16 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
     ///     normalises whitespace or key order on the way out. Carries the same tenant, soft-delete and
     ///     hierarchy filters the typed load does.
     /// </remarks>
-    Task<string?> LoadJsonAsync<T>(Guid id, CancellationToken token = default) where T : class;
+    Task<string?> LoadJsonAsync<T>(Guid id, CancellationToken token = default) where T : notnull;
 
     /// <inheritdoc cref="LoadJsonAsync{T}(Guid,CancellationToken)" />
-    Task<string?> LoadJsonAsync<T>(string id, CancellationToken token = default) where T : class;
+    Task<string?> LoadJsonAsync<T>(string id, CancellationToken token = default) where T : notnull;
 
     /// <inheritdoc cref="LoadJsonAsync{T}(Guid,CancellationToken)" />
-    Task<string?> LoadJsonAsync<T>(int id, CancellationToken token = default) where T : class;
+    Task<string?> LoadJsonAsync<T>(int id, CancellationToken token = default) where T : notnull;
 
     /// <inheritdoc cref="LoadJsonAsync{T}(Guid,CancellationToken)" />
-    Task<string?> LoadJsonAsync<T>(long id, CancellationToken token = default) where T : class;
+    Task<string?> LoadJsonAsync<T>(long id, CancellationToken token = default) where T : notnull;
 
     /// <summary>
     ///     What a document's metadata columns hold, without loading the document (fisher#29). Null when
@@ -174,32 +193,32 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
     ///     Load several documents by identity. Missing ids are absent from the result rather than
     ///     null entries, so it is not necessarily as long as the input.
     /// </summary>
-    Task<IReadOnlyList<T>> LoadManyAsync<T>(params Guid[] ids) where T : class;
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(params Guid[] ids) where T : notnull;
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
-    Task<IReadOnlyList<T>> LoadManyAsync<T>(params string[] ids) where T : class;
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(params string[] ids) where T : notnull;
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
-    Task<IReadOnlyList<T>> LoadManyAsync<T>(params int[] ids) where T : class;
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(params int[] ids) where T : notnull;
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
-    Task<IReadOnlyList<T>> LoadManyAsync<T>(params long[] ids) where T : class;
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(params long[] ids) where T : notnull;
 
     /// <inheritdoc cref="LoadManyAsync{T}(Guid[])" />
     /// <remarks>
     ///     The token comes first because the ids are a <c>params</c> array and nothing may follow one.
     ///     Same shape Marten uses (fisher#56).
     /// </remarks>
-    Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params Guid[] ids) where T : class;
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params Guid[] ids) where T : notnull;
 
     /// <inheritdoc cref="LoadManyAsync{T}(CancellationToken,Guid[])" />
-    Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params string[] ids) where T : class;
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params string[] ids) where T : notnull;
 
     /// <inheritdoc cref="LoadManyAsync{T}(CancellationToken,Guid[])" />
-    Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params int[] ids) where T : class;
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params int[] ids) where T : notnull;
 
     /// <inheritdoc cref="LoadManyAsync{T}(CancellationToken,Guid[])" />
-    Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params long[] ids) where T : class;
+    Task<IReadOnlyList<T>> LoadManyAsync<T>(CancellationToken token, params long[] ids) where T : notnull;
 
     /// <summary>
     ///     Load several documents by strong-typed identity.
@@ -211,7 +230,7 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
     ///     token can keep its usual place at the end.
     /// </remarks>
     Task<IReadOnlyList<T>> LoadManyAsync<T, TId>(TId[] ids, CancellationToken token = default)
-        where T : class where TId : notnull;
+        where T : notnull where TId : notnull;
 }
 
 /// <summary>
@@ -230,8 +249,15 @@ public interface IQuerySession : IAsyncDisposable, IDisposable
 ///         Anything that is about the session rather than about the work — <c>SaveChangesAsync</c>,
 ///         the <c>Eject</c> family, <c>ForTenant</c> itself — is on <see cref="IDocumentSession" />.
 ///     </para>
+///     <para>
+///         <b>That line is exactly where <see cref="IDocumentWriteOperations" /> binds</b> (fisher#68 /
+///         jasperfx#647), and the coincidence is not one. The shared contract splits enlisting from
+///         committing because a projection writes and must never commit — the same reason fisher#33
+///         needed this interface for tenant scopes. So the store-agnostic tier lands here rather than
+///         on <see cref="IDocumentSession" />, and no reshaping was required to accept it.
+///     </para>
 /// </remarks>
-public interface IDocumentOperations : IQuerySession
+public interface IDocumentOperations : IQuerySession, IDocumentWriteOperations
 {
     /// <summary>
     ///     The correlation id stamped onto everything this unit of work writes.
@@ -453,7 +479,8 @@ public interface IDocumentOperations : IQuerySession
 ///     both the read session and a storage-operations surface. Its members are the projection write
 ///     path — see <c>Fisher.Internal.FisherSession</c> for which of them are live today.
 /// </remarks>
-public interface IDocumentSession : IDocumentOperations, JasperFx.Events.IStorageOperations
+public interface IDocumentSession : IDocumentOperations, JasperFx.Events.IStorageOperations,
+    IDocumentSessionOperations
 {
     /// <summary>
     ///     Queue work for a different tenant into <em>this</em> unit of work, so one

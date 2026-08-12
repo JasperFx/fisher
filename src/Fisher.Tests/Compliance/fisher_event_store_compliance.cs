@@ -99,3 +99,27 @@ public class conjoined_event_tenancy_compliance
 
 public class subscription_compliance
     : SubscriptionCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * fisher#68 / jasperfx#647 — the DOCUMENT compliance suites, which arrived in
+ * JasperFx.Events.ComplianceTests 2.47.0 and cover the slice JasperFx.Events did not before.
+ *
+ * Same model as the event sourcing enrollment above, with one difference worth noticing: these close
+ * over nothing. The event fixture is generic over Fisher's session pair because so much of the event
+ * surface is only reachable through a store's own session type; every one of these runs through the
+ * shared JasperFx.Events.Documents contracts, which Fisher's own IQuerySession / IDocumentOperations /
+ * IDocumentSession / IDocumentStore implement directly rather than through an adapter. If one of them
+ * ever needs to reach past the contract, that is a hole in the contract rather than a seam to widen.
+ */
+
+public class document_session_compliance
+    : DocumentSessionCompliance<FisherDocumentComplianceFixture>;
+
+public class document_load_and_store_compliance
+    : DocumentLoadAndStoreCompliance<FisherDocumentComplianceFixture>;
+
+public class document_delete_compliance
+    : DocumentDeleteCompliance<FisherDocumentComplianceFixture>;
+
+public class document_query_compliance
+    : DocumentQueryCompliance<FisherDocumentComplianceFixture>;

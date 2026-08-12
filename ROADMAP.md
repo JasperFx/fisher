@@ -3,13 +3,16 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **two open issues** — [#55](https://github.com/JasperFx/fisher/issues/55) (a second LINQ join)
-and [#67](https://github.com/JasperFx/fisher/issues/67) (a load-sensitive intermittent in one
-fisher#59 test). The 2026-08-10 wave (#60–#66) is closed: two of those audits found real defects
-(#60's dead heartbeat branch, #63's composite teardown), #62's ported matrix found two more, and #61
-and #66 confirmed Fisher was already correct and now pin it. On JasperFx **2.46.0** / Weasel
-**9.24.0**. **All 28 compliance suites, 230 tests, green** — 2.46.0 added neither. 1189 tests green on
-net9.0 and net10.0.
+Status: **three open issues** — [#55](https://github.com/JasperFx/fisher/issues/55) (a second LINQ
+join), [#67](https://github.com/JasperFx/fisher/issues/67) (a load-sensitive intermittent in one
+fisher#59 test) and [#68](https://github.com/JasperFx/fisher/issues/68), whose **first half is done**:
+Fisher implements the JasperFx document persistence abstractions and is enrolled in the four document
+compliance suites that came with them. Its second half is `Wolverine.Fisher`, which is built in the
+wolverine repo rather than here. The 2026-08-10 wave (#60–#66) is closed: two of those audits found
+real defects (#60's dead heartbeat branch, #63's composite teardown), #62's ported matrix found two
+more, and #61 and #66 confirmed Fisher was already correct and now pin it. On JasperFx **2.47.0** /
+Weasel **9.24.0**. **All 32 compliance suites, 272 tests, green** — 28 event suites and 230 tests,
+plus 2.47.0's four document suites and 42 tests. 1232 tests green on net9.0 and net10.0.
 
 Most of the issues this file tracks came out of a file-by-file comparison against Polecat on
 2026-08-08, which filed [#22](https://github.com/JasperFx/fisher/issues/22) through
@@ -24,11 +27,11 @@ never will. It is context; the issues are the tracking.
 
 ## The destination
 
-**First round of JasperFx compliance tests passing — reached, and held through six package bumps
-that added ten suites.** `JasperFx.Events.ComplianceTests` is the shared cross-store suite Marten and
-Polecat both enroll in; passing it is what makes Fisher a real Critter Stack event store rather than a
-lookalike. As of 2.45.0 that library's event sourcing backlog is empty, so all twenty-eight suites it
-will ship for the foreseeable future are green:
+**First round of JasperFx compliance tests passing — reached, and held through seven package bumps
+that added fourteen suites.** `JasperFx.Events.ComplianceTests` is the shared cross-store suite Marten
+and Polecat both enroll in; passing it is what makes Fisher a real Critter Stack event store rather
+than a lookalike. As of 2.45.0 that library's **event sourcing** backlog is empty, so all twenty-eight
+event suites it will ship for the foreseeable future are green:
 
 | Suite | Tests |
 |---|---|
@@ -61,7 +64,23 @@ will ship for the foreseeable future are green:
 | `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-**Eight of the ten suites added since 2.39.5 went green on the version bump alone** —
+**2.47.0 opened a second front rather than adding a twenty-ninth event suite.** `JasperFx.Events.Documents`
+(jasperfx#647) is the store-agnostic *document* contract behind the Wolverine aggregate-handler
+unification, and it shipped with four suites Fisher is enrolled in — the first shared definition the
+document half of any Critter Stack store has been held to. They replace the one-time hand-comparison
+against Polecat that filed #22–#50 with something standing.
+
+| Document suite | Tests |
+|---|---|
+| `DocumentQueryCompliance` | 17 |
+| `DocumentDeleteCompliance` | 10 |
+| `DocumentLoadAndStoreCompliance` | 8 |
+| `DocumentSessionCompliance` | 7 |
+
+All four passed on the first run. The binding cost four interface declarations, one partial class and
+one constraint widening — see "The store-agnostic document contract" in CLAUDE.md.
+
+**Eight of the ten event suites added since 2.39.5 went green on the version bump alone** —
 `StringStreamIdentityCompliance`, `SnapshotLifecycleCompliance`, `EventDataMaskingCompliance`,
 `StreamCompactingCompliance`, both of 2.44.0's, and both of 2.45.0's. That is the useful signal, and
 it is a direct dividend of mirroring Polecat's internals: each of those features was built from the
@@ -73,7 +92,7 @@ Test counts keep understating the suites that matter. `AsyncDaemonCompliance` is
 the whole daemon; `FlatTableProjectionCompliance` is eight that demand an upsert generator, a
 migration hook and rebuild teardown.
 
-Being green on all twenty-eight is not the same as being feature-complete against Marten. The suites
+Being green on all thirty-two is not the same as being feature-complete against Marten. The suites
 cover what is portable across stores; the deliberate gaps listed in HANDOFF.md are still gaps.
 
 ## Filed follow-ups

@@ -255,6 +255,9 @@ Working, with tests:
   async daemon routed per database, and tenants that appear, suspend and resume at runtime
 - **Transaction participants** — `ITransactionParticipant`, so an application's own writes commit in
   Fisher's transaction rather than contending with it for the file's one write lock
+- **The store-agnostic document contract** — `JasperFx.Events.Documents`, implemented by Fisher's own
+  session and store types with no adapter, so a consumer can hold a document session without naming
+  Fisher
 - **`Fisher.AspNetCore`** — streaming `IResult` types over the JSON reads, ETag/`304` handling, event
   stream results, and a high-water health check
 - **`Fisher.EntityFrameworkCore`** — a `DbContext` saving inside Fisher's transaction, and projections
@@ -1875,7 +1878,93 @@ reintroduce fisher#20's bug one level up, where it is harder to see.
   a private member, so the tooling surfaces are excluded by the same rule that makes them explicit.
   `the_store_implements_every_interface_member_implicitly` checks the other direction through the
   interface map, so a member satisfied explicitly — compiling fine and then unreachable from the
-  concrete type — is caught too.
+  concrete type — is caught too. **Both had to learn about the document contract below**: the store's
+  session-factory members are satisfied by default interface implementations on `IDocumentStore`
+  itself, and a DIM that explicitly implements a base interface member is a *private* method on the
+  interface — so the second test's filter is `IsPublic` on the **interface** method, separating a
+  promise from a forwarder. `the_store_is_the_shared_document_session_factory` pins the forwarders
+  directly, since they are excluded from the map walk and would otherwise be pinned by nothing.
+
+### The store-agnostic document contract
+
+`JasperFx.Events.Documents` (fisher#68 / jasperfx#647), shipped in JasperFx 2.47.0 — the document
+slice a store-agnostic consumer needs alongside the event store, and the first half of what
+`Wolverine.Fisher` and a Fisher-backed CritterWatch are built on. Three session tiers, a session
+factory and a query-execution hook; seven operations, measured off CritterWatch's actual call sites
+rather than designed as a document-store facade.
+
+**Fisher's own types *are* the contracts — there is no adapter, and that is the result rather than a
+convenience.** The binding is four interface declarations and one partial class:
+
+| Contract | Fisher |
+|---|---|
+| `IDocumentReadOperations` | `IQuerySession` |
+| `IDocumentWriteOperations` | `IDocumentOperations` |
+| `IDocumentSessionOperations` | `IDocumentSession` |
+| `IDocumentSessionFactory<TOperations, TQuerySession>` | `IDocumentStore` |
+| `IDocumentQueryExecutor` | `FisherQueryProvider` |
+
+- **The three-tier split lands exactly where fisher#33 already drew it.** The contract separates
+  enlisting from committing because a projection writes and must never commit; `IDocumentOperations`
+  was split out of `IDocumentSession` for tenant scopes, which cannot commit either. Same line, two
+  reasons, so the middle tier was accepted with no reshaping — and `ITenantOperations` becomes an
+  `IDocumentWriteOperations` for free.
+- **The one non-mechanical part was a constraint widening**, as it was on Polecat. The contract is
+  `where T : notnull` and Fisher's by-identity document read surface — `LoadAsync`, `LoadManyAsync`,
+  `CheckExistsAsync`, `LoadJsonAsync` — was `where T : class`, which is strictly narrower and so cannot
+  implement it. Widening it *removed* an inconsistency rather than creating one: `Store`, `Delete`,
+  `DeleteWhere` and `Query<T>` were already `notnull`, so only the read half disagreed.
+- **`Query<T>()` binds implicitly, where both siblings need a default interface implementation to
+  forward it.** Marten returns `IMartenQueryable<T>` and Polecat `IPolecatQueryable<T>`; C# has no
+  return-type covariance for interface implementation, so each has to declare theirs `new` and forward.
+  Fisher already returned a plain `IQueryable<T>`. The one place this binding is cheaper here.
+- **`IDocumentQueryExecutor`'s `T` is unconstrained, so the four provider methods behind Fisher's
+  terminals were widened to match.** Nothing downstream wanted the constraint — `ISelector<T>` is
+  unconstrained and the projected path casts through `object?` — so `notnull` there was a claim being
+  made rather than a requirement being met, and dropping it cascaded to nothing. Fisher's own public
+  terminals keep it, where it is a useful signal to a caller. Each of the four **reads
+  `queryable.Expression`**, never a captured one, because the shared extensions compose
+  `Queryable.Where` onto the queryable before dispatching — that is how the predicate overloads come
+  free, and reading a captured expression would silently drop the predicate.
+- **`IDocumentSessionFactory` goes on `IDocumentStore` rather than being implemented explicitly**,
+  which is the one shared contract that does, and the distinction from the tooling surfaces is the
+  point: those describe a monitoring console's view of the store, this describes opening a session,
+  which is already the store's own API. It is also what makes an **ancillary** store work with no
+  second mechanism — `AddFisherStore<T>` constrains its marker to `IDocumentStore`, so the marker
+  inherits the factory and the `DispatchProxy` implements it. Marten and Polecat both declare it in
+  this position; had the three each picked their own, a store-agnostic consumer could not resolve an
+  ancillary store portably, which is the failure mode fisher#68 names.
+- **Neither of Fisher's factories is genuinely parameterless** — both take an optional tenant id — so
+  all three factory members are forwarded by DIM on the interface rather than by three one-liners on
+  `DocumentStore` and three more on `SecondaryStoreProxy`. The tenant argument defaults to null, which
+  is the right reading of a contract with no tenant parameter: JasperFx left tenant-scoped opening out
+  deliberately and can add it additively.
+- **No DI registration was needed or added**, matching both siblings. `IDocumentStore` is already
+  registered and *is* the factory.
+
+Four compliance suites, 42 tests, enrolled in `fisher_event_store_compliance.cs` and green on the
+first run. `FisherDocumentComplianceFixture` is three members wide and **deliberately not generic over
+Fisher's session pair**, unlike the event fixture: everything the document suites do runs through the
+shared contracts, so `Sessions` is typed as the bare `IDocumentSessionFactory` and a suite reaching
+past it would not compile. Two Fisher-specific notes:
+
+- **Document types are registered up front, and on SQLite that is required rather than tidy.** Fisher
+  creates a document table at first write and SQLite resolves a table name when it *prepares* a
+  statement, so `query_over_an_empty_document_type_returns_an_empty_list` and the `AnyAsync` over an
+  untouched type would fail with `no such table` rather than answering empty.
+  `DocumentComplianceConfig.DocumentTypes` exists for exactly this. Same lesson rebuild teardown,
+  `CleanAsync<T>` and the document diagnostics each had to learn.
+- **Fisher needs no shared xUnit collection, where Marten and Polecat both do.** All four suites pin
+  `SchemaName` to `compliance_documents` and the base suite wipes document data before every test, so
+  against one server one class's wipe lands in the middle of another's test. A throwaway SQLite file
+  per fixture instance — one per test — leaves the wipe nothing else to reach.
+
+**Half two of fisher#68 is `Wolverine.Fisher` and is not actionable from this repository**, the same
+place Polecat's issue landed: the integration is built in the wolverine repo against wolverine#3907.
+Two SQLite constraints carry into its design and are worth restating there — Wolverine's durability
+tables must commit through `ITransactionParticipant` on Fisher's own connection rather than through a
+parallel connection to the same file (a second connection presents as a *hang*, not an error), and
+leader election across a cluster is not viable on one file, so hosting is solo/embedded.
 
 ### Transaction participants
 
@@ -2720,10 +2809,12 @@ coalescing on purpose. Do not present it as a performance feature.
 ### Compliance suites
 
 **Fisher is enrolled, in full.** `JasperFx.Events.ComplianceTests` is referenced unconditionally —
-the old `$(EnableComplianceTests)` gate is gone. **All 28 suites, 230 tests, are live**, as of 2.45.0
-— which is the whole library, since 2.45.0 emptied the upstream event sourcing compliance backlog.
-**2.46.0 added no suite and no test** (fisher#64): the counts were re-verified against it rather than
-carried over, since "still 28" is exactly the claim a bump can quietly falsify.
+the old `$(EnableComplianceTests)` gate is gone. **All 32 suites, 272 tests, are live**, as of 2.47.0.
+The event sourcing half is 28 suites and 230 tests and has been the whole library since 2.45.0
+emptied the upstream event sourcing backlog; **2.46.0 added no suite and no test** (fisher#64), and
+the counts were re-verified against it rather than carried over, since "still 28" is exactly the
+claim a bump can quietly falsify. **2.47.0 added a second half rather than another event suite** —
+four *document* suites, 42 tests, over the store-agnostic contract described below.
 The four that arrived in 2.40.0/2.41.0 — `StringStreamIdentityCompliance`,
 `SnapshotLifecycleCompliance`, `MultiStreamProjectionCompliance`, `FlatTableProjectionCompliance` —
 went in on the same bump.
@@ -2807,6 +2898,22 @@ on the bump** — 14 tests, no production change, at the cost of two seam member
   two failures on Polecat early in that suite's development, none since. Not seen on Fisher: 15
   consecutive runs of the suite clean, plus the full 216 twice. Recorded so a first sighting here is
   recognised rather than investigated from scratch.
+
+The four **document** suites — `DocumentSessionCompliance`, `DocumentLoadAndStoreCompliance`,
+`DocumentDeleteCompliance`, `DocumentQueryCompliance` — arrived in 2.47.0 and are a second half rather
+than a fifth wave of the same thing: they hold the *document* store to a shared definition, which
+nothing cross-store did before. See "The store-agnostic document contract" for the binding and for the
+two Fisher-specific fixture notes. Two things worth knowing here:
+
+- **`DocumentQueryCompliance` is not a LINQ conformance suite and upstream is emphatic that it must
+  not become one.** The standing Critter Stack position — LINQ is out of shared-compliance scope
+  permanently, not pending a contract — is unchanged. What it pins is narrower and different in kind:
+  the *minimum translatable set* `Query<T>()` promises, since a consumer holding only `IQueryable<T>`
+  cannot discover whether `OrderBy` is translated or silently unsupported. Fisher supports far more and
+  is deliberately not held to any of it here.
+- **This is what replaces the hand-comparison sweep.** Fisher's document parity with Polecat was
+  established by the file-by-file comparison that filed fisher#22–#50, which is a one-time act;
+  enrolling converts it into a standing definition three stores are held to.
 
 The mechanics, because they are not what the package's name suggests:
 
