@@ -3,10 +3,22 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **one open issue**, [#68](https://github.com/JasperFx/fisher/issues/68), whose **first half is
-done** — Fisher implements the JasperFx document persistence abstractions and is enrolled in the four
-document compliance suites that came with them. Its second half is `Wolverine.Fisher`, which is built
-in the wolverine repo rather than here, so nothing about it is actionable from this repository.
+Status: **no open issues**, for the first time since the tracker was opened.
+
+That is a milestone and not a finish line, so it is worth being precise about what it does and does not
+mean. Every gap this repository knows about is closed; it is emphatically **not** the same as being
+feature-complete against Marten, and the deliberate gaps in [HANDOFF.md](HANDOFF.md) are still gaps —
+they are decisions rather than omissions, which is why they are not issues. The live work that remains
+lives elsewhere: `Wolverine.Fisher` is built in the wolverine repo against
+[wolverine#3907](https://github.com/JasperFx/wolverine/issues/3907), and
+[weasel#426](https://github.com/JasperFx/weasel/issues/426) is upstream. **The next issue is most
+likely to come from a JasperFx release rather than from this repository** — that has been the pattern
+for seven bumps, and it is what the compliance enrollment is for.
+
+[#68](https://github.com/JasperFx/fisher/issues/68) closed with its **first half done** — Fisher
+implements the JasperFx document persistence abstractions and is enrolled in the four document
+compliance suites that came with them — and its second half handed to the wolverine repo, which is
+where polecat#443 and marten#5216 both closed too.
 
 The 2026-08-12 wave closed the rest. [#67](https://github.com/JasperFx/fisher/issues/67) was
 diagnosed rather than papered over: the pooled-connection release is prompt but not synchronous, which

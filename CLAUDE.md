@@ -264,8 +264,9 @@ Working, with tests:
 - **`Fisher.EntityFrameworkCore`** — a `DbContext` saving inside Fisher's transaction, and projections
   whose documents are EF entities
 
-Not implemented yet — do not assume these work. The open issues are the live list; these are the ones
-most likely to be assumed present:
+Not implemented yet — do not assume these work. **There are no open issues as of 2026-08-12**, so this
+list and the deliberate gaps in HANDOFF.md are the live account rather than the tracker; these are the
+ones most likely to be assumed present:
 
 - **A message bus** — the side-effect seam exists and the default outbox drops every message. That is
   the end state, not a gap: fisher#8 was closed wontfix, and delivery is a bus integration's job here
