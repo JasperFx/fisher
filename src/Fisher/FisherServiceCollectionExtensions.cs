@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Fisher.Internal;
 using JasperFx;
 using JasperFx.Descriptors;
@@ -163,19 +164,106 @@ public static class FisherServiceCollectionExtensions
     }
 
     /// <summary>
+    ///     Contribute configuration to the primary store's options from a lambda (fisher#70).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The lambda convenience over <see cref="IConfigureFisher" />, and the same surface both
+    ///         siblings ship (<c>ConfigureMarten</c>, <c>ConfigurePolecat</c>) — so integration code that
+    ///         layers its own <see cref="StoreOptions" /> contributions onto a store somebody else
+    ///         registered reads alike across the three stores. That unification is what
+    ///         JasperFx/wolverine#3907 asked for.
+    ///     </para>
+    ///     <para>
+    ///         Runs after the <c>AddFisher(...)</c> lambda, in registration order, and may be called
+    ///         either side of it — the contributions are resolved when the store is built, not when this
+    ///         is called.
+    ///     </para>
+    /// </remarks>
+    public static IServiceCollection ConfigureFisher(this IServiceCollection services,
+        Action<StoreOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        return services.ConfigureFisher((_, options) => configure(options));
+    }
+
+    /// <inheritdoc cref="ConfigureFisher(IServiceCollection,Action{StoreOptions})" />
+    public static IServiceCollection ConfigureFisher(this IServiceCollection services,
+        Action<IServiceProvider, StoreOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        services.AddSingleton<IConfigureFisher>(new LambdaConfigureFisher(configure));
+        return services;
+    }
+
+    /// <summary>
+    ///     Contribute configuration to one secondary store's options from a lambda (fisher#70).
+    /// </summary>
+    /// <remarks>
+    ///     The targeted form, reaching the store registered as <typeparamref name="T" /> and no other.
+    ///     An untargeted <see cref="ConfigureFisher(IServiceCollection,Action{StoreOptions})" /> is about
+    ///     the primary store, which is the one an application that never registers a second has.
+    /// </remarks>
+    public static IServiceCollection ConfigureFisher<T>(this IServiceCollection services,
+        Action<StoreOptions> configure) where T : IDocumentStore
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        return services.ConfigureFisher<T>((_, options) => configure(options));
+    }
+
+    /// <inheritdoc cref="ConfigureFisher{T}(IServiceCollection,Action{StoreOptions})" />
+    public static IServiceCollection ConfigureFisher<T>(this IServiceCollection services,
+        Action<IServiceProvider, StoreOptions> configure) where T : IDocumentStore
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        // Registered against both service types, which is what makes either resolution style find it —
+        // see Configured for why there are two.
+        var lambda = new LambdaConfigureFisher<T>(configure);
+
+        services.AddSingleton<IConfigureFisher>(lambda);
+        services.AddSingleton<IConfigureFisher<T>>(lambda);
+
+        return services;
+    }
+
+    /// <summary>
     ///     Apply every matching <see cref="IConfigureFisher" /> to a store's options.
     /// </summary>
     /// <remarks>
-    ///     After the registration lambda, so the lambda states the store's shape and these adjust it —
-    ///     and filtered by store, because a contribution registered by one library reaching every store
-    ///     in the application, including ones it has never heard of, is not configuration but a
-    ///     surprise.
+    ///     <para>
+    ///         After the registration lambda, so the lambda states the store's shape and these adjust it —
+    ///         and filtered by store, because a contribution registered by one library reaching every store
+    ///         in the application, including ones it has never heard of, is not configuration but a
+    ///         surprise.
+    ///     </para>
+    ///     <para>
+    ///         <b>Both registration styles are swept, and the second was silently ignored</b> (fisher#70).
+    ///         Fisher resolves <see cref="IConfigureFisher" /> and filters by the contribution's own
+    ///         interfaces; Polecat and Marten resolve the closed <c>IConfigure*&lt;T&gt;</c> directly, so
+    ///         code ported from either registers against <see cref="IConfigureFisher{T}" /> — which
+    ///         <c>GetServices&lt;IConfigureFisher&gt;()</c> does not return, because the container matches
+    ///         on the service type a registration named rather than on what it implements. That is a
+    ///         contribution that compiles, registers, and never runs. Both are swept and deduplicated by
+    ///         reference, so registering against both service types (as
+    ///         <see cref="ConfigureFisher{T}(IServiceCollection,Action{StoreOptions})" /> does) still
+    ///         configures once.
+    ///     </para>
     /// </remarks>
     private static StoreOptions Configured(IServiceProvider services, StoreOptions options, Type? forStore)
     {
-        foreach (var configure in services.GetServices<IConfigureFisher>())
+        var applied = new HashSet<object>(ReferenceEqualityComparer.Instance);
+
+        foreach (var configure in services.GetServices<IConfigureFisher>().Concat(TargetedAt(services, forStore)))
         {
-            if (AppliesTo(configure, forStore))
+            if (AppliesTo(configure, forStore) && applied.Add(configure))
             {
                 configure.Configure(services, options);
             }
@@ -183,6 +271,15 @@ public static class FisherServiceCollectionExtensions
 
         return options;
     }
+
+    [UnconditionalSuppressMessage("Trimming", "IL2055:MakeGenericType",
+        Justification = "IConfigureFisher<T> is closed over a marker interface the caller supplied to "
+            + "AddFisherStore<T> at registration time, so the trimmer already sees the instantiation.")]
+    private static IEnumerable<IConfigureFisher> TargetedAt(IServiceProvider services, Type? forStore)
+        => forStore is null
+            ? []
+            : services.GetServices(typeof(IConfigureFisher<>).MakeGenericType(forStore))
+                .OfType<IConfigureFisher>();
 
     private static bool AppliesTo(IConfigureFisher configure, Type? forStore)
     {

@@ -2224,6 +2224,20 @@ registration surface was missing.
 - **`IConfigureFisher<T>` exists because which store a contribution is about has to be sayable.** An
   untargeted contribution reaches the primary store only; without the distinction, a library's
   configuration would reach stores it has never heard of.
+- **`ConfigureFisher(...)` is the lambda form, and it is what makes the three stores' integration code
+  read alike** (fisher#70, over JasperFx/wolverine#3907). Four overloads mirroring
+  `PolecatStoreServiceCollectionExtensions`: a primary and a targeted pair, each with and without the
+  container. Wolverine's ancillary integration uses exactly this to layer its own `StoreOptions`
+  contributions onto a store somebody else registered.
+- **Both registration styles are swept, and the second silently did nothing.** Fisher resolves
+  `IConfigureFisher` and filters by the contribution's own interfaces; Marten and Polecat resolve the
+  closed `IConfigure*<T>` directly, so code ported from either registers against `IConfigureFisher<T>`
+  — which `GetServices<IConfigureFisher>()` does not return, because the container matches on the
+  service type a registration *named* rather than on what it implements. A contribution that compiles,
+  registers and never runs. `Configured` now sweeps both and deduplicates **by reference**, which is
+  what lets `ConfigureFisher<T>` register its lambda against both service types and still configure
+  once. `a_contribution_registered_against_the_closed_interface_is_applied` and
+  `a_targeted_lambda_configures_once` pin the two halves, each verified by reverting it.
 - `StoreName` defaults to the marker's name, so two stores are distinguishable in a monitoring tool and
   in a trace with nothing said.
 

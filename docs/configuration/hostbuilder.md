@@ -137,6 +137,36 @@ builder.Services.AddFisher(options => options.Connection("Data Source=app.db"));
 An untargeted `IConfigureFisher` reaches the **primary** store only. To contribute to a secondary
 store, use the targeted `IConfigureFisher<T>` — see [Multiple Stores](/configuration/multiple-stores).
 
+### ConfigureFisher(...)
+
+For a contribution that does not warrant a class of its own, `ConfigureFisher(...)` is the lambda
+form of the same seam — and the same surface Marten's `ConfigureMarten` and Polecat's
+`ConfigurePolecat` present, so integration code that layers its own options onto a store somebody
+else registered reads alike across the three stores:
+
+<!-- snippet: sample_configure_fisher_lambda -->
+<a id='snippet-sample_configure_fisher_lambda'></a>
+```cs
+// Layered onto whatever store the application configured, either side of the AddFisher call.
+services.ConfigureFisher(options =>
+{
+    options.Schema.For<Report>().Duplicate(x => x.RunAt);
+    options.Projections.Snapshot<Report>(SnapshotLifecycle.Async);
+});
+
+// The overload taking the container as well, for configuration that needs a resolved service.
+services.ConfigureFisher((serviceProvider, options) =>
+{
+    options.Projections.Add(
+        serviceProvider.GetRequiredService<SalesProjection>(), ProjectionLifecycle.Async);
+});
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/configuration_samples.cs#L29-L43' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_configure_fisher_lambda' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+Contributions run after the `AddFisher(...)` lambda, in registration order, and may be registered
+either side of it — they are resolved when the store is built, not when the call is made.
+
 ## Session Factories
 
 By default, the scoped `IDocumentSession` is a lightweight session. Supply your own `ISessionFactory`
