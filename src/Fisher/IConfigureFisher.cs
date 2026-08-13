@@ -36,3 +36,33 @@ public interface IConfigureFisher
 public interface IConfigureFisher<T> : IConfigureFisher where T : IDocumentStore
 {
 }
+
+/// <summary>
+///     The lambda form of <see cref="IConfigureFisher" />, behind
+///     <c>services.ConfigureFisher(...)</c> (fisher#70).
+/// </summary>
+internal sealed class LambdaConfigureFisher : IConfigureFisher
+{
+    private readonly Action<IServiceProvider, StoreOptions> _configure;
+
+    internal LambdaConfigureFisher(Action<IServiceProvider, StoreOptions> configure) => _configure = configure;
+
+    public void Configure(IServiceProvider services, StoreOptions options) => _configure(services, options);
+}
+
+/// <summary>
+///     The lambda form of <see cref="IConfigureFisher{T}" />, behind
+///     <c>services.ConfigureFisher&lt;T&gt;(...)</c> (fisher#70).
+/// </summary>
+/// <remarks>
+///     The type parameter is what <c>AddFisherStore&lt;T&gt;</c>'s filter reads, off this type's own
+///     interfaces — so a lambda targeted at one store reaches that store and no other.
+/// </remarks>
+internal sealed class LambdaConfigureFisher<T> : IConfigureFisher<T> where T : IDocumentStore
+{
+    private readonly Action<IServiceProvider, StoreOptions> _configure;
+
+    internal LambdaConfigureFisher(Action<IServiceProvider, StoreOptions> configure) => _configure = configure;
+
+    public void Configure(IServiceProvider services, StoreOptions options) => _configure(services, options);
+}

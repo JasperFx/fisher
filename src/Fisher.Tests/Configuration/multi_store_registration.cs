@@ -302,6 +302,147 @@ public class multi_store_registration : IAsyncLifetime
         await host.StopAsync(Token);
     }
 
+    // ---- ConfigureFisher(...) — the lambda form (fisher#70) ----
+
+    /// <remarks>
+    ///     The lambda convenience both siblings ship, so integration code that layers its own options
+    ///     onto a store somebody else registered reads alike across the three stores.
+    /// </remarks>
+    [Fact]
+    public async Task a_lambda_contribution_reaches_the_primary_store()
+    {
+        using var host = await Host.CreateDefaultBuilder()
+            .ConfigureServices(services =>
+            {
+                services.ConfigureFisher(options =>
+                    options.Projections.Add(new CourseProjection(), ProjectionLifecycle.Inline));
+
+                services.AddFisher(options => options.ConnectionString = _first.ConnectionString);
+            })
+            .StartAsync(Token);
+
+        host.Services.GetRequiredService<IDocumentStore>()
+            .Options.Projections.All.Any(x => x is CourseProjection).ShouldBeTrue();
+
+        await host.StopAsync(Token);
+    }
+
+    [Fact]
+    public async Task a_lambda_contribution_can_read_a_service()
+    {
+        using var host = await Host.CreateDefaultBuilder()
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton(new ProjectionSwitch(true));
+
+                services.ConfigureFisher((sp, options) =>
+                {
+                    if (sp.GetRequiredService<ProjectionSwitch>().Enabled)
+                    {
+                        options.Projections.Add(new CourseProjection(), ProjectionLifecycle.Inline);
+                    }
+                });
+
+                services.AddFisher(options => options.ConnectionString = _first.ConnectionString);
+            })
+            .StartAsync(Token);
+
+        host.Services.GetRequiredService<IDocumentStore>()
+            .Options.Projections.All.Any(x => x is CourseProjection).ShouldBeTrue();
+
+        await host.StopAsync(Token);
+    }
+
+    /// <remarks>
+    ///     The targeted form, which is what an ancillary-store integration needs — a contribution that
+    ///     reached every store in the application, including ones the library has never heard of, would
+    ///     not be configuration but a surprise.
+    /// </remarks>
+    [Fact]
+    public async Task a_targeted_lambda_reaches_only_the_store_it_names()
+    {
+        using var host = await Host.CreateDefaultBuilder()
+            .ConfigureServices(services =>
+            {
+                services.ConfigureFisher<IArchiveStore>(options =>
+                    options.Projections.Add(new CourseProjection(), ProjectionLifecycle.Inline));
+
+                services.AddFisher(options => options.ConnectionString = _first.ConnectionString);
+
+                services.AddFisherStore<IArchiveStore>(options =>
+                    options.ConnectionString = _second.ConnectionString);
+            })
+            .StartAsync(Token);
+
+        host.Services.GetRequiredService<IDocumentStore>()
+            .Options.Projections.All.Any(x => x is CourseProjection).ShouldBeFalse();
+
+        host.Services.GetRequiredService<IArchiveStore>()
+            .Options.Projections.All.Any(x => x is CourseProjection).ShouldBeTrue();
+
+        await host.StopAsync(Token);
+    }
+
+    /// <remarks>
+    ///     <c>ConfigureFisher&lt;T&gt;</c> registers its lambda against both service types, so the
+    ///     dedup in <c>Configured</c> is what keeps one call from configuring twice. Counted rather than
+    ///     asserted on the options, because adding the same projection twice would look identical to
+    ///     adding it once through most assertions.
+    /// </remarks>
+    [Fact]
+    public async Task a_targeted_lambda_configures_once()
+    {
+        var calls = 0;
+
+        using var host = await Host.CreateDefaultBuilder()
+            .ConfigureServices(services =>
+            {
+                services.ConfigureFisher<IArchiveStore>(_ => Interlocked.Increment(ref calls));
+
+                services.AddFisherStore<IArchiveStore>(options =>
+                    options.ConnectionString = _second.ConnectionString);
+            })
+            .StartAsync(Token);
+
+        _ = host.Services.GetRequiredService<IArchiveStore>().Options;
+
+        calls.ShouldBe(1);
+
+        await host.StopAsync(Token);
+    }
+
+    /// <remarks>
+    ///     <b>This registration style silently did nothing</b> (fisher#70). Polecat and Marten resolve
+    ///     the closed <c>IConfigure*&lt;T&gt;</c>, so code ported from either registers against
+    ///     <c>IConfigureFisher&lt;T&gt;</c> — which <c>GetServices&lt;IConfigureFisher&gt;()</c> does not
+    ///     return, because the container matches on the service type a registration named rather than on
+    ///     what it implements. A contribution that compiles, registers and never runs.
+    /// </remarks>
+    [Fact]
+    public async Task a_contribution_registered_against_the_closed_interface_is_applied()
+    {
+        using var host = await Host.CreateDefaultBuilder()
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton(new ProjectionSwitch(true));
+                services.AddSingleton<IConfigureFisher<IArchiveStore>, EnableTheProjectionOnTheArchive>();
+
+                services.AddFisher(options => options.ConnectionString = _first.ConnectionString);
+
+                services.AddFisherStore<IArchiveStore>(options =>
+                    options.ConnectionString = _second.ConnectionString);
+            })
+            .StartAsync(Token);
+
+        host.Services.GetRequiredService<IDocumentStore>()
+            .Options.Projections.All.Any(x => x is CourseProjection).ShouldBeFalse();
+
+        host.Services.GetRequiredService<IArchiveStore>()
+            .Options.Projections.All.Any(x => x is CourseProjection).ShouldBeTrue();
+
+        await host.StopAsync(Token);
+    }
+
     /// <remarks>
     ///     One daemon per store, which is the shape that gets two concurrent writers out of SQLite.
     /// </remarks>

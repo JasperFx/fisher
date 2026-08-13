@@ -90,6 +90,28 @@ public class ReportingProjections : IConfigureFisher<IReportingStore>
 An untargeted `IConfigureFisher` reaches the primary store only. Without the distinction, a library's
 configuration would reach stores it has never heard of.
 
+`ConfigureFisher<T>(...)` is the lambda form, for a contribution that does not warrant a class:
+
+<!-- snippet: sample_configure_fisher_lambda_targeted -->
+<a id='snippet-sample_configure_fisher_lambda_targeted'></a>
+```cs
+// Reaches the store registered as IReportingStore, and no other.
+services.ConfigureFisher<IReportingStore>(options =>
+    options.Projections.Add(new SalesProjection(), ProjectionLifecycle.Async));
+
+services.ConfigureFisher<IReportingStore>((serviceProvider, options) =>
+    options.Projections.Add(
+        serviceProvider.GetRequiredService<SalesProjection>(), ProjectionLifecycle.Async));
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/configuration_samples.cs#L48-L56' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_configure_fisher_lambda_targeted' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+::: tip
+Either registration style works. Fisher sweeps both `IConfigureFisher` and the closed
+`IConfigureFisher<T>`, so code ported from Marten or Polecat — which register against the closed
+interface — behaves the same way here. A contribution registered against both is still applied once.
+:::
+
 ## How the marker is implemented
 
 The marker is implemented with `System.Reflection.DispatchProxy` — in the BCL, so no proxy library

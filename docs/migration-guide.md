@@ -23,6 +23,7 @@ builder.Services.AddFisher(opts => opts.Connection("Data Source=app.db"));
 | :--- | :--- |
 | `AddMarten` / `AddPolecat` | `AddFisher` |
 | `IConfigureMarten` / `IConfigurePolecat` | `IConfigureFisher` |
+| `ConfigureMarten` / `ConfigurePolecat` | `ConfigureFisher` |
 | `AddMartenStore<T>` / `AddPolecatStore<T>` | `AddFisherStore<T>` |
 | `DocumentMetadata` (the read result) | `StoredDocumentMetadata` |
 | `IChangeSet.Deleted` is `IEnumerable<IDeletion>` | `IEnumerable<IDocumentDeletion>` |
