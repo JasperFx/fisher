@@ -26,9 +26,23 @@ or Polecat runs here unaltered.
 
 ```cs
 opts.Projections.Snapshot<Order>(SnapshotLifecycle.Inline);
-opts.Projections.Add(new OrdersByCustomer(), ProjectionLifecycle.Async);
+opts.Projections.Add<OrdersByCustomer>(ProjectionLifecycle.Async);
 opts.Projections.CompositeProjectionFor("reporting", c => { … });
 opts.Projections.Subscribe(new NotifyOnShipment());
+```
+
+`Add<T>(lifecycle)` constructs the projection for you and is the spelling Marten and Polecat use, so a
+registration block reads identically against all three stores. Pass an instance instead when the
+projection needs constructor arguments:
+
+```cs
+opts.Projections.Add(new OrdersByCustomer(connectionString), ProjectionLifecycle.Async);
+```
+
+Both forms take an optional `AsyncOptions` lambda for rebuild and batching behaviour:
+
+```cs
+opts.Projections.Add<OrdersByCustomer>(ProjectionLifecycle.Async, o => o.BatchSize = 1000);
 ```
 
 ## Conventional methods are source-generated

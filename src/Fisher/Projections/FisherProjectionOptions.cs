@@ -186,6 +186,52 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     }
 
     /// <summary>
+    ///     Register a projection by type, constructing it — the spelling both siblings use.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <c>Projections.Add&lt;OrderProjection&gt;(ProjectionLifecycle.Inline)</c> is what
+    ///         registration code in the wild is written against, and it is the one line that stopped an
+    ///         otherwise identical block from being shared across the three stores (fisher#76). It shows
+    ///         up once per projection, and <see cref="Snapshot{T}" /> already takes its type argument, so
+    ///         the two halves of one registration block were inconsistent with each other as well.
+    ///     </para>
+    ///     <para>
+    ///         <b>This hides an inherited overload rather than adding a missing one, and that is the
+    ///         point.</b> <c>ProjectionGraph.Add&lt;TProjectionType&gt;</c> compiles today and goes
+    ///         straight to <c>All.Add</c> — bypassing <c>Register</c>, so it invokes neither
+    ///         <see cref="onAddProjection" /> (which registers the projection's event types, without
+    ///         which a process that only reads cannot resolve them by name) nor the
+    ///         <c>PublishedTypes()</c> sweep above (without which the projection's document type is
+    ///         never mapped and its <b>table is never created</b>). Both failures are silent at
+    ///         registration. Routing through the instance overload is what makes the generic form mean
+    ///         the same thing as the form beside it.
+    ///     </para>
+    ///     <para>
+    ///         The constraint is deliberately weaker than the base's, which demands
+    ///         <c>IProjectionSource</c>: the instance overload accepts a bare
+    ///         <see cref="IProjection" /> and wraps it, so requiring more here would refuse a projection
+    ///         the store can perfectly well run. Every call that satisfied the base still compiles.
+    ///     </para>
+    /// </remarks>
+    /// <typeparam name="TProjection">
+    ///     The projection class, which must have a parameterless constructor. Use the instance overload
+    ///     for a projection that needs constructor arguments.
+    /// </typeparam>
+    public new void Add<TProjection>(ProjectionLifecycle lifecycle,
+        Action<AsyncOptions>? asyncConfiguration = null)
+        where TProjection : ProjectionBase, new()
+    {
+        var projection = new TProjection();
+
+        // Before Add, matching the base's ordering: the options a rebuild reads have to be in place
+        // before AssembleAndAssertValidity runs over them.
+        asyncConfiguration?.Invoke(projection.Options);
+
+        Add(projection, lifecycle);
+    }
+
+    /// <summary>
     ///     Register a subscription — arbitrary code the async daemon drives over each range of events,
     ///     rather than a projection folding them into storage (fisher#21).
     /// </summary>

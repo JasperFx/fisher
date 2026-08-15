@@ -280,6 +280,23 @@ ones most likely to be assumed present:
   the end state, not a gap: fisher#8 was closed wontfix, and delivery is a bus integration's job here
   as it is on both siblings.
 
+### Registering a projection by type
+
+`Projections.Add<T>(lifecycle)` (fisher#76) **hides an inherited overload rather than adding a missing
+one**, and that is the whole content of the fix. `ProjectionGraph.Add<TProjectionType>` compiled on
+Fisher already and went straight to `All.Add`, bypassing `Register` — so it invoked neither
+`onAddProjection`, which registers the projection's event types (without which a read-only process
+cannot resolve them by name), nor `FisherProjectionOptions.Add`'s `PublishedTypes()` sweep, **without
+which the projection's document type is never mapped and its table is never created**. Both silent at
+registration; the symptom is `no such table` on the first event, or a rebuild that finds nothing.
+
+The `new` overload routes through the instance form, so the two spellings mean the same thing. Its
+constraint is deliberately *weaker* than the base's (`ProjectionBase, new()` rather than also
+`IProjectionSource`), because the instance form wraps a bare `IProjection` and refusing one here would
+decline a projection the store runs perfectly well; every call that satisfied the base still compiles.
+`registering_a_projection_by_type` asserts equivalence with the instance form rather than existence,
+which is the property that was actually missing.
+
 ### Inline projections
 
 `Snapshot<T>` closes `SingleStreamProjection<TDoc, TId>` over the aggregate's own identity type — the
