@@ -88,3 +88,48 @@ jobs:
           reporter: dotnet-trx
           list-suites: "failed"
           list-tests: "failed"
+
+  # fisher#73. The one property of the published package that nothing else can see: a consumer
+  # referencing only the Fisher package needs the projection-dispatcher generator, and its absence
+  # is silent — the consumer's assembly compiles clean (the generator's absence removes generated
+  # partials nothing hand-written references) and then throws "No source-generated dispatcher
+  # found ..." on its first projected event. No test can catch that from inside this repository,
+  # because the test projects reference the generator directly. So it is asserted against the
+  # packed nupkg here.
+  package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+
+      - name: Pack
+        run: dotnet pack src/Fisher/Fisher.csproj -c Release -o ./artifacts
+
+      - name: The package carries the projection dispatcher generator
+        run: |
+          nupkg=$(ls ./artifacts/Fisher.*.nupkg)
+          echo "Inspecting $nupkg"
+          unzip -l "$nupkg" | grep -q 'analyzers/dotnet/cs/JasperFx.Events.SourceGenerator.dll' || {
+            echo "::error::$nupkg does not bundle JasperFx.Events.SourceGenerator. A consumer's"
+            echo "::error::projections would compile clean and throw on their first event."
+            unzip -l "$nupkg"
+            exit 1
+          }
+
+      - name: The generator is bundled, not leaked as a transitive dependency
+        run: |
+          nupkg=$(ls ./artifacts/Fisher.*.nupkg)
+          if unzip -p "$nupkg" Fisher.nuspec | grep -qi 'JasperFx.Events.SourceGenerator'; then
+            echo "::error::Fisher.nuspec declares JasperFx.Events.SourceGenerator as a dependency."
+            echo "::error::It must stay PrivateAssets=all — flowing downstream double-loads the"
+            echo "::error::generator in a project referencing two Critter Stack stores (CS0111)."
+            exit 1
+          fi
