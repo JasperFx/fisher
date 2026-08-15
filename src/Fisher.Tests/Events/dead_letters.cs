@@ -1,3 +1,4 @@
+using Fisher.Linq;
 using Fisher.Tests.Events;
 using JasperFx;
 using JasperFx.Events;
@@ -153,6 +154,119 @@ public class dead_letters : IAsyncLifetime
         counts.Count.ShouldBe(2);
         counts.ShouldContain(x => x.ProjectionName == "tally" && x.ShardKey == "All" && x.Count == 2);
         counts.ShouldContain(x => x.ProjectionName == "ledger" && x.ShardKey == "All" && x.Count == 1);
+    }
+
+    /// <summary>
+    ///     The same counts scoped to one tenant (fisher#77).
+    /// </summary>
+    /// <remarks>
+    ///     Without the override this landed on JasperFx's default and threw <c>NotSupportedException</c>
+    ///     for a non-null tenant, where the store-global overload beside it worked. A monitoring console
+    ///     reads this to show per-tenant badges per shard.
+    /// </remarks>
+    [Fact]
+    public async Task counts_can_be_scoped_to_one_tenant()
+    {
+        var shard = Shard();
+
+        await StoreAsync(LetterFor(shard, 1, tenantId: "blue"));
+        await StoreAsync(LetterFor(shard, 2, tenantId: "blue"));
+        await StoreAsync(LetterFor(shard, 3, tenantId: "green"));
+
+        var blue = await _store.Database.FetchDeadLetterCountsAsync("blue",
+            TestContext.Current.CancellationToken);
+
+        var row = blue.ShouldHaveSingleItem();
+        row.ProjectionName.ShouldBe("tally");
+        row.ShardKey.ShouldBe("All");
+        row.Count.ShouldBe(2);
+
+        // Stamped, so a consumer keying by {ProjectionName}:{ShardKey} no longer collapses two tenants
+        // onto one badge — which is the whole reason the overload exists.
+        row.TenantId.ShouldBe("blue");
+
+        var green = await _store.Database.FetchDeadLetterCountsAsync("green",
+            TestContext.Current.CancellationToken);
+
+        green.ShouldHaveSingleItem().Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task a_tenant_with_no_dead_letters_counts_nothing()
+    {
+        await StoreAsync(LetterFor(Shard(), 1, tenantId: "blue"));
+
+        (await _store.Database.FetchDeadLetterCountsAsync("green", TestContext.Current.CancellationToken))
+            .ShouldBeEmpty();
+    }
+
+    /// <summary>
+    ///     Storing a <see cref="DeadLetterEvent" /> as a document is refused by name (fisher#77).
+    /// </summary>
+    /// <remarks>
+    ///     On Marten and Polecat a <c>DeadLetterEvent</c> is also an ordinary document, so
+    ///     <c>session.Store(letter)</c> lands it in the very table the dead-letter query reads. Here it
+    ///     is event-store infrastructure with its own table and its own write path — so before this the
+    ///     same call compiled, succeeded, wrote a <c>fi_doc_deadletterevent</c> row, and the query never
+    ///     saw it. Fisher's arrangement is the better one; the divergence is still worth failing over,
+    ///     because it is silent in the direction that hurts.
+    /// </remarks>
+    [Fact]
+    public async Task storing_a_dead_letter_as_a_document_is_refused_by_name()
+    {
+        await using var session = _store.LightweightSession();
+
+        var message = Should.Throw<InvalidOperationException>(() => session.Store(LetterFor(Shard(), 1)))
+            .Message;
+
+        message.ShouldContain(nameof(DeadLetterEvent));
+        message.ShouldContain("StoreDeadLetterEventAsync");
+    }
+
+    /// <remarks>
+    ///     Reading is refused for the same reason and by the same guard — every path into document
+    ///     storage resolves a mapping first, so a query that answered empty would be a different way of
+    ///     saying nothing was ever recorded. It surfaces at the terminal rather than at
+    ///     <c>Query&lt;T&gt;()</c>, because building the queryable resolves nothing.
+    /// </remarks>
+    [Fact]
+    public async Task querying_dead_letters_as_documents_is_refused_too()
+    {
+        await using var session = _store.QuerySession();
+
+        await Should.ThrowAsync<InvalidOperationException>(async () =>
+            await session.Query<DeadLetterEvent>().ToListAsync(TestContext.Current.CancellationToken));
+
+        await Should.ThrowAsync<InvalidOperationException>(async () =>
+            await session.LoadAsync<DeadLetterEvent>(Guid.NewGuid(), TestContext.Current.CancellationToken));
+    }
+
+    /// <remarks>
+    ///     A null tenant is store-global and must leave <c>TenantId</c> null rather than defaulting it:
+    ///     a consumer has to be able to tell "every tenant" from "the default tenant". It also has to
+    ///     count rows the daemon recorded with no tenant at all, which no tenant-scoped read can reach.
+    /// </remarks>
+    [Fact]
+    public async Task a_null_tenant_is_store_global_and_stamps_nothing()
+    {
+        var shard = Shard();
+
+        await StoreAsync(LetterFor(shard, 1, tenantId: "blue"));
+        await StoreAsync(LetterFor(shard, 2, tenantId: "green"));
+        await StoreAsync(LetterFor(shard, 3, tenantId: null));
+
+        var all = await _store.Database.FetchDeadLetterCountsAsync(tenantId: null,
+            TestContext.Current.CancellationToken);
+
+        var row = all.ShouldHaveSingleItem();
+        row.Count.ShouldBe(3);
+        row.TenantId.ShouldBeNull();
+
+        // ...and the tenant-less overload is the same answer, not a second implementation.
+        var implicitly_global =
+            await _store.Database.FetchDeadLetterCountsAsync(TestContext.Current.CancellationToken);
+
+        implicitly_global.ShouldHaveSingleItem().Count.ShouldBe(3);
     }
 
     /// <summary>
