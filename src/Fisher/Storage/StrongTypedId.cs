@@ -79,6 +79,48 @@ internal static class StrongTypedId
     }
 
     /// <summary>
+    ///     Resolve a wrapper eagerly, throwing when the type cannot be one — what
+    ///     <c>StoreOptions.RegisterValueType</c> is (fisher#75).
+    /// </summary>
+    /// <remarks>
+    ///     The difference from <see cref="TryResolve" /> is the whole value of the call. Discovery has
+    ///     to treat "not a wrapper" as the ordinary answer, because it is asked about every candidate
+    ///     identity member of every type; a caller who has <em>named</em> a type is asserting it is one,
+    ///     so the same answer is a configuration error and says so here rather than surfacing later as
+    ///     "has no identity member" from somewhere that cannot mention the wrapper.
+    /// </remarks>
+    /// <exception cref="InvalidValueTypeException"><paramref name="type" /> is not a usable wrapper.</exception>
+    internal static ValueTypeInfo Register(Type type)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+
+        if (TryResolve(type, out var info))
+        {
+            return info;
+        }
+
+        // Two different failures, and telling them apart is worth the second resolve: a shape problem
+        // is answered by ValueTypeInfo's own message, where a perfectly good wrapper around an
+        // unsupported inner type needs to be told which four Fisher can store.
+        try
+        {
+            var resolved = ValueTypeInfo.ForType(type);
+
+            throw new InvalidValueTypeException(type,
+                $"It wraps a {resolved.SimpleType.FullNameInCode()}, and Fisher stores an identity as a "
+                + "Guid, string, int or long.");
+        }
+        catch (InvalidValueTypeException)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            throw new InvalidValueTypeException(type, e.Message);
+        }
+    }
+
+    /// <summary>
     ///     The type actually stored for an identity — a wrapper's inner type, or the type itself.
     /// </summary>
     internal static Type StoredTypeFor(Type idType)

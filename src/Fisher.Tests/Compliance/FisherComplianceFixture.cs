@@ -331,13 +331,18 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         }
 
         /// <summary>
-        ///     A no-op: Fisher discovers strong-typed identifiers from their shape rather than needing
-        ///     them registered, which is Polecat's model. Marten is the store that needs the call.
+        ///     Delegates to <c>StoreOptions.RegisterValueType&lt;T&gt;()</c> (fisher#75).
         /// </summary>
+        /// <remarks>
+        ///     Fisher still discovers strong-typed identifiers from their shape, so nothing depends on
+        ///     the call — it was a no-op here until the store had one to delegate to. Delegating rather
+        ///     than staying empty is what makes the seam honest: the suite now exercises the same
+        ///     method a consumer would call, and a wrapper the store cannot actually resolve fails
+        ///     inside the suite rather than passing on a stub.
+        /// </remarks>
         /// <seealso cref="Fisher.Storage.StrongTypedId" />
         public void RegisterValueType<TValue>() where TValue : notnull
-        {
-        }
+            => _options.RegisterValueType<TValue>();
 
         /// <summary>
         ///     Register a mutating masking rule — the in-place form, for an event whose protected
