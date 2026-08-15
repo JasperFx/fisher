@@ -99,10 +99,9 @@ opts.Schema.For<OrderSummary>().Index(x => x.Customer);
 ```
 
 ::: tip
-The table is created by the migration when the projection is registered, and on demand at first write
-otherwise. Register the type if you will `Query<T>()` it before anything has been written — SQLite
-resolves a table name when it *prepares* a statement, so a query against a never-written type fails
-with `no such table` rather than returning empty.
+The table is created by the migration when the projection is registered, and on demand otherwise — at
+the first write of the type, or at the first read, whichever comes first. So a `Query<T>()` before
+anything has been projected returns empty rather than failing.
 :::
 
 ## Rebuilds

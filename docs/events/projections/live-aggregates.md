@@ -29,7 +29,9 @@ No registration is needed — a self-aggregating type is discovered.
 Conventional `Apply` / `Create` / `ShouldDelete` dispatch is **compile-time only**. JasperFx's source
 generator emits the dispatcher and there is no runtime fallback, so:
 
-- the defining project needs `JasperFx.Events.SourceGenerator`;
+- the generator runs in the assembly that **defines** the aggregate, so that assembly is the one that
+  has to reference Fisher — the package carries `JasperFx.Events.SourceGenerator` inside it, so there
+  is nothing to add yourself;
 - the aggregate needs an **identity member**, because the generator keys the dispatcher on
   `(TDoc, TId)` and resolves `TId` from it.
 
