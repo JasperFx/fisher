@@ -149,6 +149,7 @@ public partial class FisherQueryProvider
             statement.Joins[^1].On.AddRange(InnerConditions(join, side));
 
             sides.Add(side);
+            statement.DocumentTypes.Add(side.DocumentType);
             columns.AddRange(Qualified(side.Clause.SelectFields(), side.Alias));
 
             (result, intermediate, shape) = Collapse(join, sides, shape);

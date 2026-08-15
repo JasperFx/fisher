@@ -303,6 +303,46 @@ configuration — either way the first write may be the first time the table is 
 schema has already mapped are considered, which is how a document operation is told apart from an
 event one.
 
+### Reads provision the table too
+
+**Reaching that path from the write side only was fisher#74.** A `Query<T>()` or `LoadAsync<T>` against
+a type nothing had written yet failed with a raw `no such table`, where Marten and Polecat provision it
+and return an empty result. That is not an exotic shape — it is what every cold start does (resolve a
+cache before anything populates it, list a collection on a fresh install), and it is **asymmetric in
+the worst direction: it works on a warm database and fails on a fresh one**, so it passes in
+development and fails on first deploy.
+
+`FisherSession.EnsureDocumentTableForReadAsync` is the read-side entry, with three callers:
+
+- **`FisherQueryProvider.CommandFor`**, which is where every LINQ terminal converges — the same reason
+  the query span is opened there. A per-terminal call would be a dozen copies of one line and the one
+  that got forgotten would be the terminal nobody exercises against a fresh database. The types come
+  from `Statement.DocumentTypes`, which is the only thing on a statement that is not about rendering
+  SQL; the walk follows `Subquery`, because a count or an aggregate over a paged query holds the real
+  statement there, and each join adds its own side.
+- **`LoadByIdAsync` / `LoadManyByIdAsync`**, which go through storage rather than through LINQ.
+- **`MetadataForAsync`**, hand-built SQL and therefore its own caller — as it already is of the three
+  implicit filters.
+
+`CheckExistsAsync` and `LoadJsonAsync` need nothing, being routed through the LINQ path already.
+
+Three things that are decisions:
+
+- **A type with registered projection storage is skipped**, the same guard `FetchProjectionStorageAsync`
+  applies. Its rows are not in a Fisher document table, so provisioning would create one nothing ever
+  writes to.
+- **An enlisted session asserts rather than creating**, which is exactly what the write path does and
+  for the identical reason: the migration runs on its own connection and would block against the write
+  lock the caller's transaction is holding — a session deadlocking against itself. Naming the type
+  beats that, and beats the raw SQLite error it replaced.
+- **`AutoCreate.None` provisions, because the write path already does.** Weasel's explicit
+  `ApplyAllConfiguredChangesToDatabaseAsync` upgrades `None` to `CreateOrUpdate`, being the call that
+  means "apply it". Declining on reads alone would make the weaker operation the stricter one. Whether
+  the on-demand path should honour `AutoCreate.None` at all is a live question — `HiloSequence` checks
+  it and declines, so the store disagrees with itself — and is fisher#81;
+  `a_read_and_a_write_agree_about_auto_create_none` pins today's answer so either resolution is
+  deliberate.
+
 ### Flat-table projections
 
 `Projections/Flattened/` — a `FlatTableProjection` writes into a plain relational table keyed on the

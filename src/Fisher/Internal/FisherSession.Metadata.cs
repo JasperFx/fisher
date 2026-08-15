@@ -53,6 +53,10 @@ internal partial class FisherSession
     private async Task<StoredDocumentMetadata?> MetadataForIdAsync<T>(object id, CancellationToken token)
         where T : notnull
     {
+        // Hand-built SQL, so it is a caller of the on-demand provisioning in its own right (fisher#74)
+        // exactly as it is a caller of the implicit filters.
+        await EnsureDocumentTableForReadAsync(typeof(T), token).ConfigureAwait(false);
+
         var mapping = Options.Schema.MappingFor(typeof(T));
         var metadata = mapping.Metadata;
         var storage = StorageFor<T>();
