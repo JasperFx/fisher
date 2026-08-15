@@ -13,12 +13,17 @@ namespace Fisher.Tests.Projections;
 ///         The string case is the one that was broken. <c>StreamAction.AddEvent</c> stamps
 ///         <c>StreamId</c> / <c>StreamKey</c> / <c>TenantId</c> onto every event it takes, and the
 ///         <c>Guid</c> append overload goes through it — but
-///         <c>StreamAction.Append(graph, string, …)</c> appends straight to the backing list and does
+///         <c>StreamAction.Append(graph, string, …)</c> appended straight to the backing list and did
 ///         not, so an event appended to a string-identified stream reached a projection with an empty
-///         key. Nothing threw; the projection wrote a document with a blank field. Both identities are
-///         pinned here because the fix stamps them uniformly and the asymmetry is upstream's, not
-///         Fisher's — a future JasperFx release closing jasperfx#663 must not silently change which
-///         half is covered.
+///         key. Nothing threw; the projection wrote a document with a blank field.
+///     </para>
+///     <para>
+///         <b>These tests now guard the fix rather than a Fisher workaround.</b> Fisher stamped the
+///         identity in its own <c>AppendPlanner</c> until jasperfx#663 shipped in JasperFx 2.48.0,
+///         which routes both string overloads through <c>AddEvents</c>; the workaround is gone and
+///         this is what holds the behaviour. Both identities stay pinned because the asymmetry was
+///         upstream's, so a later release must not silently change which half is covered — and because
+///         the Guid half passing is what tells a regression here apart from a broken test.
 ///     </para>
 ///     <para>
 ///         The async daemon was never affected: <c>FisherEventLoader</c> hydrates through

@@ -2945,12 +2945,13 @@ coalescing on purpose. Do not present it as a performance feature.
 ### Compliance suites
 
 **Fisher is enrolled, in full.** `JasperFx.Events.ComplianceTests` is referenced unconditionally —
-the old `$(EnableComplianceTests)` gate is gone. **All 32 suites, 272 tests, are live**, as of 2.47.0.
+the old `$(EnableComplianceTests)` gate is gone. **All 32 suites, 272 tests, are live**, as of 2.48.0.
 The event sourcing half is 28 suites and 230 tests and has been the whole library since 2.45.0
 emptied the upstream event sourcing backlog; **2.46.0 added no suite and no test** (fisher#64), and
-the counts were re-verified against it rather than carried over, since "still 28" is exactly the
-claim a bump can quietly falsify. **2.47.0 added a second half rather than another event suite** —
-four *document* suites, 42 tests, over the store-agnostic contract described below.
+**2.48.0 added neither, and changed no existing suite file** — the counts were re-verified against a
+real run on each rather than carried over, since "still 32" is exactly the claim a bump can quietly
+falsify. **2.47.0 added a second half rather than another event suite** — four *document* suites, 42
+tests, over the store-agnostic contract described below.
 The four that arrived in 2.40.0/2.41.0 — `StringStreamIdentityCompliance`,
 `SnapshotLifecycleCompliance`, `MultiStreamProjectionCompliance`, `FlatTableProjectionCompliance` —
 went in on the same bump.
@@ -3097,19 +3098,31 @@ the same method compare that value against itself and pass unconditionally. Keep
 assignment and metadata application apart is what keeps the guard real; the cost is that a new
 metadata field in JasperFx will not reach Fisher's events until this method learns about it.
 
-**The same method stamps the stream's own identity onto each event, and that is not redundant**
-(fisher#72). `StreamAction.AddEvent` stamps `StreamId`/`StreamKey`/`TenantId`, and the `Guid` append
-factory goes through it — but `StreamAction.Append(graph, string, …)` appends straight to the backing
-list and does not, and `PrepareEvents` does not close the gap either (it sets `TenantId`, `Timestamp`,
-`Version` and `Sequence`, never the stream identity). So **every event appended to a string-identified
-stream reached an inline projection with an empty `StreamKey`** — which is exactly how a
-string-identified projection learns which entity it is projecting. Nothing threw: the projection ran
-and wrote a document with a blank field, and the first visible symptom was a query returning nothing.
-Filed upstream as [jasperfx#663](https://github.com/JasperFx/jasperfx/issues/663); stamping here is
-idempotent, so it stays correct when that ships. **The async daemon was never affected** —
-`FisherEventLoader` hydrates through `FisherEventsRowReader.ReadEventAcrossStreams`, which takes the
-identity off the row. `event_envelope_metadata_in_projections` pins both identities, because the
-asymmetry is upstream's and a release closing it must not silently change which half is covered.
+#### Closed upstream gap — jasperfx#663
+
+Historical, and the second completed cycle of the "workaround, filed upstream, removed when the fix
+ships" rule after `FisherCommandBuilder`. This method used to stamp the stream's own identity onto
+each event as well (fisher#72). `StreamAction.AddEvent` stamps `StreamId`/`StreamKey`/`TenantId` and
+the `Guid` append factory went through it — but `StreamAction.Append(graph, string, …)` appended
+straight to the backing list and did not, and `PrepareEvents` did not close the gap either (it sets
+`TenantId`, `Timestamp`, `Version` and `Sequence`, never the stream identity). So **every event
+appended to a string-identified stream reached an inline projection with an empty `StreamKey`** —
+which is exactly how such a projection learns which entity it is projecting. Nothing threw: the
+projection ran and wrote a document with a blank field, and the first visible symptom was a query
+returning nothing.
+
+Fixed upstream by [jasperfx#663](https://github.com/JasperFx/jasperfx/issues/663) and shipped in
+**JasperFx 2.48.0**, which routes both string overloads through `AddEvents`. **The workaround is gone;
+do not reintroduce it.** Verified by deleting it and running the full suite against 2.48.0 — 1228
+green, including the test written to fail without it. That removal is also what makes 2.48.0 a real
+floor for Fisher rather than a preference.
+
+**The async daemon was never affected** — `FisherEventLoader` hydrates through
+`FisherEventsRowReader.ReadEventAcrossStreams`, which takes the identity off the row.
+`event_envelope_metadata_in_projections` now guards the upstream fix rather than a Fisher workaround,
+and still pins **both** identities: the asymmetry was upstream's, so a later release must not silently
+change which half is covered, and the Guid half passing is what tells a regression apart from a broken
+test.
 
 `ComplianceEventProjection` binds to `Fisher.Projections.EventProjection`. Its one required member,
 `storeEntity`, is now an ordinary `IDocumentSession.Store` onto the session the events are committing

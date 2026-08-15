@@ -159,29 +159,25 @@ internal sealed class AppendPlanner
     ///         longer exists after a round trip.
     ///     </para>
     ///     <para>
-    ///         The stream's own identity is stamped here too, and that is <b>not</b> redundant
-    ///         (fisher#72). <c>StreamAction.AddEvent</c> stamps <c>StreamId</c>/<c>StreamKey</c>, but
-    ///         <c>StreamAction.Append(graph, string, …)</c> appends straight to the backing list and
-    ///         bypasses it, where the <c>Guid</c> overload beside it does not — so every event appended
-    ///         to a string-identified stream reached an inline projection with an empty
-    ///         <c>StreamKey</c>. That is the normal way a string-identified projection learns which
-    ///         entity it is projecting, and the failure was silent: the document was written with a
-    ///         blank key rather than anything throwing. Filed upstream as jasperfx#663; stamping here
-    ///         is idempotent, so it stays correct either way.
+    ///         <b>This used to stamp the stream's own identity as well, and no longer needs to.</b>
+    ///         fisher#72: <c>StreamAction.Append(graph, string, …)</c> appended straight to the backing
+    ///         list where the <c>Guid</c> overload beside it went through <c>AddEvent</c>, so every
+    ///         event appended to a string-identified stream reached an inline projection with an empty
+    ///         <c>StreamKey</c> — the normal way such a projection learns which entity it is projecting,
+    ///         and silent, because the document was written with a blank key rather than anything
+    ///         throwing. Fixed upstream by
+    ///         <see href="https://github.com/JasperFx/jasperfx/issues/663">jasperfx#663</see> and
+    ///         shipped in <b>JasperFx 2.48.0</b>, which routes both string overloads through
+    ///         <c>AddEvents</c>; the workaround here is gone, and the behaviour is pinned by
+    ///         <c>event_envelope_metadata_in_projections</c> rather than by this method. Do not
+    ///         reintroduce it — and note that removing it is what makes 2.48.0 a real floor rather than
+    ///         a preference.
     ///     </para>
     /// </remarks>
     private void ApplySessionMetadata(StreamAction stream)
     {
         foreach (var @event in stream.Events)
         {
-            @event.StreamId = stream.Id;
-            @event.StreamKey = stream.Key;
-
-            if (!string.IsNullOrEmpty(stream.TenantId))
-            {
-                @event.TenantId = stream.TenantId;
-            }
-
             if (_session.CorrelationIdEnabled)
             {
                 @event.CorrelationId ??= _session.CorrelationId;

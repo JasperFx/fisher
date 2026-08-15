@@ -30,7 +30,7 @@ of joins, which cost one new type and made the rest of the join code shorter.
 
 Before that, the 2026-08-10 wave (#60–#66): two of those audits found real defects (#60's dead
 heartbeat branch, #63's composite teardown), #62's ported matrix found two more, and #61 and #66
-confirmed Fisher was already correct and now pin it. On JasperFx **2.47.0** / Weasel **9.24.0**.
+confirmed Fisher was already correct and now pin it. On JasperFx **2.48.0** / Weasel **9.24.0**.
 **All 32 compliance suites, 272 tests, green** — 28 event suites and 230 tests, plus 2.47.0's four
 document suites and 42 tests. 1241 tests green on net9.0 and net10.0.
 

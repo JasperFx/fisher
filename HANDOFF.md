@@ -448,8 +448,8 @@ Three of the six turned up a real defect or a wrong premise, which is the useful
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.47.0 ships **32 suites, 272 tests**. Fisher passes **all 272,
-all 32 suites**. Every suite compiles; every one is also subclassed and running.
+`JasperFx.Events.ComplianceTests` 2.48.0 ships **32 suites, 272 tests** — it added no suite and
+changed no existing suite file. Fisher passes **all 272, all 32 suites**. Every suite compiles; every one is also subclassed and running.
 
 The library is now two halves. The **event sourcing** half is 28 suites and 230 tests, and its
 upstream backlog has been empty since 2.45.0 — that is the whole of it rather than a snapshot. The
