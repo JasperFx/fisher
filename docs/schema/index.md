@@ -51,15 +51,16 @@ A document type can be stored without ever being registered, and a snapshot type
 projection configuration — so the first write may be the first time the table is needed. Fisher
 creates it at commit.
 
-::: warning
-Two exceptions:
+A **read** does the same: `Query<T>()` or `LoadAsync<T>` against a type nothing has written yet
+provisions its table and answers empty, rather than failing. That matters more than it sounds, because
+it is what every cold start does — resolving a cache before anything has populated it, listing a
+collection on a fresh install.
 
-- An [enlisted session](/documents/sessions#enlisting-in-your-own-connection-or-transaction) does not
-  do this — running a migration on a second connection from inside your transaction would deadlock
-  against your own write lock. A missing table throws by name.
-- A **query** against a type whose table has never been created fails with `no such table`, because
-  SQLite resolves a table name when it *prepares* a statement. Register the type, or apply the schema
-  at startup.
+::: warning
+An [enlisted session](/documents/sessions#enlisting-in-your-own-connection-or-transaction) is the one
+exception, on reads as on writes: running a migration on a second connection from inside your
+transaction would deadlock against your own write lock, so a missing table throws by name instead.
+Apply the schema before enlisting.
 :::
 
 ## Multi-tenancy

@@ -93,12 +93,12 @@ To seed reference data at startup, see [Initial Baseline Data](/documents/initia
 You do not have to register a document type. The first `Store` of an unregistered type creates its
 table.
 
+A read provisions the table too, so `Query<T>()` or `LoadAsync<T>` against a type nothing has written
+yet answers empty rather than failing.
+
 ::: warning
 The exception is an [enlisted session](/documents/sessions#enlisting-in-your-own-connection-or-transaction),
-where a missing table throws by name rather than being created — running a migration on a second
-connection from inside your transaction would deadlock against your own write lock.
-
-The other place this bites is a query: SQLite resolves a table name when it *prepares* a statement,
-so `Query<T>()` against a type that has never been written fails with `no such table` rather than
-returning an empty list. Register the type, or apply the schema at startup.
+where a missing table throws by name rather than being created, on reads as on writes — running a
+migration on a second connection from inside your transaction would deadlock against your own write
+lock. Apply the schema before enlisting.
 :::

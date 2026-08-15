@@ -32,8 +32,9 @@ public class Order
 
 ::: warning
 The `Apply` dispatcher is source-generated with no runtime fallback, keyed on `(TDoc, TId)`. The
-aggregate needs an identity member, and the defining project needs a reference to
-`JasperFx.Events.SourceGenerator`.
+aggregate needs an identity member, and the generator runs in the assembly that **defines** it — so
+that assembly is the one that has to reference Fisher. The package carries
+`JasperFx.Events.SourceGenerator` inside it; there is no analyzer reference to add yourself.
 :::
 
 ## Inline snapshots

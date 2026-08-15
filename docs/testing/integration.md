@@ -85,17 +85,26 @@ See [Tearing Down Document Storage](/schema/cleaning).
 
 ## Registering document types up front
 
-::: warning
-SQLite resolves a table name when it **prepares** a statement, so a `Query<T>()` against a type that
-has never been written fails with `no such table` rather than returning an empty list.
-
-Register the types your tests query, or apply the schema at startup. This is the single most common
-first surprise for a test suite.
+::: tip
+**A read against a type nothing has written provisions its table and answers empty**, exactly as the
+first write of that type does. So a test that queries a collection before seeding it gets an empty
+list, not `no such table`.
 :::
+
+Registering the types up front is still worth doing, for a different reason: it puts every table in
+the one migration your fixture already runs, instead of paying a migration on the first read or write
+of each type.
 
 ```cs
 opts.Schema.For<Order>();
 ```
+
+::: warning
+An [enlisted session](/documents/sessions#enlisting-in-your-own-connection-or-transaction) is the
+exception, on reads as on writes: it cannot provision, because running a migration on a second
+connection from inside your transaction would deadlock against your own write lock. A missing table
+throws by name there.
+:::
 
 ## Testing async projections
 

@@ -62,7 +62,9 @@ public class Order
 ::: warning
 The dispatcher is emitted by `JasperFx.Events.SourceGenerator`, and **there is no runtime fallback**.
 
-- The project defining the aggregate or projection needs a reference to that package.
+- **The Fisher package carries the generator**, so referencing Fisher is enough — no analyzer
+  reference of your own. The generator runs in the assembly that *defines* the aggregate or
+  projection, so that assembly is the one that has to reference Fisher.
 - A conventional-method **projection class** must be declared `partial`.
 - The aggregate needs an identity member, because the generator keys the dispatcher on `(TDoc, TId)`.
 - `TId` is the aggregate's **own** id type — a strong-typed id is a wrapper struct, and the generated

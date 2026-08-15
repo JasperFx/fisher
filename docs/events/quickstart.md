@@ -30,7 +30,9 @@ public class Order
 ::: warning
 The `Apply` dispatcher is **source-generated**, and there is no runtime fallback. Two consequences:
 
-- The project defining the aggregate needs a reference to `JasperFx.Events.SourceGenerator`.
+- The generator runs in the assembly that **defines the aggregate**, so that assembly is the one that
+  has to reference Fisher. The Fisher package carries `JasperFx.Events.SourceGenerator` inside it, so
+  there is no analyzer reference to add yourself.
 - A conventional-method **projection class** must be declared `partial`.
 
 An aggregate also needs an identity member, because the generator keys the dispatcher on

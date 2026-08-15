@@ -164,8 +164,9 @@ Fisher therefore *requires* an identity member and says so, rather than defaulti
 identity primitive and failing later with a message about a missing generated dispatcher.
 
 ::: warning
-The generator runs in the assembly that **defines the aggregate**, so that project needs a reference
-to `JasperFx.Events.SourceGenerator`, and a conventional-method projection class must be declared
+The generator runs in the assembly that **defines the aggregate**, so that assembly is the one that
+has to reference Fisher — the package carries `JasperFx.Events.SourceGenerator` inside it, so there is
+no analyzer reference to add yourself. A conventional-method projection class must be declared
 `partial`.
 :::
 
