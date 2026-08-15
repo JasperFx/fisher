@@ -405,18 +405,57 @@ public partial class FisherDatabase : IEventDatabase
     ///     Every shard's dead-letter count in one read — the "give me every row" shape
     ///     <see cref="AllProjectionProgress" /> has, for the monitoring tools that render a table.
     /// </summary>
-    public async Task<IReadOnlyList<DeadLetterShardCount>> FetchDeadLetterCountsAsync(
+    public Task<IReadOnlyList<DeadLetterShardCount>> FetchDeadLetterCountsAsync(
+        CancellationToken token = default)
+        => FetchDeadLetterCountsAsync(tenantId: null, token);
+
+    /// <summary>
+    ///     The same counts scoped to one tenant, with the tenant stamped onto each row (fisher#77).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Without this the call lands on JasperFx's default, which throws
+    ///         <see cref="NotSupportedException" /> for a non-null tenant — so a monitoring console
+    ///         rendering per-tenant dead-letter badges got an exception where the store-global overload
+    ///         beside it worked.
+    ///     </para>
+    ///     <para>
+    ///         Cheap because Fisher's dead-letter table is store-global and records the failing event's
+    ///         tenant as an ordinary data column: this is the store-global query with a
+    ///         <c>where tenant_id = …</c> and the same grouping, not a second query shape. That is true
+    ///         under conjoined tenancy; under database-per-tenant every tenant has its own
+    ///         <c>fi_dead_letters</c>, so the filter is a no-op that costs nothing and still returns
+    ///         rows stamped with the tenant a consumer keyed by.
+    ///     </para>
+    ///     <para>
+    ///         <b>A null tenant is store-global and leaves <c>TenantId</c> null</b> rather than
+    ///         defaulting it, which is what the interface asks for — a consumer keying by
+    ///         <c>{ProjectionName}:{ShardKey}</c> must be able to tell "every tenant" from "the default
+    ///         tenant". Rows whose <c>tenant_id</c> is NULL are counted in the store-global answer and
+    ///         reachable from no tenant-scoped one, which is the honest reading of a dead letter the
+    ///         daemon recorded without a tenant.
+    ///     </para>
+    /// </remarks>
+    public async Task<IReadOnlyList<DeadLetterShardCount>> FetchDeadLetterCountsAsync(string? tenantId,
         CancellationToken token = default)
     {
         return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
         {
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
+
+            var tenantFilter = tenantId is null ? "" : " where tenant_id = @tenant";
+
             command.CommandText = $"""
                                    select projection_name, shard_name, count(*)
-                                   from {_events.DeadLetterTableName}
+                                   from {_events.DeadLetterTableName}{tenantFilter}
                                    group by projection_name, shard_name
                                    """;
+
+            if (tenantId is not null)
+            {
+                command.Parameters.AddWithValue("@tenant", tenantId);
+            }
 
             var results = new List<DeadLetterShardCount>();
 
@@ -424,7 +463,7 @@ public partial class FisherDatabase : IEventDatabase
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
                 results.Add(new DeadLetterShardCount(reader.GetString(0), reader.GetString(1),
-                    reader.GetInt64(2)));
+                    reader.GetInt64(2), tenantId));
             }
 
             return (IReadOnlyList<DeadLetterShardCount>)results;

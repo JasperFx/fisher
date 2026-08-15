@@ -755,6 +755,24 @@ Marten's. Three decisions in it:
 - **It is an upsert, not an insert.** JasperFx assigns the version-7 id at construction and the
   daemon retries the write in the background, so a retry landing after a successful first attempt
   carries the same primary key.
+- **`FetchDeadLetterCountsAsync(tenantId)` is overridden** (fisher#77), where without it the call lands
+  on JasperFx's default and *throws* `NotSupportedException` for a non-null tenant while the
+  store-global overload beside it works — which a monitoring console meets as soon as it renders
+  per-tenant badges. Cheap because the table is store-global and records the failing event's tenant as
+  an ordinary data column, so it is the same query with a `where tenant_id = …` rather than a second
+  shape. **A null tenant stays store-global and leaves `TenantId` null** rather than defaulting it, so
+  a consumer keying by `{ProjectionName}:{ShardKey}` can tell "every tenant" from "the default
+  tenant" — and rows the daemon recorded with no tenant are counted there and reachable from no
+  tenant-scoped read, which is the honest answer for them.
+- **A `DeadLetterEvent` is refused as a document**, in `DocumentSchema.MappingFor`. On both siblings it
+  is *also* an ordinary document, so `session.Store(deadLetterEvent)` lands it in the very table
+  `QueryDeadLetterEventsAsync` reads; here it is infrastructure with its own table and its own write
+  path, so the same call compiled, succeeded, wrote a `fi_doc_deadletterevent` row and the query never
+  saw it. **Fisher's arrangement is the better one and the divergence is still worth failing over**,
+  because it is silent in the direction that hurts: ported code keeps working and quietly stops
+  recording anything. The guard sits on the mapping rather than on `Store`, because every path into
+  document storage — write, query, load, an explicit `Schema.For<T>()` — resolves a mapping first, so
+  one guard covers all of them and cannot be reached around.
 
 Ordering matters when clearing event data, and it is why `DeleteAllEventDataAsync` uses an ordered
 pass rather than the cleaner's unordered one: `fi_event_tag_*` rows have a real foreign key to

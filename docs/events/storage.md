@@ -164,6 +164,33 @@ Three decisions in it:
 
 Nothing else removes them, which is why `DeleteAllEventDataAsync` does.
 
+### Reading them
+
+```cs
+// Every shard, store-global
+var counts = await store.Database.FetchDeadLetterCountsAsync();
+
+// One tenant, with TenantId stamped onto each row
+var forBlue = await store.Database.FetchDeadLetterCountsAsync("blue");
+
+// Drill in, newest first
+var rows = await store.Database.QueryDeadLetterEventsAsync(shard, tenantId: null, offset: 0, limit: 50);
+```
+
+A null tenant is store-global and leaves `TenantId` null, so a consumer keying by
+`{ProjectionName}:{ShardKey}` can tell "every tenant" from "the default tenant". Rows the daemon
+recorded with no tenant at all are counted in the store-global answer and reachable from no
+tenant-scoped one.
+
+::: warning
+**A `DeadLetterEvent` is not a document here, and Fisher refuses to treat it as one.** On Marten and
+Polecat it is *also* an ordinary document, so `session.Store(deadLetterEvent)` lands it in the very
+table the dead-letter query reads. In Fisher it is event store infrastructure with its own table and
+its own write path, so the same call would write a `fi_doc_deadletterevent` row the query can never
+see. It throws instead, naming `StoreDeadLetterEventAsync` — which is what the daemon does, and what
+ports back to either sibling unchanged.
+:::
+
 ## Deletion order
 
 `DeleteAllEventDataAsync` deletes in a fixed order — **tag tables first**, dead letters last.
