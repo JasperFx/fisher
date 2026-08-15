@@ -434,9 +434,14 @@ internal partial class FisherSession
         where T : notnull where TId : notnull
         => LoadByIdAsync<T, TId>(id, token);
 
-    private Task<T?> LoadByIdAsync<T, TId>(TId id, CancellationToken token)
+    private async Task<T?> LoadByIdAsync<T, TId>(TId id, CancellationToken token)
         where T : notnull where TId : notnull
-        => ((Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>()).LoadAsync(id, this, token);
+    {
+        await EnsureDocumentTableForReadAsync(typeof(T), token).ConfigureAwait(false);
+
+        return await ((Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>())
+            .LoadAsync(id, this, token).ConfigureAwait(false);
+    }
 
     /// <summary>
     ///     Load several documents by identity. Missing ids are simply absent from the result, which is
@@ -478,9 +483,14 @@ internal partial class FisherSession
         where T : notnull where TId : notnull
         => LoadManyByIdAsync<T, TId>(ids, token);
 
-    private Task<IReadOnlyList<T>> LoadManyByIdAsync<T, TId>(TId[] ids, CancellationToken token)
+    private async Task<IReadOnlyList<T>> LoadManyByIdAsync<T, TId>(TId[] ids, CancellationToken token)
         where T : notnull where TId : notnull
-        => ((Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>()).LoadManyAsync(ids, this, token);
+    {
+        await EnsureDocumentTableForReadAsync(typeof(T), token).ConfigureAwait(false);
+
+        return await ((Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>())
+            .LoadManyAsync(ids, this, token).ConfigureAwait(false);
+    }
 
     // ---- existence, plans and diagnostics (fisher#37) ----
 

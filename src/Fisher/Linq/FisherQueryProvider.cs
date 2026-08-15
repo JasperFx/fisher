@@ -1027,6 +1027,7 @@ public partial class FisherQueryProvider : IQueryProvider
             NonStaleTimeout = parser.NonStaleTimeout
         };
 
+        statement.DocumentTypes.Add(sourceType);
         statement.OrderBys.AddRange(parser.OrderBys);
 
         statement.Wheres.AddRange(parser.Wheres);
@@ -1331,6 +1332,19 @@ public partial class FisherQueryProvider : IQueryProvider
     private async Task<Microsoft.Data.Sqlite.SqliteCommand> CommandFor(Statement statement,
         CancellationToken token)
     {
+        // fisher#74: a query against a type nothing has written yet provisions its table, exactly as
+        // the first write of that type does. Here rather than at each terminal because this is the one
+        // place every terminal converges — the same reason the query span is opened here. The walk
+        // covers a wrapped statement (a count or an aggregate over a paged query holds the real one as
+        // its Subquery) and every side of a join.
+        for (var current = statement; current is not null; current = current.Subquery)
+        {
+            foreach (var documentType in current.DocumentTypes)
+            {
+                await _session.EnsureDocumentTableForReadAsync(documentType, token).ConfigureAwait(false);
+            }
+        }
+
         // QueryForNonStaleData: wait for the daemon before reading, not as part of the SQL. Read
         // through the subquery chain so a count, a page, an aggregate or a reversal carries it without
         // its wrap site having to remember to.

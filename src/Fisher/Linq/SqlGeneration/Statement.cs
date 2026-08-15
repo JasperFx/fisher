@@ -57,6 +57,18 @@ internal class Statement
     /// <summary>The joined tables, in order. Empty for every query that is not a join.</summary>
     public List<Joins.JoinClause> Joins { get; } = [];
 
+    /// <summary>
+    ///     Every document type this statement reads from — the source type, plus one per joined side.
+    /// </summary>
+    /// <remarks>
+    ///     Carried so <c>FisherQueryProvider.CommandFor</c> can provision the tables before executing
+    ///     (fisher#74). It is the only thing on a statement that is not about rendering SQL, and it is
+    ///     here rather than at each terminal because <c>CommandFor</c> is where every terminal converges
+    ///     — a per-terminal call would be a dozen copies of one line, one of which would be forgotten,
+    ///     and the terminal that forgot it would be the one nobody exercises against a fresh database.
+    /// </remarks>
+    public List<Type> DocumentTypes { get; } = [];
+
     public string SelectColumns { get; set; } = "data";
     public List<ISqlFragment> Wheres { get; } = [];
     public List<(string Locator, bool Descending)> OrderBys { get; } = [];

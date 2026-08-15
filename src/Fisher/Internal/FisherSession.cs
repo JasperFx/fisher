@@ -740,6 +740,59 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     }
 
     /// <summary>
+    ///     Create a document type's table before reading it, exactly as the commit loop does before
+    ///     writing it (fisher#74).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <c>EnsureDocumentTableAsync</c> used to be reached from the write path only, so a
+    ///         <c>Query&lt;T&gt;()</c> or <c>LoadAsync&lt;T&gt;</c> against a type nothing had written
+    ///         yet failed with a raw <c>no such table</c> where Marten and Polecat provision it and
+    ///         return an empty result. That is not an unusual shape — it is what every cold start does,
+    ///         and it is asymmetric in the worst direction: it works on a warm database and fails on a
+    ///         fresh one, so it passes in development and fails on first deploy.
+    ///     </para>
+    ///     <para>
+    ///         <b>A type stored by a registered projection provider is skipped</b>, because its rows are
+    ///         not in a Fisher document table at all — the same guard <c>FetchProjectionStorageAsync</c>
+    ///         applies, and for the same reason: provisioning one here would create a table nothing ever
+    ///         writes to.
+    ///     </para>
+    ///     <para>
+    ///         <b>An enlisted session asserts instead of creating</b>, which is what the write path
+    ///         already does and for the identical reason — the migration runs on its own connection and
+    ///         would block against the write lock the caller's transaction is holding. Naming the type
+    ///         beats deadlocking, and beats the raw SQLite error this replaced.
+    ///     </para>
+    ///     <para>
+    ///         <b>A read provisions under <c>AutoCreate.None</c> because a write already does.</b> Both
+    ///         reach <c>EnsureDocumentTableAsync</c>, and Weasel's explicit
+    ///         <c>ApplyAllConfiguredChangesToDatabaseAsync</c> upgrades <c>None</c> to
+    ///         <c>CreateOrUpdate</c> — it is the call that means "apply it". Making a read decline where
+    ///         a write does not would be a stricter rule on the weaker operation, and would leave the
+    ///         cold-start shape this exists to fix broken for exactly the deployments most likely to
+    ///         meet it. Whether the on-demand path should honour <c>AutoCreate.None</c> at all is a
+    ///         question about both halves at once — <c>HiloSequence</c> checks it and declines, so the
+    ///         store is not consistent with itself — and is fisher#81.
+    ///     </para>
+    /// </remarks>
+    internal async Task EnsureDocumentTableForReadAsync(Type documentType, CancellationToken token)
+    {
+        if (Options.Projections.StorageProviders.HasProviderFor(documentType))
+        {
+            return;
+        }
+
+        if (EnlistedTransaction is not null)
+        {
+            await AssertDocumentTableExistsAsync(documentType, token).ConfigureAwait(false);
+            return;
+        }
+
+        await FisherDatabase.EnsureDocumentTableAsync(documentType, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
     ///     For an enlisted session, check that a document type's table is already there rather than
     ///     creating it.
     /// </summary>
