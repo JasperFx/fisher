@@ -3011,6 +3011,20 @@ the same method compare that value against itself and pass unconditionally. Keep
 assignment and metadata application apart is what keeps the guard real; the cost is that a new
 metadata field in JasperFx will not reach Fisher's events until this method learns about it.
 
+**The same method stamps the stream's own identity onto each event, and that is not redundant**
+(fisher#72). `StreamAction.AddEvent` stamps `StreamId`/`StreamKey`/`TenantId`, and the `Guid` append
+factory goes through it — but `StreamAction.Append(graph, string, …)` appends straight to the backing
+list and does not, and `PrepareEvents` does not close the gap either (it sets `TenantId`, `Timestamp`,
+`Version` and `Sequence`, never the stream identity). So **every event appended to a string-identified
+stream reached an inline projection with an empty `StreamKey`** — which is exactly how a
+string-identified projection learns which entity it is projecting. Nothing threw: the projection ran
+and wrote a document with a blank field, and the first visible symptom was a query returning nothing.
+Filed upstream as [jasperfx#663](https://github.com/JasperFx/jasperfx/issues/663); stamping here is
+idempotent, so it stays correct when that ships. **The async daemon was never affected** —
+`FisherEventLoader` hydrates through `FisherEventsRowReader.ReadEventAcrossStreams`, which takes the
+identity off the row. `event_envelope_metadata_in_projections` pins both identities, because the
+asymmetry is upstream's and a release closing it must not silently change which half is covered.
+
 `ComplianceEventProjection` binds to `Fisher.Projections.EventProjection`. Its one required member,
 `storeEntity`, is now an ordinary `IDocumentSession.Store` onto the session the events are committing
 in, so a `Create`/`Project` method's return value lands in the same transaction as the event that

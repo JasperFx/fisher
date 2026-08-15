@@ -1,0 +1,150 @@
+using Fisher.Projections;
+using JasperFx;
+using JasperFx.Events;
+using JasperFx.Events.Projections;
+
+namespace Fisher.Tests.Projections;
+
+/// <summary>
+///     What an <see cref="IEvent" /> envelope carries when an inline projection folds it (fisher#72).
+/// </summary>
+/// <remarks>
+///     <para>
+///         The string case is the one that was broken. <c>StreamAction.AddEvent</c> stamps
+///         <c>StreamId</c> / <c>StreamKey</c> / <c>TenantId</c> onto every event it takes, and the
+///         <c>Guid</c> append overload goes through it — but
+///         <c>StreamAction.Append(graph, string, …)</c> appends straight to the backing list and does
+///         not, so an event appended to a string-identified stream reached a projection with an empty
+///         key. Nothing threw; the projection wrote a document with a blank field. Both identities are
+///         pinned here because the fix stamps them uniformly and the asymmetry is upstream's, not
+///         Fisher's — a future JasperFx release closing jasperfx#663 must not silently change which
+///         half is covered.
+///     </para>
+///     <para>
+///         The async daemon was never affected: <c>FisherEventLoader</c> hydrates through
+///         <c>FisherEventsRowReader.ReadEventAcrossStreams</c>, which takes the identity off the row.
+///     </para>
+/// </remarks>
+public class event_envelope_metadata_in_projections : IAsyncLifetime
+{
+    private readonly TemporaryDatabase _database = TemporaryDatabase.Create("envelope-metadata");
+    private DocumentStore _guidStore = null!;
+    private DocumentStore _stringStore = null!;
+
+    public async ValueTask InitializeAsync()
+    {
+        _stringStore = DocumentStore.For(options =>
+        {
+            options.ConnectionString = _database.ConnectionString;
+            options.DatabaseSchemaName = "strings";
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Events.StreamIdentity = StreamIdentity.AsString;
+            options.Schema.For<EnvelopeSnapshot>();
+            options.Projections.Add(new EnvelopeProjection(), ProjectionLifecycle.Inline);
+        });
+
+        _guidStore = DocumentStore.For(options =>
+        {
+            options.ConnectionString = _database.ConnectionString;
+            options.DatabaseSchemaName = "guids";
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Schema.For<EnvelopeSnapshot>();
+            options.Projections.Add(new EnvelopeProjection(), ProjectionLifecycle.Inline);
+        });
+
+        await _stringStore.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
+        await _guidStore.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _stringStore.DisposeAsync();
+        await _guidStore.DisposeAsync();
+        _database.Dispose();
+    }
+
+    [Fact]
+    public async Task an_appended_event_carries_its_stream_key_into_an_inline_projection()
+    {
+        await using (var session = _stringStore.LightweightSession())
+        {
+            session.Events.Append("TestService", new EnvelopeRecorded("first"), new EnvelopeRecorded("second"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var query = _stringStore.LightweightSession();
+
+        var first = await query.LoadAsync<EnvelopeSnapshot>("first", TestContext.Current.CancellationToken);
+        var second = await query.LoadAsync<EnvelopeSnapshot>("second", TestContext.Current.CancellationToken);
+
+        first.ShouldNotBeNull();
+        second.ShouldNotBeNull();
+
+        first.StreamKey.ShouldBe("TestService");
+        second.StreamKey.ShouldBe("TestService");
+
+        first.TenantId.ShouldBe(StorageConstants.DefaultTenantId);
+        first.Version.ShouldBe(1);
+        second.Version.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task a_started_stream_carries_its_stream_key_into_an_inline_projection()
+    {
+        await using (var session = _stringStore.LightweightSession())
+        {
+            session.Events.StartStream("StartedService", new EnvelopeRecorded("started"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var query = _stringStore.LightweightSession();
+
+        var entry = await query.LoadAsync<EnvelopeSnapshot>("started", TestContext.Current.CancellationToken);
+
+        entry.ShouldNotBeNull();
+        entry.StreamKey.ShouldBe("StartedService");
+    }
+
+    [Fact]
+    public async Task an_appended_event_carries_its_stream_id_into_an_inline_projection()
+    {
+        var streamId = Guid.NewGuid();
+
+        await using (var session = _guidStore.LightweightSession())
+        {
+            session.Events.Append(streamId, new EnvelopeRecorded("guid-first"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var query = _guidStore.LightweightSession();
+
+        var entry = await query.LoadAsync<EnvelopeSnapshot>("guid-first", TestContext.Current.CancellationToken);
+
+        entry.ShouldNotBeNull();
+        entry.StreamId.ShouldBe(streamId);
+    }
+}
+
+public record EnvelopeRecorded(string Name);
+
+// partial, because JasperFx's source generator emits the conventional-method dispatcher into it.
+public partial class EnvelopeProjection : EventProjection
+{
+    public EnvelopeSnapshot Create(IEvent<EnvelopeRecorded> e) => new()
+    {
+        Id = e.Data.Name,
+        StreamId = e.StreamId,
+        StreamKey = e.StreamKey ?? string.Empty,
+        TenantId = e.TenantId ?? string.Empty,
+        Version = e.Version
+    };
+}
+
+public class EnvelopeSnapshot
+{
+    public string Id { get; set; } = string.Empty;
+    public Guid StreamId { get; set; }
+    public string StreamKey { get; set; } = string.Empty;
+    public string TenantId { get; set; } = string.Empty;
+    public long Version { get; set; }
+}
