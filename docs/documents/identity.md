@@ -113,8 +113,23 @@ var order = await session.LoadAsync<Order, OrderId>(id);
 
 ::: tip
 **Fisher discovers wrappers rather than requiring registration**, which is Polecat's model rather than
-Marten's. There is no `RegisterValueType<T>` call to make.
+Marten's. Nothing above needs a registration call.
 :::
+
+`RegisterValueType<T>()` exists anyway, so a configuration block reads identically whichever store it
+is pointed at:
+
+```cs
+opts.ConfigureSerialization(EnumStorage.AsString, Casing.CamelCase);
+opts.Events.StreamIdentity = StreamIdentity.AsString;
+opts.RegisterValueType<CatchId>();
+```
+
+It is not quite a no-op, and the difference is the reason to use it. Discovery has to treat "not a
+wrapper" as the ordinary answer, because it is asked about every candidate identity member of every
+type. Naming a type here is an *assertion* that it is one, so the same answer becomes a configuration
+error — reported at configuration time, with the type named, rather than surfacing much later as
+`has no identity member`.
 
 Two things fall out of the design and are worth knowing:
 

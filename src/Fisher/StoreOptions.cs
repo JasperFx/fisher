@@ -316,6 +316,47 @@ public class StoreOptions
         Serializer = serializer;
     }
 
+    /// <summary>
+    ///     Register a strong-typed identifier — a wrapper around a single <see cref="Guid" />,
+    ///     <c>string</c>, <c>int</c> or <c>long</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Fisher discovers these on its own, so calling this is never required.</b> It exists
+    ///         because Marten's <c>StoreOptions.RegisterValueType&lt;T&gt;()</c> does and Polecat gained
+    ///         one in polecat#459, and store configuration ought to be portable: a shared block that
+    ///         reads <c>opts.RegisterValueType&lt;AlertId&gt;()</c> on two stores should not have to drop
+    ///         the line for the third and explain the omission in a comment (fisher#75).
+    ///     </para>
+    ///     <para>
+    ///         It is not quite a no-op, and the difference is what makes it worth having rather than
+    ///         merely accepting. Discovery has to treat "not a wrapper" as the ordinary answer, because
+    ///         it is asked about every candidate identity member of every type. Naming a type here is an
+    ///         <em>assertion</em> that it is one, so the same answer becomes a configuration error and is
+    ///         reported at configuration time — rather than surfacing much later as "has no identity
+    ///         member" from a place that cannot mention the wrapper.
+    ///     </para>
+    /// </remarks>
+    /// <typeparam name="TValueType">The wrapper, e.g. <c>readonly record struct OrderId(Guid Value)</c>.</typeparam>
+    /// <returns>The resolved shape, matching Marten's and Polecat's return type.</returns>
+    /// <exception cref="JasperFx.Core.Reflection.InvalidValueTypeException">
+    ///     <typeparamref name="TValueType" /> is not a usable wrapper, or wraps something Fisher cannot
+    ///     store as an identity.
+    /// </exception>
+    public JasperFx.Core.Reflection.ValueTypeInfo RegisterValueType<TValueType>() where TValueType : notnull
+        => Storage.StrongTypedId.Register(typeof(TValueType));
+
+    /// <summary>
+    ///     Register a strong-typed identifier by <see cref="Type" />. See
+    ///     <see cref="RegisterValueType{TValueType}" /> for why this exists.
+    /// </summary>
+    /// <exception cref="JasperFx.Core.Reflection.InvalidValueTypeException">
+    ///     <paramref name="type" /> is not a usable wrapper, or wraps something Fisher cannot store as
+    ///     an identity.
+    /// </exception>
+    public JasperFx.Core.Reflection.ValueTypeInfo RegisterValueType(Type type)
+        => Storage.StrongTypedId.Register(type);
+
     internal void AssertValid()
     {
         // Under database-per-tenant there is no store-level connection string to set: every tenant

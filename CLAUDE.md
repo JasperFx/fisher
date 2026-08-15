@@ -1866,7 +1866,18 @@ ADO.NET boundary while the document keeps the wrapper. Nothing downstream knows 
 the table shape, the write SQL and the positional `?` contract are untouched.
 
 - **Fisher discovers wrappers rather than requiring registration**, which is Polecat's model rather
-  than Marten's, and is why the compliance seam's `RegisterValueType<T>` is a no-op here.
+  than Marten's — so nothing depends on `StoreOptions.RegisterValueType<T>()`, which exists anyway
+  (fisher#75) for the reason polecat#459 gives: **store configuration ought to be portable**, and a
+  shared block that reads `opts.RegisterValueType<AlertId>()` on two stores should not have to drop the
+  line for the third and explain the omission in a comment. **It is not an accepted no-op**, and that
+  is what makes it worth having rather than merely tolerable: discovery must treat "not a wrapper" as
+  the ordinary answer, since it is asked about every candidate identity member of every type, whereas
+  naming a type here is an *assertion* — so the same answer becomes a configuration error, reported
+  with the type named rather than surfacing later as "has no identity member" from a place that cannot
+  mention the wrapper. `StrongTypedId.Register` is the throwing half of `TryResolve`, and it tells a
+  bad *shape* apart from a good wrapper around an inner type Fisher cannot store. The compliance
+  seam's `RegisterValueType<T>` now delegates to it rather than staying empty, so the suite exercises
+  the method a consumer would call.
 - **`DocumentIdentity.FindIdMember`'s predicate overload is the whole entry point.** Its default
   accepts only the canonical four; the overload exists so a store can widen it, and
   `StrongTypedId.IsSupportedIdType` is Fisher's. Before this, every strong-typed aggregate failed with
