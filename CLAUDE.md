@@ -3032,6 +3032,31 @@ produced it. `inline_event_projections` covers it directly — note that a conve
 projection class must be declared `partial`, because the dispatcher is source-generated into it and
 there is no runtime fallback.
 
+### What the nupkg carries beyond Fisher.dll
+
+**`JasperFx.Events.SourceGenerator` is bundled into the package as an analyzer** (fisher#73), the way
+Marten (marten#4557) and Polecat (polecat#196) both bundle it into theirs. Projection dispatch is
+source-generated with no runtime reflection fallback, and the generator ships as a development
+dependency that does **not** flow transitively — so a consumer referencing only the Fisher package
+never ran it.
+
+**The absence is silent in the worst direction.** It is not a build failure: removing the generator
+removes generated partials that nothing hand-written references, so the consuming assembly *compiles
+clean* and then throws `No source-generated dispatcher found for EventProjection …` on its first
+projected event. In a service that is a clean deploy followed by a crash on the first message.
+
+Two things hold it in place, and neither is a test — the test projects reference the generator
+directly, so nothing inside this repository can observe the packaged shape:
+
+- `_BundleEventsSourceGeneratorAnalyzer` in `Fisher.csproj` contributes the analyzer DLL to
+  `analyzers/dotnet/cs`. It runs **per-TFM**, because `$(PkgJasperFx_Events_SourceGenerator)` is only
+  resolved there, and is **conditioned on one target framework**, because the analyzer is
+  TFM-agnostic and both passes claiming the same package path fails pack on a duplicate file.
+- The `package` job in `.github/workflows/fisher.yml` packs and asserts the DLL is present **and**
+  that the nuspec does not declare the generator as a dependency. `PrivateAssets=all` is load-bearing
+  for the second half: a generator that flows downstream is double-loaded by a project referencing
+  two Critter Stack stores, which emits each `.Evolver` partial twice and fails with CS0111.
+
 ## The companion packages
 
 Two, both modelled on Polecat's and Marten's, both multi-targeting net9.0/net10.0 as the core does.

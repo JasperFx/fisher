@@ -18,6 +18,15 @@
     <ItemGroup>
         <PackageReference Include="JasperFx" />
         <PackageReference Include="JasperFx.Events" />
+        <!-- fisher#73: referenced so the projection-dispatcher generator runs over Fisher itself,
+             and so the bundling target below has a resolved package path to copy from.
+             PrivateAssets=all keeps it a development-only dependency that does not flow to
+             consumers as an ordinary transitive PackageReference — the analyzer reaches them
+             through the package instead. -->
+        <PackageReference Include="JasperFx.Events.SourceGenerator" GeneratePathProperty="true">
+            <PrivateAssets>all</PrivateAssets>
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
         <PackageReference Include="Microsoft.Data.Sqlite" />
         <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
         <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
@@ -26,5 +35,36 @@
         <PackageReference Include="Weasel.Sqlite" />
         <PackageReference Include="Weasel.Storage" />
     </ItemGroup>
+
+    <!--
+      fisher#73 — bundle JasperFx.Events.SourceGenerator into Fisher's own package, as Marten
+      (marten#4557) and Polecat (polecat#196) both do.
+
+      Projection dispatch is source-generated with no runtime reflection fallback, so a
+      conventional-method projection must be `partial` or it fails at registration with "No
+      source-generated dispatcher found ...". The generator ships as a development dependency that
+      does NOT flow transitively, so a consumer referencing only the Fisher package never ran it —
+      and the absence removes generated partials nothing hand-written references, so the consumer's
+      assembly COMPILES CLEAN and then throws on its first projected event. Carrying the analyzer
+      DLL inside Fisher's package is the self-contained fix; without it every consumer declaring a
+      projection has to know to add an explicit analyzer reference of its own.
+    -->
+    <PropertyGroup>
+        <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_BundleEventsSourceGeneratorAnalyzer</TargetsForTfmSpecificContentInPackage>
+    </PropertyGroup>
+
+    <!-- Runs per-TFM, which is where $(PkgJasperFx_Events_SourceGenerator) is resolved — it is not
+         set during the outer pack evaluation. The analyzer is TFM-agnostic and goes to one path, so
+         it must be contributed exactly once; the condition on a single target framework is what
+         stops the net9.0 and net10.0 passes both claiming analyzers/dotnet/cs and failing pack with
+         a duplicate package file. -->
+    <Target Name="_BundleEventsSourceGeneratorAnalyzer"
+            Condition="'$(TargetFramework)' == 'net9.0' And '$(PkgJasperFx_Events_SourceGenerator)' != ''">
+        <ItemGroup>
+            <TfmSpecificPackageFile Include="$(PkgJasperFx_Events_SourceGenerator)\analyzers\dotnet\cs\JasperFx.Events.SourceGenerator.dll">
+                <PackagePath>analyzers/dotnet/cs</PackagePath>
+            </TfmSpecificPackageFile>
+        </ItemGroup>
+    </Target>
 
 </Project>
