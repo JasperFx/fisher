@@ -62,6 +62,16 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
             options.AutoCreateSchemaObjects = AutoCreate.All;
             options.DatabaseSchemaName = schemaName;
 
+            // Before the mappings: a document keyed by a wrapper has to have that wrapper resolvable
+            // as an identity type by the time its mapping is built, or the mapping has no identity
+            // member to find. Fisher discovers wrappers by itself, so this is an assertion rather than
+            // a prerequisite — but a configuration that would break under a store that needs it is not
+            // worth writing.
+            foreach (var valueType in config.ValueTypes)
+            {
+                options.RegisterValueType(valueType);
+            }
+
             foreach (var documentType in config.DocumentTypes)
             {
                 options.Schema.MappingFor(documentType);

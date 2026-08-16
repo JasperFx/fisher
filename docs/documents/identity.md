@@ -109,7 +109,18 @@ constructor or a static builder.
 // Loading by a wrapper needs both type parameters, which is what keeps it
 // unambiguous against the four single-parameter overloads.
 var order = await session.LoadAsync<Order, OrderId>(id);
+
+// Or the identity-agnostic overload, which is the one the store-agnostic
+// document contract declares. It resolves a wrapper, a raw value the wrapper
+// is over, and the four canonical types alike.
+var same = await session.LoadAsync<Order>((object)id);
 ```
+
+::: tip
+The four canonical overloads are more specific than `LoadAsync<T>(object)`, so a `Guid` argument still
+binds to `LoadAsync<T>(Guid)`. Prefer a typed overload where the type is known — they resolve storage
+without a reflection step, and the compiler checks the identity against the document.
+:::
 
 ::: tip
 **Fisher discovers wrappers rather than requiring registration**, which is Polecat's model rather than

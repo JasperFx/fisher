@@ -15,6 +15,17 @@ lives elsewhere: `Wolverine.Fisher` is built in the wolverine repo against
 likely to come from a JasperFx release rather than from this repository** — that has been the pattern
 for seven bumps, and it is what the compliance enrollment is for.
 
+The 2026-08-16 wave is **0.7.2**, and it emptied the tracker again.
+[#88](https://github.com/JasperFx/fisher/issues/88) was a real cross-store divergence found by the
+CritterWatch port — `FetchLatest<T>` synthesised a default-constructed aggregate for a stream its type
+does not handle, where Marten and Polecat return null — and is the polecat#463 class.
+[#81](https://github.com/JasperFx/fisher/issues/81) settled a disagreement the store had with itself:
+the on-demand table path now honours `AutoCreate.None`, as `HiloSequence` already did. **That one is a
+behaviour change** rather than a fix, and is the only thing in 0.7.2 that can break a store which works
+today. [#89](https://github.com/JasperFx/fisher/issues/89) is the JasperFx **2.49.0** bump and
+`LoadAsync<T>(object)`, the document contract's eighth operation — which is also what let #88's fix
+widen to cover strong-typed aggregates.
+
 [#68](https://github.com/JasperFx/fisher/issues/68) closed with its **first half done** — Fisher
 implements the JasperFx document persistence abstractions and is enrolled in the four document
 compliance suites that came with them — and its second half handed to the wolverine repo, which is
@@ -30,9 +41,10 @@ of joins, which cost one new type and made the rest of the join code shorter.
 
 Before that, the 2026-08-10 wave (#60–#66): two of those audits found real defects (#60's dead
 heartbeat branch, #63's composite teardown), #62's ported matrix found two more, and #61 and #66
-confirmed Fisher was already correct and now pin it. On JasperFx **2.48.0** / Weasel **9.24.0**.
-**All 32 compliance suites, 272 tests, green** — 28 event suites and 230 tests, plus 2.47.0's four
-document suites and 42 tests. 1241 tests green on net9.0 and net10.0.
+confirmed Fisher was already correct and now pin it. On JasperFx **2.49.0** / Weasel **9.24.0**.
+**All 32 compliance suites, 275 tests, green** — 28 event suites and 230 tests, plus the four
+document suites, now 45 tests after 2.49.0 added three to `DocumentLoadAndStoreCompliance`. 1248 tests
+green on net9.0 and net10.0.
 
 Most of the issues this file tracks came out of a file-by-file comparison against Polecat on
 2026-08-08, which filed [#22](https://github.com/JasperFx/fisher/issues/22) through

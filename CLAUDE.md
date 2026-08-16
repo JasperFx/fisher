@@ -2012,8 +2012,45 @@ reintroduce fisher#20's bug one level up, where it is harder to see.
 `JasperFx.Events.Documents` (fisher#68 / jasperfx#647), shipped in JasperFx 2.47.0 — the document
 slice a store-agnostic consumer needs alongside the event store, and the first half of what
 `Wolverine.Fisher` and a Fisher-backed CritterWatch are built on. Three session tiers, a session
-factory and a query-execution hook; seven operations, measured off CritterWatch's actual call sites
-rather than designed as a document-store facade.
+factory and a query-execution hook; seven operations at 2.47.0 and **eight from 2.49.0**, measured off
+CritterWatch's actual call sites rather than designed as a document-store facade.
+
+#### `LoadAsync<T>(object)` — the eighth operation
+
+jasperfx#665 added `Task<T?> LoadAsync<T>(object id, …)` to `IDocumentReadOperations`, and fisher#89
+is Fisher's half. **It is not a compile break**: the member ships with a default implementation that
+unboxes a `Guid` or a `string`, forwards to the existing overload, and throws `NotSupportedException`
+for anything else — so the bump is clean on its own and what tells you the member is only half-present
+is the compliance suite, not the compiler.
+
+- **`LoadAsync<T, TId>` does not satisfy it**, different arity, so the contract falls to the default.
+  Fisher carries both. The two-parameter spelling keeps its own reason for existing — both type
+  parameters explicit is what keeps it unambiguous against the four single-parameter overloads.
+- **Declared on `IQuerySession` as public API rather than implemented explicitly**, matching Marten and
+  Polecat, so a consumer moving between the stores meets one spelling. The four canonical overloads are
+  more specific and still win overload resolution, so no existing call site moved.
+- **The trap is the canonical case, not the strong-typed one.** The overload is reached by a caller
+  holding *any* identity in an `object`-typed local, so an implementation that assumed a wrapper passes
+  the two strong-typed facts and silently regresses the boxed-`Guid` one.
+  `the_object_overload_resolves_canonical_identities_too` exists for exactly that, and the default gets
+  it right for free — which is what makes an override the only way to break it.
+- **`CoerceIdentity` is where the three shapes are decided**: exact match, wrapper-from-inner (through
+  `StrongTypedId`, so it agrees with how the identity was discovered in the first place), and integral
+  widening. The last is narrow on purpose — an untyped literal is an `int`, so refusing it against a
+  `long`-keyed document would refuse a difference the caller cannot see, while a general
+  `Convert.ChangeType` would turn `"12"` into an id and hide a real mistake.
+- **The wrapper half is what let fisher#88's gate widen from `IdType` to `StoredIdType`**, closing the
+  `FetchLatest` phantom for strong-typed aggregates too. Verified by narrowing it back: the strong-typed
+  phantom test fails.
+- **`FisherDocumentComplianceFixture` replays `config.ValueTypes` before the mappings.** Fisher
+  discovers wrappers by itself, so it is an assertion rather than a prerequisite — but a fixture that
+  would break under a store needing it is not worth writing.
+
+One thing this surfaced and did **not** change: the typed overloads still throw a raw
+`InvalidCastException` for a mismatched identity — `LoadAsync<Order>("12")` against a `long`-keyed type
+binds to `LoadAsync<T>(string)` and casts storage. Pre-existing, out of fisher#89's scope, and noted in
+`an_identity_of_the_wrong_type_is_refused_by_name` so the next reader does not mistake it for this
+member's behaviour.
 
 **Fisher's own types *are* the contracts — there is no adapter, and that is the result rather than a
 convenience.** The binding is four interface declarations and one partial class:
@@ -2064,7 +2101,7 @@ convenience.** The binding is four interface declarations and one partial class:
 - **No DI registration was needed or added**, matching both siblings. `IDocumentStore` is already
   registered and *is* the factory.
 
-Four compliance suites, 42 tests, enrolled in `fisher_event_store_compliance.cs` and green on the
+Four compliance suites, 45 tests, enrolled in `fisher_event_store_compliance.cs` and green on the
 first run. `FisherDocumentComplianceFixture` is three members wide and **deliberately not generic over
 Fisher's session pair**, unlike the event fixture: everything the document suites do runs through the
 shared contracts, so `Sessions` is typed as the bare `IDocumentSessionFactory` and a suite reaching
@@ -2995,13 +3032,22 @@ coalescing on purpose. Do not present it as a performance feature.
 ### Compliance suites
 
 **Fisher is enrolled, in full.** `JasperFx.Events.ComplianceTests` is referenced unconditionally —
-the old `$(EnableComplianceTests)` gate is gone. **All 32 suites, 272 tests, are live**, as of 2.48.0.
+the old `$(EnableComplianceTests)` gate is gone. **All 32 suites, 275 tests, are live**, as of 2.49.0.
 The event sourcing half is 28 suites and 230 tests and has been the whole library since 2.45.0
 emptied the upstream event sourcing backlog; **2.46.0 added no suite and no test** (fisher#64), and
 **2.48.0 added neither, and changed no existing suite file** — the counts were re-verified against a
 real run on each rather than carried over, since "still 32" is exactly the claim a bump can quietly
-falsify. **2.47.0 added a second half rather than another event suite** — four *document* suites, 42
-tests, over the store-agnostic contract described below.
+falsify. **2.47.0 added a second half rather than another event suite** — four *document* suites,
+over the store-agnostic contract described below.
+
+**2.49.0 is the first bump to widen an existing suite rather than add one** (fisher#89 / jasperfx#665).
+No new suite file; `DocumentLoadAndStoreCompliance` gained three tests, taking the document half from
+42 to 45, and `DocumentComplianceConfig` gained `ValueTypes` / `RegisterValueType<T>()` because the
+strong-typed facts need the identity type registered and the document contract carries no identity
+configuration. **That shape is worth noticing**: a bump whose suite *list* is unchanged can still
+demand production work, so diffing the file list is not enough — diff the contents. The three tests
+are two strong-typed facts and one guarding the canonical case, which is the one an override gets
+wrong; see "The store-agnostic document contract".
 The four that arrived in 2.40.0/2.41.0 — `StringStreamIdentityCompliance`,
 `SnapshotLifecycleCompliance`, `MultiStreamProjectionCompliance`, `FlatTableProjectionCompliance` —
 went in on the same bump.

@@ -90,6 +90,35 @@ public interface IQuerySession : IAsyncDisposable, IDisposable, IDocumentReadOpe
         where T : notnull where TId : notnull;
 
     /// <summary>
+    ///     Load a document by an identity whose type is not known at the call site, or null when there
+    ///     is none.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>This is <see cref="IDocumentReadOperations" />'s member</b> (fisher#89 /
+    ///         jasperfx#665), and it is declared here rather than implemented explicitly so that Fisher
+    ///         spells it the way Marten and Polecat do — a consumer moving between the stores meets one
+    ///         API. The member ships with a default implementation on the contract that handles a
+    ///         <c>Guid</c> and a <c>string</c> and throws for anything else, so overriding it is what
+    ///         makes a strong-typed identity work for a store-agnostic caller.
+    ///     </para>
+    ///     <para>
+    ///         <b>It resolves a boxed canonical identity as well as a wrapper</b>, because it is reached
+    ///         by any caller holding an identity in an <c>object</c>-typed local rather than only by one
+    ///         holding a wrapper. An implementation that assumed a wrapper would pass the strong-typed
+    ///         facts and silently regress the canonical ones — which is what
+    ///         <c>the_object_overload_resolves_canonical_identities_too</c> exists to catch.
+    ///     </para>
+    ///     <para>
+    ///         Prefer a typed overload where the type is known: they resolve storage without a
+    ///         reflection step, and the compiler checks the identity against the document. This one is
+    ///         the escape hatch, and the four canonical overloads still win overload resolution against
+    ///         it — a <c>Guid</c> argument binds to <c>LoadAsync&lt;T&gt;(Guid)</c>, not to this.
+    ///     </para>
+    /// </remarks>
+    Task<T?> LoadAsync<T>(object id, CancellationToken token = default) where T : notnull;
+
+    /// <summary>
     ///     Run your own SQL through this session and get typed results back.
     /// </summary>
     /// <remarks>
