@@ -352,13 +352,24 @@ Three things that are decisions:
   for the identical reason: the migration runs on its own connection and would block against the write
   lock the caller's transaction is holding — a session deadlocking against itself. Naming the type
   beats that, and beats the raw SQLite error it replaced.
-- **`AutoCreate.None` provisions, because the write path already does.** Weasel's explicit
-  `ApplyAllConfiguredChangesToDatabaseAsync` upgrades `None` to `CreateOrUpdate`, being the call that
-  means "apply it". Declining on reads alone would make the weaker operation the stricter one. Whether
-  the on-demand path should honour `AutoCreate.None` at all is a live question — `HiloSequence` checks
-  it and declines, so the store disagrees with itself — and is fisher#81;
-  `a_read_and_a_write_agree_about_auto_create_none` pins today's answer so either resolution is
-  deliberate.
+- **`AutoCreate.None` is honoured: the on-demand path checks and declines** (fisher#81). Weasel's
+  `ApplyAllConfiguredChangesToDatabaseAsync` upgrades `None` to `CreateOrUpdate`, because that call
+  *is* the explicit "apply it" — correct for the call as Weasel means it, and wrong for a path whose
+  whole point is that it fires implicitly, on the first write and (since fisher#74) the first read of a
+  document type. So a store configured "the schema is not yours to change" was still issuing DDL from
+  inside a session, while `HiloSequence` checked the same setting and declined. Both halves were
+  answered together, because answering the read alone would make the weaker operation the stricter one
+  — `a_read_and_a_write_agree_about_auto_create_none` still pins that they agree, having been rewritten
+  to pin the refusal rather than the provisioning.
+  - **An existing table is not an error**, so the common case for a store deploying this way — schema
+    applied out of band — is untouched. `auto_create_none_is_happy_once_the_schema_has_been_applied`
+    exists because "honours `AutoCreate.None`" could otherwise be an unconditional throw and still pass.
+  - **A refused type is removed from the ensured-tables cache**, the same discipline that keeps the
+    first-use migration uncached until it succeeds. Without it the second call succeeds silently and the
+    failure resurfaces as `no such table` from wherever the caller went next — and worse, a read would
+    cache the type and let the *write* through. Verified by removing it: two tests fail.
+  - The message names the document type, the setting, and the call to make — strictly better than the
+    raw `SQLite Error 1: no such table` about a name the caller never wrote.
 
 ### Flat-table projections
 
