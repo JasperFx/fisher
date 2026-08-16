@@ -2517,9 +2517,59 @@ cross-store compliance suites route everything through, so declaring it is what 
 `EventStoreComplianceFixture.EventsFor(session)` possible at all.
 
 Everything reachable without document storage is real: `FetchForWriting` rebuilds the aggregate by
-live aggregation (there is no snapshot to read instead), `WriteToAggregate` is fetch + callback +
-`SaveChangesAsync`, and `ProjectLatest` folds the session's pending events on top of the committed
-state.
+live aggregation, `WriteToAggregate` is fetch + callback + `SaveChangesAsync`, and `ProjectLatest`
+folds the session's pending events on top of the committed state.
+
+**`FetchLatest` is the exception, and it reads a document rather than folding** — see below.
+
+#### `FetchLatest` reads an Inline aggregate's document
+
+`EventOperations.CanReadInlineDocument` (fisher#88, the polecat#463 class). `FetchLatest<T>` used to
+live-aggregate the stream for *every* `T`, whatever its lifecycle, and the doc comment said so —
+adding that Fisher had no snapshot storage to read instead, which stopped being true when
+`Projections.Snapshot<T>` landed. So the claim aged into a bug: JasperFx's `InlineFetchPlanner` routes
+an Inline aggregate to its projected document, and Fisher kept folding.
+
+**The visible difference is a stream that exists but holds nothing `T` owns.** Marten and Polecat find
+no document and return null; Fisher folded the foreign events and handed back whatever the aggregator
+constructed. That matters because `FetchLatest<T>(id) is null` is the idiomatic "does this aggregate
+exist?" probe — so the probe was satisfied by any stream id holding events at all, and the answer
+depended on whether some other aggregate happened to share the id space.
+
+- **A default-constructed aggregate is not neutral**, which is what makes this worse than an empty
+  answer. A conventional `Create`/`Apply` aggregate came out null anyway, because nothing built an
+  instance; the shape that surfaces it is a catch-all `Evolve(IEvent)`, which accepts every event type
+  by construction. The reported case had `bool IsActive` defaulting to `true`, so the phantom read as
+  an **active alert** for a service that had none.
+- **Reading the document is what the write side already believed.** The inline projection screens out
+  streams it does not own, which is exactly why no row was ever written for them; the read path now
+  agrees. `no_document_is_written_for_a_stream_the_aggregate_does_not_handle` pins both halves
+  together — it passed before the fix, and keeping it is the point.
+- **Inline only**, mirroring `InlineFetchPlanner`. A Live aggregate has no document to read, and Marten
+  routes an Async one to the document only when the mapping is revisioned.
+- **Gated on the type having a Fisher mapping**, which is what keeps an EF Core-backed projection on
+  the old path: a type registered with `Projections.StorageProviders` is deliberately never mapped, so
+  its rows are in no `fi_doc_*` table and `LoadAsync` would answer about a table nothing writes to.
+  `HasMappingFor` is the same question the storage registry is itself constructed with, and unlike
+  `MappingFor` it does not create a mapping as a side effect of asking.
+- **And gated on the key type**, because a stream identity and a document identity are not always the
+  same type — a natural key resolves to a stream *key* (string) for an aggregate whose document id is a
+  Guid, and that key cannot address the document at all. Those fall back to live aggregation exactly as
+  before.
+- **`IdType` rather than `StoredIdType`, which is the one place Polecat's version does not port.**
+  Polecat compares the *inner* type so a strong-typed id matches on the value it wraps, because its
+  load path re-wraps on the way through; Fisher's does not. `LoadAsync<T>(Guid)` resolves storage by
+  hard-casting to `IDocumentStorage<T, Guid>`, and a strong-typed aggregate's storage is keyed on the
+  wrapper — so unwrapping passes the gate and then throws `InvalidCastException` from inside the load.
+  **`StrongTypedIdentityCompliance` is what caught it**, which is the argument for the suites in one
+  line: the gate looked right, matched the sibling it was ported from, and was wrong. Comparing
+  `IdType` leaves a strong-typed aggregate folding the stream exactly as before, so the phantom
+  survives for that shape alone; fisher#89's `LoadAsync<T>(object)` is the entry point that resolves a
+  canonical and a wrapped identity alike, and widening this is what it makes possible.
+- **`FetchForWriting` deliberately still folds**, as it does on Polecat. The two ask different
+  questions: `FetchLatest` reports current state, where `FetchForWriting` is the read half of a
+  read-modify-write whose guard is the stream's version — so the fold is what the version it hands back
+  has to agree with.
 
 **Nothing on `IEventStoreOperations` throws any more.** What did lived in
 `EventOperations.Unsupported.cs`, one file on purpose so that file shrinking was the progress

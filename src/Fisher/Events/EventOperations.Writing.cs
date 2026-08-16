@@ -1,6 +1,7 @@
 using Fisher.Exceptions;
 using Fisher.Storage;
 using JasperFx.Events;
+using JasperFx.Events.Projections;
 using Microsoft.Data.Sqlite;
 
 namespace Fisher.Events;
@@ -88,9 +89,18 @@ public partial class EventOperations
     ///     the stream has right now.
     /// </summary>
     /// <remarks>
-    ///     The aggregate is rebuilt by live aggregation on every call — Fisher has no snapshot storage
-    ///     to read instead. A stream that does not exist yet comes back with a null
-    ///     <see cref="IEventStream{T}.Aggregate" /> and an append surface that will start it.
+    ///     <para>
+    ///         The aggregate is rebuilt by live aggregation on every call. A stream that does not exist
+    ///         yet comes back with a null <see cref="IEventStream{T}.Aggregate" /> and an append surface
+    ///         that will start it.
+    ///     </para>
+    ///     <para>
+    ///         <b>Deliberately still a fold, where <c>FetchLatest</c> reads an Inline aggregate's
+    ///         document</b> (fisher#88). Polecat scoped its equivalent fix the same way. The two are
+    ///         asking different questions: <c>FetchLatest</c> reports current state, while this is the
+    ///         read half of a read-modify-write whose guard is the stream's version — so folding the
+    ///         stream is what the version it returns has to agree with.
+    ///     </para>
     /// </remarks>
     public Task<IEventStream<T>> FetchForWriting<T>(Guid id, CancellationToken cancellation = default)
         where T : class
@@ -336,17 +346,103 @@ public partial class EventOperations
     ///     The current state of an aggregate.
     /// </summary>
     /// <remarks>
-    ///     Equivalent to <c>AggregateStreamAsync</c> today. In Marten and Polecat this reads a
-    ///     persisted snapshot when one is registered and only falls back to folding the stream; Fisher
-    ///     has no snapshot storage yet, so it always folds. Events pending in this session are not
-    ///     included — see <see cref="ProjectLatest{T}(Guid,CancellationToken)" />.
+    ///     An <c>Inline</c>-projected aggregate is read from its projected document; anything else
+    ///     folds the stream through <c>AggregateStreamAsync</c>. See
+    ///     <see cref="CanReadInlineDocument{T}" />. Events pending in this session are not included —
+    ///     see <see cref="ProjectLatest{T}(Guid,CancellationToken)" />.
     /// </remarks>
     public async ValueTask<T?> FetchLatest<T>(Guid id, CancellationToken cancellation = default) where T : class
-        => await AggregateStreamAsync<T>(id, token: cancellation).ConfigureAwait(false);
+    {
+        if (CanReadInlineDocument<T>(typeof(Guid)))
+        {
+            return await _session.LoadAsync<T>(id, cancellation).ConfigureAwait(false);
+        }
+
+        return await AggregateStreamAsync<T>(id, token: cancellation).ConfigureAwait(false);
+    }
 
     /// <inheritdoc cref="FetchLatest{T}(Guid,CancellationToken)" />
     public async ValueTask<T?> FetchLatest<T>(string id, CancellationToken cancellation = default) where T : class
-        => await AggregateStreamAsync<T>(id, token: cancellation).ConfigureAwait(false);
+    {
+        if (CanReadInlineDocument<T>(typeof(string)))
+        {
+            return await _session.LoadAsync<T>(id, cancellation).ConfigureAwait(false);
+        }
+
+        return await AggregateStreamAsync<T>(id, token: cancellation).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     fisher#88: is <typeparamref name="T" /> the subject of an <c>Inline</c> projection whose
+    ///     projected document can be addressed by a <paramref name="keyType" />-typed identity?
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Fisher used to live-aggregate the stream for <em>every</em> <c>FetchLatest&lt;T&gt;</c>,
+    ///         whatever <c>T</c>'s lifecycle — the doc comment here said so, and said Fisher had no
+    ///         snapshot storage to read instead, which stopped being true when
+    ///         <c>Projections.Snapshot&lt;T&gt;</c> landed. Marten's fetch planner routes an Inline
+    ///         aggregate to <c>FetchInlinedPlan</c>, which simply loads the projected document. The
+    ///         visible difference is on a stream that exists but holds nothing <c>T</c> owns: Marten
+    ///         and Polecat find no document and return <c>null</c>, where Fisher folded the foreign
+    ///         events and handed back whatever the aggregator constructed. This is polecat#463, fixed
+    ///         there in 5.15.0 by polecat#467, and Fisher is the same shape.
+    ///     </para>
+    ///     <para>
+    ///         <b>A default-constructed aggregate is not neutral.</b> For a conventional
+    ///         <c>Create</c>/<c>Apply</c> aggregate the old path came out null anyway, because nothing
+    ///         built an instance. The shape that surfaces it is a catch-all <c>Evolve(IEvent)</c>,
+    ///         which accepts every event type by construction: the aggregator built an instance, the
+    ///         switch inside matched nothing, and the defaults came back as though they were state. In
+    ///         the reported case a <c>bool IsActive</c> defaulting to <c>true</c> made the phantom read
+    ///         as an <em>active alert</em> for a service that had none. Since
+    ///         <c>FetchLatest&lt;T&gt;(id) is null</c> is the idiomatic "does this aggregate exist?"
+    ///         probe, that probe was satisfied by any stream id holding events at all.
+    ///     </para>
+    ///     <para>
+    ///         Reading the document is also what the write side already believed: the inline projection
+    ///         screens out streams it does not own, which is exactly why no row was ever written for
+    ///         them. The two halves now agree.
+    ///     </para>
+    ///     <para>
+    ///         <b>Inline only</b>, mirroring JasperFx's <c>InlineFetchPlanner</c>. A Live aggregate has
+    ///         no document to read, and Marten routes an Async one to the document only when the
+    ///         mapping is revisioned.
+    ///     </para>
+    ///     <para>
+    ///         <b>The mapping gate is what keeps an externally-stored projection on the old path.</b>
+    ///         A type registered with <c>Projections.StorageProviders</c> — an EF Core-backed
+    ///         projection — is deliberately never mapped, so its rows are in no <c>fi_doc_*</c> table
+    ///         and <c>LoadAsync</c> would answer about a table nothing writes to.
+    ///         <c>HasMappingFor</c> is the same question the storage registry itself is constructed
+    ///         with, and it does not create a mapping the way <c>MappingFor</c> would.
+    ///     </para>
+    ///     <para>
+    ///         <b>And the key type has to match, because a stream identity and a document identity are
+    ///         not always the same type.</b> A natural key resolves to a stream <em>key</em> (string)
+    ///         for an aggregate whose document id is a Guid, and that key cannot address the document
+    ///         at all; those fall back to live aggregation exactly as before.
+    ///     </para>
+    ///     <para>
+    ///         <b><c>IdType</c> rather than <c>StoredIdType</c>, which is where Polecat's equivalent
+    ///         does not port.</b> Polecat compares the <em>inner</em> type so a strong-typed id matches
+    ///         on the value it wraps, because its load path re-wraps on the way through. Fisher's does
+    ///         not: <c>LoadAsync&lt;T&gt;(Guid)</c> resolves storage by hard-casting to
+    ///         <c>IDocumentStorage&lt;T, Guid&gt;</c>, and a strong-typed aggregate's storage is keyed
+    ///         on the wrapper — so unwrapping here passes the gate and then throws
+    ///         <c>InvalidCastException</c> from inside the load. Comparing <c>IdType</c> leaves a
+    ///         strong-typed aggregate folding the stream, exactly as it did before this change, so the
+    ///         phantom survives only for that shape. <c>StrongTypedIdentityCompliance</c> is what
+    ///         caught it, and widening this is what fisher#89's <c>LoadAsync&lt;T&gt;(object)</c> —
+    ///         an entry point that resolves a canonical and a wrapped identity alike — exists to make
+    ///         possible.
+    ///     </para>
+    /// </remarks>
+    private bool CanReadInlineDocument<T>(Type keyType) where T : class
+        => Graph.Options.Projections.TryFindAggregate(typeof(T), out var projection)
+           && projection.Lifecycle == ProjectionLifecycle.Inline
+           && Graph.Options.Schema.HasMappingFor(typeof(T))
+           && Graph.Options.Schema.MappingFor(typeof(T)).IdType == keyType;
 
     /// <inheritdoc cref="FetchForWriting{T,TId}(TId,CancellationToken)" />
     /// <inheritdoc cref="FetchForWriting{T,TId}(TId,CancellationToken)" />
