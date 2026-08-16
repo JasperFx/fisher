@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using System.Reflection;
 using Fisher.Storage;
 using Fisher.Storage.ClosedShape;
 using JasperFx;
@@ -433,6 +434,83 @@ internal partial class FisherSession
     public Task<T?> LoadAsync<T, TId>(TId id, CancellationToken token = default)
         where T : notnull where TId : notnull
         => LoadByIdAsync<T, TId>(id, token);
+
+    /// <inheritdoc cref="IQuerySession.LoadAsync{T}(object,CancellationToken)" />
+    public Task<T?> LoadAsync<T>(object id, CancellationToken token = default) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(id);
+
+        var idType = Options.Schema.MappingFor(typeof(T)).IdType;
+
+        return LoadByUntypedIdAsync<T>(idType, CoerceIdentity<T>(idType, id), token);
+    }
+
+    /// <summary>
+    ///     Bring a loosely-typed identity to the exact type this document's storage is keyed on.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Three shapes, and the first is by far the common one — a caller holding the document's
+    ///         real identity in an <c>object</c>-typed local, which is what the contract's own member is
+    ///         for. The wrapper case is what makes a strong-typed identity reachable from a raw stream
+    ///         id, and it is the one an implementation that assumed a wrapper would get backwards.
+    ///     </para>
+    ///     <para>
+    ///         <b>The numeric case is a real convenience rather than a courtesy.</b> An untyped integer
+    ///         literal is an <c>int</c>, so <c>LoadAsync&lt;Order&gt;((object)1)</c> against a
+    ///         <c>long</c>-keyed document would otherwise be refused for a difference the caller cannot
+    ///         see. It is deliberately narrow — integral widening only, through the identity types
+    ///         Fisher actually supports — rather than a general <c>Convert.ChangeType</c>, which would
+    ///         happily turn the string "12" into an id and hide a genuine mistake.
+    ///     </para>
+    /// </remarks>
+    private object CoerceIdentity<T>(Type idType, object id) where T : notnull
+    {
+        if (idType.IsInstanceOfType(id))
+        {
+            return id;
+        }
+
+        // A raw value for a wrapper-keyed document. StrongTypedId is what knows how to build one, and
+        // going through it is what keeps this agreeing with how the identity was discovered.
+        if (Storage.StrongTypedId.TryResolve(idType, out var valueType)
+            && valueType.SimpleType.IsInstanceOfType(id))
+        {
+            return valueType.Ctor is not null
+                ? valueType.Ctor.Invoke([id])
+                : valueType.Builder!.Invoke(null, [id])!;
+        }
+
+        if (id is int or long && (idType == typeof(int) || idType == typeof(long)))
+        {
+            return Convert.ChangeType(id, idType);
+        }
+
+        throw new InvalidOperationException(
+            $"Cannot load a {typeof(T).FullName} by an identity of type {id.GetType().FullName}: the "
+            + $"document is keyed on {idType.FullName}.");
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(Type, Type), MethodInfo>
+        LoadByUntypedId = new();
+
+    /// <summary>
+    ///     Dispatch to <see cref="LoadByIdAsync{T,TId}" /> for an identity type only known at runtime.
+    /// </summary>
+    /// <remarks>
+    ///     The closed method is cached per <c>(document, identity)</c> pair, because the reflection is
+    ///     the only thing this overload costs over a typed one and it is the same pair every time.
+    /// </remarks>
+    private Task<T?> LoadByUntypedIdAsync<T>(Type idType, object id, CancellationToken token)
+        where T : notnull
+    {
+        var method = LoadByUntypedId.GetOrAdd((typeof(T), idType), static key =>
+            typeof(FisherSession)
+                .GetMethod(nameof(LoadByIdAsync), BindingFlags.Instance | BindingFlags.NonPublic)!
+                .MakeGenericMethod(key.Item1, key.Item2));
+
+        return (Task<T?>)method.Invoke(this, [id, token])!;
+    }
 
     private async Task<T?> LoadByIdAsync<T, TId>(TId id, CancellationToken token)
         where T : notnull where TId : notnull

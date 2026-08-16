@@ -12,9 +12,10 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1165 tests green on net9.0 and net10.0**, with no known intermittent failures — 1132 in
-`Fisher.Tests`, 20 in `Fisher.AspNetCore.Tests` and 13 in `Fisher.EntityFrameworkCore.Tests`. 230 of
-them are shared cross-store compliance tests — which as of 2.45.0 is every event sourcing suite the shared library has.
+**1297 tests green on net9.0 and net10.0**, with no known intermittent failures — 1248 in
+`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 13 in `Fisher.EntityFrameworkCore.Tests`. 275 of
+them are shared cross-store compliance tests — 230 event sourcing, which as of 2.45.0 is every event
+suite the shared library has, and 45 document.
 
 ## Closed since the comparison
 
@@ -448,12 +449,17 @@ Three of the six turned up a real defect or a wrong premise, which is the useful
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.48.0 ships **32 suites, 272 tests** — it added no suite and
-changed no existing suite file. Fisher passes **all 272, all 32 suites**. Every suite compiles; every one is also subclassed and running.
+`JasperFx.Events.ComplianceTests` 2.49.0 ships **32 suites, 275 tests**. Fisher passes **all 275, all
+32 suites**. Every suite compiles; every one is also subclassed and running.
+
+**2.49.0 added no suite file and still required production work**, which is the first bump of that
+shape: `DocumentLoadAndStoreCompliance` gained three tests for `LoadAsync<T>(object)` (jasperfx#665 /
+fisher#89) and `DocumentComplianceConfig` gained `ValueTypes`. Diffing the suite *list* would have
+reported a clean bump — diff the contents.
 
 The library is now two halves. The **event sourcing** half is 28 suites and 230 tests, and its
 upstream backlog has been empty since 2.45.0 — that is the whole of it rather than a snapshot. The
-**document** half arrived in 2.47.0 (jasperfx#647): four suites, 42 tests, over the store-agnostic
+**document** half arrived in 2.47.0 (jasperfx#647): four suites, 45 tests as of 2.49.0, over the store-agnostic
 document contract Fisher implements for fisher#68. That half exists because the document side had no
 shared definition at all — Fisher's document parity with Polecat was established by the one-time
 hand-comparison that filed #22–#50, and enrolling replaces it with something standing.
@@ -490,7 +496,7 @@ and `Query<T>` were already `notnull`. See "The store-agnostic document contract
 **Green on all thirty-two is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 32 suites, 272 tests
+### Green — 32 suites, 275 tests
 
 Event sourcing — 28 suites, 230 tests:
 
@@ -525,13 +531,13 @@ Event sourcing — 28 suites, 230 tests:
 | `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 4 suites, 42 tests, through `FisherDocumentComplianceFixture`:
+Documents — 4 suites, 45 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
 | `DocumentQueryCompliance` | 17 |
 | `DocumentDeleteCompliance` | 10 |
-| `DocumentLoadAndStoreCompliance` | 8 |
+| `DocumentLoadAndStoreCompliance` | 11 |
 | `DocumentSessionCompliance` | 7 |
 
 ### Nothing in the fixture throws any more

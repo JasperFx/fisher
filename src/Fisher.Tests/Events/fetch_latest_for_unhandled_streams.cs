@@ -57,6 +57,27 @@ public partial class AlertRecord
     }
 }
 
+public readonly record struct TicketId(string Value);
+
+/// <summary>
+///     An aggregate keyed on a strong-typed identity wrapping the stream key.
+/// </summary>
+public partial class TicketRecord
+{
+    public TicketId Id { get; set; }
+    public string Reason { get; set; } = "";
+    public bool IsActive { get; set; } = true;
+
+    public void Evolve(IEvent e)
+    {
+        if (e.Data is AlertRaised raised)
+        {
+            Reason = raised.Reason;
+            IsActive = true;
+        }
+    }
+}
+
 /// <summary>
 ///     A Live aggregate over the same events, to pin that the document read is <c>Inline</c> only.
 /// </summary>
@@ -257,6 +278,47 @@ public class fetch_latest_for_unhandled_streams : IDisposable
 
         live.ShouldNotBeNull();
         live.Reason.ShouldBe("still burning");
+    }
+
+    /// <summary>
+    ///     <b>The strong-typed shape, which fisher#88 alone could not cover.</b> Its gate compared
+    ///     <c>IdType</c>, so an aggregate keyed on a wrapper kept folding and kept synthesising the
+    ///     phantom. fisher#89's <c>LoadAsync&lt;T&gt;(object)</c> is what made comparing
+    ///     <c>StoredIdType</c> safe: the raw stream id is now wrapped on the way to the document
+    ///     rather than hard-cast against storage keyed on the wrapper.
+    /// </summary>
+    [Fact]
+    public async Task fetch_latest_is_null_for_a_strong_typed_aggregate_that_does_not_handle_the_stream()
+    {
+        await using var store = StoreWith(o => o.Projections.Snapshot<TicketRecord>(SnapshotLifecycle.Inline));
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
+        await StartServiceStream(store, "StrongTyped");
+
+        await using var session = store.LightweightSession();
+
+        (await session.Events.FetchLatest<TicketRecord>("StrongTyped",
+            TestContext.Current.CancellationToken)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task a_strong_typed_aggregate_still_reads_its_own_stream()
+    {
+        await using var store = StoreWith(o => o.Projections.Snapshot<TicketRecord>(SnapshotLifecycle.Inline));
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
+
+        await using (var session = store.LightweightSession())
+        {
+            session.Events.StartStream<TicketRecord>("OwnedTicket", new AlertRaised("wedged"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var query = store.LightweightSession();
+
+        var ticket = await query.Events.FetchLatest<TicketRecord>("OwnedTicket",
+            TestContext.Current.CancellationToken);
+
+        ticket.ShouldNotBeNull();
+        ticket.Reason.ShouldBe("wedged");
     }
 
     /// <summary>

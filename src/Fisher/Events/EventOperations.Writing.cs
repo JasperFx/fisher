@@ -355,7 +355,7 @@ public partial class EventOperations
     {
         if (CanReadInlineDocument<T>(typeof(Guid)))
         {
-            return await _session.LoadAsync<T>(id, cancellation).ConfigureAwait(false);
+            return await _session.LoadAsync<T>((object)id, cancellation).ConfigureAwait(false);
         }
 
         return await AggregateStreamAsync<T>(id, token: cancellation).ConfigureAwait(false);
@@ -366,7 +366,7 @@ public partial class EventOperations
     {
         if (CanReadInlineDocument<T>(typeof(string)))
         {
-            return await _session.LoadAsync<T>(id, cancellation).ConfigureAwait(false);
+            return await _session.LoadAsync<T>((object)id, cancellation).ConfigureAwait(false);
         }
 
         return await AggregateStreamAsync<T>(id, token: cancellation).ConfigureAwait(false);
@@ -424,25 +424,23 @@ public partial class EventOperations
     ///         at all; those fall back to live aggregation exactly as before.
     ///     </para>
     ///     <para>
-    ///         <b><c>IdType</c> rather than <c>StoredIdType</c>, which is where Polecat's equivalent
-    ///         does not port.</b> Polecat compares the <em>inner</em> type so a strong-typed id matches
-    ///         on the value it wraps, because its load path re-wraps on the way through. Fisher's does
-    ///         not: <c>LoadAsync&lt;T&gt;(Guid)</c> resolves storage by hard-casting to
-    ///         <c>IDocumentStorage&lt;T, Guid&gt;</c>, and a strong-typed aggregate's storage is keyed
-    ///         on the wrapper — so unwrapping here passes the gate and then throws
-    ///         <c>InvalidCastException</c> from inside the load. Comparing <c>IdType</c> leaves a
-    ///         strong-typed aggregate folding the stream, exactly as it did before this change, so the
-    ///         phantom survives only for that shape. <c>StrongTypedIdentityCompliance</c> is what
-    ///         caught it, and widening this is what fisher#89's <c>LoadAsync&lt;T&gt;(object)</c> —
-    ///         an entry point that resolves a canonical and a wrapped identity alike — exists to make
-    ///         possible.
+    ///         <b><c>StoredIdType</c>, so a strong-typed aggregate is covered too</b> — it compares the
+    ///         wrapper's <em>inner</em> type against the stream key, and the load then re-wraps.
+    ///         <b>That only became safe with fisher#89.</b> Before it, the raw value went to
+    ///         <c>LoadAsync&lt;T&gt;(Guid)</c>, which resolves storage by hard-casting to
+    ///         <c>IDocumentStorage&lt;T, Guid&gt;</c> while a strong-typed aggregate's storage is keyed
+    ///         on the wrapper — so unwrapping passed the gate and then threw
+    ///         <c>InvalidCastException</c> from inside the load, which is what
+    ///         <c>StrongTypedIdentityCompliance</c> caught. The identity is now handed to
+    ///         <c>LoadAsync&lt;T&gt;(object)</c>, which resolves a canonical and a wrapped identity
+    ///         alike, so the phantom is closed for every aggregate shape rather than all but one.
     ///     </para>
     /// </remarks>
     private bool CanReadInlineDocument<T>(Type keyType) where T : class
         => Graph.Options.Projections.TryFindAggregate(typeof(T), out var projection)
            && projection.Lifecycle == ProjectionLifecycle.Inline
            && Graph.Options.Schema.HasMappingFor(typeof(T))
-           && Graph.Options.Schema.MappingFor(typeof(T)).IdType == keyType;
+           && Graph.Options.Schema.MappingFor(typeof(T)).StoredIdType == keyType;
 
     /// <inheritdoc cref="FetchForWriting{T,TId}(TId,CancellationToken)" />
     /// <inheritdoc cref="FetchForWriting{T,TId}(TId,CancellationToken)" />

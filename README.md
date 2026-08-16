@@ -28,7 +28,7 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > database-per-tenant, with tenants that appear at runtime), `AddFisher(...)` DI registration, and the
 > `Fisher.AspNetCore` and `Fisher.EntityFrameworkCore` companion packages all work and are tested.
 >
-> Fisher passes **all 32 suites and 272 tests** of `JasperFx.Events.ComplianceTests`, the shared
+> Fisher passes **all 32 suites and 275 tests** of `JasperFx.Events.ComplianceTests`, the shared
 > cross-store suite Marten and Polecat also enroll in.
 >
 > The one thing that is *not* there is deliberate and permanent: **no message bus.** The projection
