@@ -152,18 +152,19 @@ public class reading_before_the_first_write : IAsyncLifetime
 
     /// <remarks>
     ///     <para>
-    ///         <b>A read under <c>AutoCreate.None</c> provisions, because a write under
-    ///         <c>AutoCreate.None</c> already does.</b> Both go through
-    ///         <c>EnsureDocumentTableAsync</c>, and Weasel's explicit
-    ///         <c>ApplyAllConfiguredChangesToDatabaseAsync</c> deliberately upgrades <c>None</c> to
-    ///         <c>CreateOrUpdate</c> — being the call that means "apply it". So this pins that reads and
-    ///         writes agree rather than claiming a policy neither of them honours.
+    ///         <b>The on-demand path honours <c>AutoCreate.None</c> and declines</b> (fisher#81), which
+    ///         is a deliberate reversal of what this test used to pin. Weasel's
+    ///         <c>ApplyAllConfiguredChangesToDatabaseAsync</c> upgrades <c>None</c> to
+    ///         <c>CreateOrUpdate</c> — correct for the call as Weasel means it, since that call <em>is</em>
+    ///         the explicit "apply it" — but wrong for a path that fires implicitly on the first write
+    ///         (and since fisher#74 the first read) of a type. So a store configured "the schema is not
+    ///         yours to change" was still issuing DDL from inside a session, while <c>HiloSequence</c>
+    ///         checked the same setting and declined.
     ///     </para>
     ///     <para>
-    ///         Whether the on-demand path <em>should</em> honour <c>AutoCreate.None</c> is a real
-    ///         question — <c>HiloSequence</c> checks it explicitly and declines — but it is one about
-    ///         both paths at once, and answering it here would leave a read stricter than a write.
-    ///         Filed as fisher#81.
+    ///         What has not changed is that the two agree: a read and a write are refused the same way,
+    ///         which is the property this test has always been for. Answering only one of them would
+    ///         leave the weaker operation the stricter one.
     ///     </para>
     /// </remarks>
     [Fact]
@@ -177,16 +178,89 @@ public class reading_before_the_first_write : IAsyncLifetime
 
         await using var reading = store.QuerySession();
 
-        (await reading.Query<NeverCreated>().ToListAsync(TestContext.Current.CancellationToken))
-            .ShouldBeEmpty();
+        var read = await Should.ThrowAsync<InvalidOperationException>(
+            async () => await reading.Query<NeverCreated>()
+                .ToListAsync(TestContext.Current.CancellationToken));
 
         await using var writing = store.LightweightSession();
 
         writing.Store(new NeverCreated { Id = "one" });
-        await writing.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        (await reading.Query<NeverCreated>().CountAsync(TestContext.Current.CancellationToken))
+        var written = await Should.ThrowAsync<InvalidOperationException>(
+            async () => await writing.SaveChangesAsync(TestContext.Current.CancellationToken));
+
+        // Same refusal, and it names the type rather than leaving SQLite to say "no such table" about
+        // a name the caller never wrote.
+        foreach (var message in new[] { read.Message, written.Message })
+        {
+            message.ShouldContain(nameof(NeverCreated));
+            message.ShouldContain("AutoCreate.None");
+            message.ShouldContain("ApplyAllConfiguredChangesToDatabaseAsync");
+        }
+    }
+
+    /// <remarks>
+    ///     The overwhelmingly common case for a store deploying this way: the schema was applied out of
+    ///     band, so the table is already there and nothing is refused. Without this, "honours
+    ///     <c>AutoCreate.None</c>" could be implemented as an unconditional throw and still pass the
+    ///     test above.
+    /// </remarks>
+    [Fact]
+    public async Task auto_create_none_is_happy_once_the_schema_has_been_applied()
+    {
+        await using (var applying = DocumentStore.For(options =>
+                     {
+                         options.ConnectionString = _database.ConnectionString;
+                         options.AutoCreateSchemaObjects = AutoCreate.All;
+                         options.Schema.For<AppliedUpFront>();
+                     }))
+        {
+            await applying.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = _database.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.None;
+            options.Schema.For<AppliedUpFront>();
+        });
+
+        await using var session = store.LightweightSession();
+
+        (await session.Query<AppliedUpFront>().ToListAsync(TestContext.Current.CancellationToken))
+            .ShouldBeEmpty();
+
+        session.Store(new AppliedUpFront { Id = "one" });
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        (await session.Query<AppliedUpFront>().CountAsync(TestContext.Current.CancellationToken))
             .ShouldBe(1);
+    }
+
+    /// <remarks>
+    ///     A refused type must not be remembered as handled, or the second call through the on-demand
+    ///     path succeeds silently and the failure resurfaces as <c>no such table</c> from wherever the
+    ///     caller went next. Same discipline as the first-use migration, which is not cached until it
+    ///     succeeds.
+    /// </remarks>
+    [Fact]
+    public async Task a_refusal_is_not_cached_as_though_the_table_existed()
+    {
+        await using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = _database.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.None;
+        });
+
+        await using var session = store.QuerySession();
+
+        await Should.ThrowAsync<InvalidOperationException>(
+            async () => await session.Query<NeverCreated>()
+                .ToListAsync(TestContext.Current.CancellationToken));
+
+        await Should.ThrowAsync<InvalidOperationException>(
+            async () => await session.Query<NeverCreated>()
+                .ToListAsync(TestContext.Current.CancellationToken));
     }
 
     /// <remarks>
@@ -228,6 +302,11 @@ public class TraceProvider
 }
 
 public class NeverCreated
+{
+    public string Id { get; set; } = string.Empty;
+}
+
+public class AppliedUpFront
 {
     public string Id { get; set; } = string.Empty;
 }

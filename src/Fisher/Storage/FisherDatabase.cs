@@ -215,10 +215,34 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
     ///     Create this document type's table if it is not known to exist yet.
     /// </summary>
     /// <remarks>
-    ///     Snapshot types are registered by projection configuration, which can run after the schema
-    ///     was last applied, so the inline projection path cannot assume its table is already there.
-    ///     The set of types already handled is cached because the check would otherwise run on every
-    ///     commit.
+    ///     <para>
+    ///         Snapshot types are registered by projection configuration, which can run after the schema
+    ///         was last applied, so the inline projection path cannot assume its table is already there.
+    ///         The set of types already handled is cached because the check would otherwise run on every
+    ///         commit.
+    ///     </para>
+    ///     <para>
+    ///         <b>Under <c>AutoCreate.None</c> this checks and declines instead of creating</b>
+    ///         (fisher#81). Weasel's <c>ApplyAllConfiguredChangesToDatabaseAsync</c> deliberately
+    ///         upgrades <c>None</c> to <c>CreateOrUpdate</c>, because that call <em>is</em> the explicit
+    ///         "apply it" — correct for the call as Weasel means it, and wrong for a path whose whole
+    ///         point is that it fires implicitly, on the first write (and since fisher#74 the first
+    ///         read) of a document type. So a store configured "the schema is not yours to change" was
+    ///         still issuing DDL from inside a session, while <c>HiloSequence</c> checked the same
+    ///         setting and declined — the store disagreeing with itself.
+    ///     </para>
+    ///     <para>
+    ///         <b>An existing table is not an error.</b> A store deploying this way applies its schema
+    ///         out of band, so the overwhelmingly common case is that the table is already there; only a
+    ///         genuinely missing one is refused, and the message names the type rather than leaving
+    ///         SQLite to say <c>no such table</c> about a name the caller never wrote.
+    ///     </para>
+    ///     <para>
+    ///         <b>The type is uncached when the check fails</b>, for the reason the first-use migration
+    ///         above is not cached until it succeeds: remembering a type as handled after refusing it
+    ///         would make the second call through this path silently succeed, and the failure would then
+    ///         surface as <c>no such table</c> from wherever the caller went next.
+    ///     </para>
     /// </remarks>
     internal async Task EnsureDocumentTableAsync(Type documentType, CancellationToken token)
     {
@@ -230,12 +254,56 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
             }
         }
 
-        // Registering the mapping is what puts the table into BuildFeatureSchemas; applying the whole
-        // configuration then creates it. Heavier than emitting one CREATE TABLE, but it goes through
-        // the same migration path as every other Fisher table instead of beside it.
-        _options.Schema.MappingFor(documentType);
+        try
+        {
+            // Registering the mapping is what puts the table into BuildFeatureSchemas; applying the
+            // whole configuration then creates it. Heavier than emitting one CREATE TABLE, but it goes
+            // through the same migration path as every other Fisher table instead of beside it.
+            var mapping = _options.Schema.MappingFor(documentType);
 
-        await ApplyAllConfiguredChangesToDatabaseAsync(ct: token).ConfigureAwait(false);
+            if (AutoCreate == JasperFx.AutoCreate.None)
+            {
+                await AssertDocumentTableExistsAsync(documentType, mapping.TableName.Name, token)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            await ApplyAllConfiguredChangesToDatabaseAsync(ct: token).ConfigureAwait(false);
+        }
+        catch
+        {
+            lock (_ensuredDocumentTables)
+            {
+                _ensuredDocumentTables.Remove(documentType);
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    ///     Under <c>AutoCreate.None</c>, check that a document type's table is already there and say
+    ///     which type is missing if it is not.
+    /// </summary>
+    private async Task AssertDocumentTableExistsAsync(Type documentType, string tableName,
+        CancellationToken token)
+    {
+        await using var conn = await OpenConnectionAsync(token).ConfigureAwait(false);
+
+        await using var command = conn.CreateCommand();
+        command.CommandText = "select 1 from sqlite_master where type = 'table' and name = $name";
+        command.Parameters.AddWithValue("$name", tableName);
+
+        if (await command.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
+        {
+            throw new InvalidOperationException(
+                $"There is no table '{tableName}' for document type {documentType.FullName}. This store is "
+                + "configured AutoCreate.None, so Fisher will not create one on demand — register the type "
+                + "with StoreOptions.Schema.For<T>() and apply the configuration with "
+                + "ApplyAllConfiguredChangesToDatabaseAsync (or the generated DDL) before using it. A type "
+                + "registered only by projection configuration needs the schema re-applied after that "
+                + "registration.");
+        }
     }
 
     /// <summary>

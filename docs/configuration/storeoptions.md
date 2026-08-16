@@ -59,6 +59,18 @@ cleaning the other's rows, silently.
 `AutoCreate.None` is honoured everywhere for free, because all DDL goes through Weasel's migrations
 rather than being issued ad hoc at call sites.
 
+::: warning
+Fisher normally creates a document type's table **on demand**, the first time something reads or
+writes one — a snapshot type is registered by projection configuration, which can run after the
+schema was last applied.
+
+Under `AutoCreate.None` that path checks instead of creating, and throws naming the document type if
+its table is missing. So a store configured this way must apply its schema out of band — with
+`ApplyAllConfiguredChangesToDatabaseAsync`, the generated DDL, or
+`ApplyAllDatabaseChangesOnStartup()` — and must **re-apply it after registering a new projection**,
+since that registration is what maps the snapshot's document type.
+:::
+
 ## Event store options
 
 ```cs
