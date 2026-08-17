@@ -27,6 +27,16 @@ internal class EventsTable : Table
 {
     public const string TableSuffix = "events";
 
+    /// <summary>
+    ///     What <c>data</c> holds for a row whose body is in <c>data_binary</c> (fisher#93).
+    /// </summary>
+    /// <remarks>
+    ///     Valid JSON rather than an empty string, so that <c>json_valid(data)</c> and every
+    ///     <c>json_extract</c> over the column keep answering rather than erroring on a binary row.
+    ///     They answer "no such member", which is the truth — the member is in the BLOB.
+    /// </remarks>
+    public const string JsonPlaceholder = "{}";
+
     public EventsTable(EventGraph events)
         : base(FisherTableNaming.ObjectFor(events.DatabaseSchemaName, TableSuffix))
     {
@@ -45,26 +55,24 @@ internal class EventsTable : Table
 
         // Event body as JSON text. SQLite's json1 functions operate on TEXT directly.
         //
-        // Nullable only when a binary serializer is configured (fisher#43), because that is when a row
-        // may carry its body in data_binary instead. Gated rather than made nullable unconditionally so
-        // that a store which will never hold a binary event keeps the constraint it had — and because
-        // the gate is checkable: the serializer has to be supplied for the feature to work at all, so
-        // "is there one" is the same question as "can this store hold a binary body".
-        if (events.EventOptions.BinarySerializer is null)
-        {
-            AddColumn("data", "TEXT").NotNull();
-        }
-        else
-        {
-            AddColumn("data", "TEXT").AllowNulls();
+        // Stays NOT NULL even for a binary row, which carries the placeholder EventsTable.JsonPlaceholder
+        // here instead (fisher#93). Two bytes per binary row buys the whole upgrade story: relaxing a
+        // NOT NULL on SQLite means rebuilding the table, where adding data_binary below is a plain
+        // ALTER TABLE ADD COLUMN that an existing store takes in place.
+        AddColumn("data", "TEXT").NotNull();
 
-            // BLOB affinity, and a column of its own rather than BLOBs mixed into data. SQLite would
-            // tolerate the mixture — affinity is a preference, not a constraint — but then typeof(data)
-            // becomes the only way to tell a body's encoding apart, and json_extract over the column
-            // silently stops meaning anything for the rows that are binary. One nullable column per row
-            // buys an unambiguous shape.
-            AddColumn("data_binary", "BLOB").AllowNulls();
-        }
+        // BLOB affinity, and a column of its own rather than BLOBs mixed into data. SQLite would
+        // tolerate the mixture — affinity is a preference, not a constraint — but then typeof(data)
+        // becomes the only way to tell a body's encoding apart, and json_extract over the column
+        // silently stops meaning anything for the rows that are binary. One nullable column per row
+        // buys an unambiguous shape.
+        //
+        // Unconditional, and that is the load-bearing half of fisher#93 rather than a simplification:
+        // it is what makes a row, not the store's current configuration, the thing that says how its
+        // body is encoded. So marking one event type [BinaryEvent] on a live store needs no migration
+        // and no schema decision taken in advance, and un-marking it leaves the rows already written
+        // perfectly readable.
+        AddColumn("data_binary", "BLOB").AllowNulls();
 
         // Event type alias for deserialization.
         AddColumn("type", "TEXT").NotNull();

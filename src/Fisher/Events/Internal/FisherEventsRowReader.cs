@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
+using Fisher.Events.Schema;
 using Fisher.Storage;
 using JasperFx.Events;
 
@@ -74,11 +75,9 @@ internal static class FisherEventsRowReader
             sb.Append(", user_name");
         }
 
-        // Last in the list, so every ordinal above it is unmoved whether or not the store has one.
-        if (options.BinarySerializer is not null)
-        {
-            sb.Append(", data_binary");
-        }
+        // Last in the list, so every ordinal above it is unmoved by the optional columns before it.
+        // Unconditional, because the column is (fisher#93).
+        sb.Append(", data_binary");
 
         return sb.ToString();
     }
@@ -166,6 +165,30 @@ internal static class FisherEventsRowReader
         => (reader.GetInt64(0), reader.IsDBNull(8) ? null : reader.GetString(8));
 
     /// <summary>
+    ///     Decode a row whose body is in <c>data_binary</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Refused by name when the row is binary and the type has no serializer registered in this
+    ///     process — the same row a differently configured process wrote perfectly well. Returning
+    ///     null or falling through to the JSON placeholder would present an event with every member
+    ///     at its default, which is a far worse answer than an exception naming the configuration.
+    /// </remarks>
+    private static object DeserializeBinary(DbDataReader reader, in MetadataSlots slots,
+        FisherEventType mapping, Type resolvedType)
+    {
+        if (mapping.BinarySerializer is not { } serializer)
+        {
+            throw new InvalidOperationException(
+                $"This event row's body is a BLOB in {EventsTable.TableSuffix}.data_binary, but no "
+                + $"IEventBinarySerializer is registered for '{resolvedType.FullName}'. Set "
+                + "StoreOptions.Events.DefaultBinarySerializer, or register one for this type with "
+                + $"StoreOptions.Events.UseBinarySerializer<{resolvedType.Name}>(...).");
+        }
+
+        return serializer.Deserialize(resolvedType, (byte[])reader.GetValue(slots.BinaryDataIdx));
+    }
+
+    /// <summary>
     ///     Everything except the stream identity, which the specialized wrappers assign.
     /// </summary>
     private static IEvent? ReadEventCore(DbDataReader reader, in EventHydrationContext ctx,
@@ -190,13 +213,13 @@ internal static class FisherEventsRowReader
 
         var mapping = ctx.EventGraph.EventMappingFor(resolvedType);
 
-        // Whichever column holds this row's body. Reading the flag off the resolved event type rather
-        // than testing the columns is what keeps the two encodings from being told apart by a null
-        // check that a genuinely null body would also pass.
-        var data = mapping.IsBinary
-            ? ctx.EventGraph.EventOptions.BinarySerializer!.Deserialize(
-                (byte[])reader.GetValue(slots.BinaryDataIdx), resolvedType)
-            : ctx.Serializer.FromJson(resolvedType, reader.GetString(4));
+        // Whichever column holds this row's body — decided PER ROW, by data_binary being null or not,
+        // never by the event type's current setting (fisher#93). That is what makes marking a type
+        // [BinaryEvent] an in-place change: rows written before the change still carry JSON, and this
+        // still reads them. A dispatch on the type would misread every one of them instead.
+        var data = reader.IsDBNull(slots.BinaryDataIdx)
+            ? ctx.Serializer.FromJson(resolvedType, reader.GetString(4))
+            : DeserializeBinary(reader, slots, mapping, resolvedType);
 
         var @event = mapping.Wrap(data);
 

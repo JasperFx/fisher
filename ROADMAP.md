@@ -15,6 +15,23 @@ lives elsewhere: `Wolverine.Fisher` is built in the wolverine repo against
 likely to come from a JasperFx release rather than from this repository** — that has been the pattern
 for seven bumps, and it is what the compliance enrollment is for.
 
+The 2026-08-17 wave is **0.8.0**, and it is the pattern above playing out exactly: the issue came from
+a JasperFx release. [#93](https://github.com/JasperFx/fisher/issues/93) asked for Marten's binary event
+serialization, and asked in the same breath for the interface to be lifted into `JasperFx.Events` so a
+store-agnostic consumer writes one serializer rather than three. **2.50.0 did lift it**, so fisher#43's
+Fisher-native `IEventBinarySerializer` and `[BinaryEvent]` are gone and the `JasperFx.Events` pair
+replaces them — the one breaking change in 0.8.0, and the reason it is a minor rather than a patch.
+Along with it: per-type registration through `Events.UseBinarySerializer<TEvent>(…)` beside the
+attribute, `Events.BinarySerializer` renamed to `Events.DefaultBinarySerializer`, and `data_binary` now
+**unconditional** with per-row rather than per-type dispatch — which is what makes marking a type
+`[BinaryEvent]` an in-place change on a live file with no migration, and what fisher#43's design could
+not do. 2.50.0's other half is jasperfx#669, an `Events` accessor on the document session contracts;
+Fisher's sessions declared `Events` as their own concrete type, which does **not** satisfy a contract
+member (C# interface implementation is not return-type covariant), so both tiers needed an explicit
+implementation. Two new compliance suites pin both halves. On JasperFx **2.50.0** / Weasel **9.24.0**.
+**All 34 compliance suites, 286 tests, green** — 29 event suites and 236 tests, plus five document
+suites and 50 tests. 1265 tests green on net9.0 and net10.0.
+
 The 2026-08-16 wave is **0.7.2**, and it emptied the tracker again.
 [#88](https://github.com/JasperFx/fisher/issues/88) was a real cross-store divergence found by the
 CritterWatch port — `FetchLatest<T>` synthesised a default-constructed aggregate for a stream its type
@@ -42,9 +59,6 @@ of joins, which cost one new type and made the rest of the join code shorter.
 Before that, the 2026-08-10 wave (#60–#66): two of those audits found real defects (#60's dead
 heartbeat branch, #63's composite teardown), #62's ported matrix found two more, and #61 and #66
 confirmed Fisher was already correct and now pin it. On JasperFx **2.49.0** / Weasel **9.24.0**.
-**All 32 compliance suites, 275 tests, green** — 28 event suites and 230 tests, plus the four
-document suites, now 45 tests after 2.49.0 added three to `DocumentLoadAndStoreCompliance`. 1248 tests
-green on net9.0 and net10.0.
 
 Most of the issues this file tracks came out of a file-by-file comparison against Polecat on
 2026-08-08, which filed [#22](https://github.com/JasperFx/fisher/issues/22) through
@@ -62,8 +76,8 @@ never will. It is context; the issues are the tracking.
 **First round of JasperFx compliance tests passing — reached, and held through seven package bumps
 that added fourteen suites.** `JasperFx.Events.ComplianceTests` is the shared cross-store suite Marten
 and Polecat both enroll in; passing it is what makes Fisher a real Critter Stack event store rather
-than a lookalike. As of 2.45.0 that library's **event sourcing** backlog is empty, so all twenty-eight
-event suites it will ship for the foreseeable future are green:
+than a lookalike. Every event suite it ships is green — twenty-eight from 2.45.0, plus
+`BinaryEventSerializationCompliance` from 2.50.0:
 
 | Suite | Tests |
 |---|---|
@@ -95,6 +109,7 @@ event suites it will ship for the foreseeable future are green:
 | `EventProjectionEnrichmentCompliance` | 3 |
 | `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
+| `BinaryEventSerializationCompliance` | 6 |
 
 **2.47.0 opened a second front rather than adding a twenty-ninth event suite.** `JasperFx.Events.Documents`
 (jasperfx#647) is the store-agnostic *document* contract behind the Wolverine aggregate-handler
@@ -108,6 +123,7 @@ against Polecat that filed #22–#50 with something standing.
 | `DocumentDeleteCompliance` | 10 |
 | `DocumentLoadAndStoreCompliance` | 8 |
 | `DocumentSessionCompliance` | 7 |
+| `DocumentSessionEventsCompliance` | 5 |
 
 All four passed on the first run. The binding cost four interface declarations, one partial class and
 one constraint widening — see "The store-agnostic document contract" in CLAUDE.md.

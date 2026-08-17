@@ -50,8 +50,16 @@ public interface IQuerySession : IAsyncDisposable, IDisposable, IDocumentReadOpe
     ///     second event-operations type would exist only to express a distinction the session does not
     ///     make. What it buys is that an endpoint or a report taking an <c>IQuerySession</c> can read
     ///     streams, which it could not before (fisher#49).
+    ///     <para>
+    ///         <c>new</c> because <see cref="IDocumentReadOperations.Events" /> arrived in
+    ///         JasperFx.Events 2.50.0 (jasperfx#669) typed as <see cref="IQueryEventStore" />, and this
+    ///         one is deliberately wider. The hiding is intentional; the <em>contract</em> member is
+    ///         satisfied by an explicit implementation on the session, because C# interface
+    ///         implementation is not return-type covariant and this declaration alone would leave it
+    ///         bound to the contract's throwing default.
+    ///     </para>
     /// </remarks>
-    EventOperations Events { get; }
+    new EventOperations Events { get; }
 
     /// <summary>
     ///     Start a LINQ query over a document type.
@@ -511,6 +519,18 @@ public interface IDocumentOperations : IQuerySession, IDocumentWriteOperations
 public interface IDocumentSession : IDocumentOperations, JasperFx.Events.IStorageOperations,
     IDocumentSessionOperations
 {
+    /// <summary>
+    ///     The event store surface for this session.
+    /// </summary>
+    /// <remarks>
+    ///     Re-declared rather than inherited, and it is not decoration. From JasperFx.Events 2.50.0
+    ///     this interface reaches an <c>Events</c> down two unrelated branches —
+    ///     <see cref="IQuerySession" />'s and <see cref="IDocumentSessionOperations" />'s — and neither
+    ///     hides the other, so every <c>session.Events</c> in the codebase would be CS0229 ambiguous.
+    ///     Naming it once here is what resolves the lookup, and it resolves to the widest of the three.
+    /// </remarks>
+    new EventOperations Events { get; }
+
     /// <summary>
     ///     Queue work for a different tenant into <em>this</em> unit of work, so one
     ///     <see cref="SaveChangesAsync" /> writes for several tenants in one transaction (fisher#33).

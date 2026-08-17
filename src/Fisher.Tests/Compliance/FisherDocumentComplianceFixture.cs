@@ -1,5 +1,6 @@
 using JasperFx;
 using JasperFx.Events.ComplianceTests;
+using JasperFx.Events;
 using JasperFx.Events.Documents;
 
 namespace Fisher.Tests.Compliance;
@@ -75,6 +76,24 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
             foreach (var documentType in config.DocumentTypes)
             {
                 options.Schema.MappingFor(documentType);
+            }
+
+            // jasperfx#669. Only DocumentSessionEventsCompliance populates this, and only because that
+            // suite reaches the event store through a document session. Registering up front is the
+            // same discipline the document types above need and for a related reason: the event tables
+            // have to be in the migration this fixture applies, and on SQLite a table that is not there
+            // when a statement is prepared is a `no such table`, not an empty result.
+            if (config.EventTypes.Count != 0)
+            {
+                // The suite appends by string stream key throughout and the config carries no knob for
+                // it, so the stream identity is the fixture's to supply. Guid — Fisher's default and
+                // every sibling's — would refuse every append in the suite by name.
+                options.Events.StreamIdentity = StreamIdentity.AsString;
+
+                foreach (var eventType in config.EventTypes)
+                {
+                    options.Events.AddEventType(eventType);
+                }
             }
         });
 

@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Globalization;
 using Fisher.Exceptions;
+using Fisher.Events.Schema;
 using Fisher.Storage;
 using JasperFx.Core.Exceptions;
 using JasperFx.Events;
@@ -88,16 +89,12 @@ internal sealed class FisherQuickAppendEventsOperation
         {
             builder.Append("insert into ");
             builder.Append(_graph.EventsTableName);
-            // A binary body goes into data_binary and leaves data null; a JSON body does the reverse.
-            // Which one this event is comes off the event type, so a stream can mix the two freely.
+            // A binary body goes into data_binary and leaves data holding the JSON placeholder; a JSON
+            // body does the reverse. Which one this event is comes off the event type's registered
+            // serializer, so a stream can mix the two freely.
             var binary = _graph.BinaryEncoderFor(@event);
 
             builder.Append(" (id, stream_id, version, data, type, timestamp, tenant_id, dotnet_type");
-
-            if (binary is not null)
-            {
-                builder.Append(", data_binary");
-            }
 
             if (options.EnableCorrelationId)
             {
@@ -119,6 +116,16 @@ internal sealed class FisherQuickAppendEventsOperation
                 builder.Append(", user_name");
             }
 
+            // Unconditional, because the column is (fisher#93): an explicit null for a JSON event is
+            // what lets the read path decide encoding per row rather than per type.
+            //
+            // ⚠️ LAST, and it has to be — the value below is bound last. fisher#43 named it ninth here
+            // while binding it last, so a store with any of the four metadata columns enabled wrote a
+            // binary event's BLOB into correlation_id and its correlation id into data_binary. Nothing
+            // caught it because the binary tests enabled no metadata and the metadata tests appended no
+            // binary event. The column list and the bind order are one contract.
+            builder.Append(", data_binary");
+
             builder.Append(") values (");
 
             Bind(builder, @event.Id, StorageColumnType.Guid);
@@ -138,14 +145,9 @@ internal sealed class FisherQuickAppendEventsOperation
 
             builder.Append(", ");
 
-            if (binary is null)
-            {
-                Bind(builder, session.Serializer.ToJson(@event.Data), StorageColumnType.Json);
-            }
-            else
-            {
-                builder.Append("null");
-            }
+            Bind(builder,
+                binary is null ? session.Serializer.ToJson(@event.Data) : EventsTable.JsonPlaceholder,
+                StorageColumnType.Json);
 
             builder.Append(", ");
             Bind(builder, @event.EventTypeName, StorageColumnType.String);
@@ -188,9 +190,17 @@ internal sealed class FisherQuickAppendEventsOperation
 
             // Last, because it is the last column in the list above — the two orders are one contract,
             // as everywhere else Fisher builds a positional insert.
-            if (binary is not null)
+            //
+            // Bound as a byte[] parameter rather than composed into the SQL: Microsoft.Data.Sqlite maps
+            // it to a real BLOB, so a payload of arbitrary bytes (gzip output, MessagePack) survives.
+            // Any route through a text encoding here corrupts exactly those and nothing else.
+            builder.Append(", ");
+            if (binary is null)
             {
-                builder.Append(", ");
+                builder.Append("null");
+            }
+            else
+            {
                 builder.AppendParameter(binary);
             }
 
