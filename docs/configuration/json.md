@@ -92,6 +92,8 @@ precisely so they *do* sort as text, which is why `IEvent.Timestamp` permits ran
 
 ## Binary event bodies
 
-An event type marked `[BinaryEvent]` bypasses JSON entirely and is stored as a BLOB in
+An event type marked `[BinaryEvent]`, or registered through
+`opts.Events.UseBinarySerializer<TEvent>(…)`, bypasses JSON entirely and is stored as a BLOB in
 `fi_events.data_binary`. See [Binary event bodies](/events/storage#binary-event-bodies) — including
-why Fisher ships no `IEventBinarySerializer` of its own.
+why Fisher ships no `IEventBinarySerializer` of its own, and why the interface lives in
+`JasperFx.Events` rather than in Fisher.

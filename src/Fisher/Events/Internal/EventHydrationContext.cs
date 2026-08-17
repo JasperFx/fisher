@@ -51,8 +51,8 @@ internal readonly struct MetadataSlots
     public int UserNameIdx { get; }
 
     /// <summary>
-    ///     Where <c>data_binary</c> sits, or -1 when the store has no binary serializer and therefore
-    ///     no such column (fisher#43).
+    ///     Where <c>data_binary</c> sits (fisher#93). Never -1 — the column is unconditional, because
+    ///     the row rather than the configuration is what says how a body is encoded.
     /// </summary>
     public int BinaryDataIdx { get; }
 
@@ -71,7 +71,7 @@ internal readonly struct MetadataSlots
 
         // Last, so adding it shifts nothing above it — the same reason fisher#29's session metadata
         // binders were appended rather than inserted.
-        var binaryData = options.BinarySerializer is not null ? next : -1;
+        var binaryData = next;
 
         return new MetadataSlots(correlation, causation, headers, userName, binaryData);
     }

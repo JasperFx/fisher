@@ -252,8 +252,9 @@ Working, with tests:
   cascade options; the child column is the generated one a duplicated field creates
 - **Declarative and store-wide configuration** — `[Index]` / `[UniqueIndex]` / `[DuplicateField]` /
   `[HiloSequence]`, `AddSubClassHierarchy()`, `StoreOptions.Policies` and `StoreOptions.InitialData`
-- **Binary event bodies** — `[BinaryEvent]` over a supplied `IEventBinarySerializer`, stored in a
-  `data_binary` BLOB column beside the JSON one
+- **Binary event bodies** — `JasperFx.Events.BinaryEventAttribute` or
+  `Events.UseBinarySerializer<TEvent>(…)` over a supplied `JasperFx.Events.IEventBinarySerializer`,
+  stored in an always-present `data_binary` BLOB column beside the JSON one
 - **Document-side tooling** — `IDocumentStoreUsageSource`, `IDocumentStoreDiagnostics` and projection
   step-through, so a monitoring console sees the document half as well as the event half
 - **Tracing** — an `ActivitySource` named `Fisher`, with spans for commits, queries and loads and a
@@ -2026,6 +2027,32 @@ slice a store-agnostic consumer needs alongside the event store, and the first h
 factory and a query-execution hook; seven operations at 2.47.0 and **eight from 2.49.0**, measured off
 CritterWatch's actual call sites rather than designed as a document-store facade.
 
+#### `Events` on the session contracts — the non-covariance trap
+
+jasperfx#669 (JasperFx 2.50.0) added an `Events` accessor to both document session tiers:
+`IQueryEventStore Events` on `IDocumentReadOperations`, narrowed to `IEventStoreOperations Events` on
+`IDocumentSessionOperations`. It is the store-agnostic route from a session a consumer opened through
+`IDocumentSessionFactory` to that session's event store.
+
+⚠️ **Both carry a throwing default, and Fisher's pre-existing `Events` did NOT satisfy either.** C#
+interface implementation is not return-type covariant: `IQuerySession` and `IDocumentSession` both
+declare `Events` as Fisher's concrete `EventOperations`, which *implements* `IEventStoreOperations` but
+does not *implement the member*. The near-miss binds to the throwing default with **no compile error
+anywhere**, and nothing notices until a caller holds the session as the contract — which is the only
+caller the accessor exists for. Two explicit implementations on `FisherSession` close it, and
+`document_session_events_compliance` is what proves them closed. Deleting them still compiles.
+
+⚠️ **A second, louder consequence:** `IDocumentSession` now reaches an `Events` down two unrelated
+branches — `IQuerySession`'s and `IDocumentSessionOperations`' — and neither hides the other, so every
+`session.Events` in the tree became CS0229 ambiguous on the bump. `IDocumentSession` re-declares
+`new EventOperations Events { get; }` to resolve the lookup. That declaration looks redundant and is
+not.
+
+⚠️ **The compliance suite appends by string stream key throughout and `DocumentComplianceConfig`
+carries no stream-identity knob**, so `FisherDocumentComplianceFixture` sets
+`StreamIdentity.AsString` when the config declares event types. Fisher's default — and every sibling's
+— is Guid, which refuses every append in the suite by name.
+
 #### `LoadAsync<T>(object)` — the eighth operation
 
 jasperfx#665 added `Task<T?> LoadAsync<T>(object id, …)` to `IDocumentReadOperations`, and fisher#89
@@ -2936,8 +2963,18 @@ interleaved.
 
 ### Binary event bodies
 
-`[BinaryEvent]` and `StoreOptions.Events.BinarySerializer` (fisher#43) — an event body stored as a
-BLOB in `fi_events.data_binary` rather than as JSON text in `data`.
+`JasperFx.Events.BinaryEventAttribute`, `StoreOptions.Events.DefaultBinarySerializer` and
+`StoreOptions.Events.UseBinarySerializer<TEvent>(…)` (fisher#43, reshaped by fisher#93) — an event
+body stored as a BLOB in `fi_events.data_binary` rather than as JSON text in `data`.
+
+⚠️ **The interface and the attribute live in `JasperFx.Events`, not in Fisher.** fisher#43 declared
+Fisher-native copies; jasperfx#669 promoted the pair into the core in 2.50.0 and fisher#93 deleted
+Fisher's, so one serializer implementation serves Fisher, Marten and Polecat. The core signature is
+`Serialize(Type type, object data)` / `Deserialize(Type type, byte[] data)` — **argument order
+reversed** from Fisher's old one, which is a silent break for an implementation that used positional
+names, so it is a compile error only because the parameter *types* also swap. Do not re-add a
+Fisher-local copy: two `BinaryEventAttribute`s in scope is CS0104 in every file importing both
+namespaces.
 
 **Worth more here than the same feature is on Marten**, and for a structural reason: Fisher is
 embedded, so the store's disk footprint *is* the application's, and SQLite has no `jsonb` — where
@@ -2948,21 +2985,35 @@ forever, property names included.
   since affinity is a preference rather than a constraint — but then `typeof(data)` is the only way to
   tell an encoding apart, and `json_extract` over the column silently stops meaning anything for the
   rows that are binary. One nullable column per row buys an unambiguous shape.
-- **The column exists only when a serializer is configured, and that gate is the whole schema story.**
-  `data` becomes nullable at the same moment. Gated rather than made unconditional so a store that will
-  never hold a binary event keeps the constraint it had — and the gate is checkable, because the
-  serializer has to be supplied for the feature to work at all. Appending a binary event to a store
-  created without one is refused by name rather than failing on `data`'s NOT NULL constraint.
+- ⚠️ **`data_binary` is UNCONDITIONAL, and `data` keeps its NOT NULL constraint** — fisher#93 reversed
+  both halves of fisher#43's gate, and the reversal is the point of the issue rather than a tidy-up. A
+  binary row writes the placeholder `EventsTable.JsonPlaceholder` (`{}`) into `data`. Two consequences,
+  both load-bearing: an existing store upgrades with a plain `ALTER TABLE ADD COLUMN` instead of the
+  table rebuild SQLite demands to relax a NOT NULL, and there is no longer a schema decision to take
+  before the store is created. Appending a `[BinaryEvent]` type with no serializer configured is still
+  refused by name — it is a configuration error, not a silent reversion to JSON.
 - **`data_binary` is composed last in the SELECT and gets the last `MetadataSlots` ordinal**, so every
   ordinal above it is unmoved whether or not the store has one. Same reason fisher#29's session
   metadata binders were appended rather than inserted.
-- **Which column a row's body is in is read off the resolved event type, never off a null check.** A
-  genuinely null body would pass the null check too.
+- ⚠️ **Which column a row's body is in is decided PER ROW, on `data_binary IS NULL` — never off the
+  event type.** fisher#43 dispatched on the type and fisher#93 reversed that too. It is what makes
+  marking a type `[BinaryEvent]` an in-place change on a live file: rows written before the change are
+  still JSON and still read. A type-based dispatch sends every one of them down the binary path, where
+  a null BLOB is either an exception or an event with every member at its default — silent, since the
+  row and the stream are otherwise intact. `turning_a_type_binary_on_an_existing_file_needs_no_migration`
+  pins it, as does the shared `BinaryEventSerializationCompliance`.
+- ⚠️ **The BLOB is bound as a `byte[]` parameter, never routed through a text encoding.** Arbitrary
+  bytes — gzip output, MessagePack — are exactly what a text round trip corrupts, and nothing else is.
+  The compliance suite's serializer gzips deliberately for this reason.
+- ⚠️ **The column list and the bind order are one contract, and fisher#43 broke it.** `data_binary` was
+  named ninth in the INSERT while being bound last, so a store with any of the four `Enable*` metadata
+  columns on wrote a binary event's BLOB into `correlation_id`. Nothing caught it: the binary tests
+  enabled no metadata and the metadata tests appended no binary event. It is last in both now.
 - **Both rewrite operations refuse a binary event by name, and that was the likeliest way this feature
   could corrupt data.** They write the JSON `data` column; against a binary row that leaves a JSON body
   *and* a BLOB body, and every reader resolves by event type — so the JSON would be invisible and the
-  row quietly wrong. `QueryEventDataAsync<T>` (fisher#41) refuses one too, because `data` is null for
-  those rows and `json_extract(null, …)` is null: it would match nothing and report that as an answer.
+  row quietly wrong. `QueryEventDataAsync<T>` (fisher#41) refuses one too, because `data` holds only the
+  placeholder for those rows: it would match nothing and report that as an answer.
 - **Compacting works and clears the BLOB.** The snapshot it writes is a JSON `Compacted<T>`, so the
   replace is permitted; `ReplaceEventOperation` nulls `data_binary` as well, or the row keeps a body no
   reader will ever look at.
@@ -3043,7 +3094,11 @@ coalescing on purpose. Do not present it as a performance feature.
 ### Compliance suites
 
 **Fisher is enrolled, in full.** `JasperFx.Events.ComplianceTests` is referenced unconditionally —
-the old `$(EnableComplianceTests)` gate is gone. **All 32 suites, 275 tests, are live**, as of 2.49.0.
+the old `$(EnableComplianceTests)` gate is gone. **All 34 suites, 286 tests, are live**, as of 2.50.0,
+which added both of the last two: `BinaryEventSerializationCompliance` (6, the event half's
+twenty-ninth) and `DocumentSessionEventsCompliance` (5, the document half's fifth). Both are **opt-in**
+— their registrar members carry throwing defaults, so enrolling is a deliberate line rather than
+something a bump does to you.
 The event sourcing half is 28 suites and 230 tests and has been the whole library since 2.45.0
 emptied the upstream event sourcing backlog; **2.46.0 added no suite and no test** (fisher#64), and
 **2.48.0 added neither, and changed no existing suite file** — the counts were re-verified against a

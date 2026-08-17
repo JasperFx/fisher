@@ -101,6 +101,20 @@ public class subscription_compliance
     : SubscriptionCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
 /*
+ * fisher#93 — binary event serialization, arriving in JasperFx.Events.ComplianceTests 2.50.0 and
+ * opt-in rather than baseline: the two registrar members it drives carry throwing defaults, so a
+ * store without binary storage declines by not writing the line below.
+ *
+ * Fisher does not decline. The definition it is held to is the one that matters most for an embedded
+ * store — that JSON and binary rows coexist per event type in one table, so marking a chatty type
+ * [BinaryEvent] on a live SQLite file is an in-place change with no migration of the events already
+ * in it.
+ */
+
+public class binary_event_serialization_compliance
+    : BinaryEventSerializationCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
  * fisher#68 / jasperfx#647 — the DOCUMENT compliance suites, which arrived in
  * JasperFx.Events.ComplianceTests 2.47.0 and cover the slice JasperFx.Events did not before.
  *
@@ -123,3 +137,18 @@ public class document_delete_compliance
 
 public class document_query_compliance
     : DocumentQueryCompliance<FisherDocumentComplianceFixture>;
+
+/*
+ * jasperfx#669 — the route from a session the consumer opened to that session's event store. Opt-in
+ * because it is the one document suite that needs the store to be an event store as well; Fisher is
+ * both, so it enrolls.
+ *
+ * ⚠️ The failure it catches is silent. Fisher's IQuerySession and IDocumentSession both declare an
+ * Events of Fisher's own EventOperations type, and C# interface implementation is not return-type
+ * covariant — so neither satisfies IDocumentReadOperations.Events or IDocumentSessionOperations.Events,
+ * and both would bind to the contract's throwing default with no compile error anywhere. The two
+ * explicit implementations on FisherSession are what close it; this is what proves them closed.
+ */
+
+public class document_session_events_compliance
+    : DocumentSessionEventsCompliance<FisherDocumentComplianceFixture>;

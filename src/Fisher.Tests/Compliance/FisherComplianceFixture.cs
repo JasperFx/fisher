@@ -325,6 +325,17 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         public ITagTypeRegistration RegisterTagType<TTag>(string tableSuffix) where TTag : notnull
             => _options.Events.RegisterTagType<TTag>(tableSuffix);
 
+        /// <summary>
+        ///     fisher#93 — a binary serializer for one event type.
+        /// </summary>
+        public void UseBinarySerializer<TEvent>(JasperFx.Events.IEventBinarySerializer serializer)
+            where TEvent : notnull
+            => _options.Events.UseBinarySerializer<TEvent>(serializer);
+
+        /// <inheritdoc cref="UseBinarySerializer{TEvent}" />
+        public void SetDefaultBinarySerializer(JasperFx.Events.IEventBinarySerializer serializer)
+            => _options.Events.DefaultBinarySerializer = serializer;
+
         /// <inheritdoc cref="FisherComplianceFixture.SupportsLiveAggregationRegistration" />
         public void LiveAggregation<TDoc>() where TDoc : notnull
         {

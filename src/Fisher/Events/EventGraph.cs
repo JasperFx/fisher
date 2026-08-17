@@ -245,37 +245,108 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     }
 
     public override FisherEventType EventMappingFor(Type eventType)
-        => _eventTypes.GetOrAdd(eventType, static type => new FisherEventType(type));
+        => _eventTypes.GetOrAdd(eventType, type => new FisherEventType(type, ResolveBinarySerializerFor(type)));
+
+    // ---- binary event serialization (fisher#93) ----
+
+    private readonly ConcurrentDictionary<Type, IEventBinarySerializer> _binarySerializerByType = new();
+    private IEventBinarySerializer? _defaultBinarySerializer;
 
     /// <summary>
-    ///     The encoded body for an event whose type is marked <see cref="BinaryEventAttribute" />, or
-    ///     null when it is stored as JSON (fisher#43).
+    ///     The store-wide fallback serializer for event types marked
+    ///     <see cref="BinaryEventAttribute" /> that have no explicit per-type registration.
     /// </summary>
     /// <remarks>
-    ///     Refused by name when the type is binary and no serializer is configured, because the column
-    ///     the body would go in does not exist: the store was created without it, and the caller would
-    ///     otherwise meet a NOT NULL constraint on <c>data</c> that names neither the event type nor
-    ///     the missing configuration.
+    ///     Assigning this refreshes every mapping already built, so configuration order does not
+    ///     matter — <c>AddEventType&lt;T&gt;()</c> before the serializer is set resolves the same way
+    ///     as after it.
+    /// </remarks>
+    public IEventBinarySerializer? DefaultBinarySerializer
+    {
+        get => _defaultBinarySerializer;
+        set
+        {
+            _defaultBinarySerializer = value;
+            refreshBinarySerializers();
+        }
+    }
+
+    /// <summary>
+    ///     Store this one event type's body through <paramref name="serializer" /> rather than as JSON
+    ///     text (fisher#93). Beats <see cref="BinaryEventAttribute" /> + <see cref="DefaultBinarySerializer" />.
+    /// </summary>
+    public EventGraph UseBinarySerializer<TEvent>(IEventBinarySerializer serializer) where TEvent : notnull
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+
+        _binarySerializerByType[typeof(TEvent)] = serializer;
+
+        // The mapping may already exist — AddEventType, a projection registration or an earlier append
+        // all build one — so refresh it rather than relying on the GetOrAdd factory having run after.
+        EventMappingFor(typeof(TEvent)).BinarySerializer = serializer;
+
+        return this;
+    }
+
+    /// <summary>
+    ///     The serializer for an event type, or null when it is stored as JSON. Explicit per-type
+    ///     registration wins; <see cref="BinaryEventAttribute" /> falls back to
+    ///     <see cref="DefaultBinarySerializer" />.
+    /// </summary>
+    /// <remarks>
+    ///     Returns null rather than throwing for an attribute-marked type with no serializer
+    ///     configured, because a mapping is built on read paths too and a store that can only ever
+    ///     read such a row should not be unable to. The refusal belongs on the append, where it is
+    ///     actionable — see <see cref="BinaryEncoderFor" />.
+    /// </remarks>
+    internal IEventBinarySerializer? ResolveBinarySerializerFor(Type eventType)
+    {
+        if (_binarySerializerByType.TryGetValue(eventType, out var explicitSerializer))
+        {
+            return explicitSerializer;
+        }
+
+        return eventType.IsDefined(typeof(BinaryEventAttribute), false) ? _defaultBinarySerializer : null;
+    }
+
+    private void refreshBinarySerializers()
+    {
+        foreach (var mapping in _eventTypes.Values)
+        {
+            mapping.BinarySerializer = ResolveBinarySerializerFor(mapping.EventType);
+        }
+    }
+
+    /// <summary>
+    ///     The encoded body for an event stored through an <see cref="IEventBinarySerializer" />, or
+    ///     null when it is stored as JSON (fisher#93).
+    /// </summary>
+    /// <remarks>
+    ///     A type marked <see cref="BinaryEventAttribute" /> with no serializer configured is refused
+    ///     by name here rather than reverting to JSON. Silently writing JSON would put rows in the
+    ///     store in a format the operator did not choose and believes they are not using — and the
+    ///     next process to run <em>with</em> a serializer configured would read them correctly only
+    ///     because the row, not the type, decides.
     /// </remarks>
     internal byte[]? BinaryEncoderFor(IEvent @event)
     {
         var eventType = @event.EventType;
+        var mapping = EventMappingFor(eventType);
 
-        if (!EventMappingFor(eventType).IsBinary)
+        if (mapping.BinarySerializer is { } serializer)
         {
-            return null;
+            return serializer.Serialize(eventType, @event.Data);
         }
 
-        if (EventOptions.BinarySerializer is not { } serializer)
+        if (mapping.IsMarkedBinary)
         {
             throw new InvalidOperationException(
-                $"'{eventType.Name}' is marked [BinaryEvent] but this store has no "
-                + "StoreOptions.Events.BinarySerializer, so there is no data_binary column to write it "
-                + "to — the column is created only when a serializer is configured, because that is a "
-                + "schema decision. Set the serializer before the schema is created.");
+                $"'{eventType.Name}' is marked [BinaryEvent] but this store has no binary serializer "
+                + "for it. Set StoreOptions.Events.DefaultBinarySerializer, or register one for this "
+                + $"type with StoreOptions.Events.UseBinarySerializer<{eventType.Name}>(...).");
         }
 
-        return serializer.Serialize(@event.Data, eventType);
+        return null;
     }
 
     /// <summary>
@@ -451,24 +522,49 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
         "Class-level: Wrap uses Type.MakeGenericType(typeof(Event<>), eventType) to construct Event<T> envelopes. Event types are preserved by registration on the caller side.")]
 public class FisherEventType : IEventType
 {
-    public FisherEventType(Type eventType)
+    public FisherEventType(Type eventType, IEventBinarySerializer? binarySerializer = null)
     {
         EventType = eventType;
         EventTypeName = EventGraph.ToEventTypeName(eventType.Name);
         DotNetTypeName = $"{eventType.FullName}, {eventType.Assembly.GetName().Name}";
 
-        // Read once, here, because every append and every read of this type asks — and because the
-        // answer cannot change: it is an attribute on the type.
-        IsBinary = eventType.GetCustomAttribute<BinaryEventAttribute>() is not null;
+        // Read once, here, because every append of this type asks — and because the answer cannot
+        // change: it is an attribute on the type. The serializer is not the same question and can be
+        // registered after the mapping exists, which is why it is settable.
+        IsMarkedBinary = eventType.IsDefined(typeof(BinaryEventAttribute), false);
+        BinarySerializer = binarySerializer;
     }
 
     public Type EventType { get; }
 
     /// <summary>
-    ///     Whether this event's body is stored as a BLOB in <c>data_binary</c> rather than as JSON text
-    ///     in <c>data</c> (fisher#43).
+    ///     The serializer this event type's body is stored through, or null when it is stored as JSON
+    ///     text in <c>data</c> (fisher#93).
     /// </summary>
-    public bool IsBinary { get; }
+    /// <remarks>
+    ///     Settable because registration order is not fixed: <c>UseBinarySerializer&lt;T&gt;</c> and
+    ///     <c>DefaultBinarySerializer</c> may both arrive after a mapping has been built by an
+    ///     <c>AddEventType</c> or a projection registration.
+    /// </remarks>
+    public IEventBinarySerializer? BinarySerializer { get; internal set; }
+
+    /// <summary>
+    ///     Whether the type carries <see cref="BinaryEventAttribute" />. Distinct from
+    ///     <see cref="IsBinary" />: marked with no serializer configured is a configuration error the
+    ///     append refuses, not a silent reversion to JSON.
+    /// </summary>
+    public bool IsMarkedBinary { get; }
+
+    /// <summary>
+    ///     Whether new appends of this event type write a BLOB into <c>data_binary</c> rather than JSON
+    ///     text into <c>data</c> (fisher#93).
+    /// </summary>
+    /// <remarks>
+    ///     A write-side answer only. Reads dispatch per row on whether <c>data_binary</c> is null, so
+    ///     rows written before this type opted in still read through the JSON path — which is what
+    ///     makes turning a type binary an in-place change with no migration of existing event data.
+    /// </remarks>
+    public bool IsBinary => BinarySerializer is not null;
     public string EventTypeName { get; set; }
     public string DotNetTypeName { get; set; }
     public string Alias => EventTypeName;

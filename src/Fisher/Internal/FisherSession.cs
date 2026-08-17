@@ -6,6 +6,7 @@ using Fisher.Storage;
 using JasperFx;
 using JasperFx.Events;
 using JasperFx.Events.Daemon;
+using JasperFx.Events.Documents;
 using Microsoft.Data.Sqlite;
 using Weasel.Sqlite;
 using Weasel.Storage;
@@ -228,6 +229,32 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     ///     The event store operations for this session.
     /// </summary>
     public EventOperations Events { get; }
+
+    /// <summary>
+    ///     jasperfx#669 — the store-agnostic route from a session to its event store.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>These two lines are not redundant with <see cref="Events" /> above, and deleting
+    ///         them breaks nothing at compile time.</b> C# interface implementation is not return-type
+    ///         covariant: a property declared as <see cref="EventOperations" /> does not satisfy a
+    ///         contract member declared as <see cref="IQueryEventStore" />, even though
+    ///         <see cref="EventOperations" /> implements it. Without an explicit implementation the
+    ///         member silently binds to the contract's throwing default, and the only thing that ever
+    ///         notices is a caller holding the session as the contract — which is precisely the caller
+    ///         the accessor exists for. <c>document_session_events_compliance</c> is what pins it.
+    ///     </para>
+    ///     <para>
+    ///         Two tiers, both forwarding to the same object: Fisher's <c>EventOperations</c> can read
+    ///         and append, and its <c>IQuerySession</c> is a convention rather than a guarantee, so the
+    ///         narrowing here is about what the <em>contract</em> promises rather than about what this
+    ///         session can do.
+    ///     </para>
+    /// </remarks>
+    IQueryEventStore IDocumentReadOperations.Events => Events;
+
+    /// <inheritdoc cref="IDocumentReadOperations.Events" />
+    IEventStoreOperations IDocumentSessionOperations.Events => Events;
 
     internal void QueueOperation(Weasel.Storage.IStorageOperation operation)
     {

@@ -96,7 +96,8 @@ Other event options worth knowing:
 
 | Option | Purpose |
 | :--- | :--- |
-| `Events.BinarySerializer` | Enables [binary event bodies](/events/storage#binary-event-bodies). |
+| `Events.DefaultBinarySerializer` | Store-wide fallback serializer for `[BinaryEvent]` types — see [binary event bodies](/events/storage#binary-event-bodies). |
+| `Events.UseBinarySerializer<TEvent>(…)` | Per-type binary serializer, which wins over the attribute plus the default. |
 | `Events.HighWaterLivenessInterval` | How often an idle daemon re-stamps its liveness mark. |
 | `Events.MessageOutbox` | The [side-effect](/events/projections/side-effects) sink. |
 | `Events.AppendObserver` | A callback with every appended event, after commit. |

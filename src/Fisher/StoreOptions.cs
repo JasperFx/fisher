@@ -416,24 +416,48 @@ public class EventStoreOptions : IEventStoreInstrumentation
     public bool EnableUserName { get; set; }
 
     /// <summary>
-    ///     The serializer for event types marked <see cref="Events.BinaryEventAttribute" />
-    ///     (fisher#43). Null — the default — means the store stores every event body as JSON text.
+    ///     The store-wide fallback serializer for event types marked
+    ///     <see cref="JasperFx.Events.BinaryEventAttribute" /> (fisher#93). Null — the default —
+    ///     means every such type must name its own serializer through
+    ///     <see cref="UseBinarySerializer{TEvent}" />.
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         <b>Setting this is a schema decision and has to happen before the schema is created.</b>
-    ///         It is what adds <c>fi_events.data_binary</c> and makes <c>data</c> nullable; a store
-    ///         created without it has neither, and appending a binary event to one is refused by name
-    ///         rather than failing on a NOT NULL constraint. Same rule as
-    ///         <see cref="TenancyStyle" /> and the <c>Enable*</c> metadata flags, and for the same
-    ///         reason.
+    ///         <b>Not a schema decision.</b> <c>fi_events.data_binary</c> is always present, so
+    ///         turning a single event type binary is an in-place change on a live store with no
+    ///         migration of existing event data, and turning it back off is equally safe: reads
+    ///         dispatch per row on whether that column is null, not on the type's current setting.
     ///     </para>
     ///     <para>
-    ///         Fisher ships no implementation — see <see cref="Events.IEventBinarySerializer" /> for
-    ///         why that is the end state rather than a gap.
+    ///         Fisher ships no implementation — see
+    ///         <see cref="JasperFx.Events.IEventBinarySerializer" />. A binary encoding is a choice
+    ///         with real consequences for schema evolution, and picking one would be Fisher deciding
+    ///         how the application's data ages. The seam is here; the encoding is yours. Because the
+    ///         interface lives in <c>JasperFx.Events</c>, one implementation serves Fisher, Marten
+    ///         and Polecat alike.
     ///     </para>
     /// </remarks>
-    public Events.IEventBinarySerializer? BinarySerializer { get; set; }
+    public IEventBinarySerializer? DefaultBinarySerializer
+    {
+        get => EventGraph!.DefaultBinarySerializer;
+        set => EventGraph!.DefaultBinarySerializer = value;
+    }
+
+    /// <summary>
+    ///     Store this one event type's body through <paramref name="serializer" /> rather than as JSON
+    ///     text (fisher#93), whether or not it carries
+    ///     <see cref="JasperFx.Events.BinaryEventAttribute" />.
+    /// </summary>
+    /// <remarks>
+    ///     Beats the attribute plus <see cref="DefaultBinarySerializer" />, and is the route for an
+    ///     event type whose source you do not own.
+    /// </remarks>
+    public EventStoreOptions UseBinarySerializer<TEvent>(IEventBinarySerializer serializer)
+        where TEvent : notnull
+    {
+        EventGraph!.UseBinarySerializer<TEvent>(serializer);
+        return this;
+    }
 
     /// <summary>
     ///     Run inline projections' side effects when an inline projection is applied during

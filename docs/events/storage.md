@@ -8,8 +8,8 @@
 | `id` | TEXT | The event's own identity |
 | `stream_id` | TEXT / INTEGER | Guid or string stream identity |
 | `version` | INTEGER | Position within the stream |
-| `data` | TEXT | The JSON body |
-| `data_binary` | BLOB | Present only when a [binary serializer](#binary-event-bodies) is configured |
+| `data` | TEXT | The JSON body, or `{}` when the body is in `data_binary` |
+| `data_binary` | BLOB | The [binary body](#binary-event-bodies), or NULL for a JSON event. Always present |
 | `type` | TEXT | The event's short alias |
 | `dotnet_type` | TEXT | Assembly-qualified type name |
 | `timestamp` | TEXT | Fixed-width UTC ISO-8601 |
@@ -89,10 +89,11 @@ asymmetry that breaks quietly under a provider upgrade.
 
 ## Binary event bodies
 
-An event body can be a BLOB rather than JSON text:
+An event body can be a BLOB rather than JSON text. Opt in **per event type**, by attribute against a
+store-wide fallback serializer:
 
 ```cs
-opts.Events.BinarySerializer = new MyBinarySerializer();
+opts.Events.DefaultBinarySerializer = new MyBinarySerializer();
 ```
 
 ```cs
@@ -100,49 +101,92 @@ opts.Events.BinarySerializer = new MyBinarySerializer();
 public record SensorReadings(float[] Samples);
 ```
 
+…or by explicit per-type registration, which is the route for a type whose source you do not own and
+which wins over the attribute:
+
+```cs
+opts.Events.UseBinarySerializer<SensorReadings>(new MyBinarySerializer());
+```
+
 **Worth more here than the same feature is on Marten**, and for a structural reason: Fisher is
 embedded, so the store's disk footprint *is* the application's — and SQLite has no `jsonb`. Where
 PostgreSQL keeps a compact binary form for free, Fisher stores the literal JSON text of every event
 forever, property names included.
 
-The decisions in it:
+### One serializer for every Critter Stack store
+
+`IEventBinarySerializer` and `[BinaryEvent]` both live in **`JasperFx.Events`**, not in Fisher — so a
+single implementation serves Fisher, Marten and Polecat alike, and an application compiling one body
+of source against more than one store needs one serializer rather than one per flavour.
+
+```cs
+public interface IEventBinarySerializer
+{
+    byte[] Serialize(Type type, object data);
+    object Deserialize(Type type, byte[] data);
+}
+```
+
+::: tip
+**Fisher ships no implementation, and that is the end state.** A binary encoding is a choice with real
+consequences for schema evolution — MessagePack, protobuf and compressed JSON fail differently when an
+event type gains a member — and picking one would be Fisher deciding how your data ages. The seam is
+here; the encoding is yours.
+:::
+
+### The row, not the store, says how a body is encoded
+
+**`fi_events.data_binary` is always present, on every Fisher store, whether or not a serializer is
+configured.** A row is binary when that column is non-null and JSON when it is null — decided per
+row, never from the event type's current configuration or from any per-store or per-stream flag.
+
+That is what makes this safe to adopt on a live file:
+
+- **Marking one event type `[BinaryEvent]` needs no migration.** The column is already there, and the
+  rows already written stay JSON and keep reading through the JSON path.
+- **Un-marking it is equally safe in the other direction.** The rows already written binary keep
+  reading through their serializer.
+- **Upgrading an existing store to Fisher 0.8.0 is a plain `ALTER TABLE ADD COLUMN`,** taken in place
+  by the usual migration. Nothing in the table is rewritten and no event data moves.
+
+A binary row's `data` holds the placeholder `{}` rather than NULL, which is why `data` keeps its NOT
+NULL constraint. Two bytes per binary row is what buys the ADD COLUMN upgrade above: relaxing a NOT
+NULL on SQLite means rebuilding the whole table.
+
+The rest of the shape:
 
 - **A separate nullable BLOB column, not BLOBs mixed into `data`.** SQLite would tolerate the mixture,
   since affinity is a preference rather than a constraint — but then `typeof(data)` is the only way to
   tell an encoding apart, and `json_extract` over the column silently stops meaning anything for the
   rows that are binary.
-- **The column exists only when a serializer is configured**, and `data` becomes nullable at the same
-  moment — so a store that will never hold a binary event keeps the constraint it had. Appending a
-  binary event to a store created without a serializer is refused **by name**, rather than failing on
-  `data`'s NOT NULL constraint.
-- **Which column a row's body is in is read off the resolved event type**, never off a null check. A
-  genuinely null body would pass a null check too.
+- **The bytes are bound as a real BLOB parameter,** never composed into SQL or routed through a text
+  encoding, so a payload of arbitrary bytes — gzip output, MessagePack — survives intact.
 - **`data_binary` is composed last in the SELECT** and gets the last ordinal, so every ordinal above
-  it is unmoved whether or not the store has one.
+  it is unmoved by the optional metadata columns.
 
 A stream can mix the two encodings freely. Everything that reads the row's *columns* — stream reads,
 the daemon's loader, DCB tag queries, event metadata filters — is unaffected, which is why the daemon
 needed no change at all.
 
 ::: warning
+An event type marked `[BinaryEvent]` with **no** serializer configured is refused **by name** on
+append, rather than quietly reverting to JSON. Silently writing JSON would put rows in the store in a
+format you did not choose and believe you are not using.
+
+Reading a binary row with no serializer registered for its type is refused the same way.
+:::
+
+::: warning
 Two things **refuse** a binary event by name, and both would otherwise corrupt data or lie:
 
 - The [rewrite operations](/events/rewriting) write the JSON `data` column. Against a binary row that
-  would leave a JSON body *and* a BLOB body, and every reader resolves by event type — so the JSON
+  would leave a JSON body *and* a BLOB body, and every reader dispatches on the BLOB — so the JSON
   would be invisible and the row quietly wrong.
-- [`QueryEventDataAsync<T>`](/events/querying#querying-event-bodies) reads `data`, which is null for
-  those rows, and `json_extract(null, …)` is null — it would match nothing and report that as an
-  answer.
+- [`QueryEventDataAsync<T>`](/events/querying#querying-event-bodies) reads `data`, which holds only
+  the placeholder for those rows — it would match nothing and report that as an answer.
 
 [Compacting](/events/rewriting#stream-compacting) does work, and clears the BLOB: the snapshot it
 writes is JSON, and leaving the BLOB would keep a body no reader will ever look at.
-:::
-
-::: tip
-**Fisher ships no `IEventBinarySerializer`, and that is the end state.** A binary encoding is a choice
-with real consequences for schema evolution — MessagePack, protobuf and compressed JSON fail
-differently when an event type gains a member — and picking one would be Fisher deciding how your
-data ages.
 :::
 
 ## Dead letters
