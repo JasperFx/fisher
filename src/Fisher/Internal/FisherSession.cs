@@ -256,6 +256,43 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     /// <inheritdoc cref="IDocumentReadOperations.Events" />
     IEventStoreOperations IDocumentSessionOperations.Events => Events;
 
+    /// <summary>
+    ///     jasperfx#673 — the <see cref="StreamAction" />s this unit of work has queued and not yet
+    ///     committed, for a consumer that did not do the appending.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Not free the way the sibling stores' forwards are, in two ways.</b> The contract
+    ///         returns <see cref="IReadOnlyList{T}" /> and <see cref="EventOperations.PendingStreams" />
+    ///         is a <see cref="IReadOnlyCollection{T}" /> over a dictionary's values, so this has to
+    ///         copy; and the copy is wanted anyway, because that collection is a <em>live</em> view of
+    ///         the tracking dictionary and a caller holding it across another <c>Append</c> would see it
+    ///         change underneath them. The contract permits either and says a caller needing stability
+    ///         should copy — doing it here means every caller gets the stable answer.
+    ///     </para>
+    ///     <para>
+    ///         <b>Tenant scopes are included, because this is a question about the unit of work rather
+    ///         than about one tenant.</b> <c>SaveChangesAsync</c> commits the scopes' streams in the
+    ///         same transaction as its own, and <see cref="Services.ChangeSet" /> already reports them
+    ///         together for exactly that reason — a pre-commit hook told "these are the events about to
+    ///         be written" and then handed only the default tenant's would be wrong about the commit it
+    ///         is bracketing. Each action carries its own <c>TenantId</c>, so nothing is ambiguous. A
+    ///         scope holds no scopes of its own (they are flattened), so reading this from one reports
+    ///         that tenant alone.
+    ///     </para>
+    ///     <para>
+    ///         ⚠️ <b>Explicit, and the non-covariance trap is why that matters here more than
+    ///         anywhere.</b> Fisher already has a member <em>named</em> <c>PendingStreams</c> — on
+    ///         <see cref="EventOperations" />, returning a different collection type. Had that shape
+    ///         ever been put on the session itself it would not satisfy this member and would bind to
+    ///         the contract's throwing default with no compile error, which is the same trap
+    ///         jasperfx#669's <c>Events</c> accessor sprang. <c>pending_stream_actions_compliance</c>
+    ///         reads it through a contract-typed session, which is the only caller that would notice.
+    ///     </para>
+    /// </remarks>
+    IReadOnlyList<StreamAction> IDocumentSessionOperations.PendingStreams
+        => Events.PendingStreams.Concat(TenantScopes.SelectMany(x => x.Events.PendingStreams)).ToArray();
+
     internal void QueueOperation(Weasel.Storage.IStorageOperation operation)
     {
         lock (_operationsLock)

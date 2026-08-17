@@ -12,14 +12,14 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1314 tests green on net9.0 and net10.0**, with no known intermittent failures — 1265 in
-`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 13 in `Fisher.EntityFrameworkCore.Tests`. 286 of
-them are shared cross-store compliance tests — 236 event sourcing and 50 document. On JasperFx
+**1327 tests green on net9.0 and net10.0**, with no known intermittent failures — 1278 in
+`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 13 in `Fisher.EntityFrameworkCore.Tests`. 295 of
+them are shared cross-store compliance tests — 236 event sourcing and 59 document. On JasperFx
 **2.51.0** / Weasel **9.24.0**.
 
-**Two of 2.51.0's suites are not enrolled**, and both are opt-in with throwing contract defaults, so
-nothing here reports them as missing: `PendingStreamActionsCompliance` (fisher#96) and
-`AggregateWriteCacheCompliance` (fisher#97). Those are the only two shared suites Fisher does not run.
+**One of 2.51.0's suites is not enrolled**: `AggregateWriteCacheCompliance` (fisher#97). It is opt-in
+with a throwing contract default, so nothing here reports it as missing — it is the only shared suite
+Fisher does not run.
 
 ## Closed since the comparison
 
