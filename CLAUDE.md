@@ -196,7 +196,9 @@ Working, with tests:
   self-aggregating types
 - Inline projections: `Projections.Snapshot<T>` and `Projections.Add`, applied during
   `SaveChangesAsync` in the same transaction as the events
-- `FetchForWriting` / `WriteToAggregate` / `AppendOptimistic` / `FetchLatest` / `ProjectLatest`
+- `FetchForWriting` / `WriteToAggregate` / `AppendOptimistic` / `FetchLatest` / `ProjectLatest`, with
+  the shared opt-in second-level aggregate cache behind `FetchForWriting`
+  (`Events.CacheAggregatesForWriting<T>()`)
 - `EventOperations` implements the full `IEventStoreOperations` — see below for which members throw
 - Document storage over Guid, string, int and long ids; numeric ids via Hi-Lo sequences (`fi_hilo`)
 - `EventProjection.storeEntity` — an `EventProjection`'s `Create`/`Project` results are stored inline
@@ -2700,6 +2702,78 @@ identity**, where Polecat uses a list. `FetchForWriting` must therefore reuse an
 `StreamAction` rather than construct a fresh one — replacing the dictionary entry would silently drop
 events an earlier `Append` had queued for the same stream in the same session.
 
+#### The aggregate write cache
+
+`Events.CacheAggregatesForWriting<T>()` and `EventOperations.AggregateForWritingAsync` (fisher#97 /
+jasperfx#674) — a node-local, opt-in, second-level cache of aggregate snapshots between
+`FetchForWriting` calls. The contract, the key, the default bounded implementation and the registration
+surface are all JasperFx's; what Fisher supplies is the fetch path, which is the same division as the
+async daemon.
+
+**Grade 1 and only grade 1.** The cached snapshot is a *baseline*: the stream version is read on every
+call whether the take hit or missed, the events after the baseline are folded on, and the optimistic
+guard still runs inside the write transaction. A stale entry costs a larger fold — never a wrong
+aggregate, never a suppressed concurrency failure. The "trusted" variant that also skips the version
+read is retired upstream against a measurement (0.19 ms of a 13.2 ms round); **do not reintroduce it**,
+and if `a_cached_baseline_cannot_suppress_a_concurrency_exception` ever fails, that is what has
+happened.
+
+- **What a hit removes here is bigger than on either sibling, and it is a different thing.** Marten and
+  Polecat load a stored snapshot and fold what follows, so the cache removes a *document read*. Fisher's
+  `FetchForWriting` deliberately folds the whole stream on every call — see `CanReadInlineDocument` for
+  why it does not read the Inline document the way `FetchLatest` does — so a hit removes *the fold of
+  the history*. The measurements behind jasperfx#674 are PostgreSQL round trips and do not transfer;
+  the saving is real here for a different reason.
+- **No enabled/disabled branch anywhere.** `ResolveCache(Type)` hands back `NulloAggregateWriteCache`
+  for an unenrolled type, so the ordinary path is unchanged: every take misses and every store is
+  dropped. `RecordAggregateCacheWriteBack` returns early on the nullo cache, so an unenrolled fetch also
+  allocates nothing.
+- **Nothing is stored at fetch time, and the reason is take-on-read rather than poisoning.** An entry
+  written while the caller still holds the instance can be claimed by a second session, which folds
+  *its* delta onto the very object the first caller is still reading — the aggregate would silently gain
+  state nobody in that session appended. Since the whole subject is that caching is unobservable except
+  in latency, that is disqualifying. The write-back is deferred to the end of the unit of work, as
+  Marten's is.
+- **The version stored is the one read *before* the unit of work appended anything**, which is where
+  Fisher diverges from the issue's advice to take it from the committed `StreamAction`. That advice is
+  for a store whose inline projection mutates the very instance `FetchForWriting` handed out; **Fisher's
+  does not** — it loads the snapshot document and builds its own — so labelling the instance with the
+  committed version would claim events it has not applied, and the next fetch would fold them twice.
+  `aggregate_write_cache.the_inline_projection_leaves_the_fetched_aggregate_alone` pins the premise,
+  because it is a fact about Fisher rather than a choice, and the write-back is wrong the moment it
+  stops holding.
+- **A failed commit therefore needs no compensation.** The baseline describes committed state that
+  existed either way, so there is no poisoned entry — which is also why the flush runs for an enlisted
+  session, where the post-commit hooks do not. It runs outside the resilience pipeline for fisher#12's
+  reason.
+- **A fetch that never commits leaves nothing behind**, having consumed the entry it claimed. The
+  contract expects that: an implementation may evict whenever it likes, and dropping an entry is always
+  sound.
+- **The key's database identifier carries the logical store as well as the file.** Under
+  database-per-tenant `FisherDatabase.Identifier` already separates two files; within one file two
+  logical stores are separated by the table prefix rather than by a schema, so `DatabaseSchemaName` is
+  folded in. `AggregateWriteCacheOptions.Cache` names exactly that collision as the one its key cannot
+  close. The tenant component is always the session's — Fisher has no aggregate registered as global,
+  and under conjoined tenancy two tenants share a stream id space.
+- **A rewritten event below a baseline is the one real hole, and it is not closable here.** A cached
+  baseline is derived state, so masking or overwriting an event body leaves it holding what the old body
+  produced — the same caveat a snapshot, document or flat table already carries, and the caveat masking
+  is documented under. Evicting on rewrite would close it only within the rewriting process: the cache
+  is node-local by construction, so another node's entry is unreachable. Documented as a reason to leave
+  a rewritten aggregate unenrolled rather than half-closed with a guarantee the design cannot make.
+- **Compacting needs nothing**, and that is worth knowing rather than assuming: JasperFx's aggregator
+  calls `Compacted<T>.MaybeFastForward` before folding, so a delta that reaches the snapshot event
+  *replaces* the baseline outright. A baseline below a compaction point heals on the next fetch for
+  free.
+
+`AggregateWriteCacheCompliance` (14 tests) is the definition — its subject is that a hit is
+indistinguishable from a miss, including when the baseline is stale, ahead of the stream, or evicted.
+Every one of those facts is vacuously true of a store that ignored the opt-in, which is why the suite
+brings its own recording cache and asserts a nonzero hit count. Verified by disabling the take: exactly
+the two hit-count facts fail. `aggregate_write_cache` covers what the suite cannot see — the premise
+above, the write-back's timing and version, the tenant and logical-store components of the key, and
+that an unenrolled type never reaches the cache at all.
+
 ### Live aggregation
 
 `EventGraph` implements `IAggregationSourceFactory<IQuerySession>`: given an aggregate type it closes
@@ -3131,15 +3205,14 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**35 of the 36 suites are enrolled, 295 tests, as of 2.51.0.** `JasperFx.Events.ComplianceTests` is
-referenced unconditionally — the old `$(EnableComplianceTests)` gate is gone. The most recently
-enrolled are `BinaryEventSerializationCompliance` (6, the event half's twenty-ninth) and
-`DocumentSessionEventsCompliance` (5) from 2.50.0, and `PendingStreamActionsCompliance` (9, fisher#96)
-from 2.51.0. All three are **opt-in** — their contract members carry throwing defaults, so enrolling is
-a deliberate line rather than something a bump does to you.
+**Fisher is enrolled, in full — all 36 suites, 309 tests, as of 2.51.0.**
+`JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
+gate is gone. The most recently enrolled are `BinaryEventSerializationCompliance` (6, the event half's
+twenty-ninth) and `DocumentSessionEventsCompliance` (5) from 2.50.0, and 2.51.0's two:
+`PendingStreamActionsCompliance` (9, fisher#96) and `AggregateWriteCacheCompliance` (14, fisher#97).
+All four are **opt-in** — their contract members carry throwing defaults, so enrolling is a deliberate
+line rather than something a bump does to you.
 
-**The one that is not enrolled is `AggregateWriteCacheCompliance`** (fisher#97, the shared second-level
-`FetchForWriting` snapshot cache), opt-in the same way and with production work of its own to do.
 2.51.0's third change is fisher#98 and is fixture-side: `DocumentComplianceConfig.StreamIdentity`
 (jasperfx#672) replaced an inference `FisherDocumentComplianceFixture` was making — string identity
 whenever the config declared event types, right only for as long as `DocumentSessionEventsCompliance`

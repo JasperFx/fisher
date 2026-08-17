@@ -115,6 +115,21 @@ public class binary_event_serialization_compliance
     : BinaryEventSerializationCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
 /*
+ * fisher#97 / jasperfx#674 — the second-level FetchForWriting snapshot cache, opt-in the same way.
+ *
+ * The suite's subject is that turning caching on is unobservable except in latency: a hit is
+ * indistinguishable from a miss, including when the baseline is stale, ahead of the stream, or
+ * evicted, and a cached baseline can never suppress a concurrency failure. Every one of those facts
+ * is vacuously true of a store that dropped the opt-in on the floor, since an uncached fetch is
+ * correct by construction — which is why the suite brings its own recording cache and asserts a
+ * nonzero hit count. `the_cache_is_actually_consulted_when_a_type_opts_in` is the fact holding that,
+ * and it is the only one Fisher could fail by doing nothing.
+ */
+
+public class aggregate_write_cache_compliance
+    : AggregateWriteCacheCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
  * fisher#68 / jasperfx#647 — the DOCUMENT compliance suites, which arrived in
  * JasperFx.Events.ComplianceTests 2.47.0 and cover the slice JasperFx.Events did not before.
  *

@@ -6,6 +6,7 @@ using JasperFx;
 using JasperFx.MultiTenancy;
 using JasperFx.Events;
 using JasperFx.Events.Daemon;
+using JasperFx.Events.Fetching;
 using JasperFx.Events.Tags;
 using Polly;
 using Weasel.Core;
@@ -458,6 +459,46 @@ public class EventStoreOptions : IEventStoreInstrumentation
         EventGraph!.UseBinarySerializer<TEvent>(serializer);
         return this;
     }
+
+    /// <summary>
+    ///     Keep recently fetched snapshots of <typeparamref name="T" /> in a node-local cache, so that a
+    ///     later <c>FetchForWriting&lt;T&gt;</c> folds only the events after the cached one rather than
+    ///     the stream's whole history (fisher#97 / jasperfx#674). <b>Off for every aggregate type by
+    ///     default.</b>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>The cached snapshot is only ever a baseline.</b> The stream's version and every event
+    ///         after the cached one are still read on every call, and the optimistic concurrency
+    ///         assertion on append is untouched — so a stale entry costs a larger delta fold, never a
+    ///         wrong aggregate and never a suppressed concurrency failure.
+    ///     </para>
+    ///     <para>
+    ///         <b>Worth more here than the same option is on Marten or Polecat.</b> There the cache
+    ///         removes a snapshot <em>load</em>; Fisher's <c>FetchForWriting</c> folds the stream on
+    ///         every call by design, so what a hit removes is the fold itself. That also makes it per
+    ///         aggregate type rather than store-wide: the win is proportional to how often one stream is
+    ///         fetched for writing, so it is real on a hot aggregate and only overhead on one written
+    ///         once.
+    ///     </para>
+    ///     <para>
+    ///         The cache is node-local and deliberately incoherent between processes, which is sound for
+    ///         exactly the reason above. Supply your own implementation — or a size limit for the
+    ///         default bounded one — through <see cref="AggregateWriteCaching" />.
+    ///     </para>
+    /// </remarks>
+    public EventStoreOptions CacheAggregatesForWriting<T>(int sizeLimit = 1000) where T : class
+    {
+        EventGraph!.CacheAggregatesForWriting<T>(sizeLimit);
+        return this;
+    }
+
+    /// <summary>
+    ///     The <c>FetchForWriting</c> snapshot cache's own configuration — which types are enrolled, the
+    ///     default cache's size limit, and the seam for supplying a cache of your own.
+    /// </summary>
+    /// <inheritdoc cref="CacheAggregatesForWriting{T}" />
+    public AggregateWriteCacheOptions AggregateWriteCaching => EventGraph!.AggregateWriteCaching;
 
     /// <summary>
     ///     Run inline projections' side effects when an inline projection is applied during

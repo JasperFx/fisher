@@ -537,6 +537,19 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         // publishing through it would flush the same messages again.
         _messageBatch = null;
 
+        // fisher#97. The aggregates this unit of work fetched for writing go back to the second-level
+        // cache here, after the write and outside the resilience pipeline — a retried SQLITE_BUSY
+        // re-executes the whole write delegate, and this is not work to repeat per attempt. It runs for
+        // an enlisted session too, unlike the post-commit hooks below: what is stored is the baseline
+        // as of the version read *before* this unit of work appended anything, so it describes state
+        // that is committed whether or not the caller's transaction ever is.
+        Events.FlushAggregateCacheWriteBacks();
+
+        foreach (var scope in TenantScopes)
+        {
+            scope.Events.FlushAggregateCacheWriteBacks();
+        }
+
         ResetChangeTracking(queued);
 
         foreach (var scope in TenantScopes)

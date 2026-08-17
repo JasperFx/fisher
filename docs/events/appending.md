@@ -88,14 +88,54 @@ await session.Events.WriteToAggregate<Order>(orderId, stream =>
 });
 ```
 
-`FetchForWriting` returns the aggregate from a snapshot if one is stored, and by live aggregation
-otherwise.
+**`FetchForWriting` folds the stream on every call**, whatever the aggregate's projection lifecycle.
+That is deliberate and differs from [`FetchLatest`](/events/snapshots), which reads an `Inline`
+aggregate's projected document: the two ask different questions. `FetchLatest` reports current state,
+while this is the read half of a read-modify-write whose guard is the stream's version — so folding
+the stream is what the version it hands back has to agree with.
 
 ::: warning
 Fisher tracks pending streams in a **dictionary keyed by identity**, where Polecat uses a list. So
 `FetchForWriting` reuses an already-tracked `StreamAction` rather than constructing a fresh one —
 replacing the dictionary entry would silently drop events an earlier `Append` had queued for the same
 stream in the same session.
+:::
+
+### Caching the aggregate between fetches
+
+A hot stream re-folds its whole history on every command. `CacheAggregatesForWriting<T>()` keeps
+recently fetched snapshots in a node-local cache, so a later fetch folds only the events after the
+cached one:
+
+```cs
+opts.Events.CacheAggregatesForWriting<Order>();          // off for every type by default
+opts.Events.CacheAggregatesForWriting<Order>(sizeLimit: 5000);
+```
+
+**The cached snapshot is only ever a baseline.** The stream's version and every event after the cached
+one are still read on every call, and the optimistic concurrency assertion on append is untouched — so
+a stale entry costs a larger fold, never a wrong aggregate and never a suppressed concurrency failure.
+Turning it on is unobservable except in latency.
+
+::: tip
+**This is worth more on Fisher than on Marten or Polecat.** There the cache removes a snapshot *load*;
+here it removes the fold itself, because `FetchForWriting` folds by design. It is opt-in per aggregate
+type because the win is proportional to how often one stream is fetched for writing — real on a hot
+aggregate under load, and only overhead on one written once.
+:::
+
+The contract is `JasperFx.Events.Fetching.IAggregateWriteCache`, shared with Marten and Polecat, so a
+consumer targeting more than one store configures caching once. Supply your own implementation — an
+adapter over a shared `IMemoryCache`, say — through `opts.Events.AggregateWriteCaching.Cache`.
+
+::: warning
+**A cached baseline is derived state, and [event rewriting](/events/rewriting) does not reach derived
+state.** Masking or overwriting an event body below a cached baseline leaves that baseline holding
+what the old body produced, exactly as it leaves an already-written snapshot, document or flat table
+holding it. The cache is node-local by design — masking on one node could not evict another's — so
+this is the same caveat masking already carries, one place further along. Leave an aggregate whose
+history you rewrite unenrolled, or treat a rewrite as requiring a restart of the processes holding
+it.
 :::
 
 ### By natural key or strong-typed id

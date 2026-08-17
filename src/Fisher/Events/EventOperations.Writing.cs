@@ -1,6 +1,7 @@
 using Fisher.Exceptions;
 using Fisher.Storage;
 using JasperFx.Events;
+using JasperFx.Events.Fetching;
 using JasperFx.Events.Projections;
 using Microsoft.Data.Sqlite;
 
@@ -13,6 +14,14 @@ namespace Fisher.Events;
 /// </summary>
 public partial class EventOperations
 {
+    /// <summary>
+    ///     Aggregates fetched for writing in this unit of work, waiting to be written back to the
+    ///     <see cref="IAggregateWriteCache" /> once it commits. Null until a type that opted in is
+    ///     fetched, which is the overwhelmingly common case.
+    /// </summary>
+    private List<(IAggregateWriteCache Cache, AggregateCacheKey Key, object Aggregate, long Version)>?
+        _pendingCacheWrites;
+
     // ---- AppendOptimistic ----
 
     /// <summary>
@@ -510,7 +519,7 @@ public partial class EventOperations
         T? aggregate = null;
         if (version > 0)
         {
-            aggregate = await AggregateStreamAsync<T>(streamId, 0, null, null, 0, token).ConfigureAwait(false);
+            aggregate = await AggregateForWritingAsync<T>(streamId, version.Value, token).ConfigureAwait(false);
         }
 
         var action = TrackForWriting(streamId, version);
@@ -518,6 +527,158 @@ public partial class EventOperations
         return streamId is Guid guid
             ? EventStream<T>.ForGuid(this, action, guid, aggregate, token)
             : EventStream<T>.ForString(this, action, (string)streamId, aggregate, token);
+    }
+
+    /// <summary>
+    ///     The aggregate a <c>FetchForWriting</c> hands back, folded onto a cached baseline where one is
+    ///     available (fisher#97 / jasperfx#674).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>The cached snapshot is a baseline and nothing more.</b> The stream's version has
+    ///         already been read by the caller above, and it is read on every call whether the cache hit
+    ///         or missed; the optimistic guard still runs inside the write transaction. So a stale entry
+    ///         costs a larger delta fold — never a wrong aggregate, and never a suppressed concurrency
+    ///         failure. The "trusted" variant that also skips the version read is retired upstream and
+    ///         must not be reintroduced here.
+    ///     </para>
+    ///     <para>
+    ///         <b>What it removes is bigger on Fisher than on the siblings, and for a structural
+    ///         reason.</b> Marten and Polecat load a stored snapshot and fold the events after it, so
+    ///         the cache removes a document read. Fisher's <c>FetchForWriting</c> deliberately folds the
+    ///         whole stream on every call — see the remarks on <c>FetchForWriting</c> for why it does
+    ///         not read the Inline document the way <c>FetchLatest</c> does — so what a hit removes here
+    ///         is the fold of the stream's entire history, leaving only the events after the baseline.
+    ///         The measurements behind jasperfx#674 are PostgreSQL round trips and do not transfer;
+    ///         this is a different saving on a different axis.
+    ///     </para>
+    ///     <para>
+    ///         <b>No enabled/disabled branch.</b> <c>ResolveCache(Type)</c> hands back
+    ///         <c>NulloAggregateWriteCache</c> for a type nobody enrolled, so an unenrolled aggregate
+    ///         takes exactly the path it took before: every take misses and every store is dropped.
+    ///         Resolved per call rather than once, because Fisher has no fetch-plan object to hang it on
+    ///         — it is a hash-set probe under a lock, next to two SQL statements.
+    ///     </para>
+    ///     <para>
+    ///         <b>A baseline ahead of the stream heals on this call.</b> That is what a restore or a
+    ///         rollback leaves behind, and a negative delta cannot be folded — so the entry is dropped
+    ///         (<c>TryTake</c> has already removed it) and the fetch redone from nothing, which then
+    ///         writes the correct baseline back.
+    ///     </para>
+    /// </remarks>
+    private async Task<T?> AggregateForWritingAsync<T>(object streamId, long version, CancellationToken token)
+        where T : class
+    {
+        var cache = Graph.AggregateWriteCaching.ResolveCache(typeof(T));
+        var key = AggregateCacheKeyFor<T>(streamId);
+
+        // Take-on-read is a contract requirement rather than an implementation detail: the fold below
+        // mutates the instance it is handed, so exactly one caller may ever win an entry. A loser
+        // simply misses and takes the uncached path, which is always correct.
+        var aggregate = cache.TryTake(key, out var claimed, out var baseline) && claimed is T typed
+                        && baseline > 0 && baseline <= version
+            ? await AggregateStreamAsync<T>(streamId, 0, null, typed, baseline + 1, token).ConfigureAwait(false)
+            : await AggregateStreamAsync<T>(streamId, 0, null, null, 0, token).ConfigureAwait(false);
+
+        if (aggregate is not null)
+        {
+            RecordAggregateCacheWriteBack(cache, key, aggregate, version);
+        }
+
+        return aggregate;
+    }
+
+    /// <summary>
+    ///     The cache key for one aggregate of one stream.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>The database identifier carries the logical store as well as the file</b>, which is a
+    ///         Fisher-shaped widening of what the shared key means by "database". Under
+    ///         database-per-tenant the identifier already distinguishes two files holding the same
+    ///         stream id; within one file, two logical stores are separated by the table prefix rather
+    ///         than by a schema, so folding <c>DatabaseSchemaName</c> in is what stops them colliding
+    ///         when they are handed the same cache instance. <see cref="AggregateWriteCacheOptions" />
+    ///         names that collision as the one its own key cannot close.
+    ///     </para>
+    ///     <para>
+    ///         <b>The tenant is always the session's, never <c>GlobalTenant</c>.</b> Fisher has no
+    ///         aggregate registered as global, so claiming one would be a wider key than the store can
+    ///         justify: under conjoined tenancy two tenants' streams share an id space and must not
+    ///         share an entry. Where a store is single-tenanted every session resolves the same tenant
+    ///         id anyway, so nothing is lost.
+    ///     </para>
+    /// </remarks>
+    private AggregateCacheKey AggregateCacheKeyFor<T>(object streamId) where T : class
+        => new(typeof(T), $"{_session.FisherDatabase.Identifier}/{_session.Options.DatabaseSchemaName}",
+            TenantId, streamId);
+
+    /// <summary>
+    ///     Hold a fetched aggregate to be written back to the cache once the unit of work has been
+    ///     written.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Nothing is stored at fetch time, and the reason is take-on-read rather than
+    ///         poisoning.</b> An entry written while the caller still holds the instance can be claimed
+    ///         by a second session, which folds <em>its</em> delta onto the very object the first
+    ///         caller is still reading — the aggregate would silently gain state nobody in that session
+    ///         appended. Since the whole subject of this feature is that caching is unobservable except
+    ///         in latency, that is disqualifying. Deferring to the end of the unit of work is also what
+    ///         Marten does.
+    ///     </para>
+    ///     <para>
+    ///         <b>The version stored is the one read <em>before</em> this unit of work appended
+    ///         anything</b>, which is what makes a failed commit a non-event here: the baseline
+    ///         describes committed state that existed either way, so there is no poisoned entry to
+    ///         compensate for and no eviction to arrange. It also means the entry is behind the stream
+    ///         by whatever this session appended, which is exactly the case
+    ///         <c>AggregateForWritingAsync</c> exists to fold — and it is the honest label, since
+    ///         nothing applies this session's events to the instance handed out (see
+    ///         <c>aggregate_write_cache.the_inline_projection_leaves_the_fetched_aggregate_alone</c>,
+    ///         which pins the premise).
+    ///     </para>
+    ///     <para>
+    ///         A fetch that never commits therefore leaves no entry, having consumed the one it claimed.
+    ///         That is the contract's own expectation — an implementation is free to evict whenever it
+    ///         likes, and dropping an entry is always sound.
+    ///     </para>
+    /// </remarks>
+    private void RecordAggregateCacheWriteBack(IAggregateWriteCache cache, AggregateCacheKey key,
+        object aggregate, long version)
+    {
+        // The unenrolled path allocates nothing: ResolveCache hands back the nullo cache for a type
+        // nobody opted in, and storing into it would be a list of work to discard later.
+        if (cache is NulloAggregateWriteCache)
+        {
+            return;
+        }
+
+        (_pendingCacheWrites ??= []).Add((cache, key, aggregate, version));
+    }
+
+    /// <summary>
+    ///     Write every aggregate fetched for writing in this unit of work back to its cache.
+    /// </summary>
+    /// <remarks>
+    ///     Called by <c>FisherSession.SaveChangesAsync</c> once the write has succeeded, and outside
+    ///     the resilience pipeline — a retried <c>SQLITE_BUSY</c> re-executes the whole write delegate,
+    ///     and this is not work that should happen once per attempt. Nothing here can fail in a way the
+    ///     caller should hear about: a cache is free to drop anything it is given.
+    /// </remarks>
+    internal void FlushAggregateCacheWriteBacks()
+    {
+        if (_pendingCacheWrites is null)
+        {
+            return;
+        }
+
+        foreach (var (cache, key, aggregate, version) in _pendingCacheWrites)
+        {
+            cache.Store(key, aggregate, version);
+        }
+
+        _pendingCacheWrites.Clear();
     }
 
     /// <summary>

@@ -342,6 +342,25 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         }
 
         /// <summary>
+        ///     fisher#97 — enroll an aggregate type in the second-level <c>FetchForWriting</c> snapshot
+        ///     cache, using the cache instance the suite supplied so it can see what the store did with
+        ///     it.
+        /// </summary>
+        /// <remarks>
+        ///     Both halves are on JasperFx's own <c>EventRegistry</c>, which <c>EventGraph</c> derives
+        ///     from, so this is the two lines the shared registrar's remarks predict. The suite supplies
+        ///     the instance rather than reading the store's own because every behavioural fact about
+        ///     caching is vacuously true of a store that ignored the opt-in — an uncached fetch being
+        ///     correct by construction — so the hit count is the only thing that separates the two.
+        /// </remarks>
+        public void CacheAggregatesForWriting<TDoc>(JasperFx.Events.Fetching.IAggregateWriteCache cache)
+            where TDoc : class
+        {
+            _options.Events.AggregateWriteCaching.Cache = cache;
+            _options.Events.CacheAggregatesForWriting<TDoc>();
+        }
+
+        /// <summary>
         ///     Delegates to <c>StoreOptions.RegisterValueType&lt;T&gt;()</c> (fisher#75).
         /// </summary>
         /// <remarks>
