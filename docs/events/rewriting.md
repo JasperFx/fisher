@@ -112,6 +112,11 @@ expression. That asymmetry is the shared interface's, not Fisher's — the param
 **Masking does not reach anything derived from the events.** A snapshot, document or flat table that
 already folded the unmasked body still holds the protected information until that projection is
 rebuilt. Marten is the same.
+
+That includes a baseline held by the
+[`FetchForWriting` aggregate cache](/events/appending#caching-the-aggregate-between-fetches), which is
+node-local and therefore not reachable from the process doing the masking at all. Leave an aggregate
+whose history you mask unenrolled.
 :::
 
 ## Stream compacting

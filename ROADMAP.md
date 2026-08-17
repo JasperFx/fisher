@@ -3,12 +3,10 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **one open issue**, [#97](https://github.com/JasperFx/fisher/issues/97) — the JasperFx 2.51.0
-bump asking for production work, which is exactly the pattern this file has predicted for eight bumps
-running.
+Status: **no open issues** — the JasperFx 2.51.0 wave asked for three and all three are closed.
 
-The tracker was empty before them, and that is a milestone rather than a finish line, so it is worth
-being precise about what it does and does not mean. Every gap this repository knows about is closed; it is emphatically **not** the same as being
+That is a milestone and not a finish line, so it is worth being precise about what it does and does not
+mean. Every gap this repository knows about is closed; it is emphatically **not** the same as being
 feature-complete against Marten, and the deliberate gaps in [HANDOFF.md](HANDOFF.md) are still gaps —
 they are decisions rather than omissions, which is why they are not issues. The live work that remains
 lives elsewhere: `Wolverine.Fisher` is built in the wolverine repo against
@@ -43,8 +41,25 @@ view. **Tenant scopes are included**, because the scopes' streams commit in the 
 one tenant. `PendingStreamActionsCompliance` (9 tests) enrolled, and verified load-bearing by removing
 the forward: every one of the nine fails on the contract's throwing default.
 
-`AggregateWriteCacheCompliance` ([#97](https://github.com/JasperFx/fisher/issues/97), the shared
-second-level `FetchForWriting` snapshot cache) is the other, and is next.
+**0.9.0** is the other, and it is a feature rather than a forward.
+[#97](https://github.com/JasperFx/fisher/issues/97) / jasperfx#674 moved `IAggregateWriteCache` into
+`JasperFx.Events`, so the three stores share one second-level snapshot cache behind `FetchForWriting`
+instead of a consumer targeting all three writing one per flavour. Opt-in per aggregate type through
+`Events.CacheAggregatesForWriting<T>()`, off by default, and **grade 1 only**: the cached snapshot is a
+*baseline*, the stream version and every event after it are still read on every call, and the
+optimistic guard is untouched — so a stale entry costs a larger fold, never a wrong aggregate.
+
+**What a hit removes is bigger here than the issue's PostgreSQL measurements suggest, and it is a
+different thing.** On the siblings the cache removes a snapshot *load*; Fisher's `FetchForWriting` folds
+the stream on every call by design, so a hit removes *the fold of the history*. Two decisions are
+Fisher's rather than the shared design's: nothing is written back at fetch time, because an entry
+written while the caller still holds the instance defeats take-on-read and lets a second session fold
+its delta onto the object the first is reading; and the version stored is the one read *before* the
+unit of work, because Fisher's inline projection — unlike Marten's — leaves the fetched instance alone,
+so the committed version would claim events it has not applied.
+`aggregate_write_cache.the_inline_projection_leaves_the_fetched_aggregate_alone` pins that premise.
+`AggregateWriteCacheCompliance` (14 tests) enrolled, and verified load-bearing by disabling the take:
+exactly the two hit-count facts fail.
 
 The 2026-08-17 wave is **0.8.0**, and it is the pattern above playing out exactly: the issue came from
 a JasperFx release. [#93](https://github.com/JasperFx/fisher/issues/93) asked for Marten's binary event
@@ -60,8 +75,8 @@ not do. 2.50.0's other half is jasperfx#669, an `Events` accessor on the documen
 Fisher's sessions declared `Events` as their own concrete type, which does **not** satisfy a contract
 member (C# interface implementation is not return-type covariant), so both tiers needed an explicit
 implementation. Two new compliance suites pin both halves. On JasperFx **2.51.0** / Weasel **9.24.0**.
-**35 of the 36 compliance suites, 295 tests, green** — 29 event suites and 236 tests, plus six document
-suites and 59 tests. 1278 tests green on net9.0 and net10.0.
+**All 36 compliance suites, 309 tests, green** — 30 event suites and 250 tests, plus six document
+suites and 59 tests. 1300 tests green on net9.0 and net10.0.
 
 The 2026-08-16 wave is **0.7.2**, and it emptied the tracker again.
 [#88](https://github.com/JasperFx/fisher/issues/88) was a real cross-store divergence found by the
@@ -141,6 +156,7 @@ than a lookalike. Every event suite it ships is green — twenty-eight from 2.45
 | `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 | `BinaryEventSerializationCompliance` | 6 |
+| `AggregateWriteCacheCompliance` | 14 |
 
 **2.47.0 opened a second front rather than adding a twenty-ninth event suite.** `JasperFx.Events.Documents`
 (jasperfx#647) is the store-agnostic *document* contract behind the Wolverine aggregate-handler
