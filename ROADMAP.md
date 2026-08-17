@@ -3,10 +3,12 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **no open issues**, for the first time since the tracker was opened.
+Status: **two open issues**, [#96](https://github.com/JasperFx/fisher/issues/96) and
+[#97](https://github.com/JasperFx/fisher/issues/97), both of them the JasperFx 2.51.0 bump asking for
+production work — which is exactly the pattern this file has predicted for eight bumps running.
 
-That is a milestone and not a finish line, so it is worth being precise about what it does and does not
-mean. Every gap this repository knows about is closed; it is emphatically **not** the same as being
+The tracker was empty before them, and that is a milestone rather than a finish line, so it is worth
+being precise about what it does and does not mean. Every gap this repository knows about is closed; it is emphatically **not** the same as being
 feature-complete against Marten, and the deliberate gaps in [HANDOFF.md](HANDOFF.md) are still gaps —
 they are decisions rather than omissions, which is why they are not issues. The live work that remains
 lives elsewhere: `Wolverine.Fisher` is built in the wolverine repo against
@@ -14,6 +16,22 @@ lives elsewhere: `Wolverine.Fisher` is built in the wolverine repo against
 [weasel#426](https://github.com/JasperFx/weasel/issues/426) is upstream. **The next issue is most
 likely to come from a JasperFx release rather than from this repository** — that has been the pattern
 for seven bumps, and it is what the compliance enrollment is for.
+
+**0.8.1** is the JasperFx **2.51.0** bump. [#98](https://github.com/JasperFx/fisher/issues/98) is its
+one requirement and it is entirely fixture-side: `DocumentComplianceConfig` gained a `StreamIdentity`
+knob (jasperfx#672), so a document suite now *states* the stream identity it needs instead of leaving
+each fixture to guess. Fisher's fixture had exactly that guess to remove — it set string identity
+whenever the config declared event types, an inference that happened to be right only because
+`DocumentSessionEventsCompliance` was the only suite populating `EventTypes`, and would have silently
+mis-configured the first Guid-keyed event suite to arrive. Verified load-bearing by disabling it: three
+of that suite's five facts fail with the stream-identity error jasperfx#672 describes.
+
+The bump also ships two **opt-in** suites, neither enrolled here yet because each needs real production
+work and has an issue of its own: `PendingStreamActionsCompliance`
+([#96](https://github.com/JasperFx/fisher/issues/96), the document contract's `PendingStreams`) and
+`AggregateWriteCacheCompliance` ([#97](https://github.com/JasperFx/fisher/issues/97), the shared
+second-level `FetchForWriting` snapshot cache). Both contract members carry throwing defaults, which is
+why the bump itself builds clean — the compiler has nothing to say and only the suites would.
 
 The 2026-08-17 wave is **0.8.0**, and it is the pattern above playing out exactly: the issue came from
 a JasperFx release. [#93](https://github.com/JasperFx/fisher/issues/93) asked for Marten's binary event
@@ -28,7 +46,7 @@ attribute, `Events.BinarySerializer` renamed to `Events.DefaultBinarySerializer`
 not do. 2.50.0's other half is jasperfx#669, an `Events` accessor on the document session contracts;
 Fisher's sessions declared `Events` as their own concrete type, which does **not** satisfy a contract
 member (C# interface implementation is not return-type covariant), so both tiers needed an explicit
-implementation. Two new compliance suites pin both halves. On JasperFx **2.50.0** / Weasel **9.24.0**.
+implementation. Two new compliance suites pin both halves. On JasperFx **2.51.0** / Weasel **9.24.0**.
 **All 34 compliance suites, 286 tests, green** — 29 event suites and 236 tests, plus five document
 suites and 50 tests. 1265 tests green on net9.0 and net10.0.
 

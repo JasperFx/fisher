@@ -78,22 +78,25 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
                 options.Schema.MappingFor(documentType);
             }
 
+            // jasperfx#672. The suite states the stream identity it needs and the fixture replays it,
+            // exactly as it replays the value types above. This used to be an *inference* made here —
+            // string identity whenever the config declared event types — which was right only because
+            // DocumentSessionEventsCompliance was the only suite populating EventTypes, and would have
+            // silently mis-configured the first Guid-keyed event suite to arrive. Null means "leave the
+            // store on its own default", so every document-only suite is untouched.
+            if (config.StreamIdentity.HasValue)
+            {
+                options.Events.StreamIdentity = config.StreamIdentity.Value;
+            }
+
             // jasperfx#669. Only DocumentSessionEventsCompliance populates this, and only because that
             // suite reaches the event store through a document session. Registering up front is the
             // same discipline the document types above need and for a related reason: the event tables
             // have to be in the migration this fixture applies, and on SQLite a table that is not there
             // when a statement is prepared is a `no such table`, not an empty result.
-            if (config.EventTypes.Count != 0)
+            foreach (var eventType in config.EventTypes)
             {
-                // The suite appends by string stream key throughout and the config carries no knob for
-                // it, so the stream identity is the fixture's to supply. Guid — Fisher's default and
-                // every sibling's — would refuse every append in the suite by name.
-                options.Events.StreamIdentity = StreamIdentity.AsString;
-
-                foreach (var eventType in config.EventTypes)
-                {
-                    options.Events.AddEventType(eventType);
-                }
+                options.Events.AddEventType(eventType);
             }
         });
 
