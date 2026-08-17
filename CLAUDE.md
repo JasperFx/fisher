@@ -2048,10 +2048,15 @@ branches — `IQuerySession`'s and `IDocumentSessionOperations`' — and neither
 `new EventOperations Events { get; }` to resolve the lookup. That declaration looks redundant and is
 not.
 
-⚠️ **The compliance suite appends by string stream key throughout and `DocumentComplianceConfig`
-carries no stream-identity knob**, so `FisherDocumentComplianceFixture` sets
-`StreamIdentity.AsString` when the config declares event types. Fisher's default — and every sibling's
-— is Guid, which refuses every append in the suite by name.
+⚠️ **The compliance suite appends by string stream key throughout**, and Fisher's default — like every
+sibling's — is Guid, which refuses every append in the suite by name. The suite now *says* so:
+`DocumentComplianceConfig.StreamIdentity` (jasperfx#672 / fisher#98) is nullable, defaults to null
+meaning "leave the store on its own default", and `FisherDocumentComplianceFixture` replays it exactly
+as it replays `ValueTypes`. **What that replaced was an inference made in the fixture** — string
+identity whenever the config declared *event types* — which was right only because
+`DocumentSessionEventsCompliance` was the one suite populating `EventTypes`, and would have silently
+mis-configured the first Guid-keyed event suite to arrive. A precondition a config cannot carry is one
+each fixture has to guess, and a correct store then fails an undeclared requirement.
 
 #### `LoadAsync<T>(object)` — the eighth operation
 
@@ -3093,12 +3098,21 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher is enrolled, in full.** `JasperFx.Events.ComplianceTests` is referenced unconditionally —
-the old `$(EnableComplianceTests)` gate is gone. **All 34 suites, 286 tests, are live**, as of 2.50.0,
-which added both of the last two: `BinaryEventSerializationCompliance` (6, the event half's
-twenty-ninth) and `DocumentSessionEventsCompliance` (5, the document half's fifth). Both are **opt-in**
-— their registrar members carry throwing defaults, so enrolling is a deliberate line rather than
-something a bump does to you.
+**34 of the 36 suites are enrolled, 286 tests, as of 2.51.0.** `JasperFx.Events.ComplianceTests` is
+referenced unconditionally — the old `$(EnableComplianceTests)` gate is gone. 2.50.0 added the two most
+recently enrolled: `BinaryEventSerializationCompliance` (6, the event half's twenty-ninth) and
+`DocumentSessionEventsCompliance` (5, the document half's fifth). Both are **opt-in** — their registrar
+members carry throwing defaults, so enrolling is a deliberate line rather than something a bump does to
+you.
+
+**The two that are not enrolled are 2.51.0's, and both are opt-in the same way**:
+`PendingStreamActionsCompliance` (fisher#96, `IDocumentSessionOperations.PendingStreams`) and
+`AggregateWriteCacheCompliance` (fisher#97, the shared second-level `FetchForWriting` snapshot cache).
+Each needs production work, so each has its own issue rather than being enrolled against a throwing
+default. 2.51.0's third change is fisher#98 and is fixture-side: `DocumentComplianceConfig.StreamIdentity`
+(jasperfx#672) replaced an inference `FisherDocumentComplianceFixture` was making — string identity
+whenever the config declared event types, right only for as long as `DocumentSessionEventsCompliance`
+was the sole suite populating `EventTypes`.
 The event sourcing half is 28 suites and 230 tests and has been the whole library since 2.45.0
 emptied the upstream event sourcing backlog; **2.46.0 added no suite and no test** (fisher#64), and
 **2.48.0 added neither, and changed no existing suite file** — the counts were re-verified against a
