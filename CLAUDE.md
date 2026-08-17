@@ -2058,6 +2058,39 @@ identity whenever the config declared *event types* — which was right only bec
 mis-configured the first Guid-keyed event suite to arrive. A precondition a config cannot carry is one
 each fixture has to guess, and a correct store then fails an undeclared requirement.
 
+#### `PendingStreams` — the same trap one member over
+
+jasperfx#673 (JasperFx 2.51.0) added `IReadOnlyList<StreamAction> PendingStreams` to
+`IDocumentSessionOperations`: the stream actions a session has queued and not yet committed, for code
+that did **not** do the appending — a listener, or a pre-commit hook deciding something from what is
+about to be written. Code at the call site already has the `StreamAction`, because `StartStream` and
+`Append` return it. fisher#96 is Fisher's half, and it is an explicit implementation on `FisherSession`
+beside the two `Events` ones.
+
+- **Fisher is the store most exposed to the non-covariance trap here**, because it already has a member
+  *named* `PendingStreams` — on `EventOperations`, returning `IReadOnlyCollection<StreamAction>` over
+  `_streams.Values`. That is not the contract's `IReadOnlyList<StreamAction>`, so had that shape ever
+  been put on the session it would have bound to the throwing default with no compile error anywhere.
+  The default **throws rather than answering empty**, deliberately: empty is indistinguishable from a
+  session with nothing pending, so a silent default would discard a consumer's derived work with a
+  clean build and green tests.
+- **The forward copies, and both reasons are worth keeping.** The types differ, so a copy is forced;
+  and the native collection is a *live* view of the tracking dictionary, so a caller holding it across
+  another append watches it change. The contract permits either and tells a caller wanting stability to
+  copy — doing it here is what makes every caller's answer stable rather than the ones who read that
+  remark.
+- **Tenant scopes are included**, where `EventOperations.PendingStreams` is per-scope by construction.
+  `SaveChangesAsync` commits the scopes' streams in the same transaction and `ChangeSet` already
+  reports the two together; a hook told "this is what is about to be written" and handed only the
+  default tenant's would be wrong about the commit it is bracketing. Each action carries its own
+  `TenantId`, and a scope holds no scopes of its own, so reading it from one reports that tenant alone.
+- **Not added to Fisher's own `IDocumentSession`.** `session.Events.PendingStreams` is the native
+  spelling and predates the contract; a second public member of a different type saying the same thing
+  is how the two would drift.
+
+`pending_stream_actions_compliance` (9 tests) is the definition; `pending_stream_actions` covers the
+two decisions above, which a suite written against three stores has no vocabulary for.
+
 #### `LoadAsync<T>(object)` — the eighth operation
 
 jasperfx#665 added `Task<T?> LoadAsync<T>(object id, …)` to `IDocumentReadOperations`, and fisher#89
@@ -3098,18 +3131,16 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**34 of the 36 suites are enrolled, 286 tests, as of 2.51.0.** `JasperFx.Events.ComplianceTests` is
-referenced unconditionally — the old `$(EnableComplianceTests)` gate is gone. 2.50.0 added the two most
-recently enrolled: `BinaryEventSerializationCompliance` (6, the event half's twenty-ninth) and
-`DocumentSessionEventsCompliance` (5, the document half's fifth). Both are **opt-in** — their registrar
-members carry throwing defaults, so enrolling is a deliberate line rather than something a bump does to
-you.
+**35 of the 36 suites are enrolled, 295 tests, as of 2.51.0.** `JasperFx.Events.ComplianceTests` is
+referenced unconditionally — the old `$(EnableComplianceTests)` gate is gone. The most recently
+enrolled are `BinaryEventSerializationCompliance` (6, the event half's twenty-ninth) and
+`DocumentSessionEventsCompliance` (5) from 2.50.0, and `PendingStreamActionsCompliance` (9, fisher#96)
+from 2.51.0. All three are **opt-in** — their contract members carry throwing defaults, so enrolling is
+a deliberate line rather than something a bump does to you.
 
-**The two that are not enrolled are 2.51.0's, and both are opt-in the same way**:
-`PendingStreamActionsCompliance` (fisher#96, `IDocumentSessionOperations.PendingStreams`) and
-`AggregateWriteCacheCompliance` (fisher#97, the shared second-level `FetchForWriting` snapshot cache).
-Each needs production work, so each has its own issue rather than being enrolled against a throwing
-default. 2.51.0's third change is fisher#98 and is fixture-side: `DocumentComplianceConfig.StreamIdentity`
+**The one that is not enrolled is `AggregateWriteCacheCompliance`** (fisher#97, the shared second-level
+`FetchForWriting` snapshot cache), opt-in the same way and with production work of its own to do.
+2.51.0's third change is fisher#98 and is fixture-side: `DocumentComplianceConfig.StreamIdentity`
 (jasperfx#672) replaced an inference `FisherDocumentComplianceFixture` was making — string identity
 whenever the config declared event types, right only for as long as `DocumentSessionEventsCompliance`
 was the sole suite populating `EventTypes`.

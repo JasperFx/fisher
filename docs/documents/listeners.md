@@ -82,6 +82,42 @@ that had already committed.
   `AfterCommitAsync` on the daemon's threads for every batch of every shard. JasperFx's
   `IDaemonChangeListener` is the hook for that side, and Fisher supports it.
 
+## Reading what is about to be appended
+
+`IChangeSet` describes a commit that has happened. Before one has, the streams a session has enlisted
+are readable from the session itself — which is what a `BeforeSaveChangesAsync` hook deciding
+something from the events it is bracketing needs:
+
+```cs
+foreach (var action in session.Events.PendingStreams)
+{
+    // action.Id / action.Key, action.ActionType, action.Events, action.TenantId
+}
+```
+
+The same collection is on the shared `JasperFx.Events.Documents.IDocumentSessionOperations`, so a
+listener written against the store-agnostic contract rather than against Fisher reads it without
+naming Fisher:
+
+```cs
+IReadOnlyList<StreamAction> pending = ((IDocumentSessionOperations)session).PendingStreams;
+```
+
+The two answers are the same actions, with two differences worth knowing:
+
+- **The contract's is a snapshot; `Events.PendingStreams` is a live view** of the session's tracking
+  dictionary. A hook that appends while holding the latter sees it change underneath it.
+- **The contract's includes every [tenant scope](/documents/multi-tenancy#writing-across-tenants)
+  of the session**, because those commit in this same transaction — the question it answers is about
+  the unit of work rather than about one tenant. Each action carries its own `TenantId`. Read from a
+  scope, it reports that tenant alone.
+
+::: tip
+A stream is pending only until the commit clears it, and a session is reusable afterwards — so a
+collection that still held committed actions would double-count them on the next read. Fisher's is
+empty after `SaveChangesAsync`.
+:::
+
 ## IChangeSet
 
 ```cs

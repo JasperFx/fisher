@@ -3,9 +3,9 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **two open issues**, [#96](https://github.com/JasperFx/fisher/issues/96) and
-[#97](https://github.com/JasperFx/fisher/issues/97), both of them the JasperFx 2.51.0 bump asking for
-production work — which is exactly the pattern this file has predicted for eight bumps running.
+Status: **one open issue**, [#97](https://github.com/JasperFx/fisher/issues/97) — the JasperFx 2.51.0
+bump asking for production work, which is exactly the pattern this file has predicted for eight bumps
+running.
 
 The tracker was empty before them, and that is a milestone rather than a finish line, so it is worth
 being precise about what it does and does not mean. Every gap this repository knows about is closed; it is emphatically **not** the same as being
@@ -26,12 +26,25 @@ whenever the config declared event types, an inference that happened to be right
 mis-configured the first Guid-keyed event suite to arrive. Verified load-bearing by disabling it: three
 of that suite's five facts fail with the stream-identity error jasperfx#672 describes.
 
-The bump also ships two **opt-in** suites, neither enrolled here yet because each needs real production
-work and has an issue of its own: `PendingStreamActionsCompliance`
-([#96](https://github.com/JasperFx/fisher/issues/96), the document contract's `PendingStreams`) and
+The bump also ships two **opt-in** suites, and both contract members behind them carry throwing
+defaults — which is why the bump itself builds clean, and why a store adopting neither would look
+finished to the compiler.
+
+**0.8.2** is the first of the two. [#96](https://github.com/JasperFx/fisher/issues/96) /
+jasperfx#673 puts `PendingStreams` on `IDocumentSessionOperations`, so a consumer holding a session as
+the shared contract can read the `StreamAction`s it has queued and not yet committed — a listener or a
+pre-commit hook deciding something from the events the session is about to write, without naming a
+store. Fisher had the collection and neither the spelling nor the type: `Events.PendingStreams` is
+`IReadOnlyCollection<StreamAction>` over a dictionary's values against the contract's
+`IReadOnlyList<StreamAction>`, and there is no `PendingChanges` facade as there is on both siblings. So
+it is an explicit forward that copies — and the copy is wanted, since the native collection is a *live*
+view. **Tenant scopes are included**, because the scopes' streams commit in the same transaction and
+`IChangeSet` already reports the two together; the question is about the unit of work rather than about
+one tenant. `PendingStreamActionsCompliance` (9 tests) enrolled, and verified load-bearing by removing
+the forward: every one of the nine fails on the contract's throwing default.
+
 `AggregateWriteCacheCompliance` ([#97](https://github.com/JasperFx/fisher/issues/97), the shared
-second-level `FetchForWriting` snapshot cache). Both contract members carry throwing defaults, which is
-why the bump itself builds clean — the compiler has nothing to say and only the suites would.
+second-level `FetchForWriting` snapshot cache) is the other, and is next.
 
 The 2026-08-17 wave is **0.8.0**, and it is the pattern above playing out exactly: the issue came from
 a JasperFx release. [#93](https://github.com/JasperFx/fisher/issues/93) asked for Marten's binary event
@@ -47,8 +60,8 @@ not do. 2.50.0's other half is jasperfx#669, an `Events` accessor on the documen
 Fisher's sessions declared `Events` as their own concrete type, which does **not** satisfy a contract
 member (C# interface implementation is not return-type covariant), so both tiers needed an explicit
 implementation. Two new compliance suites pin both halves. On JasperFx **2.51.0** / Weasel **9.24.0**.
-**All 34 compliance suites, 286 tests, green** — 29 event suites and 236 tests, plus five document
-suites and 50 tests. 1265 tests green on net9.0 and net10.0.
+**35 of the 36 compliance suites, 295 tests, green** — 29 event suites and 236 tests, plus six document
+suites and 59 tests. 1278 tests green on net9.0 and net10.0.
 
 The 2026-08-16 wave is **0.7.2**, and it emptied the tracker again.
 [#88](https://github.com/JasperFx/fisher/issues/88) was a real cross-store divergence found by the
@@ -138,8 +151,9 @@ against Polecat that filed #22–#50 with something standing.
 | Document suite | Tests |
 |---|---|
 | `DocumentQueryCompliance` | 17 |
+| `DocumentLoadAndStoreCompliance` | 11 |
 | `DocumentDeleteCompliance` | 10 |
-| `DocumentLoadAndStoreCompliance` | 8 |
+| `PendingStreamActionsCompliance` | 9 |
 | `DocumentSessionCompliance` | 7 |
 | `DocumentSessionEventsCompliance` | 5 |
 

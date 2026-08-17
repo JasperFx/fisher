@@ -152,3 +152,19 @@ public class document_query_compliance
 
 public class document_session_events_compliance
     : DocumentSessionEventsCompliance<FisherDocumentComplianceFixture>;
+
+/*
+ * jasperfx#673 — the StreamActions a session has queued and not yet committed, read by code that did
+ * not do the appending. Same trap one member over, and Fisher is the store most exposed to it: it
+ * already has a member *named* PendingStreams, on EventOperations, returning
+ * IReadOnlyCollection<StreamAction> rather than the contract's IReadOnlyList<StreamAction>. Had that
+ * shape ever landed on the session type it would bind to the throwing default with a clean build.
+ *
+ * The suite's first fact is the load-bearing one: an empty collection on a session with nothing
+ * enlisted, which a store still on the default cannot produce. That is why the default throws rather
+ * than answering empty — empty is indistinguishable from a session with nothing pending, so a silent
+ * default would let a consumer's derived work be discarded with green tests.
+ */
+
+public class pending_stream_actions_compliance
+    : PendingStreamActionsCompliance<FisherDocumentComplianceFixture>;
