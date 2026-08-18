@@ -78,15 +78,25 @@ public interface IChangeSet
 ///     wrong one ever notices — the same lesson <c>StoredDocumentMetadata</c> records. The members are
 ///     unchanged, so a listener body reading <c>DocumentType</c> and <c>Id</c> ports across untouched;
 ///     only a declaration that names the type has to be edited.
+///     <para>
+///         <b>It now derives from <c>JasperFx.Events.Documents.IDocumentDeletion</c></b>, which
+///         jasperfx#679 added with this type's exact members and — deliberately — this type's exact
+///         name, Fisher's spelling having been picked as the shared one precisely because
+///         <c>IDeletion</c> was already taken next to <c>Weasel.Storage</c>. Two structurally
+///         identical interfaces one namespace apart is a clash to resolve rather than a coincidence
+///         to live with, and derivation resolves it in the direction that costs nothing: no member
+///         is re-declared, no implementer changes, and a listener written against the shared
+///         contract sees Fisher's descriptors without an adapter.
+///     </para>
 /// </remarks>
-public interface IDocumentDeletion
+public interface IDocumentDeletion : JasperFx.Events.Documents.IDocumentDeletion
 {
-    /// <summary>The type deleted. For a hierarchy this is the type the caller named.</summary>
-    Type DocumentType { get; }
-
-    /// <summary>
-    ///     The identity deleted, or <c>null</c> for a predicate-based <c>DeleteWhere</c> /
-    ///     <c>HardDeleteWhere</c>, which names rows it never loaded and therefore has no id to report.
-    /// </summary>
-    object? Id { get; }
+    // Both members - Type DocumentType and object? Id - are inherited from the JasperFx contract
+    // rather than declared here, and the derivation is what resolves the name clash jasperfx#679
+    // created. See the remarks above: re-declaring them would hide the base pair behind an identical
+    // pair, which is the exact near-miss shape the contract's own remarks warn about, and it would
+    // cost every implementer an explicit implementation for no gain. Inheriting instead means every
+    // Fisher deletion descriptor IS a contract deletion, so ChangeSet's List<IDocumentDeletion>
+    // satisfies IReadOnlyList<JasperFx.Events.Documents.IDocumentDeletion> by variance with no copy
+    // and no cast.
 }

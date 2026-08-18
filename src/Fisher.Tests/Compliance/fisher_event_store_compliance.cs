@@ -183,3 +183,24 @@ public class document_session_events_compliance
 
 public class pending_stream_actions_compliance
     : PendingStreamActionsCompliance<FisherDocumentComplianceFixture>;
+
+/*
+ * jasperfx#679 — the post-commit session hook, and the change set it is handed. Fisher enrolls
+ * because the suite needs documents and nothing else.
+ *
+ * ⚠️ This is the one document suite a green build says nothing about. Unlike jasperfx#669 and #673
+ * the shared contract declares no default implementation, so a near-miss member is CS0535 rather
+ * than a silent bind — but the *wiring* is invisible to the compiler at every point. A store that
+ * declares IDocumentCommitListener and IDocumentChangeSet perfectly and never invokes a listener
+ * compiles clean and passes every other suite in the library. These ten facts are the only thing
+ * standing between the contract and a no-op.
+ *
+ * Two of Fisher's firing rules are deliberately NOT exercised here, and the suite says so in its own
+ * remarks: it asserts nothing about an empty unit of work, and nothing about a session enlisted in a
+ * caller's transaction. Fisher skips the hook for both (SaveChangesAsync's early return, and
+ * `EnlistedTransaction is null` on the post-commit branch), which the contract permits and Marten
+ * does not do. Fisher's own tests own those two — see the session listener tests.
+ */
+
+public class document_commit_listener_compliance
+    : DocumentCommitListenerCompliance<FisherDocumentComplianceFixture>;
