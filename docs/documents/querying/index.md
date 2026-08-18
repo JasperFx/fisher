@@ -61,3 +61,15 @@ var results = await session.Query<Summary>()
 `QueryForNonStaleData` waits for the **whole store**, where Polecat waits for the projections feeding
 the queried type. Stricter rather than weaker, and it needs no type-to-shard map.
 :::
+
+**"The whole store" means every async shard the store has registered**, not every shard that has
+recorded progress — including one that has never run. A registered shard with no progression row is
+behind by definition, so the wait blocks until it reports rather than treating it as absent.
+
+::: warning
+The consequence is worth knowing before you meet it: **if the async daemon is not running, this waits
+out its timeout and throws `TimeoutException`.** That is the honest answer — the data really is stale
+and nothing is going to advance it — and the message names the shards that have recorded nothing at
+all, so "never started" is distinguishable from "still catching up". A store with no async projections
+returns immediately, because there is nothing to wait for.
+:::

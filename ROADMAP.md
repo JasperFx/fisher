@@ -3,7 +3,20 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **no open issues** — the JasperFx 2.51.0 wave asked for three and all three are closed.
+Status: **no open issues**. The JasperFx 2.51.0 wave asked for three, and preparing its release found
+a fourth — [#102](https://github.com/JasperFx/fisher/issues/102), which is **0.9.1**.
+
+**0.9.1** is that fix, and it is worth reading as a warning about what an intermittent can hide.
+`WaitForNonStaleProjectionDataAsync` decided it was done from the rows in `fi_event_progression`
+rather than from the shards the store *registers* — so a shard that had not run yet was invisible, and
+a store with two async projections was declared non-stale the moment the first one reached the head.
+Behind `QueryForNonStaleData` that tells an application its data is current while a projection has
+never run. It presented once, as a `rebuild_and_catch_up_compliance` failure on a loaded two-core CI
+runner, and passed 25/25 locally in isolation — the window is the gap between one shard's first commit
+and the next shard's. The same rule was broken the other way round too: with events present and no
+rows at all, a store with **no** async projections waited out its timeout every time. Registered
+shards are now the authority in both directions, and an orphan row from a de-registered projection is
+ignored rather than waited on forever.
 
 That is a milestone and not a finish line, so it is worth being precise about what it does and does not
 mean. Every gap this repository knows about is closed; it is emphatically **not** the same as being
@@ -76,7 +89,7 @@ Fisher's sessions declared `Events` as their own concrete type, which does **not
 member (C# interface implementation is not return-type covariant), so both tiers needed an explicit
 implementation. Two new compliance suites pin both halves. On JasperFx **2.51.0** / Weasel **9.24.0**.
 **All 36 compliance suites, 309 tests, green** — 30 event suites and 250 tests, plus six document
-suites and 59 tests. 1300 tests green on net9.0 and net10.0.
+suites and 59 tests. 1305 tests green on net9.0 and net10.0.
 
 The 2026-08-16 wave is **0.7.2**, and it emptied the tracker again.
 [#88](https://github.com/JasperFx/fisher/issues/88) was a real cross-store divergence found by the

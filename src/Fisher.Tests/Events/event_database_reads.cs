@@ -1,4 +1,5 @@
 using Fisher.Tests.Events;
+using Fisher.Tests.Projections;
 using JasperFx;
 using JasperFx.Events;
 using JasperFx.Events.Projections;
@@ -23,6 +24,14 @@ public class event_database_reads : IAsyncLifetime
         {
             options.ConnectionString = _database.ConnectionString;
             options.AutoCreateSchemaObjects = AutoCreate.All;
+
+            // fisher#102. The waiting tests below are about *registered* shards, because that is what
+            // the wait is defined against — a progression row is evidence about a shard rather than the
+            // definition of one. Two of them, because the bug being pinned is only visible with two: one
+            // shard at the head while the other has never run. The daemon is deliberately never started
+            // here, so every row these tests read is one they seeded.
+            options.Projections.Snapshot<AsyncQuestTally>(SnapshotLifecycle.Async);
+            options.Projections.Snapshot<AsyncQuestRoster>(SnapshotLifecycle.Async);
         });
 
         await _store.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
@@ -172,10 +181,137 @@ public class event_database_reads : IAsyncLifetime
     public async Task waiting_times_out_when_a_shard_never_catches_up()
     {
         await AppendAsync(3);
-        await WriteProgressAsync(new ShardName("tally").Identity, 1);
+        await WriteProgressAsync(TheRegisteredShard, 1);
 
         await Should.ThrowAsync<TimeoutException>(async () =>
             await TheDatabase.WaitForNonStaleProjectionDataAsync(TimeSpan.FromMilliseconds(300)));
+    }
+
+    /// <summary>
+    ///     <b>fisher#102, the fact the bug actually lived in: one shard at the head does not make the
+    ///     store non-stale while another has never run.</b>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         This is the discriminating shape, and the one below is not. With <em>no</em> rows at all
+    ///         the old rule also waited — <c>shards.Length > 0</c> was false — so a store where nothing
+    ///         has run cannot tell the two rules apart. It takes a shard that <em>has</em> reported,
+    ///         standing in for the whole set, which is exactly what happened on CI: the turbine shard
+    ///         reached the head and the audit shard had not started, and the wait believed the first
+    ///         one.
+    ///     </para>
+    ///     <para>
+    ///         Seeded rather than raced. The window is the gap between one shard's first commit and
+    ///         another's, so a daemon-driven test would be trying to land inside the bug rather than
+    ///         pinning the rule.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task one_shard_at_the_head_does_not_speak_for_a_shard_that_never_ran()
+    {
+        await AppendAsync(3);
+        await WriteProgressAsync(TheRegisteredShard, 3);
+
+        await Should.ThrowAsync<TimeoutException>(async () =>
+            await TheDatabase.WaitForNonStaleProjectionDataAsync(TimeSpan.FromMilliseconds(300)));
+    }
+
+    /// <summary>
+    ///     <b>fisher#102 — a registered shard that has never run is stale, and used not to be.</b>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The wait used to read its answer off the rows in <c>fi_event_progression</c>, which makes
+    ///         a shard that has not started <em>invisible</em>: with no row it has no sequence to be
+    ///         behind, so a store with two async projections was declared non-stale the moment the first
+    ///         one reached the head. Behind <c>QueryForNonStaleData</c> that tells an application its
+    ///         data is current while a projection has never run.
+    ///     </para>
+    ///     <para>
+    ///         Seeded rather than raced, because the window is exactly the gap between one shard's first
+    ///         commit and another's — a daemon-driven test would be trying to land inside the bug rather
+    ///         than pinning the rule. Here nothing has run at all, which is the same state at its
+    ///         simplest.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_registered_shard_that_has_never_run_is_stale()
+    {
+        await AppendAsync(3);
+
+        await Should.ThrowAsync<TimeoutException>(async () =>
+            await TheDatabase.WaitForNonStaleProjectionDataAsync(TimeSpan.FromMilliseconds(300)));
+    }
+
+    /// <summary>
+    ///     The timeout says which shards have recorded nothing at all, because "never started" and
+    ///     "still catching up" are different operational situations and a caller should not have to
+    ///     guess which it got.
+    /// </summary>
+    [Fact]
+    public async Task the_timeout_names_a_shard_that_recorded_nothing()
+    {
+        await AppendAsync(3);
+
+        var timeout = await Should.ThrowAsync<TimeoutException>(async () =>
+            await TheDatabase.WaitForNonStaleProjectionDataAsync(TimeSpan.FromMilliseconds(300)));
+
+        timeout.Message.ShouldContain(TheRegisteredShard);
+        timeout.Message.ShouldContain("the daemon may not be running");
+    }
+
+    /// <summary>
+    ///     A store with no async projections has nothing to wait for, so the wait returns rather than
+    ///     timing out (fisher#102, second half).
+    /// </summary>
+    /// <remarks>
+    ///     This was broken the other way round by the same rule: with events present and no rows,
+    ///     <c>shards.Length > 0</c> was false forever, so <c>QueryForNonStaleData</c> against a store
+    ///     with no async projections <em>always</em> threw <see cref="TimeoutException" /> — a wait for
+    ///     something that could never happen.
+    /// </remarks>
+    [Fact]
+    public async Task a_store_with_no_async_projections_never_waits()
+    {
+        using var database = TemporaryDatabase.Create("eventdb-no-projections");
+        await using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = database.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+        });
+
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
+
+        await using (var session = store.LightweightSession())
+        {
+            session.Events.StartStream(Guid.NewGuid(), new QuestStarted("Quest"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await Should.NotThrowAsync(async () =>
+            await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    /// <summary>
+    ///     A progression row for a shard nothing registers does not make the store stale.
+    /// </summary>
+    /// <remarks>
+    ///     A projection removed from configuration leaves its row behind — that is what
+    ///     <c>DeleteProjectionProgressByShardNameAsync</c> exists to clean up, and its own remarks say
+    ///     the abstraction targets orphans that may never have been registered. Blocking on one would
+    ///     make every subsequent wait hang on a shard that will never advance again, so the registered
+    ///     set is the authority in both directions.
+    /// </remarks>
+    [Fact]
+    public async Task a_row_for_a_shard_nothing_registers_is_ignored()
+    {
+        await AppendAsync(3);
+        await WriteProgressAsync(TheRegisteredShard, 3);
+        await WriteProgressAsync(TheOtherRegisteredShard, 3);
+        await WriteProgressAsync(new ShardName("removed_projection").Identity, 1);
+
+        await Should.NotThrowAsync(async () =>
+            await TheDatabase.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(5)));
     }
 
     /// <summary>
@@ -193,7 +329,7 @@ public class event_database_reads : IAsyncLifetime
     public async Task waiting_reports_a_timeout_even_when_the_clock_elapses_inside_a_query()
     {
         await AppendAsync(3);
-        await WriteProgressAsync(new ShardName("tally").Identity, 1);
+        await WriteProgressAsync(TheRegisteredShard, 1);
 
         await Should.ThrowAsync<TimeoutException>(async () =>
             await TheDatabase.WaitForNonStaleProjectionDataAsync(TimeSpan.Zero));
@@ -203,11 +339,25 @@ public class event_database_reads : IAsyncLifetime
     public async Task waiting_returns_once_every_shard_has_reached_the_head()
     {
         await AppendAsync(3);
-        await WriteProgressAsync(new ShardName("tally").Identity, 3);
+        await WriteProgressAsync(TheRegisteredShard, 3);
+        await WriteProgressAsync(TheOtherRegisteredShard, 3);
 
         await Should.NotThrowAsync(async () =>
             await TheDatabase.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(5)));
     }
+
+    /// <summary>
+    ///     The identity of a registered async shard — taken from the store rather than spelled out, so
+    ///     a change to how a shard is named cannot leave these tests seeding a row that matches nothing
+    ///     and passing for the wrong reason.
+    /// </summary>
+    private string ShardFor<T>()
+        => _store.Options.Projections.AllShards()
+            .Single(x => x.Name.Name == typeof(T).Name).Name.Identity;
+
+    private string TheRegisteredShard => ShardFor<AsyncQuestTally>();
+
+    private string TheOtherRegisteredShard => ShardFor<AsyncQuestRoster>();
 
     private async Task WriteProgressAsync(string name, long sequence)
     {
