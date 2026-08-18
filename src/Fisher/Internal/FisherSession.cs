@@ -564,7 +564,16 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         // commit can make, and Fisher is not told when that happens.
         if (Listeners.Count > 0 && EnlistedTransaction is null)
         {
-            var commit = new Services.ChangeSet(queued, streams);
+            // Typed as Fisher's IChangeSet rather than left to var, and that is not style. From
+            // fisher#104 IDocumentSessionListener also carries jasperfx#679's
+            // AfterCommitAsync(IDocumentSessionOperations, IDocumentChangeSet, CancellationToken),
+            // and ChangeSet implements both change-set interfaces while this session implements both
+            // session interfaces — so a `var` local leaves the call below with two applicable
+            // overloads, resolved today only by IDocumentSession being the more derived first
+            // argument. Naming the type makes the shared overload inapplicable instead of
+            // second-best, so the listener Fisher invokes cannot quietly change if either hierarchy
+            // moves.
+            Services.IChangeSet commit = new Services.ChangeSet(queued, streams);
 
             foreach (var listener in Listeners)
             {

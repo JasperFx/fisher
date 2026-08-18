@@ -98,6 +98,17 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
             {
                 options.Events.AddEventType(eventType);
             }
+
+            // jasperfx#679. The one config member that carries instances rather than Types, because
+            // the suite has to hold the very listener it registered in order to read back what the
+            // store handed it. Adapted onto Fisher's own listener type and added to the same
+            // Listeners collection every other listener uses — Fisher deliberately grew no second
+            // list for the shared contract, so this is the shipped registration route rather than a
+            // test-only one.
+            foreach (var listener in config.CommitListeners)
+            {
+                options.Listeners.Add(listener.AsSessionListener());
+            }
         });
 
         await _store.ApplyAllConfiguredChangesToDatabaseAsync(Cancellation).ConfigureAwait(false);

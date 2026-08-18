@@ -82,6 +82,43 @@ that had already committed.
   `AfterCommitAsync` on the daemon's threads for every batch of every shard. JasperFx's
   `IDaemonChangeListener` is the hook for that side, and Fisher supports it.
 
+## The store-agnostic contract
+
+`JasperFx.Events.Documents.IDocumentCommitListener` is the shared spelling of the after-commit hook,
+so a post-commit side effect can be written once and registered with Marten, Polecat or Fisher.
+Fisher's `IDocumentSessionListener` **derives from it**, which makes both directions work:
+
+```cs
+// Outbound: a Fisher listener already IS a contract listener. Nothing to do.
+IDocumentCommitListener asContract = new MyFisherListener();
+
+// Inbound: a listener that implements only the shared contract, registered with AsSessionListener().
+options.Listeners.Add(myCommitListener.AsSessionListener());
+```
+
+`ChangeSet` implements `IDocumentChangeSet` alongside `IChangeSet`, and `IDocumentDeletion` derives
+from the contract's identically-named type — so nothing is copied or converted on the way through.
+
+::: tip
+There is **no second `CommitListeners` collection**. A contract listener is adapted onto
+`IDocumentSessionListener` and joins the same `Listeners` list, so it runs in the same order, is
+cached per session the same way, and obeys every rule below without exception.
+:::
+
+::: warning
+`IDocumentChangeSet` declares `Inserted`, `Updated` and `Deleted` as `IReadOnlyList<>` where Fisher's
+own `IChangeSet` says `IEnumerable<>`. That is the contract insisting on a *materialised* snapshot,
+because on Marten the change set is the live unit of work and a lazy sequence taken out of one is
+wrong by the time a listener reads it again. Fisher's is a snapshot either way.
+:::
+
+::: warning
+**The rules below are Fisher's, and two of them are not shared.** An empty unit of work and an
+enlisted session both fire nothing here; Marten fires unconditionally for the latter. The shared
+contract permits both answers and deliberately asserts neither, so a listener that must hear about a
+commit made under your own transaction has to check its store.
+:::
+
 ## Reading what is about to be appended
 
 `IChangeSet` describes a commit that has happened. Before one has, the streams a session has enlisted

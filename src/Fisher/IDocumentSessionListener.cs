@@ -1,4 +1,5 @@
 using Fisher.Services;
+using JasperFx.Events.Documents;
 
 namespace Fisher;
 
@@ -62,7 +63,7 @@ namespace Fisher;
 ///         cannot un-commit anything, on any store.
 ///     </para>
 /// </remarks>
-public interface IDocumentSessionListener
+public interface IDocumentSessionListener : IDocumentCommitListener
 {
     /// <summary>
     ///     Called at the start of <c>SaveChangesAsync</c>, before anything is written.
@@ -79,6 +80,42 @@ public interface IDocumentSessionListener
     ///     Called after the transaction has committed, with a snapshot of what it wrote.
     /// </summary>
     Task AfterCommitAsync(IDocumentSession session, IChangeSet commit, CancellationToken token);
+
+    /// <summary>
+    ///     The store-agnostic spelling of the member above (fisher#104 / jasperfx#679), forwarded to
+    ///     it so a listener implements one method rather than two.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>A default implementation, and it has to be one.</b> The contract's member differs
+    ///         from Fisher's by both of its interesting parameter types, so it is a separate
+    ///         signature that Fisher's does not satisfy — deriving without supplying a body would
+    ///         make this interface's contract member unimplemented and every existing listener a
+    ///         CS0535. That is the one mercy of jasperfx#679 over jasperfx#669: the contract declares
+    ///         no default of its own, so the near-miss is a build error rather than a member that
+    ///         silently binds to a throwing default. It still is not evidence of anything — see
+    ///         below.
+    ///     </para>
+    ///     <para>
+    ///         <b>This forward is the outbound half only, and nothing inside Fisher calls it.</b>
+    ///         It exists so that a listener written for Fisher <em>is</em> an
+    ///         <see cref="IDocumentCommitListener" /> — store-agnostic code that collects the shared
+    ///         type picks Fisher's listeners up unchanged. The inbound half, registering a listener
+    ///         that only implements the shared type, is <c>AsSessionListener()</c>; a listener
+    ///         registered that way is invoked through Fisher's own member, not through this one. So
+    ///         a green build proves neither direction, which is what
+    ///         <c>DocumentCommitListenerCompliance</c> is for.
+    ///     </para>
+    ///     <para>
+    ///         The two casts are safe on every path that reaches here from Fisher — the session is
+    ///         always a Fisher session and the change set always Fisher's — and would only fail for
+    ///         a caller synthesising another store's arguments, which is not a case this interface
+    ///         claims to serve.
+    ///     </para>
+    /// </remarks>
+    Task IDocumentCommitListener.AfterCommitAsync(IDocumentSessionOperations session,
+        IDocumentChangeSet commit, CancellationToken token)
+        => AfterCommitAsync((IDocumentSession)session, (IChangeSet)commit, token);
 
     /// <summary>
     ///     Called as each document is materialised from the database.

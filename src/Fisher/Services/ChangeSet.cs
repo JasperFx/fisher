@@ -20,7 +20,7 @@ namespace Fisher.Services;
 ///         <c>SQLITE_BUSY</c>, one that had been drained twice.
 ///     </para>
 /// </remarks>
-internal sealed class ChangeSet : IChangeSet
+internal sealed partial class ChangeSet : IChangeSet
 {
     private readonly List<object> _updated = [];
     private readonly List<object> _inserted = [];
