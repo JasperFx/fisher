@@ -425,7 +425,7 @@ all of it:
 | `IEventStore<IDocumentSession, IQuerySession>` | `DocumentStore.Daemon.cs` | shards, sessions, loaders, batches, progression bookkeeping |
 | `FisherProjectionDaemon` | `Events/Daemon/` | a dozen lines closing `JasperFxAsyncDaemon<,,>` over Fisher's session pair |
 
-Five things that are decisions rather than mechanics:
+Six things that are decisions rather than mechanics:
 
 - **The high-water mark simply is `max(seq_id)`.** Marten and Polecat must distinguish the highest
   sequence *issued* from the highest safe to *read*, because a PostgreSQL sequence or SQL Server
@@ -435,6 +435,26 @@ Five things that are decisions rather than mechanics:
   (`sqlite_sequence` is an ordinary table and rolls back with it). Committed sequences are contiguous,
   so `DetectInSafeZone` has no separate answer to give. **Do not reintroduce gap-skipping** — it would
   guard a state that cannot occur.
+- **Non-stale is decided against the shards the store *registers*, not the rows
+  `fi_event_progression` holds** (fisher#102). Reading it off the rows makes a shard that has not run
+  yet invisible — with no row it has no sequence to be behind — so a store with two async projections
+  was declared non-stale the moment the first reached the head. It is a *window*, from one shard's
+  first commit to the next shard's, which is why it surfaced as an intermittent
+  `rebuild_and_catch_up_compliance` failure on a loaded two-core CI runner and never locally. Behind
+  `QueryForNonStaleData` it tells an application its data is current while a projection has never run.
+  Three consequences, each deliberate:
+  - **A registered shard with no row is stale**, so a wait with no daemon running now times out rather
+    than returning early. That is the honest answer, and the message names the shards that recorded
+    nothing, because "never started" and "still catching up" are different operational situations.
+  - **A store with no async projections returns immediately.** The same rule was broken the other way
+    round: with events present and no rows, the old `shards.Length > 0` clause was false forever, so
+    `QueryForNonStaleData` on a store with no async projections *always* threw `TimeoutException`.
+  - **A row for a shard nothing registers is ignored.** A projection removed from configuration leaves
+    an orphan row that will never advance again — `DeleteProjectionProgressByShardNameAsync` exists for
+    exactly those — and waiting on one would hang every subsequent call.
+  `one_shard_at_the_head_does_not_speak_for_a_shard_that_never_ran` is the discriminating fact, and it
+  needs *two* registered shards: with no rows at all the old rule waited too, so a store where nothing
+  has run cannot tell the two rules apart.
 - **The session's operation queue is guarded, because the daemon is not a single caller.** JasperFx's
   `ExecutionStage` fans its executions out with `Task.WhenAll` and they all queue onto the *same*
   Fisher session, so two projection slices can call `QueueOperation` at the same instant.

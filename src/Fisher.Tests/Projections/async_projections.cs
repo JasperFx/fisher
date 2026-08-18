@@ -360,3 +360,15 @@ internal sealed class FailOnceBatch : Fisher.Events.Messaging.IMessageBatch
 }
 
 internal sealed class TransientBatchFailure : Exception;
+
+/// <summary>
+///     A second async-snapshotted aggregate over the same events, for tests that need two shards
+///     rather than one — fisher#102's rule is only visible when one shard can stand in for another.
+/// </summary>
+public class AsyncQuestRoster
+{
+    public Guid Id { get; set; }
+    public int Members { get; set; }
+
+    public void Apply(MemberJoined joined) => Members++;
+}

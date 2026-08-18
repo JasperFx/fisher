@@ -155,10 +155,23 @@ Or from a query:
 await session.Query<CustomerSales>().QueryForNonStaleData(TimeSpan.FromSeconds(5)).ToListAsync();
 ```
 
+Non-stale means **every registered async shard** has reached the current high-water mark. A shard that
+has not started yet counts as behind — it has no progression row, and a row is evidence about a shard
+rather than the definition of one. So the wait blocks until it reports, and a store with no async
+projections returns immediately.
+
 ::: warning
 **Non-stale does not imply a post-commit listener has run.** The progression row is written *inside*
 the batch's transaction, so non-stale is true the moment that commits — strictly before any listener.
 Wait on the listener's own signal instead.
+:::
+
+::: warning
+**Waiting without a running daemon throws `TimeoutException`.** Nothing will advance a registered
+shard, so there is no honest early return; the message names the shards that have recorded nothing so
+"never started" reads differently from "still catching up". A progression row for a projection that is
+no longer registered is ignored rather than waited on — that is what
+`DeleteProjectionProgressByShardNameAsync` is for.
 :::
 
 ## Event-emitting projections

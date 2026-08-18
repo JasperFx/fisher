@@ -204,6 +204,31 @@ public partial class FisherDatabase : IEventDatabase
     ///         caller that asked to wait for non-stale data and got stale data anyway has no way to tell.
     ///     </para>
     ///     <para>
+    ///         <b>"Every registered shard" means the shards the store has registered, not the rows
+    ///         <c>fi_event_progression</c> happens to hold</b> (fisher#102). Reading the answer off the
+    ///         rows makes a shard that has not run yet <em>invisible</em>, because a shard with no row
+    ///         has no sequence to be behind — so with two async projections the wait returned the moment
+    ///         the first one reached the head, while the second had never started. That is a window
+    ///         rather than a state: it lasts from the first shard committing its progression row to the
+    ///         second committing its first, which is why it presented as an intermittent on a loaded
+    ///         two-core CI runner and never locally. What it costs is the whole point of the call —
+    ///         behind <c>QueryForNonStaleData</c> an application is told its data is current while a
+    ///         projection has never run, and reads empty documents that look like answers.
+    ///     </para>
+    ///     <para>
+    ///         The consequence worth knowing: <b>a store with a registered async projection whose daemon
+    ///         is not running now waits out the timeout</b> where it used to return early. That is the
+    ///         honest answer — the data really is stale — but it turns a fast bogus success into a
+    ///         <see cref="TimeoutException" />, and the message names the shards that are missing rather
+    ///         than only the ones that are behind, because "never started" and "still catching up" are
+    ///         different operational situations.
+    ///     </para>
+    ///     <para>
+    ///         Subscriptions are shards too and are included, since the daemon runs them and they record
+    ///         progression exactly as a projection does — a subscription left behind is as much a reason
+    ///         to call the data stale.
+    ///     </para>
+    ///     <para>
     ///         <strong>Every cancellation this method's own clock causes becomes that
     ///         <see cref="TimeoutException" />, wherever in the cycle it lands.</strong> The two reads
     ///         take the same token as the delay, so translating only the delay's cancellation meant the
@@ -215,6 +240,10 @@ public partial class FisherDatabase : IEventDatabase
     public async Task WaitForNonStaleProjectionDataAsync(TimeSpan timeout)
     {
         using var cancellation = new CancellationTokenSource(timeout);
+
+        // Resolved once: the registration is fixed for the store's lifetime, and the whole point is
+        // that this set does not shrink to whatever has managed to write a row yet.
+        var expected = _options.Projections.AllShards().Select(x => x.Name.Identity).ToArray();
 
         var highWater = 0L;
         var shards = Array.Empty<ShardState>();
@@ -231,8 +260,17 @@ public partial class FisherDatabase : IEventDatabase
                         StringComparison.OrdinalIgnoreCase))
                     .ToArray();
 
-                // No events means nothing can be stale. Shards that exist must all have reached the head.
-                if (highWater == 0 || (shards.Length > 0 && shards.All(x => x.Sequence >= highWater)))
+                // No events means nothing can be stale, whatever any shard has recorded.
+                if (highWater == 0)
+                {
+                    return;
+                }
+
+                // Every registered shard, present and at the head. A shard with no row is behind by
+                // definition, which is exactly the case the row-derived version could not see.
+                if (expected.All(identity =>
+                        shards.FirstOrDefault(x => string.Equals(x.ShardName, identity,
+                            StringComparison.OrdinalIgnoreCase)) is { } state && state.Sequence >= highWater))
                 {
                     return;
                 }
@@ -245,9 +283,20 @@ public partial class FisherDatabase : IEventDatabase
         {
             // Filtered on this method's own token so that if an overload ever accepts the caller's,
             // their cancellation still surfaces as a cancellation rather than as a timeout.
+            var missing = expected
+                .Where(identity => shards.All(x => !string.Equals(x.ShardName, identity,
+                    StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+
+            var detail = missing.Length > 0
+                ? $" Registered shards that have not recorded any progress: [{string.Join(", ", missing)}]"
+                  + " — the daemon may not be running."
+                : string.Empty;
+
             throw new TimeoutException(
                 $"Projection data was still stale after {timeout}. High water is at {highWater}; "
-                + $"shards are at [{string.Join(", ", shards.Select(x => $"{x.ShardName}:{x.Sequence}"))}].");
+                + $"shards are at [{string.Join(", ", shards.Select(x => $"{x.ShardName}:{x.Sequence}"))}]."
+                + detail);
         }
     }
 
