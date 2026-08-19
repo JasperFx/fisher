@@ -1,6 +1,17 @@
 name: Deploy docs
 
+# A release publishes the packages and the site it points at, together. `publish.yml` fires on the
+# same tag, so `gh release create v1.0.0` is the whole release: three nupkgs and the documentation
+# that documents them, cut from one commit. Without this the site drifted — it was
+# workflow_dispatch-only and had never run, so fisher.jasperfx.net was two waves behind the packages
+# while `PackageProjectUrl` on every one of them pointed at it.
+#
+# Lowercase `v*` matches the pattern `publish.yml` uses, and matters for the same reason: a tag cut
+# as `V1.0.0` matches neither workflow and the release silently does nothing.
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 concurrency:
