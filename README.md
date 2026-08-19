@@ -10,8 +10,6 @@ SQLite-backed Event Store and Document Database inside the Critter Stack.
     <img src="./logo.png" alt="Fisher logo" width="40%">
 </div>
 
-_Sorry, we don't have the documentation published **yet**, but we'll get there soon!_
-
 **Documentation: [fisher.jasperfx.net](https://fisher.jasperfx.net/)**
 
 Fisher is [Marten](https://martendb.io) and [Polecat](https://polecat.jasperfx.net) for SQLite —
@@ -19,7 +17,7 @@ event sourcing and document storage with the same API, in a database that is a *
 process**. There is no server to install, nothing to provision, and nothing to keep running. Backup is
 `cp`. Tests need no fixture.
 
-> **Status: early, but no longer a skeleton.** The event store, document storage over all four
+> **Status: 1.0.** The event store, document storage over all four
 > identity types plus strong-typed wrappers, hierarchies, numeric revisions, soft delete, duplicated
 > fields, user-declared indexes, document metadata mapping, LINQ — including joins, grouping and both
 > paging styles — patching, bulk insert, DCB tags, natural keys, all five projection shapes across all
@@ -28,8 +26,12 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > database-per-tenant, with tenants that appear at runtime), `AddFisher(...)` DI registration, and the
 > `Fisher.AspNetCore` and `Fisher.EntityFrameworkCore` companion packages all work and are tested.
 >
-> Fisher passes **all 32 suites and 275 tests** of `JasperFx.Events.ComplianceTests`, the shared
-> cross-store suite Marten and Polecat also enroll in.
+> Fisher passes **all 37 suites and 319 tests** of `JasperFx.Events.ComplianceTests`, the shared
+> cross-store suite Marten and Polecat also enroll in, alongside its own 1,320.
+>
+> 1.0 means the API is stable and the semantics above are settled — not that Fisher is
+> feature-complete against Marten. The gaps that remain are **decisions**, documented in
+> [HANDOFF.md](HANDOFF.md) rather than filed as issues.
 >
 > The one thing that is *not* there is deliberate and permanent: **no message bus.** The projection
 > side-effect seam exists and the default outbox drops every message, because delivery is a bus
