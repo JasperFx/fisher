@@ -15,7 +15,7 @@ scoreboard and the things that are true right now but not obvious from either.
 **1375 tests green on net9.0 and net10.0**, with no known intermittent failures — 1320 in
 `Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 319 of
 them are shared cross-store compliance tests — 250 event sourcing, which as of 2.53.0 is every event
-suite the shared library has, and 69 document. On JasperFx **2.53.0** / Weasel **9.24.0**.
+suite the shared library has, and 69 document. On JasperFx **2.53.0** / Weasel **9.25.0**.
 
 ## Closed since the comparison
 
@@ -940,12 +940,16 @@ delta detection uses the former, so a duplicated column reads as missing on ever
 patch re-adds it. Fisher runs a migration on the first write of each document type per process, so
 the second one fails outright with `duplicate column name`. This is the normal path, not a corner.
 
-`DocumentTable` overrides `ConfigureQueryCommand` to query `table_xinfo`, whose first six columns are
-`table_info`'s in the same order, so Weasel's positional reader needs no change and the generated
-column comes back as an ordinary one that `TableColumn.Equals` matches. Verified by reverting: six of
-the thirteen tests fail with the real SQLite error. Reported upstream as
-[weasel#426](https://github.com/JasperFx/weasel/issues/426), and the override is meant to go when
-that ships — **do not delete it before then.**
+Fisher carried a `DocumentTable.ConfigureQueryCommand` override for this, querying `table_xinfo`
+instead. **It is gone**: [weasel#426](https://github.com/JasperFx/weasel/issues/426) shipped in
+Weasel.Sqlite **9.24.0**, and the override was removed on the 9.25.0 bump.
+
+Removing it was overdue rather than optional, which is the part worth keeping. The override and the
+reader that consumes it are one contract, and 9.25.0 added a fifth statement (triggers) to the
+metadata query while Fisher's copy still emitted four. That surfaced as
+`ArgumentOutOfRangeException` from `readForeignKeysAsync` — a result-set misalignment naming neither
+Fisher nor generated columns. A workaround kept past its fix does not sit harmless; it drifts from the
+thing it was copied from, silently.
 
 ### `Schema.For<T>()` returns an expression now
 

@@ -19,8 +19,8 @@
              source. Weasel.Storage: the dialect-neutral closed-shape document + event storage
              runtime extracted from Marten, which Fisher plugs a SQLite dialect into rather than
              hand-writing storage. -->
-        <PackageVersion Include="Weasel.Sqlite" Version="9.24.0" />
-        <PackageVersion Include="Weasel.Storage" Version="9.24.0" />
+        <PackageVersion Include="Weasel.Sqlite" Version="9.25.0" />
+        <PackageVersion Include="Weasel.Storage" Version="9.25.0" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
