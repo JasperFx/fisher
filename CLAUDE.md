@@ -3569,10 +3569,17 @@ factory)`, over `Projections.StorageProviders` in the core.
   is created per batch and cannot dispose itself — it has to outlive the apply that created it *and*
   survive a retried commit. Disposing at the batch boundary covers the failed batch too, which is the
   case that would otherwise leak a context per attempt behind a persistently failing shard.
-- **A registered type is deliberately not mapped**, so `Snapshot<T>` skips its mapping and the type
-  gets no `fi_doc_*` table. That is what makes registration-before-projection load-bearing, and it is
-  checked rather than documented — the same "this line has to come first" shape fisher#39 gave
-  `SeedInitialDataOnStartup`.
+- **A registered type is deliberately not mapped**, so registering the projection skips its mapping
+  and the type gets no `fi_doc_*` table. That is what makes registration-before-projection
+  load-bearing, and it is checked rather than documented — the same "this line has to come first"
+  shape fisher#39 gave `SeedInitialDataOnStartup`.
+  - **Both registration doors skip it, which was fisher#111**: only `Snapshot<T>` carried the
+    `HasProviderFor` guard, so `Projections.Add(projection, lifecycle)` mapped the type anyway and
+    left a stray, empty table in the migration. `Add` is the only door for a multi-stream projection,
+    so that was *every* EF-backed one. Silent in both directions — the projection works, because
+    storage resolution checks the registry first, and the table sits in the schema forever. The guard
+    is per published type rather than per projection, since a projection may publish several and only
+    some of them be registered.
 - **Rebuild teardown reads the table name off the registry**, because the sweep that finds a
   projection's tables looks at *mapped* types. **This is the flat-table lesson one layer over** — the
   same gap `IPublishesTables` closes, reached from the other direction, and without it a rebuild

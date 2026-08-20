@@ -47,12 +47,11 @@ namespace Fisher.EntityFrameworkCore.Tests;
 ///         same place only when a range happens to span several streams.
 ///     </para>
 ///     <para>
-///         One thing to expect in this suite's schema and not to read as a defect in it: registering
-///         through <c>Projections.Add</c> rather than <c>Snapshot&lt;T&gt;</c> leaves a stray, empty
-///         <c>fi_doc_squadtally</c> table, because only <c>Snapshot&lt;T&gt;</c> guards its mapping
-///         with <c>HasProviderFor</c>. The registered EF storage is still what resolves —
-///         <see cref="an_ef_backed_storage_declares_itself_not_thread_safe" /> is what proves it — so
-///         nothing here is measuring the wrong table. Tracked as fisher#111.
+///         This suite registers through <c>Projections.Add</c> rather than <c>Snapshot&lt;T&gt;</c>,
+///         which is forced — <c>Add</c> is the only door for a multi-stream projection — and is also
+///         why <see cref="an_ef_backed_type_registered_through_add_gets_no_fisher_document_table" />
+///         lives here: fisher#111 was that only <c>Snapshot&lt;T&gt;</c> guarded its mapping, so this
+///         registration left a stray, empty <c>fi_doc_squadtally</c> table behind.
 ///     </para>
 /// </remarks>
 public class ef_core_projection_concurrency : IAsyncLifetime
@@ -175,6 +174,32 @@ public class ef_core_projection_concurrency : IAsyncLifetime
             .FetchProjectionStorageAsync<PlainTally, Guid>(StorageConstants.DefaultTenantId, Token);
 
         storage.IsThreadSafe.ShouldBeTrue();
+    }
+
+    /// <summary>
+    ///     fisher#111 — the other registration door leaves no stray Fisher table either.
+    /// </summary>
+    /// <remarks>
+    ///     <c>an_ef_backed_type_gets_no_fisher_document_table</c> covers the same property for
+    ///     <c>Snapshot&lt;T&gt;</c>, which was the only door that had the guard. Asserted on the name
+    ///     rather than on "no <c>fi_doc</c> tables at all", because
+    ///     <see cref="fishers_own_projection_storage_is_still_thread_safe" /> resolves storage for a
+    ///     genuine Fisher document and creates <c>fi_doc_plaintally</c> on demand — a blanket assertion
+    ///     would pass or fail on test ordering.
+    /// </remarks>
+    [Fact]
+    public async Task an_ef_backed_type_registered_through_add_gets_no_fisher_document_table()
+    {
+        await using var connection = new SqliteConnection(_database.ConnectionString);
+        await connection.OpenAsync(Token);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "select count(*) from sqlite_master where type = 'table' and name = 'fi_doc_squadtally'";
+
+        var count = Convert.ToInt64(await command.ExecuteScalarAsync(Token));
+
+        count.ShouldBe(0);
     }
 
     /// <summary>

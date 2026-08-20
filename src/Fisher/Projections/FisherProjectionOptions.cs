@@ -156,6 +156,17 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     ///         rather than a shortcoming: what such a projection writes, and where, is its own business,
     ///         and Fisher only creates tables for types it was told about.
     ///     </para>
+    ///     <para>
+    ///         <b>A published type with a registered storage provider is skipped</b>, the same check
+    ///         <see cref="Snapshot{T}" /> makes and for the same reason: its rows are not in a Fisher
+    ///         document table, so mapping it would put a second, empty table in the migration and leave
+    ///         a reader wondering which one the projection uses. <b>This was fisher#111</b>, and only
+    ///         <c>Snapshot&lt;T&gt;</c> had the guard — so an EF Core-backed
+    ///         <c>SingleStreamProjection</c> registered here, and <em>every</em> EF-backed
+    ///         <c>MultiStreamProjection</c>, since this overload is the only door for one. Silent in
+    ///         both directions: the projection works, because storage resolution checks the registry
+    ///         first, and the stray table sits in the schema forever.
+    ///     </para>
     /// </remarks>
     public void Add(ProjectionBase projection, ProjectionLifecycle lifecycle)
     {
@@ -179,6 +190,14 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
 
         foreach (var published in source.PublishedTypes())
         {
+            // Unless it already has somewhere else to live, exactly as Snapshot<T> checks — see the
+            // remarks. Asked per published type rather than per projection, because a projection may
+            // publish several and only some of them be registered.
+            if (StorageProviders.HasProviderFor(published))
+            {
+                continue;
+            }
+
             _events.Options.Schema.MappingFor(published);
         }
 
