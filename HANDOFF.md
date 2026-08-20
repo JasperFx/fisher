@@ -12,10 +12,10 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1354 tests green on net9.0 and net10.0**, with no known intermittent failures — 1305 in
-`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 13 in `Fisher.EntityFrameworkCore.Tests`. 309 of
-them are shared cross-store compliance tests — 250 event sourcing, which as of 2.51.0 is every event
-suite the shared library has, and 59 document. On JasperFx **2.51.0** / Weasel **9.24.0**.
+**1369 tests green on net9.0 and net10.0**, with no known intermittent failures — 1320 in
+`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 13 in `Fisher.EntityFrameworkCore.Tests`. 319 of
+them are shared cross-store compliance tests — 250 event sourcing, which as of 2.52.0 is every event
+suite the shared library has, and 69 document. On JasperFx **2.52.0** / Weasel **9.24.0**.
 
 ## Closed since the comparison
 
@@ -345,9 +345,11 @@ doing the work.
 
 Like 2.43.0 and 2.44.0 this is a compliance-tests-only release — the core assemblies are unchanged and
 the whole diff is the two suite files, three seam additions and the version. **With it the upstream ES
-compliance backlog is empty**, so twenty-eight is where the *event* half sits until a new one is
+compliance backlog is empty**, so twenty-eight was where the *event* half sat until a new one was
 filed. 2.47.0 opened a second half rather than a twenty-ninth event suite — see the document contract
-below.
+below. Two have been filed since, both from widened contracts rather than from a reopened backlog:
+`BinaryEventSerializationCompliance` in 2.50.0 (the twenty-ninth) and `AggregateWriteCacheCompliance`
+in 2.51.0, putting the event half at thirty.
 
 ## The 2.44.0 bump cost nothing whatever
 
@@ -418,13 +420,14 @@ documented public API to 2.42.2. This was a compliance-tests release.
 **fisher#13's intermittent rebuild failure is gone**, fixed at `e3c9912` — the session's operation
 queue was not thread-safe. Earlier handoffs described it as the one known flake; it no longer is.
 
-## Six of seven filed issues closed
+## All seven filed issues closed
 
 The tracker was empty when this pass started, while ROADMAP named five unbuilt features — against
 Fisher's own convention that a deferred gap lives in the tracker rather than in a doc. Seven were
-filed; six are done. **Only #19, composite projections, is still open.**
+filed; all seven are done — #19, composite projections, was the last and shipped, so this list is
+closed rather than outstanding.
 
-Three of the six turned up a real defect or a wrong premise, which is the useful part:
+Three of the seven turned up a real defect or a wrong premise, which is the useful part:
 
 - **#18** — the difficulty was the *positional slot contract*, not the SQL. The shared upsert binds
   four trailing slots unconditionally, overwrite two; Fisher's `guarded` flag is false under Numeric
@@ -443,25 +446,26 @@ Three of the six turned up a real defect or a wrong premise, which is the useful
 | ~~[#16](https://github.com/JasperFx/fisher/issues/16)~~ indexes | `Duplicate` is currently the only way to get one. SQLite indexes expressions directly, so this is *cheaper* here than on the siblings — but the indexed expression must be built from `MemberFactory`'s `TypedLocator`, or it is created, never used, and reports nothing. |
 | ~~[#17](https://github.com/JasperFx/fisher/issues/17)~~ hierarchies | `dotnet_type` is already the discriminator, so no schema change. Decide whether it holds a short alias before anything writes rows. |
 | ~~[#18](https://github.com/JasperFx/fisher/issues/18)~~ numeric revisions | The one item on this list with no SQLite-specific answer needed, which is unusual enough to say. |
-| [#19](https://github.com/JasperFx/fisher/issues/19) composite projections | Possibly close to free — `ProjectionGraph` already discovers them. Also the most likely place to find whatever fisher#13 did not cover. |
+| ~~[#19](https://github.com/JasperFx/fisher/issues/19)~~ composite projections | Nearly as free as it looked — `FisherCompositeProjection` closes JasperFx's base and `CompositeIProjectionSource` presents a bare `IProjection` as a stage. What it cost was member teardown (fisher#63): a wrapper holding a member must be asked what it publishes, or a rebuild replays onto rows the previous run left. |
 | ~~[#20](https://github.com/JasperFx/fisher/issues/20)~~ `AddFisher` | The largest gap between "works" and "usable without boilerplate". |
 | ~~[#21](https://github.com/JasperFx/fisher/issues/21)~~ subscriptions | `ISubscriptionRunner` is resolved by a soft `as` cast, so not implementing it fails at runtime rather than at compile time — which is why it reads as absent rather than broken. |
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.49.0 ships **32 suites, 275 tests**. Fisher passes **all 275, all
-32 suites**. Every suite compiles; every one is also subclassed and running.
+`JasperFx.Events.ComplianceTests` 2.52.0 ships **37 suites, 319 tests**. Fisher passes **all 319, all
+37 suites**. Every suite compiles; every one is also subclassed and running.
 
 **2.49.0 added no suite file and still required production work**, which is the first bump of that
 shape: `DocumentLoadAndStoreCompliance` gained three tests for `LoadAsync<T>(object)` (jasperfx#665 /
 fisher#89) and `DocumentComplianceConfig` gained `ValueTypes`. Diffing the suite *list* would have
 reported a clean bump — diff the contents.
 
-The library is now two halves. The **event sourcing** half is 28 suites and 230 tests, and its
+The library is now two halves. The **event sourcing** half is 30 suites and 250 tests, and its
 upstream backlog has been empty since 2.45.0 — that is the whole of it rather than a snapshot. The
-**document** half arrived in 2.47.0 (jasperfx#647): four suites, 45 tests as of 2.49.0, over the store-agnostic
-document contract Fisher implements for fisher#68. That half exists because the document side had no
-shared definition at all — Fisher's document parity with Polecat was established by the one-time
+**document** half arrived in 2.47.0 (jasperfx#647) and is now seven suites, 69 tests, over the
+store-agnostic document contract Fisher implements for fisher#68. Every suite added since 2.49.0 has
+landed in that half rather than the event one. It exists because the document side had no shared
+definition at all — Fisher's document parity with Polecat was established by the one-time
 hand-comparison that filed #22–#50, and enrolling replaces it with something standing.
 
 The ten suites added since 2.39.5 divided cleanly into "already true" and "had to be built", and the
@@ -493,17 +497,18 @@ by-identity document read surface was `where T : class` where the contract is `w
 Widening it removed an inconsistency rather than creating one, since `Store`, `Delete`, `DeleteWhere`
 and `Query<T>` were already `notnull`. See "The store-agnostic document contract" in CLAUDE.md.
 
-**Green on all thirty-two is not the same as feature-complete.** The suites cover what is portable
+**Green on all thirty-seven is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 32 suites, 275 tests
+### Green — 37 suites, 319 tests
 
-Event sourcing — 28 suites, 230 tests:
+Event sourcing — 30 suites, 250 tests:
 
 | Suite | Tests |
 |---|---|
 | `DcbTagQueryAndConsistencyCompliance` | 26 |
 | `StringStreamIdentityCompliance` | 19 |
+| `AggregateWriteCacheCompliance` | 14 |
 | `FetchForWritingCompliance` | 13 |
 | `StreamReadCompliance` | 11 |
 | `StrongTypedIdentityCompliance` | 11 |
@@ -522,6 +527,7 @@ Event sourcing — 28 suites, 230 tests:
 | `SnapshotLifecycleCompliance` | 6 |
 | `EventStoreExplorerCompliance` | 6 |
 | `AssignTagWhereCompliance` | 6 |
+| `BinaryEventSerializationCompliance` | 6 |
 | `DeadLetterCompliance` | 6 |
 | `SubscriptionCompliance` | 6 |
 | `RebuildConcurrencyCapCompliance` | 5 |
@@ -531,14 +537,17 @@ Event sourcing — 28 suites, 230 tests:
 | `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 4 suites, 45 tests, through `FisherDocumentComplianceFixture`:
+Documents — 7 suites, 69 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
 | `DocumentQueryCompliance` | 17 |
-| `DocumentDeleteCompliance` | 10 |
 | `DocumentLoadAndStoreCompliance` | 11 |
+| `DocumentDeleteCompliance` | 10 |
+| `DocumentCommitListenerCompliance` | 10 |
+| `PendingStreamActionsCompliance` | 9 |
 | `DocumentSessionCompliance` | 7 |
+| `DocumentSessionEventsCompliance` | 5 |
 
 ### Nothing in the fixture throws any more
 
@@ -1177,11 +1186,14 @@ Each of these is a decision with a reason, not an oversight:
   already passed the event keeps what it derived from the old body until it is rebuilt. Marten is the
   same. This is why masking is a data-at-rest operation rather than a correction, and why compacting
   is one-way.
-- **No composite projections** ([#19](https://github.com/JasperFx/fisher/issues/19)) — the one
-  projection shape Fisher does not support. Possibly close to free, since `ProjectionGraph` already
-  discovers them and `FisherProjectionOptions` derives from it, but nobody has tried it. Also the
-  likeliest place to find whatever fisher#13 did not cover, because a composite is more of exactly the
-  concurrent-queueing shape that bug lived in.
+- **A composite projection's stages cannot read each other's writes**, which is the one thing about
+  composites that reads like a gap and is not. Composite projections themselves shipped (#19): several
+  projections as ordered stages under one shard, rebuilt together in one pass. What a stage boundary
+  does *not* buy is a later stage seeing an earlier one's rows through `LoadAsync` — the whole composite
+  commits as one batch, so nothing an earlier stage queued is in the database yet. JasperFx's mechanism
+  for sharing across stages is the aggregate cache, which aggregation projections participate in and a
+  bare `IProjection` does not. Composites are also always asynchronous, deliberately: a stage boundary
+  only means something inside a daemon batch.
 - **Nothing on `IEventStoreOperations` is partial any more.** Natural keys were the last of it (#40);
   bulk insert and strong-typed ids came off this line earlier (#36, #53, #14).
 - **`dotnet_type` is the one metadata column with nowhere to go.** Every other one is projectable onto
@@ -1190,11 +1202,16 @@ Each of these is a decision with a reason, not an oversight:
   that would silently do nothing. That is an upstream gap, not a Fisher decision — and
   `MetadataForAsync` reads the column regardless, so the value is reachable even though no member can
   hold it.
-- **Multi-tenancy stops at the conjoined style.** One database sliced by a tenant id column, which
-  works and is now pinned cross-store by `ConjoinedEventTenancyCompliance`. What is absent is
-  database-per-tenant, which is why every `IEventDatabase` parameter in `DocumentStore.Daemon.cs` is
-  ignored — and on SQLite that is a different problem rather than a missing feature, since a store is
-  a file and separate tenants would mean separate files with their own lifecycle.
+- **Tenants can be deprovisioned but never deleted**, which is the one deliberate limit left in the
+  tenancy story rather than a stage it stops at. Both styles ship: conjoined (one file sliced by a
+  tenant id column, pinned cross-store by `ConjoinedEventTenancyCompliance`), database-per-tenant
+  (#47), and tenants that appear, suspend and resume at runtime (#58) — with the daemon routed per
+  database, which is what fisher#57 made those `IEventDatabase` parameters carry. Deleting a tenant
+  here would mean deleting a *file*: the cheapest deprovisioning of any Critter Stack store and the
+  most irreversible, and Fisher cannot know whether that file is backed up. So the API suspends or
+  forgets and an operator removes the file themselves. `DisabledTenantException` is distinct from
+  `UnknownTenantException` because "switched off" and "never heard of it" are different operational
+  situations.
 - **No hot-cold daemon coordination**, and `AddAsyncDaemon(DaemonMode.HotCold)` refuses rather than
   quietly running Solo. Failover means several nodes competing for a leadership lease through the
   database, and a Fisher store is a file SQLite does not make safe to share across nodes.
