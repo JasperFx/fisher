@@ -3586,6 +3586,24 @@ factory)`, over `Projections.StorageProviders` in the core.
 - Registering a bare `IProjection` now wraps it in JasperFx's `ProjectionWrapper`, which Fisher had no
   path for before: `Projections.Add(ProjectionBase, ...)` assumed every projection base was also an
   `IProjectionSource`. Polecat wraps in the same place.
+- **`EfCoreProjectionStorage.IsThreadSafe` is `false`, and the `SemaphoreSlim` beside it is not an
+  alternative to that** (fisher#108, over jasperfx#683). `AggregationRunner` posts a range's slices
+  into a fixed ten-wide `Block` — ten real reader tasks — against one storage instance, and a
+  `DbContext` is not thread-safe. The lock serializes each individual *call*; what it cannot close is
+  the window *between* two, where one thread's aggregation mutates entities that another thread's
+  `Entry()` is running `DetectChanges` over. Nothing reachable from inside the storage can stop the
+  fan-out, which is why the seam had to be upstream. `FisherProjectionStorage` keeps the default of
+  `true`: it queues onto the session, whose queue fisher#13 made thread-safe for this exact shape.
+  - **Fisher was measurably harder to break than Marten, and that is the semaphore's doing rather than
+    luck.** Marten reported real corruption (marten#5266 — `Dictionary.TryInsert`,
+    `ChangeDetector.DetectChanges`); forcing Fisher back to ten-wide over 15,000 slice applications
+    produced no exception at all. So the lock stays: it is what makes the residual window narrow, and
+    the declaration is what closes it.
+  - **The test asserts the fan-out stopped, not that a crash stopped**, which is the only assertion
+    worth making about a data race — a test waiting for corruption is probabilistic in the direction
+    that fails you, so green would prove nothing. `slices_are_applied_one_at_a_time` counts concurrent
+    `Apply` calls: one with the declaration, **8 measured without it**. The counters live in the test's
+    projection rather than in the storage, so production carries no instrumentation.
 
 ## Conventions
 

@@ -25,10 +25,30 @@ namespace Fisher.EntityFrameworkCore;
 ///         which blocks from inside the transaction it is waiting on.
 ///     </para>
 ///     <para>
-///         The <see cref="SemaphoreSlim" /> is fisher#13's lesson applied one layer over. A
-///         <c>DbContext</c> is explicitly not thread-safe, and JasperFx's <c>ExecutionStage</c> fans
-///         its slices out with <c>Task.WhenAll</c> onto the same storage — the shape that silently lost
-///         a slice's write when the session's operation queue was an unguarded <c>List&lt;T&gt;</c>.
+///         <b>This storage declares itself not thread-safe, and that — not the
+///         <see cref="SemaphoreSlim" /> — is what makes it correct</b> (fisher#108, over
+///         jasperfx#683). <c>AggregationRunner</c> applies a range's slices through a fixed ten-wide
+///         block against one storage instance, and a <c>DbContext</c> is explicitly not thread-safe;
+///         for a multi-stream projection whose grouping fans one event into many slices, up to ten of
+///         them concurrently call <c>Entry()</c> / <c>Find</c> and mutate one change tracker. Reported
+///         on Marten as <c>InvalidOperationException</c> out of <c>Dictionary.TryInsert</c> and
+///         <c>NullReferenceException</c> out of <c>ChangeDetector.DetectChanges</c> (marten#5266).
+///     </para>
+///     <para>
+///         <b>A lock inside the storage does not close it</b>, which is the part worth keeping: it
+///         serializes each individual call, but between two calls the aggregation running on one
+///         thread mutates entities that another thread's <c>Entry()</c> is running
+///         <c>DetectChanges</c> over — precisely the second exception above. The fan-out itself has to
+///         stop and nothing reachable from inside the storage can stop it, which is why the seam is
+///         upstream rather than here.
+///     </para>
+///     <para>
+///         The <see cref="SemaphoreSlim" /> stays regardless. With <see cref="IsThreadSafe" /> false
+///         the runner applies slices one at a time, but that is the runner's promise rather than
+///         something this class can observe; the gate costs an uncontended lock per call and keeps the
+///         invariant local to the thing that depends on it. fisher#13 is why that caution is cheap at
+///         the price — the same fan-out silently lost a slice's write when the session's operation
+///         queue was an unguarded <c>List&lt;T&gt;</c>.
 ///     </para>
 /// </remarks>
 internal sealed class EfCoreProjectionStorage<TDoc, TId, TContext> : IProjectionStorage<TDoc, TId>
@@ -51,6 +71,18 @@ internal sealed class EfCoreProjectionStorage<TDoc, TId, TContext> : IProjection
     internal TContext Context => _context;
 
     public string TenantId { get; }
+
+    /// <summary>
+    ///     False, because this storage wraps one <see cref="DbContext" /> and a <c>DbContext</c> is not
+    ///     thread-safe. The daemon then applies a range's slices one at a time instead of ten-wide.
+    /// </summary>
+    /// <remarks>
+    ///     See the remarks on the class for why the <see cref="SemaphoreSlim" /> below is not an
+    ///     alternative to this. <c>FisherProjectionStorage</c> leaves the default of <c>true</c>: it
+    ///     queues operations onto the session, whose queue was made thread-safe by fisher#13 for
+    ///     exactly this fan-out.
+    /// </remarks>
+    public bool IsThreadSafe => false;
 
     public void SetIdentity(TDoc document, TId identity) => Locked(() => SetIdentityUnsafe(document, identity));
 
