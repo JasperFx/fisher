@@ -12,10 +12,10 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1369 tests green on net9.0 and net10.0**, with no known intermittent failures — 1320 in
-`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 13 in `Fisher.EntityFrameworkCore.Tests`. 319 of
-them are shared cross-store compliance tests — 250 event sourcing, which as of 2.52.0 is every event
-suite the shared library has, and 69 document. On JasperFx **2.52.0** / Weasel **9.24.0**.
+**1374 tests green on net9.0 and net10.0**, with no known intermittent failures — 1320 in
+`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 18 in `Fisher.EntityFrameworkCore.Tests`. 319 of
+them are shared cross-store compliance tests — 250 event sourcing, which as of 2.53.0 is every event
+suite the shared library has, and 69 document. On JasperFx **2.53.0** / Weasel **9.24.0**.
 
 ## Closed since the comparison
 
@@ -452,8 +452,10 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.52.0 ships **37 suites, 319 tests**. Fisher passes **all 319, all
-37 suites**. Every suite compiles; every one is also subclassed and running.
+`JasperFx.Events.ComplianceTests` 2.53.0 ships **37 suites, 319 tests**. Fisher passes **all 319, all
+37 suites**. Every suite compiles; every one is also subclassed and running. 2.53.0 changed no suite
+file and added no test — verified against a run rather than by diffing the file list, which is the
+lesson 2.49.0 taught.
 
 **2.49.0 added no suite file and still required production work**, which is the first bump of that
 shape: `DocumentLoadAndStoreCompliance` gained three tests for `LoadAsync<T>(object)` (jasperfx#665 /
