@@ -3,10 +3,51 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **no open issues**. The JasperFx 2.51.0 wave asked for three, and preparing its release found
-a fourth — [#102](https://github.com/JasperFx/fisher/issues/102), which is **0.9.1**.
+Status: **one open issue, and it is blocked upstream** —
+[#109](https://github.com/JasperFx/fisher/issues/109), the downstream half of
+[jasperfx#684](https://github.com/JasperFx/jasperfx/issues/684), which is an epic rather than a
+next-release item. It is filed so the Fisher half is not rediscovered later rather than because it is
+actionable now.
 
-**0.9.1** is that fix, and it is worth reading as a warning about what an intermittent can hide.
+**1.0.1** is the JasperFx **2.53.0** bump and two fixes it turned up.
+[#108](https://github.com/JasperFx/fisher/issues/108) is the reason for the bump:
+[jasperfx#683](https://github.com/JasperFx/jasperfx/issues/683) adds
+`IProjectionStorage.IsThreadSafe`, and `EfCoreProjectionStorage` returns false, so the daemon applies
+a range's slices one at a time rather than through `AggregationRunner`'s ten-wide block. A
+`DbContext` is not thread-safe and the storage's own lock does not close it — a lock serializes each
+individual call, but between two calls one thread's aggregation mutates entities that another
+thread's `Entry()` is running `DetectChanges` over. Two things were measured rather than assumed:
+Fisher genuinely is called ten-wide (9 concurrent calls observed), and Fisher is much harder to break
+than Marten was, because that lock absorbs the simultaneous-call corruption Marten reported —
+15,000 slice applications over a forced ten-wide run produced no exception at all. So the lock stays
+and the declaration is what closes it.
+
+[#111](https://github.com/JasperFx/fisher/issues/111) fell out of writing that fix's test: only
+`Snapshot<T>` carried the `HasProviderFor` guard, so a type registered with `ProjectToEfCore` and
+projected through `Projections.Add` was mapped anyway and got a stray, empty `fi_doc_` table beside
+the EF table it actually writes to. `Add` is the only door for a multi-stream projection, so that was
+every EF-backed one. Silent in both directions — the projection works, because storage resolution
+checks the registry first, and the table sits in the schema forever.
+
+The release also carries two documentation repairs and the thing that should stop the second one
+recurring. [#107](https://github.com/JasperFx/fisher/issues/107) is that HANDOFF.md's deliberate-gaps
+list still described composite projections and database-per-tenant as absent, months after both
+shipped — understating Fisher in the document the README points at as the public account of what it
+does not do. The sweep found worse rot in the compliance scoreboard than in the gaps list it was
+filed about: it claimed "2.49.0 ships 32 suites, 275 tests" while its own header already said 2.51.0.
+Those numbers are now checked by CI (`scripts/check_scoreboard.py`) against the TRX reports on every
+run, per-suite table rows and pinned versions included, so the next drift fails the build instead of
+reaching a reader. It caught a mangled comment on its first run.
+
+**1.0.0** is the release that closed the Polecat comparison. Every gap this repository knew about was
+closed, the deliberate gaps in [HANDOFF.md](HANDOFF.md) became the standing account of what Fisher
+does not do rather than a backlog, and the docs site began shipping with the release —
+`docs.yml` matches the same `v*` tag as `publish.yml`, so a tag produces three nupkgs and
+fisher.jasperfx.net from one commit. Before that coupling the site had never run and was serving
+pre-0.9.0 content.
+
+**0.9.1** is the last of the pre-1.0 fixes, and it is worth reading as a warning about what an
+intermittent can hide.
 `WaitForNonStaleProjectionDataAsync` decided it was done from the rows in `fi_event_progression`
 rather than from the shards the store *registers* — so a shard that had not run yet was invisible, and
 a store with two async projections was declared non-stale the moment the first one reached the head.
@@ -201,7 +242,7 @@ Test counts keep understating the suites that matter. `AsyncDaemonCompliance` is
 the whole daemon; `FlatTableProjectionCompliance` is eight that demand an upsert generator, a
 migration hook and rebuild teardown.
 
-Being green on all thirty-two is not the same as being feature-complete against Marten. The suites
+Being green on all thirty-seven is not the same as being feature-complete against Marten. The suites
 cover what is portable across stores; the deliberate gaps listed in HANDOFF.md are still gaps.
 
 ## Filed follow-ups
