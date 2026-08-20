@@ -65,7 +65,7 @@ feature-complete against Marten, and the deliberate gaps in [HANDOFF.md](HANDOFF
 they are decisions rather than omissions, which is why they are not issues. The live work that remains
 lives elsewhere: `Wolverine.Fisher` is built in the wolverine repo against
 [wolverine#3907](https://github.com/JasperFx/wolverine/issues/3907), and
-[weasel#426](https://github.com/JasperFx/weasel/issues/426) is upstream. **The next issue is most
+[weasel#426](https://github.com/JasperFx/weasel/issues/426) has since shipped. **The next issue is most
 likely to come from a JasperFx release rather than from this repository** — that has been the pattern
 for seven bumps, and it is what the compliance enrollment is for.
 
@@ -251,7 +251,7 @@ cover what is portable across stores; the deliberate gaps listed in HANDOFF.md a
 |---|---|
 | ~~[fisher#1](https://github.com/JasperFx/fisher/issues/1)~~ | **Closed.** LINQ ordering and range comparison on date document members — `strftime` normalises inline, no duplicated column needed, exactly as predicted. |
 | ~~[fisher#2](https://github.com/JasperFx/fisher/issues/2)~~ | **Closed.** Duplicated fields, as indexed SQLite `VIRTUAL` generated columns — nothing writes them, so they cannot drift from `data` and need no backfill. The generated-column shape this file predicted was the right one. |
-| [weasel#426](https://github.com/JasperFx/weasel/issues/426) | Upstream. `pragma_table_info` omits generated columns, so a Weasel.Sqlite table carrying one never converges. Fisher works around it in `DocumentTable`; the override goes when this ships. Found while building #2. |
+| ~~[weasel#426](https://github.com/JasperFx/weasel/issues/426)~~ | **Shipped in Weasel.Sqlite 9.24.0.** `pragma_table_info` omitted generated columns, so a table carrying one never converged. Fisher's `DocumentTable` override was removed on the 9.25.0 bump — a release late, which cost a result-set misalignment when 9.25.0 added a statement the stale copy did not have. Found while building #2. |
 | ~~[fisher#3](https://github.com/JasperFx/fisher/issues/3)~~ | **Closed.** Event-emitting async projections — raised events are planned and appended inside the batch's transaction. |
 | ~~[fisher#4](https://github.com/JasperFx/fisher/issues/4)~~ | **Closed.** Projection side effects — `IMessageOutbox` / `IMessageBatch`, both commit paths bracketed. |
 | ~~[fisher#8](https://github.com/JasperFx/fisher/issues/8)~~ | **Closed wontfix.** A built-in outbox is not Fisher's job — delivery is a bus integration's, as on both siblings. `NulloMessageOutbox` is the intended end state and is documented as one. |

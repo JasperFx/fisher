@@ -62,13 +62,23 @@ work goes through Weasel's table definitions and migrations, which is what makes
 `AutoCreate.None` honoured everywhere for free rather than at each call site's discretion.
 
 **When Weasel.Sqlite cannot do it, the workaround is local, commented, filed upstream, and removed
-when the fix ships.** That cycle has run twice already and both ends are visible in this file:
-`FisherCommandBuilder` existed because `CommandBuilder` did not declare `Weasel.Core.ICommandBuilder`,
-and it is **gone** now that weasel#424 shipped in 9.23.2 — do not reintroduce it.
-`DocumentTable.ConfigureQueryCommand` overrides Weasel's `pragma_table_info` query because it omits
-generated columns; that is [weasel#426](https://github.com/JasperFx/weasel/issues/426), and the
-override goes when it ships. A deviation with no issue behind it is a deviation nobody will ever
-remove.
+when the fix ships.** That cycle has now run twice and closed twice, and **both removals are the
+point of the rule** rather than a tidy-up:
+
+- `FisherCommandBuilder` existed because `CommandBuilder` did not declare
+  `Weasel.Core.ICommandBuilder`. Gone since weasel#424 shipped in 9.23.2 — do not reintroduce it.
+- `DocumentTable.ConfigureQueryCommand` overrode Weasel's `pragma_table_info` query because it omits
+  generated columns. Gone since [weasel#426](https://github.com/JasperFx/weasel/issues/426) shipped
+  in **9.24.0** — do not reintroduce that either.
+
+**The second one shows what the rule is actually protecting against**, because it was not removed on
+the bump that fixed it and the cost arrived one release later. Weasel 9.25.0 added a fifth statement
+(triggers) to the metadata query; Fisher's override still emitted four, and the override and the
+reader that consumes it are one contract. The result was not a stale-but-harmless copy — it was
+`ArgumentOutOfRangeException` out of `readForeignKeysAsync`, a result-set misalignment with nothing in
+the message about Fisher or about generated columns. A deviation with no issue behind it is a
+deviation nobody will ever remove; a deviation whose issue has *closed* is worse, because it now
+diverges silently from the thing it was copied from.
 
 **Reusable data-access helpers belong in Weasel.Sqlite eventually, so write them where they can move.**
 The test is whether the helper would be equally correct for any SQLite consumer or whether it encodes
@@ -1566,13 +1576,14 @@ JSON — a null test asks whether the member is present, which is not quite whet
 Two things that are easy to get wrong:
 
 - **`pragma_table_info` does not list generated columns; only `pragma_table_xinfo` does.** Weasel's
-  delta detection uses the former, so every duplicated column reads as missing and the migration
-  emits `ALTER TABLE … ADD COLUMN` for it *every time* — and since Fisher runs a migration on the
-  first write of each document type per process, the second one fails with `duplicate column name`.
-  `DocumentTable` overrides `ConfigureQueryCommand` to use `table_xinfo`, whose first six columns are
-  `table_info`'s in the same order, so Weasel's positional reader needs no change. Reported as
-  [weasel#426](https://github.com/JasperFx/weasel/issues/426); the override goes when that ships.
-  `applying_the_configuration_again_is_a_no_op` fails with the real SQLite error without it.
+  delta detection used the former, so every duplicated column read as missing and the migration
+  emitted `ALTER TABLE … ADD COLUMN` for it *every time* — and since Fisher runs a migration on the
+  first write of each document type per process, the second one failed with `duplicate column name`.
+  **Fixed upstream in Weasel.Sqlite 9.24.0** ([weasel#426](https://github.com/JasperFx/weasel/issues/426)),
+  which reads `table_xinfo` and filters `hidden <> 1` — so generated columns (2 and 3) come back and a
+  virtual table's hidden columns do not. Fisher carried a `DocumentTable.ConfigureQueryCommand`
+  override until 9.25.0 and **it is gone**; do not reintroduce it.
+  `applying_the_configuration_again_is_a_no_op` is still the test that catches this either way.
 - **The declared type is the column's comparison affinity**, so `SqliteTypeFor` is load-bearing
   rather than decorative — declare a numeric member TEXT and it starts sorting as text. `decimal`
   goes to REAL because `json_extract` hands back a REAL for any JSON number, and a column whose
