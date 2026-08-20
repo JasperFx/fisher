@@ -78,6 +78,20 @@ jobs:
           done
           exit $status
 
+      # HANDOFF.md calls itself the compliance scoreboard, and its numbers are hand-maintained --
+      # which is why they rot. fisher#107 found it claiming "2.49.0 ships 32 suites, 275 tests"
+      # while its own header already said 2.51.0: two scoreboards in one file disagreeing, both
+      # understating Fisher in the document the 1.0 README points at as the public account of what
+      # Fisher does not do. This compares every number in it against the TRX reports just written.
+      #
+      # No `if:`, so it inherits the default of running only when the steps before it succeeded.
+      # That is what we want: a red suite makes the counts unverifiable rather than wrong, and a
+      # failed run should not also produce a confusing second failure about arithmetic. The script
+      # refuses to report agreement on a run with failures for the same reason, in case it is ever
+      # invoked directly.
+      - name: The scoreboard agrees with the run
+        run: python3 scripts/check_scoreboard.py --tfm ${{ matrix.tfm }} --configuration Release
+
       - name: Report results
         uses: dorny/test-reporter@v3
         if: ${{ !cancelled() }}
