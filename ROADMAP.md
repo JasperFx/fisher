@@ -9,6 +9,23 @@ Status: **one open issue, and it is blocked upstream** —
 next-release item. It is filed so the Fisher half is not rediscovered later rather than because it is
 actionable now.
 
+**1.0.2** is Weasel **9.25.1**, and it exists because of what the 9.25.0 bump removed rather than
+what 9.25.1 adds. Fisher carried a `DocumentTable.ConfigureQueryCommand` override for
+[weasel#426](https://github.com/JasperFx/weasel/issues/426), which had shipped in 9.24.0 — so the
+override was a release stale, and 9.25.0 then added a fifth statement (triggers) to the metadata query
+it copies. The override and the reader that consumes it are one contract, so a consumer on 1.0.1 who
+took Weasel 9.25.0 transitively got `ArgumentOutOfRangeException` from `readForeignKeysAsync` on any
+document type with a foreign key. Removed on `main`, released here.
+
+9.25.1 rather than 9.25.0 because upstream's own upgrade page now leads with a warning to skip
+9.25.0: a length rule on local identifiers refused conventional schemas whose primary key constraint
+names were merely long (weasel#485, weasel#486), and the quiet half aborted a projection's schema
+application so the daemon then failed against storage that had never been created. **Fisher itself is
+not exposed to that** — verified rather than assumed, by applying a schema with a ~140-character index
+name on both 9.25.0 and 9.25.1: Fisher emits an inline `PRIMARY KEY` with no named constraint, so the
+rule has nothing of Fisher's to reject. Taking 9.25.1 is still right, because a Fisher application's
+*own* Weasel-managed schema is not Fisher's to vouch for.
+
 **1.0.1** is the JasperFx **2.53.0** bump and two fixes it turned up.
 [#108](https://github.com/JasperFx/fisher/issues/108) is the reason for the bump:
 [jasperfx#683](https://github.com/JasperFx/jasperfx/issues/683) adds
