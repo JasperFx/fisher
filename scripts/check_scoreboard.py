@@ -12,6 +12,19 @@ This reads the TRX reports CI already produces and compares every machine-checka
 HANDOFF.md against them. It asserts nothing about prose: what it checks is counts, the suite split,
 the per-suite tables, and the package versions.
 
+It also covers the two other files that carry these numbers, and they need very different treatment:
+
+  README.md   the package front page, so its counts are the ones a prospective user reads first.
+              One claim, entirely current.
+
+  ROADMAP.md  **mostly a changelog, and its historical entries must NOT be checked.** The 0.8.1
+              entry still says "All 36 compliance suites, 309 tests" because that is what was true
+              at 0.8.1, and the 1.0.1 entry quotes the stale "2.49.0 ships 32 suites, 275 tests"
+              verbatim as the thing fisher#107 found. Both are correct as written. A sweep over every
+              "N suites, M tests" in that file would fail on them immediately and the obvious "fix"
+              would be to rewrite history. Exactly one claim in ROADMAP is about the present tense,
+              and it is the only one checked here.
+
 Usage:
     python3 scripts/check_scoreboard.py --tfm net10.0 --configuration Release
 
@@ -38,6 +51,8 @@ ENROLLMENT = Path("src/Fisher.Tests/Compliance/fisher_event_store_compliance.cs"
 DOCUMENT_FIXTURE = "FisherDocumentComplianceFixture"
 
 HANDOFF = Path("HANDOFF.md")
+README = Path("README.md")
+ROADMAP = Path("ROADMAP.md")
 PACKAGES = Path("Directory.Packages.props")
 
 ONES = [
@@ -64,6 +79,12 @@ class Failures:
         self.items.append(message)
 
     def expect(self, label: str, claimed: int | str | None, actual: int | str) -> None:
+        # README writes its counts for a human ("1,320"), so a bare string compare would report a
+        # mismatch that is only formatting. Normalising here rather than at each call site keeps the
+        # HANDOFF checks — which are unformatted — reading exactly as before.
+        if isinstance(claimed, str):
+            claimed = claimed.replace(",", "")
+
         if claimed is None:
             self.add(
                 f"{label}: could not find this claim in the file. If the wording changed, update "
@@ -330,6 +351,36 @@ def main() -> int:
             failures.expect("enrollment comment, package version", enrolled_claim.group(2),
                             compliance_pinned)
 
+    # ---- README.md ------------------------------------------------------------------------------
+    # The package front page. Its numbers are the first a prospective user sees, and it was ahead of
+    # HANDOFF when fisher#107 was filed -- which is how the disagreement became visible at all.
+    readme = (root / README).read_text(encoding="utf-8")
+
+    readme_claim = re.search(r"\*\*all (\d+) suites and (\d+) tests\*\*", readme)
+    if readme_claim is None:
+        failures.expect("README, 'all N suites and M tests'", None,
+                        f"{len(compliance)} suites, {compliance_total} tests")
+    else:
+        failures.expect("README, suites", readme_claim.group(1), len(compliance))
+        failures.expect("README, compliance tests", readme_claim.group(2), compliance_total)
+
+    failures.expect(
+        "README, Fisher.Tests count",
+        find(r"alongside its own ([\d,]+)", readme),
+        totals["Fisher.Tests"],
+    )
+
+    # ---- ROADMAP.md -----------------------------------------------------------------------------
+    # One claim, deliberately. See the module docstring for why a sweep here would be wrong: the file
+    # is a changelog, and its per-release entries are meant to hold the numbers that were true then.
+    roadmap = (root / ROADMAP).read_text(encoding="utf-8")
+
+    failures.expect(
+        "ROADMAP, 'green on all <n>'",
+        find(r"Being green on all ([\w-]+) is not the same as being feature-complete", roadmap),
+        number_word(len(compliance)),
+    )
+
     # ---- report --------------------------------------------------------------------------------
     if failures.items:
         print(f"The scoreboard disagrees with the {args.tfm} run:\n", file=sys.stderr)
@@ -337,8 +388,11 @@ def main() -> int:
             print(f"  - {item}", file=sys.stderr)
             print(f"::error::scoreboard: {item}")
         print(
-            "\nHANDOFF.md is the compliance scoreboard, so these numbers are load-bearing rather "
-            "than decorative. Update them from a real run — never by arithmetic.",
+            "\nHANDOFF.md is the compliance scoreboard and README.md is the package front page, so "
+            "these numbers are load-bearing rather than decorative. Update them from a real run — "
+            "never by arithmetic.\n\nIf a ROADMAP line is reported here, check it is the present-tense "
+            "one before editing: that file's per-release entries are history and are supposed to keep "
+            "the numbers that were true at the time.",
             file=sys.stderr,
         )
         return 1
