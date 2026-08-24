@@ -2893,6 +2893,60 @@ Three SQLite-specific points:
 `ReadStreamMetadata` returns an **empty tag dictionary, not null**: the record declares `Tags`
 non-nullable, and returning null there is what polecat#412 was.
 
+#### What `TryCreateUsage` puts on the wire — fisher#120
+
+`projections list` rendered "No projections in this store." for a store with twenty registered, and
+`projections rebuild` matched none of them. The descriptor is where both of those answers come from,
+and Fisher never populated `EventStoreUsage.Subscriptions`.
+
+**The fix is one line — `Options.Projections.Describe(usage, this)` — and that is the uncomfortable
+part rather than the reassuring one.** Everything it fills was already built: `ProjectionGraph.Describe`
+is the shared implementation, and Fisher's two projection source types of its own
+(`CompositeIProjectionSource`, `FlatTableProjection`) already implemented `Describe`. Nothing about
+the gap was Fisher-specific, which is exactly why it survived — there was no dialect decision to
+prompt anybody to look.
+
+**The general rule this establishes: an unfilled slot on `EventStoreUsage` does not read as "this
+store does not describe that", it reads as *the store has none*.** Every member is a list or a
+nullable that starts empty, so the failure is silent in the one direction that matters — no
+exception, no warning, and a console rendering a confident, wrong answer. That is why the whole
+descriptor was audited alongside the reported member rather than the one line being added:
+
+- **Both event-type collections.** `Events` and `RegisteredEventTypes` are the same registry twice and
+  a consumer may read either. Filling one alone is polecat#411.
+- **`TagTypes` and `DcbTagTypes`**, off `EventGraph.TagTypes`. Fisher has DCB; the console had no way
+  to know.
+- **`ProjectionErrors` and `ProjectionRebuildErrors`** separately, because they differ — a rebuild
+  stops on an error a normal run skips, and a console reading one for the other offers "view related
+  dead letters" to a store that halts.
+- **`EventMetadata`**, whose four event flags are the opt-in `Enable*` options; every *stream* facet
+  is universal in Fisher, so those keep the capability defaults.
+- **`GlobalAggregates` and `DiscoveredDcbAggregates` stay empty, and that is the correct answer** —
+  Fisher registers no aggregate as global and has no `IDcbAggregateRegistry`. Worth saying, because
+  under the rule above an empty list is a claim rather than an omission.
+
+**`MaxEventSequence` is the one entry that means something different here than on either sibling.** It
+is the physical `max(seq_id)`, and the gap between it and the high-water mark is what CritterWatch#150's
+second signal renders. **On Fisher there can never be a gap** — one writer per file plus
+`BEGIN IMMEDIATE` makes committed sequences contiguous, which is the same fact that lets
+`FisherHighWaterDetector` skip gap detection entirely. So the signal cannot fire, and reporting the
+number is what lets a console establish that; leaving it null renders as "n/a" and says nothing.
+
+Two decisions in how it is read:
+
+- **A failed read costs the number, not the description.** The likeliest reason it fails is that the
+  schema does not exist yet, which is precisely when a monitoring tool is most likely to be pointed at
+  the store. `a_store_with_no_schema_still_describes_itself` pins that the method stays useful there.
+- **`Describe` is called last, as Polecat calls it.** It registers each subscription's included event
+  types on the event graph as a side effect, so calling it earlier would let those types into
+  `usage.Events` and make a diagnostics call's output depend on whether anything had asked before.
+
+**The shared suite cannot catch this class of gap for any store**, which is worth knowing before
+assuming compliance covers the descriptor: `EventStoreExplorerCompliance` asserts on `usage.Events`
+alone and returns early when the usage is null. `event_store_usage` is Fisher's own until that grows a
+sibling, and it asserts presence rather than shape for the reason above — all nine of its tests fail
+against the shipped 1.0.2 behaviour.
+
 ### LINQ
 
 Ported from Polecat, which owns `Polecat.Linq.SqlGeneration` itself rather than taking it from
