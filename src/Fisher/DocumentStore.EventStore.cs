@@ -180,11 +180,23 @@ public partial class DocumentStore : IEventStore
     ///     Describe this store's configuration for monitoring tools.
     /// </summary>
     /// <remarks>
-    ///     Built by hand rather than through <see cref="EventStoreUsage" />'s reflective constructor,
-    ///     which walks the subject's properties and would dump the store's runtime handles into the
-    ///     descriptor as if they were configuration.
+    ///     <para>
+    ///         Built by hand rather than through <see cref="EventStoreUsage" />'s reflective constructor,
+    ///         which walks the subject's properties and would dump the store's runtime handles into the
+    ///         descriptor as if they were configuration.
+    ///     </para>
+    ///     <para>
+    ///         <b>Building it by hand is why fisher#120 happened, and the shape of that bug is the reason
+    ///         to be exhaustive here rather than tidy.</b> An unfilled slot on this object is not read as
+    ///         "this store does not describe that" — it is read as <em>the store has none</em>. The
+    ///         missing <see cref="EventStoreUsage.Subscriptions" /> list made
+    ///         <c>projections list</c> answer "No projections in this store" for a store with twenty of
+    ///         them, and <c>projections rebuild</c> match none of them, with nothing anywhere reporting a
+    ///         gap. Every list below is populated for that reason, not because a consumer was known to
+    ///         want it.
+    ///     </para>
     /// </remarks>
-    Task<EventStoreUsage?> IEventStore.TryCreateUsage(CancellationToken token)
+    async Task<EventStoreUsage?> IEventStore.TryCreateUsage(CancellationToken token)
     {
         var usage = new EventStoreUsage
         {
@@ -207,12 +219,103 @@ public partial class DocumentStore : IEventStore
         // wire rather than guessing.
         usage.MaxConcurrentRebuildsPerDatabase = ResolveMaxConcurrentRebuilds();
 
+        // Both event-type collections, because EventStoreUsage carries the registry twice and a
+        // consumer is entitled to read either. Filling one alone is what polecat#411 was.
         foreach (var eventType in EventGraph.AllKnownEventTypes())
         {
             usage.Events.Add(new EventDescriptor(eventType.EventTypeName, TypeDescriptor.For(eventType.EventType)));
+
+            usage.RegisteredEventTypes.Add(new EventTypeDescriptor(
+                EventType: TypeDescriptor.For(eventType.EventType),
+                Alias: eventType.EventTypeName,
+                Description: null!));
         }
 
-        return Task.FromResult<EventStoreUsage?>(usage);
+        foreach (var registration in EventGraph.TagTypes)
+        {
+            usage.TagTypes.Add(new TagTypeDescriptor
+            {
+                TagType = registration.TagType.FullName ?? registration.TagType.Name,
+                SimpleType = registration.SimpleType.FullName ?? registration.SimpleType.Name,
+                TableSuffix = registration.TableSuffix,
+                AggregateType = registration.AggregateType?.FullName
+            });
+
+            usage.DcbTagTypes.Add(new DcbTagDescriptor(
+                Name: registration.TagType.Name,
+                SimpleType: registration.SimpleType.FullName ?? registration.SimpleType.Name,
+                TagType: TypeDescriptor.For(registration.TagType),
+                Description: null!));
+        }
+
+        // JasperFx/ProductSupport#3 — the two policies are separate because they differ: a rebuild
+        // stops on an error a normal run would skip, and a console showing "view related dead
+        // letters" for a store that halts instead offers a button that never returns anything.
+        usage.ProjectionErrors = ErrorPolicyFor(Options.Projections.Errors);
+        usage.ProjectionRebuildErrors = ErrorPolicyFor(Options.Projections.RebuildErrors);
+
+        // jasperfx#475 — the four event columns are opt-in and read straight off the options. Every
+        // stream facet is universal in Fisher, so those keep EventMetadataCapabilities' defaults.
+        usage.EventMetadata = new EventMetadataCapabilities
+        {
+            StoreType = "Fisher",
+            CorrelationId = Options.Events.EnableCorrelationId,
+            CausationId = Options.Events.EnableCausationId,
+            Headers = Options.Events.EnableHeaders,
+            UserName = Options.Events.EnableUserName
+        };
+
+        usage.MaxEventSequence = await TryReadMaxEventSequenceAsync(token).ConfigureAwait(false);
+
+        // fisher#120 — the line whose absence was the issue. Everything it fills is already built:
+        // ProjectionGraph.Describe walks the registered projections and subscriptions, and Fisher's
+        // two source types of its own (CompositeIProjectionSource, FlatTableProjection) implement
+        // Describe. Nothing here is Fisher-specific, which is exactly why it was easy to leave out.
+        Options.Projections.Describe(usage, this);
+
+        return usage;
+    }
+
+    private static ProjectionErrorHandlingDescriptor ErrorPolicyFor(ErrorHandlingOptions options)
+        => new()
+        {
+            SkipApplyErrors = options.SkipApplyErrors,
+            SkipUnknownEvents = options.SkipUnknownEvents,
+            SkipSerializationErrors = options.SkipSerializationErrors
+        };
+
+    /// <summary>
+    ///     The highest sequence physically present in <c>fi_events</c>, or null when it cannot be read.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>On Fisher this is always equal to the high-water mark, and that is worth stating
+    ///         rather than leaving a consumer to infer it.</b> The gap between the two is what
+    ///         CritterWatch#150's second signal renders — a sequence issued but not yet safe to read —
+    ///         and on Marten and Polecat it is real, because a server-side sequence or IDENTITY hands
+    ///         out numbers outside the transaction. SQLite allows one writer per file and
+    ///         <c>BEGIN IMMEDIATE</c> commits a transaction's sequences before the next writer
+    ///         allocates any, so committed sequences are contiguous and the signal cannot fire here.
+    ///         Reporting the number anyway is what lets a console see that, where leaving it null
+    ///         renders as "n/a" and says nothing.
+    ///     </para>
+    ///     <para>
+    ///         A failure is swallowed rather than propagated: this is a diagnostics call, and the most
+    ///         likely reason the read fails is that the schema has not been created yet — which is
+    ///         precisely when a monitoring tool is most likely to be pointed at the store. Failing the
+    ///         whole description over one optional number would answer nothing at all.
+    ///     </para>
+    /// </remarks>
+    private async Task<long?> TryReadMaxEventSequenceAsync(CancellationToken token)
+    {
+        try
+        {
+            return await Database.FetchHighestEventSequenceNumber(token).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     /// <summary>
