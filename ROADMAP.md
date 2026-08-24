@@ -3,11 +3,49 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **one open issue, and it is blocked upstream** —
-[#109](https://github.com/JasperFx/fisher/issues/109), the downstream half of
-[jasperfx#684](https://github.com/JasperFx/jasperfx/issues/684), which is an epic rather than a
-next-release item. It is filed so the Fisher half is not rediscovered later rather than because it is
-actionable now.
+Status: **two open issues, neither of them next-release work.**
+[#109](https://github.com/JasperFx/fisher/issues/109) is the downstream half of
+[jasperfx#684](https://github.com/JasperFx/jasperfx/issues/684), an epic rather than a next-release
+item; it is filed so the Fisher half is not rediscovered later rather than because it is actionable
+now. [#122](https://github.com/JasperFx/fisher/issues/122) is a rebuild that clears the rows of a
+*second* projection publishing the same document type — by design given per-projection teardown, and
+Marten behaves identically, so what is wanted is a warning and a docs note rather than a change to
+what teardown means.
+
+**1.0.3** is two bugs found by one Marten→Fisher migration, both of which answered a question
+wrongly rather than failing.
+
+[#119](https://github.com/JasperFx/fisher/pull/119) is the sharper one: an inline projection read
+`IEvent.Timestamp` as `DateTimeOffset.MinValue`, so every read model recording it baked in a
+year-0001 date — and because replay reads the column while the envelope was only hydrated on read
+paths, **the same projection produced different documents inline and rebuilt**. Silent until somebody
+looked at a date. `AppendPlanner.ApplySessionMetadata` now stamps the timestamp from
+`EventGraph.TimeProvider` and `FisherQuickAppendEventsOperation` persists that value instead of the
+column default; both halves are needed, since stamping alone leaves the two views a clock apart. This
+is the cost CLAUDE.md already predicted for not being able to use `StreamAction.PrepareEvents` coming
+due, and it carries a trade now written down there: with inline projections registered the reading is
+taken outside the write lock, so `fi_events.timestamp` is no longer strictly monotonic with `seq_id`
+across streams. Same-stream ordering is untouched, Marten resolves it identically, and it cannot be
+had both ways. Reported and fixed by @kebin.
+
+[#120](https://github.com/JasperFx/fisher/issues/120) is `projections list` answering "No projections
+in this store." for a store with twenty of them, and `projections rebuild` matching none:
+`TryCreateUsage` never populated `usage.Subscriptions`, which is what both commands read. The fix is
+one line — `Options.Projections.Describe(usage, this)`, already implemented upstream and already
+satisfied by Fisher's own two projection source types — and that is the uncomfortable part rather
+than the reassuring one, because nothing about the omission was dialect-specific and so nothing
+prompted anybody to look. Every member of `EventStoreUsage` is a list or nullable starting empty, so
+an unfilled slot reads as *the store has none* rather than as "not described"; the whole descriptor
+was therefore audited alongside the reported member. `RegisteredEventTypes`, `TagTypes` /
+`DcbTagTypes`, both projection error policies, `EventMetadata` and `MaxEventSequence` are now
+populated too. That last one means something different here than on either sibling: the gap between
+it and the high-water mark is what CritterWatch#150's second signal renders, and on Fisher there can
+never be one, because one writer per file plus `BEGIN IMMEDIATE` makes committed sequences
+contiguous.
+
+Neither was catchable by the shared compliance suite, which asserts on `usage.Events` alone and has
+no coverage of envelope metadata inside an inline projection —
+[jasperfx#700](https://github.com/JasperFx/jasperfx/issues/700) is filed for the first half of that.
 
 **1.0.2** is Weasel **9.25.1**, and it exists because of what the 9.25.0 bump removed rather than
 what 9.25.1 adds. Fisher carried a `DocumentTable.ConfigureQueryCommand` override for
