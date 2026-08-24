@@ -128,6 +128,54 @@ public class event_envelope_metadata_in_projections : IAsyncLifetime
         entry.ShouldNotBeNull();
         entry.StreamId.ShouldBe(streamId);
     }
+
+    [Fact]
+    public async Task an_appended_event_carries_its_timestamp_into_an_inline_projection()
+    {
+        var before = DateTimeOffset.UtcNow.AddMinutes(-1);
+
+        await using (var session = _stringStore.LightweightSession())
+        {
+            session.Events.StartStream("TimestampedService", new EnvelopeRecorded("stamped"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var query = _stringStore.LightweightSession();
+
+        var entry = await query.LoadAsync<EnvelopeSnapshot>("stamped", TestContext.Current.CancellationToken);
+
+        entry.ShouldNotBeNull();
+
+        // The broken behaviour was not a wrong value but the *default* one: the envelope's
+        // Timestamp was only ever hydrated on read paths, so an inline projection folded
+        // events whose Timestamp was DateTimeOffset.MinValue and baked year-0001 dates
+        // into every read model that recorded e.Timestamp.
+        entry.Timestamp.ShouldBeGreaterThan(before);
+        entry.Timestamp.ShouldBeLessThan(DateTimeOffset.UtcNow.AddMinutes(1));
+    }
+
+    [Fact]
+    public async Task the_inline_timestamp_and_the_persisted_timestamp_agree()
+    {
+        await using (var session = _stringStore.LightweightSession())
+        {
+            session.Events.StartStream("AgreeingService", new EnvelopeRecorded("agreeing"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var query = _stringStore.LightweightSession();
+
+        var entry = await query.LoadAsync<EnvelopeSnapshot>("agreeing", TestContext.Current.CancellationToken);
+        var replayed = await query.Events.FetchStreamAsync("AgreeingService",
+            token: TestContext.Current.CancellationToken);
+
+        entry.ShouldNotBeNull();
+        replayed.Count.ShouldBe(1);
+
+        // What the inline projection saw must be what a rebuild will see, or the same
+        // projection produces different documents inline vs rebuilt.
+        replayed[0].Timestamp.ShouldBe(entry.Timestamp);
+    }
 }
 
 public record EnvelopeRecorded(string Name);
@@ -141,7 +189,8 @@ public partial class EnvelopeProjection : EventProjection
         StreamId = e.StreamId,
         StreamKey = e.StreamKey ?? string.Empty,
         TenantId = e.TenantId ?? string.Empty,
-        Version = e.Version
+        Version = e.Version,
+        Timestamp = e.Timestamp
     };
 }
 
@@ -152,4 +201,5 @@ public class EnvelopeSnapshot
     public string StreamKey { get; set; } = string.Empty;
     public string TenantId { get; set; } = string.Empty;
     public long Version { get; set; }
+    public DateTimeOffset Timestamp { get; set; }
 }
