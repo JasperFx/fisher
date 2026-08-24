@@ -153,7 +153,17 @@ internal sealed class FisherQuickAppendEventsOperation
             Bind(builder, @event.EventTypeName, StorageColumnType.String);
 
             builder.Append(", ");
-            builder.Append(SqliteTimestamp.NowExpression);
+            if (@event.Timestamp != default)
+            {
+                // The value AppendPlanner.ApplySessionMetadata stamped before inline projections
+                // ran. Persisting it (rather than the server-side now) is what keeps the inline
+                // and replay views of e.Timestamp identical.
+                Bind(builder, SqliteTimestamp.ToDatabaseValue(@event.Timestamp), StorageColumnType.String);
+            }
+            else
+            {
+                builder.Append(SqliteTimestamp.NowExpression);
+            }
 
             builder.Append(", ");
             Bind(builder, @event.TenantId ?? Stream.TenantId, StorageColumnType.String);

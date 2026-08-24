@@ -176,8 +176,24 @@ internal sealed class AppendPlanner
     /// </remarks>
     private void ApplySessionMetadata(StreamAction stream)
     {
+        // One reading per stream, not per event: the events of one append share a moment the
+        // same way they share a transaction. Guarded so a caller that stamped its own value
+        // (or a retry re-entering this method) is left alone — and mirrored by the append
+        // operation, which persists this value instead of the column default whenever it is
+        // set, so what an inline projection folded is what a rebuild will read back.
+        // Round-tripped through the storage format up front: the column keeps milliseconds,
+        // so stamping raw ticks here would leave the inline view sub-millisecond ahead of
+        // every later read of the same event.
+        var timestamp = Fisher.Storage.SqliteTimestamp.FromDatabaseValue(
+            Fisher.Storage.SqliteTimestamp.ToDatabaseValue(_graph.TimeProvider.GetUtcNow()));
+
         foreach (var @event in stream.Events)
         {
+            if (@event.Timestamp == default)
+            {
+                @event.Timestamp = timestamp;
+            }
+
             if (_session.CorrelationIdEnabled)
             {
                 @event.CorrelationId ??= _session.CorrelationId;
