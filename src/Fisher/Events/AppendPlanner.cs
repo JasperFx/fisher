@@ -184,8 +184,8 @@ internal sealed class AppendPlanner
         // Round-tripped through the storage format up front: the column keeps milliseconds,
         // so stamping raw ticks here would leave the inline view sub-millisecond ahead of
         // every later read of the same event.
-        var timestamp = Fisher.Storage.SqliteTimestamp.FromDatabaseValue(
-            Fisher.Storage.SqliteTimestamp.ToDatabaseValue(_graph.TimeProvider.GetUtcNow()));
+        var timestamp = SqliteTimestamp.FromDatabaseValue(
+            SqliteTimestamp.ToDatabaseValue(_graph.TimeProvider.GetUtcNow()));
 
         foreach (var @event in stream.Events)
         {

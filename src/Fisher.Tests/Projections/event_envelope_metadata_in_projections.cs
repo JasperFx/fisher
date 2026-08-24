@@ -180,7 +180,6 @@ public class event_envelope_metadata_in_projections : IAsyncLifetime
 
 public record EnvelopeRecorded(string Name);
 
-
 // partial, because JasperFx's source generator emits the conventional-method dispatcher into it.
 public partial class EnvelopeProjection : EventProjection
 {

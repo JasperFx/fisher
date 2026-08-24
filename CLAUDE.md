@@ -3409,6 +3409,47 @@ the same method compare that value against itself and pass unconditionally. Keep
 assignment and metadata application apart is what keeps the guard real; the cost is that a new
 metadata field in JasperFx will not reach Fisher's events until this method learns about it.
 
+#### `Timestamp`, and that cost coming due — fisher#119
+
+**The cost named above is not hypothetical, and `Timestamp` is the field it came due on.**
+`PrepareEvents` stamps it (as `EventSlice` does for a projection's raised events) and
+`ApplySessionMetadata` did not — so an event reached an inline projection carrying
+`DateTimeOffset.MinValue`, and every read model recording `e.Timestamp` baked in a year-0001 date.
+Worse than merely wrong: **the same projection produced different documents inline and rebuilt**,
+because replay reads the column, so the divergence was invisible until somebody looked at a date.
+
+- **One reading per stream, not per event** — the events of one append share a moment the way they
+  share a transaction — and **round-tripped through `SqliteTimestamp` before it is assigned**. The
+  column keeps milliseconds, so stamping raw ticks would leave the inline view sub-millisecond ahead
+  of every later read of the same event: the same divergence, one digit further down.
+- **`FisherQuickAppendEventsOperation` persists the stamped value instead of `NowExpression`**
+  whenever it is set. That is the half that makes the two views agree; stamping alone would have
+  fixed the year-0001 symptom and left inline and replay a clock apart.
+- **Guarded on `== default`**, so a caller's own value survives — and so does the first attempt's
+  when the resilience pipeline re-executes the write delegate. A retried commit therefore persists
+  the moment the append was made rather than the moment it finally won the write lock, which is
+  exactly what the inline projection already folded on attempt one.
+- **Raised events are stamped by JasperFx before they ever reach here**, so the guard leaves them
+  alone and the operation now persists their value too. They previously took the column default; the
+  two paths are consistent for free.
+
+**The trade, which is real and is not closable.** With inline projections registered the reading is
+taken in `AssignVersionsAheadOfProjectionsAsync` — *outside* the write lock, because running before
+it is that pass's whole purpose — so `fi_events.timestamp` is no longer strictly monotonic with
+`seq_id`. Two writers on different streams can stamp in one order and commit in the other, skewed by
+at most the write-lock wait. **Same-stream ordering is untouched**: the loser of a concurrent append
+to one stream fails the optimistic guard rather than interleaving, so `FetchStreamAsync`'s timestamp
+bound and the rewrite operations' assumption both still hold where they are actually read. The one
+consumer reading that order *across* streams is `FindEventStoreFloorAtTimeAsync`, whose
+`max(seq_id) where timestamp <= ?` can floor a rebuild-from-timestamp one skew window off.
+
+It cannot be had both ways — an inline projection cannot see the final timestamp before the write
+lock is taken *and* have it assigned under that lock. Marten resolves it identically, and
+`EventAppendMode.Quick`'s own doc comment says timestamps come from `TimeProvider`, so this is the
+family's behaviour rather than a Fisher concession, and ported projection code now behaves the same
+here as it does there. **Without inline projections nothing moves at all**: the stamp is taken in
+`PlanAsync`, which runs inside the write transaction.
+
 #### Closed upstream gap — jasperfx#663
 
 Historical, and the second completed cycle of the "workaround, filed upstream, removed when the fix
