@@ -26,8 +26,8 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > database-per-tenant, with tenants that appear at runtime), `AddFisher(...)` DI registration, and the
 > `Fisher.AspNetCore` and `Fisher.EntityFrameworkCore` companion packages all work and are tested.
 >
-> Fisher passes **all 37 suites and 319 tests** of `JasperFx.Events.ComplianceTests`, the shared
-> cross-store suite Marten and Polecat also enroll in, alongside its own 1,331.
+> Fisher passes **all 37 suites and 320 tests** of `JasperFx.Events.ComplianceTests`, the shared
+> cross-store suite Marten and Polecat also enroll in, alongside its own 1,332.
 >
 > 1.0 means the API is stable and the semantics above are settled — not that Fisher is
 > feature-complete against Marten. The gaps that remain are **decisions**, documented in
