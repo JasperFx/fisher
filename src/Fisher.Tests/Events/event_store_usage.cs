@@ -20,9 +20,25 @@ namespace Fisher.Tests.Events;
 ///         nothing under <c>projections rebuild</c>.
 ///     </para>
 ///     <para>
-///         The shared <c>EventStoreExplorerCompliance</c> checks exactly one of these lists
-///         (<c>usage.Events</c>) and is explicit that a null usage is allowed, so it cannot catch this
-///         class of gap for any store. Until it grows a sibling, these are Fisher's own.
+///         The shared <c>EventStoreExplorerCompliance</c> now checks two of these lists —
+///         <c>usage.Events</c>, and <c>usage.Subscriptions</c> since jasperfx#700 closed the slot
+///         fisher#120 reported — and is explicit that a null usage is allowed. Every other slot is
+///         still unguarded for every store, so these remain Fisher's own.
+///     </para>
+///     <para>
+///         <b>Seven of them are in the wrong repository and there is an issue to move them</b>
+///         (jasperfx#712). Nothing about the event-type collections, the two error policies, the async
+///         shard names, the descriptor's names or the opt-in metadata flags is dialect-specific, and
+///         six of the seven need no new seam member — so they are guarding a shared contract from one
+///         store's test project. Whatever is promoted gets deleted here rather than duplicated.
+///     </para>
+///     <para>
+///         <b>Two stay whatever happens</b>, and they are the reason this reads as an audit rather
+///         than a backlog. <c>the_max_event_sequence_is_the_high_water_mark</c> asserts equality,
+///         which is true because one writer per file plus <c>BEGIN IMMEDIATE</c> makes committed
+///         sequences contiguous — a claim about SQLite, not about the contract.
+///         <c>every_stream_facet_is_reported_as_captured</c> is a claim about <c>fi_streams</c>'
+///         shape; it may well hold for the siblings too, but that is theirs to confirm.
 ///     </para>
 /// </remarks>
 public class event_store_usage : IAsyncLifetime
