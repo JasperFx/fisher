@@ -179,12 +179,29 @@ Filter by a tag the test's own store sets.
 
 ## Testing against Fisher, deploying on Marten or Polecat
 
-The API is shared, so this is a common and reasonable setup — an integration suite that needs no server
-at all, against production code that runs on PostgreSQL or SQL Server.
+The API is shared, so an integration suite that needs no server at all is an appealing idea. It is
+also a **narrow** one, and worth scoping deliberately.
 
-::: warning
-What does **not** carry across is the behaviour this documentation calls out as SQLite-specific: the
+::: danger
+**Fisher is not a test double for Marten or Polecat.** The
+[migration guide](/migration-guide#behaviour-that-differs) lists the behaviours that compile and then
+differ, which is precisely the failure mode of a stand-in: the suite compiles, goes green, and
+production behaves another way.
+
+Several of them are what integration tests are for. The
 [exclusive append methods fail rather than wait](/events/appending#the-exclusive-methods-fail-where-the-siblings-wait),
-[string comparisons are ordinal](/documents/querying/linq/strings), sub-millisecond timestamp equality
-is normalised away, and there is one writer per file. Test those against the store you deploy on.
+so a suite here exercises the failing path and production the waiting one.
+[Numeric revisions](/documents/concurrency#numeric-revisions) follow Marten's strictly-greater guard
+rather than Polecat's equality one. `QueryForNonStaleData` waits for the whole store, which is
+*stricter* — so a real staleness race in the deployed store can stay hidden.
+[String comparisons are ordinal](/documents/querying/linq/strings) and inner-side join predicates are
+applied, both of which change which rows come back. And there is one writer per file.
 :::
+
+Scoped honestly, a suite on Fisher for an application deployed elsewhere covers **wiring,
+registration, projection shape**, and that handlers and endpoints hold together. It does **not** cover
+concurrency, ordering, collation, or staleness — and the hard part is that knowing which of your tests
+are sensitive to those is not obvious in advance.
+
+None of this applies when you deploy on Fisher, which is what it is built for: edge, embedded,
+desktop, single-node. Then the suite and production are the same store.
