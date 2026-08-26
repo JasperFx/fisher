@@ -3290,13 +3290,24 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher is enrolled, in full — all 36 suites, 309 tests, as of 2.51.0.**
+**Fisher is enrolled, in full — all 37 suites, 320 tests, as of 2.56.0.**
 `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
 gate is gone. The most recently enrolled are `BinaryEventSerializationCompliance` (6, the event half's
 twenty-ninth) and `DocumentSessionEventsCompliance` (5) from 2.50.0, and 2.51.0's two:
 `PendingStreamActionsCompliance` (9, fisher#96) and `AggregateWriteCacheCompliance` (14, fisher#97).
 All four are **opt-in** — their contract members carry throwing defaults, so enrolling is a deliberate
 line rather than something a bump does to you.
+
+**2.52.0 added the 37th suite and 2.56.0 the 320th test, and nothing between them moved.**
+`DocumentCommitListenerCompliance` (10) is the document half's seventh; 2.52.1, 2.53.0, 2.54.0 and
+2.55.0 changed no suite file at all. 2.56.0 added one test —
+`EventStoreExplorerCompliance.usage_describes_the_registered_projections`, jasperfx#700 — which is
+**fisher#120's regression guard, and shared rather than Fisher-local on purpose**: `TryCreateUsage`
+had one shared test asserting on `usage.Events` alone, so a store could fill that slot, leave the
+rest of `EventStoreUsage` empty and still pass the suite. Nothing about the omission was
+dialect-specific, so no store-level decision existed to prompt anybody to look. Fisher passed it
+unchanged on the bump — see "What `TryCreateUsage` puts on the wire" for the one-line fix it holds
+in place.
 
 2.51.0's third change is fisher#98 and is fixture-side: `DocumentComplianceConfig.StreamIdentity`
 (jasperfx#672) replaced an inference `FisherDocumentComplianceFixture` was making — string identity

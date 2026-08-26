@@ -9,7 +9,7 @@ namespace Fisher.Tests.Compliance;
  * these tests cannot drift between the products.
  *
  * Suites were added one at a time as Fisher grew into them. All thirty-seven that ship in
- * JasperFx.Events.ComplianceTests 2.53.0 are enrolled; there is no suite Fisher declines.
+ * JasperFx.Events.ComplianceTests 2.56.0 are enrolled; there is no suite Fisher declines.
  *
  * Nothing in the fixture throws any more, but the discipline stands for the next seam member that
  * arrives ahead of the feature: a member Fisher cannot honour throws a NotSupportedException naming
