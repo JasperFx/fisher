@@ -455,6 +455,15 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 `JasperFx.Events.ComplianceTests` 2.56.0 ships **37 suites, 320 tests**. Fisher passes **all 320, all
 37 suites**. Every suite compiles; every one is also subclassed and running.
 
+**What that does and does not claim, because the difference is load-bearing** (fisher#124). The suite
+pins **API portability, not behavioural equivalence**: code written against one store compiles and
+runs against another. It does not pin that the three *behave* the same, and the migration guide's
+"Behaviour that differs" list is exactly what it does not pin — the exclusive methods failing rather
+than waiting, Marten's strictly-greater revision guard rather than Polecat's equality one, a stricter
+`QueryForNonStaleData`, ordinal string comparison, applied inner-side join predicates. Read as
+equivalence, "passes all 37 suites" invites using Fisher as a test double for a Marten or Polecat
+application, which the divergence list argues against.
+
 **The bump crossed three releases and the whole compliance delta is one test.** 2.54.0 and 2.55.0
 changed no suite file; 2.56.0 added `usage_describes_the_registered_projections` to
 `EventStoreExplorerCompliance`, taking it from 6 to 7 and the event half from 250 to 251. No suite

@@ -29,6 +29,13 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > Fisher passes **all 37 suites and 320 tests** of `JasperFx.Events.ComplianceTests`, the shared
 > cross-store suite Marten and Polecat also enroll in, alongside its own 1,343.
 >
+> That suite pins **API portability, not behavioural equivalence** — code written against one store
+> compiles and runs against another. It does not pin that the three behave identically, and they do
+> not: concurrency under contention, string collation, timestamp precision and staleness semantics all
+> differ. The [migration guide](https://fisher.jasperfx.net/migration-guide#behaviour-that-differs)
+> lists them, which is also why Fisher is not a drop-in test double for a Marten or Polecat
+> application.
+>
 > 1.0 means the API is stable and the semantics above are settled — not that Fisher is
 > feature-complete against Marten. The gaps that remain are **decisions**, documented in
 > [HANDOFF.md](HANDOFF.md) rather than filed as issues.

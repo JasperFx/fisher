@@ -148,6 +148,28 @@ Worth revisiting when you port, because the workaround you carried may no longer
 
 ## Testing against Fisher, deploying elsewhere
 
-A common and reasonable setup — an integration suite with no server at all, against production code
-that runs on PostgreSQL or SQL Server. Just test the SQLite-specific behaviours above against the store
-you actually deploy on. See [Integration Testing](/testing/integration).
+An integration suite with no server at all is an appealing idea, and it is a **narrow** one. Read the
+scope before adopting it.
+
+::: danger
+**Fisher is not a test double for Marten or Polecat.** The section above is a list of behaviours that
+compile and then differ — which is the exact failure mode of a stand-in: the suite compiles, goes
+green, and production behaves another way.
+
+Several of those divergences fall squarely in the territory integration tests exist to cover.
+Concurrency under contention differs (the exclusive methods fail where the siblings wait), the
+numeric-revision guard differs from Polecat's, `QueryForNonStaleData` is stricter here — so a real
+staleness race in the deployed store can stay hidden — and both ordinal string comparison and
+inner-side join predicates change which rows come back.
+:::
+
+What a suite on Fisher **can** honestly cover for an application deployed elsewhere: wiring,
+registration, projection shape, and that your handlers and endpoints hold together. What it **cannot**
+cover: concurrency, ordering, collation, and staleness semantics. Those have to be tested against the
+store you deploy on, and the hard part is that knowing in advance which of your tests are sensitive to
+them is not obvious.
+
+Fisher's own positioning is **SQLite in production** — edge, embedded, desktop, single-node. That is
+where it is a first-class answer rather than a compromise.
+
+See [Integration Testing](/testing/integration).
