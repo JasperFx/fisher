@@ -3,14 +3,53 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **two open issues, neither of them next-release work.**
+Status: **one open issue, and it is not next-release work.**
 [#109](https://github.com/JasperFx/fisher/issues/109) is the downstream half of
 [jasperfx#684](https://github.com/JasperFx/jasperfx/issues/684), an epic rather than a next-release
 item; it is filed so the Fisher half is not rediscovered later rather than because it is actionable
-now. [#122](https://github.com/JasperFx/fisher/issues/122) is a rebuild that clears the rows of a
-*second* projection publishing the same document type — by design given per-projection teardown, and
-Marten behaves identically, so what is wanted is a warning and a docs note rather than a change to
-what teardown means.
+now. One upstream issue is outstanding and is Fisher's to write:
+[jasperfx#712](https://github.com/JasperFx/jasperfx/issues/712), promoting seven of
+`event_store_usage.cs`'s nine tests into the shared suite.
+
+**1.0.4** is the JasperFx **2.56.0** / Weasel **9.27.0** bump plus the three issues that Marten→Fisher
+migration left open. No new public API; nothing in it changes what any existing call does.
+
+The bump crosses three JasperFx releases and **the entire compliance delta is one test**, which is the
+one worth having: [jasperfx#700](https://github.com/JasperFx/jasperfx/issues/700) adds
+`usage_describes_the_registered_projections` to `EventStoreExplorerCompliance`, so 1.0.3's #120 fix is
+now held by a cross-store guard rather than by Fisher's own tests. Fisher passed it unchanged. No seam
+member was needed — `ComplianceStoreConfig` and `IComplianceStoreRegistrar` are byte-identical across
+2.54.0, 2.55.0 and 2.56.0, and the core's public surface moved only in `EventModeling`, which Fisher
+references nowhere. Weasel moves in lockstep as its pin comment requires.
+
+[#122](https://github.com/JasperFx/fisher/issues/122) is the shared-published-type teardown hazard
+#120 turned up: teardown clears *the whole of* every table a projection publishes into, so two
+projections publishing one document type share a `fi_doc_*` table and rebuilding either wipes both.
+Marten behaves identically and the semantics are unchanged — what is added is that the store now says
+so, at rebuild time, naming the table and the other projections. **Writing the test corrected the
+remedy.** The issue and its reporter both assumed "rebuild them together" was the answer; there is no
+such operation, since every `RebuildProjectionAsync` overload names one projection, so "together" is
+one after the other and the second teardown discards what the first rebuild wrote. `RewindSubscriptionAsync`
+is what actually works, because it replays onto the rows that are there instead of clearing first, and
+that is where the warning and the docs now point.
+
+[#126](https://github.com/JasperFx/fisher/issues/126) is regression guards for two Marten patching
+bugs ([marten#5290](https://github.com/JasperFx/marten/issues/5290),
+[marten#5295](https://github.com/JasperFx/marten/issues/5295)), **neither of which exists here** —
+`PatchExpression.PathOf` resolves through the same member machinery the LINQ provider uses, and a
+duplicated field is a `VIRTUAL` generated column that cannot drift from `data`. Half the request was
+already covered; what was genuinely missing is `[JsonPropertyName]`. The experiment is the reason the
+file earns its place: replacing `PathOf` with marten#5290 exactly — the CLR name under a camelCase
+transform — leaves **all 23 existing patching tests passing** and fails three of the new ones.
+
+[#124](https://github.com/JasperFx/fisher/issues/124) removes an endorsement the rest of the
+documentation argued against: **Fisher is not a test double for Marten or Polecat.** The divergence
+list two sections above it is headed "the ones that compile and then behave differently", which is
+precisely a stand-in's failure mode, and several of those divergences — the exclusive methods, the
+revision guard, `QueryForNonStaleData`, ordinal string comparison, inner-side join predicates — are
+what integration tests exist to cover. Both pages said it, not just the one the issue named. The
+compliance claim in README and HANDOFF now says what it means: the shared suite pins **API
+portability, not behavioural equivalence.**
 
 **1.0.3** is two bugs found by one Marten→Fisher migration, both of which answered a question
 wrongly rather than failing.
@@ -43,9 +82,10 @@ it and the high-water mark is what CritterWatch#150's second signal renders, and
 never be one, because one writer per file plus `BEGIN IMMEDIATE` makes committed sequences
 contiguous.
 
-Neither was catchable by the shared compliance suite, which asserts on `usage.Events` alone and has
-no coverage of envelope metadata inside an inline projection —
-[jasperfx#700](https://github.com/JasperFx/jasperfx/issues/700) is filed for the first half of that.
+Neither was catchable by the shared compliance suite, which asserted on `usage.Events` alone and has
+no coverage of envelope metadata inside an inline projection.
+[jasperfx#700](https://github.com/JasperFx/jasperfx/issues/700) closed the first half of that and
+shipped in 2.56.0, which 1.0.4 takes.
 
 **1.0.2** is Weasel **9.25.1**, and it exists because of what the 9.25.0 bump removed rather than
 what 9.25.1 adds. Fisher carried a `DocumentTable.ConfigureQueryCommand` override for
