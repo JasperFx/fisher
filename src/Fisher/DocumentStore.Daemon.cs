@@ -209,6 +209,10 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         var tables = PublishedTableNamesFor(subscriptionName);
         var target = DatabaseFrom(database);
 
+        // Outside the resilience pipeline below, so a retried SQLITE_BUSY does not warn twice about
+        // one rebuild -- the same reason every other once-per-unit-of-work step sits outside it.
+        WarnAboutTablesSharedWithAnotherProjection(subscriptionName, tables);
+
         await Options.ResiliencePipeline.ExecuteAsync(async ct =>
         {
             await using var connection = await target.OpenConnectionAsync(ct).ConfigureAwait(false);
@@ -246,6 +250,98 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     }
 
     /// <summary>
+    ///     Warn when a rebuild is about to clear a table another registered projection also writes to
+    ///     (fisher#122).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Teardown deletes <em>the whole of</em> every table the named projection publishes into,
+    ///         and then the rebuild replays only that projection. So when two projections publish the
+    ///         same document type they share one <c>fi_doc_*</c> table, and rebuilding either wipes
+    ///         both — the rebuilt one is correct and the other's rows are simply gone until it too is
+    ///         rebuilt. Nothing errors, the rebuild reports success, and the damage is to a read model
+    ///         nobody is looking at.
+    ///     </para>
+    ///     <para>
+    ///         <b>This is a warning and not a refusal, deliberately.</b> Sharing a published type is
+    ///         legal and sometimes intended — it is only rebuilding that costs anything, and a store
+    ///         that never rebuilds runs this configuration perfectly well. Refusing would break it;
+    ///         saying nothing is what cost the reporter a debugging session.
+    ///     </para>
+    ///     <para>
+    ///         <b>The message sends the operator to a rewind, not to a second rebuild, and that
+    ///         correction came out of writing the test.</b> fisher#122 and its reporter both assumed
+    ///         "rebuild them together" was the remedy. There is no such operation — every
+    ///         <c>RebuildProjectionAsync</c> overload names one projection — so "together" means one
+    ///         after the other, and the second teardown clears the shared table again and discards what
+    ///         the first rebuild wrote. Only the projection rebuilt last keeps its rows.
+    ///         <c>RewindSubscriptionAsync</c> is what actually works, because it replays onto the rows
+    ///         that are there instead of clearing first.
+    ///         <c>shared_published_table_rebuild.rebuilding_each_in_turn_still_leaves_one_of_them_empty</c>
+    ///         pins the wrong advice as wrong.
+    ///     </para>
+    ///     <para>
+    ///         <b>And it is at rebuild time rather than at registration.</b> A registration-time warning
+    ///         fires on every boot about something that only matters when somebody rebuilds. Here the
+    ///         operator is present, the information is actionable, and the other projections can be
+    ///         named.
+    ///     </para>
+    ///     <para>
+    ///         <b>Marten behaves identically</b>, so this is not a Fisher divergence and the semantics
+    ///         are unchanged. What is added is that the store now says so.
+    ///     </para>
+    /// </remarks>
+    private void WarnAboutTablesSharedWithAnotherProjection(string subscriptionName, IReadOnlyList<string> tables)
+    {
+        if (tables.Count == 0)
+        {
+            return;
+        }
+
+        var mine = new HashSet<string>(tables, StringComparer.OrdinalIgnoreCase);
+
+        // Grouped by table rather than by projection, because the table is the thing being cleared and
+        // one projection may share more than one of them.
+        var shared = new SortedDictionary<string, SortedSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var other in Options.Projections.All)
+        {
+            if (other.Name == subscriptionName)
+            {
+                continue;
+            }
+
+            foreach (var table in PublishedTableNamesFor(other).Where(mine.Contains))
+            {
+                if (!shared.TryGetValue(table, out var names))
+                {
+                    shared[table] = names = new SortedSet<string>(StringComparer.Ordinal);
+                }
+
+                names.Add(other.Name);
+            }
+        }
+
+        if (shared.Count == 0)
+        {
+            return;
+        }
+
+        var detail = string.Join("; ",
+            shared.Select(pair => $"{pair.Key} is also published by {string.Join(", ", pair.Value)}"));
+
+        _daemonLogger.LogWarning(
+            "Rebuilding projection {Projection} will clear {TableCount} table(s) that another registered "
+            + "projection also publishes into: {Detail}. Teardown deletes the whole table and the rebuild "
+            + "replays only {Projection}, so the other projection(s) will be left with no rows. Rebuilding "
+            + "them afterwards does NOT fix it -- each rebuild clears the shared table again, so only the "
+            + "one rebuilt last keeps its rows. Rewind them instead: "
+            + "daemon.RewindSubscriptionAsync(name, token, sequenceFloor: 0) replays a projection onto the "
+            + "rows that are there rather than clearing first.",
+            subscriptionName, shared.Count, detail, subscriptionName);
+    }
+
+    /// <summary>
     ///     The unquoted tables a projection publishes into.
     /// </summary>
     /// <remarks>
@@ -255,12 +351,13 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     ///     the rows the previous run left behind.
     /// </remarks>
     private IReadOnlyList<string> PublishedTableNamesFor(string subscriptionName)
-    {
-        if (!Options.Projections.TryFindProjection(subscriptionName, out var source))
-        {
-            return [];
-        }
+        => Options.Projections.TryFindProjection(subscriptionName, out var source)
+            ? PublishedTableNamesFor(source!)
+            : [];
 
+    private IReadOnlyList<string> PublishedTableNamesFor(
+        IProjectionSource<IDocumentSession, IQuerySession> source)
+    {
         var tables = source.PublishedTypes()
             .Where(Options.Schema.HasMappingFor)
             .Select(x => Options.Schema.MappingFor(x).TableName.Name)
@@ -412,8 +509,31 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         return daemons;
     }
 
+    /// <summary>
+    ///     The logger the most recently built daemon was given, so a rebuild has somewhere to warn.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Stashed rather than passed, because the seam has no parameter for it.</b>
+    ///         <c>TeardownExistingProjectionStateAsync</c> is on <see cref="IEventStore{T,TQ}" />, which
+    ///         is JasperFx's interface and takes an <see cref="IEventDatabase" /> and a name. A rebuild
+    ///         only ever reaches teardown through a daemon, and a daemon is only ever built through
+    ///         <see cref="BuildDaemonForAsync" />, so this is set on every path that can reach the
+    ///         warning.
+    ///     </para>
+    ///     <para>
+    ///         Under database-per-tenant several daemons are built and the last logger wins. That is
+    ///         harmless here: <c>AddAsyncDaemon</c> hands every one of them the same logger, and a
+    ///         consumer building daemons by hand with different ones still gets the warning — on one of
+    ///         its own loggers rather than on none.
+    ///     </para>
+    /// </remarks>
+    private volatile ILogger _daemonLogger = NullLogger.Instance;
+
     private async ValueTask<IProjectionDaemon> BuildDaemonForAsync(FisherDatabase database, ILogger logger)
     {
+        _daemonLogger = logger;
+
         // Per database, because the journal mode is a property of the file. A store with one tenant
         // configured without WAL is exactly the case the warning exists for, and warning once for the
         // store would miss it.

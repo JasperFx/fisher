@@ -27,7 +27,7 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > `Fisher.AspNetCore` and `Fisher.EntityFrameworkCore` companion packages all work and are tested.
 >
 > Fisher passes **all 37 suites and 320 tests** of `JasperFx.Events.ComplianceTests`, the shared
-> cross-store suite Marten and Polecat also enroll in, alongside its own 1,338.
+> cross-store suite Marten and Polecat also enroll in, alongside its own 1,343.
 >
 > 1.0 means the API is stable and the semantics above are settled — not that Fisher is
 > feature-complete against Marten. The gaps that remain are **decisions**, documented in

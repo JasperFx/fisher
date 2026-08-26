@@ -143,6 +143,38 @@ Test a rebuild with a row the replay **cannot** recreate. A replay rewrites ever
 produce, so a broken teardown is invisible against live data.
 :::
 
+### Two projections publishing one document type
+
+Teardown clears **the whole of** every table the named projection publishes into. Two projections
+that publish the same document type share one `fi_doc_*` table, so rebuilding either one deletes
+**both** projections' rows — and the rebuild then replays only the projection it was asked for. The
+rebuild succeeds, the rebuilt projection is correct, and the other read model is left empty.
+
+Marten behaves the same way. Fisher warns about it at rebuild time, naming the table and the other
+projections that write into it:
+
+```
+warn: Rebuilding projection LandedTally will clear 1 table(s) that another registered projection
+      also publishes into: fi_doc_tally is also published by ReleasedTally. ...
+```
+
+::: danger
+**Rebuilding the other projection afterwards does not fix it.** There is no operation that rebuilds
+two projections together — every `RebuildProjectionAsync` overload names one — so a second rebuild
+clears the shared table *again* and discards what the first one wrote. Only the projection rebuilt
+last keeps its rows.
+
+Rewind instead. `RewindSubscriptionAsync` replays a projection onto the rows that are already there
+rather than clearing first:
+
+```cs
+await daemon.RewindSubscriptionAsync("ReleasedTally", token, sequenceFloor: 0);
+```
+:::
+
+Sharing a published type between two projections is legal and costs nothing until somebody rebuilds,
+so Fisher warns rather than refusing.
+
 ## Catching up and waiting
 
 ```cs
