@@ -105,8 +105,10 @@ var order = await session.LoadAsync<Order>(id);
 ```cs
 opts.Projections.Snapshot<Order>(SnapshotLifecycle.Inline);   // same transaction
 opts.Projections.Snapshot<Order>(SnapshotLifecycle.Async);    // background daemon
-opts.Projections.Snapshot<Order>(SnapshotLifecycle.Live);     // no storage at all
 ```
+
+Those are the only two values. For no storage at all, register nothing and fold the stream on demand
+as in step 5 — see [Live Aggregations](/events/projections/live-aggregates).
 
 With `Async`, host the daemon:
 
