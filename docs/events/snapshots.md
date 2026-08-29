@@ -5,14 +5,16 @@ A snapshot is an aggregate stored as a document and kept current from its stream
 ```cs
 opts.Projections.Snapshot<Order>(SnapshotLifecycle.Inline);
 opts.Projections.Snapshot<Order>(SnapshotLifecycle.Async);
-opts.Projections.Snapshot<Order>(SnapshotLifecycle.Live);
 ```
+
+`SnapshotLifecycle` carries those two values and no more. Storing nothing is the third option, and it
+needs no registration at all — see [Live Aggregations](/events/projections/live-aggregates).
 
 | Lifecycle | When it is updated | Read with |
 | :--- | :--- | :--- |
 | `Inline` | The same transaction as the append | `LoadAsync<Order>(id)` |
 | `Async` | A background daemon, shortly after | `LoadAsync<Order>(id)` |
-| `Live` | Never stored — folded on demand | `AggregateStreamAsync<Order>(id)` |
+| *no registration* | Never stored — folded on demand | [Live aggregation](/events/projections/live-aggregates) |
 
 ## What `Snapshot<T>` does
 
@@ -75,11 +77,14 @@ See [the async daemon](/events/projections/async-daemon).
 
 ## Live
 
-Nothing is stored and no table is created. Every read folds the stream:
+Not a `SnapshotLifecycle` value: there is nothing to register. Without a `Snapshot<T>` call nothing is
+stored, no table is created, and every read folds the stream:
 
 ```cs
 var order = await session.Events.AggregateStreamAsync<Order>(orderId);
 ```
+
+See [Live Aggregations](/events/projections/live-aggregates).
 
 ## FetchForWriting reads whichever exists
 
