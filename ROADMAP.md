@@ -7,9 +7,49 @@ Status: **one open issue, and it is not next-release work.**
 [#109](https://github.com/JasperFx/fisher/issues/109) is the downstream half of
 [jasperfx#684](https://github.com/JasperFx/jasperfx/issues/684), an epic rather than a next-release
 item; it is filed so the Fisher half is not rediscovered later rather than because it is actionable
-now. One upstream issue is outstanding and is Fisher's to write:
+now. Three upstream issues are outstanding and are Fisher's to write:
 [jasperfx#712](https://github.com/JasperFx/jasperfx/issues/712), promoting seven of
-`event_store_usage.cs`'s nine tests into the shared suite.
+`event_store_usage.cs`'s nine tests into the shared suite;
+[jasperfx#718](https://github.com/JasperFx/jasperfx/issues/718), an identity-less boundary aggregate
+in the DCB suite; and [polecat#521](https://github.com/JasperFx/polecat/issues/521), which is a
+sibling's bug rather than Fisher's but was found here.
+
+**1.0.5** is one behaviour fix, its coverage, and a documentation correction. No new public API, and
+nothing in it changes what an existing call does.
+
+[#135](https://github.com/JasperFx/fisher/issues/135) is `[BoundaryAggregate]`: a DCB aggregate
+reached only through a tag boundary is keyed to no stream, and Fisher required a `Guid Id` from it
+anyway — telling its author to add a member the model has no use for, in a message about single
+stream aggregates that was accurate for a different aggregate. `AggregateIdentity.ResolveIdType` now
+treats JasperFx's marker as an explicit opt-out and answers `string`, the vestigial `TId` the source
+generator already keys such a type's evolver on. The marker stays the whole exemption; an unmarked
+identity-less aggregate is still refused, and the refusal now names the boundary case.
+
+**The issue's premise about the sibling did not survive checking, and the correction is the useful
+part.** #135 filed this as a Fisher-only divergence because Polecat's DCB page documents the marker
+as the cross-stack answer. Polecat's *source* never mentions it: an identity-less boundary aggregate
+throws there too, out of `DocumentMapping`'s constructor. Reproduced against Polecat 5.20.0 rather
+than inferred, and filed as [polecat#521](https://github.com/JasperFx/polecat/issues/521). So Fisher
+is the **first** store to honour it, and what closed is a gap against the attribute's documented
+contract rather than against a sibling's behaviour.
+
+**Why it went unnoticed in both stores, which is the part worth keeping.** `FetchForWritingByTags`
+folds an aggregate only when the query *finds events*, so a boundary over an empty result — the
+ordinary "this must not exist yet" assertion — succeeded regardless. A suite exercising only that
+path is green over a model that throws on first real use, and the shared suite exercises nothing
+else here, every DCB aggregate in it happening to carry an identity
+([jasperfx#718](https://github.com/JasperFx/jasperfx/issues/718)). Fisher's own coverage folds with
+events present, and was verified by reverting the fix: five of seven tests fail, and the two that
+survive are exactly the empty boundary and the refusal.
+
+[#133](https://github.com/JasperFx/fisher/issues/133) is the coverage that found #135 rather than a
+fix — concurrent appends guarded by one DCB boundary must serialize to a single winner, ported from
+[marten#5300](https://github.com/JasperFx/marten/issues/5300) and
+[marten#4591](https://github.com/JasperFx/marten/issues/4591), which caught real bugs in both
+siblings. **Fisher passes all three from the outset**, and the fixture exists to keep it that way:
+the check runs inside `BEGIN IMMEDIATE` and SQLite admits one writer per file, so the check-then-act
+is genuinely serial rather than merely looking it. Both properties the argument rests on are what a
+later change could quietly remove.
 
 **1.0.4** is the JasperFx **2.56.0** / Weasel **9.27.0** bump plus the three issues that Marten→Fisher
 migration left open. No new public API; nothing in it changes what any existing call does.
