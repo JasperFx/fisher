@@ -67,6 +67,60 @@ A boundary over an **empty result still enforces consistency**: the last-seen se
 later matching event exceeds it.
 :::
 
+## Identity-less boundary aggregates
+
+An aggregate reached only through a tag boundary is keyed to no stream, so requiring it to carry a
+`Guid Id` would be asking for a member the model has no use for. Mark it `[BoundaryAggregate]` (from
+`JasperFx.Events.Aggregation`) and leave the identity off:
+
+<!-- snippet: sample_dcb_boundary_aggregate -->
+<a id='snippet-sample_dcb_boundary_aggregate'></a>
+```cs
+[BoundaryAggregate]
+public partial class ShowSeating
+{
+    public HashSet<string> Reserved { get; } = [];
+
+    public void Apply(SeatReserved e) => Reserved.Add(e.Seat);
+
+    public void Apply(SeatReleased e) => Reserved.Remove(e.Seat);
+}
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/dcb_samples.cs#L17-L27' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_dcb_boundary_aggregate' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+Keep the type `partial`: the marker is what makes JasperFx's source generator emit a dispatcher for
+it, and the generator attaches that to the type. The attribute must sit on the aggregate **in its own
+defining assembly** — that is the compilation the evolver is emitted into, and the assembly the
+runtime scans when resolving it.
+
+::: warning
+The marker is the whole opt-in, and an identity-less aggregate **without** it is still refused. A bare
+no-`Id` aggregate is far more often a forgotten identity than a deliberate boundary aggregate, so the
+generator emits nothing for one and Fisher declines to resolve it — deliberately, rather than
+inventing an identity that would leave the dispatcher unmatched later.
+:::
+
+::: tip
+An aggregate that already has an `Id` needs no marker and is unaffected. `[BoundaryAggregate]` is only
+for the identity-less case, and the `string` identity it implies is vestigial — nothing on the DCB
+path reads it.
+:::
+
+::: tip
+This bites late without the marker. `FetchForWritingByTags` only folds an aggregate when the query
+**finds events**, so a boundary over an empty result — the ordinary "this must not exist yet"
+assertion — works either way, and the failure arrives the first time the boundary actually matches
+something.
+:::
+
+::: warning
+`[BoundaryAggregate]` is a JasperFx marker rather than a Fisher one, so a model carrying it is
+portable in *source*. It is not yet portable in behaviour: as of Polecat 5.20.0 an identity-less
+boundary aggregate still fails there, from its own document-identity resolution, despite Polecat's
+DCB page documenting the marker. See [polecat#521](https://github.com/JasperFx/polecat/issues/521).
+:::
+
 ## How tag rows are stored
 
 One `fi_event_tag_<suffix>` table per tag type, with a composite primary key **leading with `value`**.

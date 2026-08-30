@@ -1,5 +1,6 @@
 using JasperFx;
 using JasperFx.Events;
+using JasperFx.Events.Aggregation;
 using JasperFx.Events.Tags;
 
 namespace Fisher.Tests.Events;
@@ -12,13 +13,12 @@ public record Enrolled(string Name);
 
 public record ProgressRecorded(string Milestone);
 
-public class ProgramEnrollment
+// gh-135: reached only through a tag boundary, so it is keyed to no stream and carries no identity.
+// It used to need an unused `Id` to satisfy single-stream identity resolution; [BoundaryAggregate] is
+// the marker that says the omission is deliberate. See boundary_aggregates.
+[BoundaryAggregate]
+public partial class ProgramEnrollment
 {
-    // Fisher resolves an aggregate's identity from a Guid `Id` (or an [Identity] member) even when the
-    // aggregate is only ever reached through a tag boundary — there is no boundary-aggregate marker here
-    // the way Polecat has one. The value is unused by these tests, which only read Enrollee.
-    public Guid Id { get; set; }
-
     public string Enrollee { get; set; } = "";
 
     public List<string> Milestones { get; set; } = [];
