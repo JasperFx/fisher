@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1401 tests green on net9.0 and net10.0**, with no known intermittent failures — 1346 in
+**1408 tests green on net9.0 and net10.0**, with no known intermittent failures — 1353 in
 `Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 320 of
 them are shared cross-store compliance tests — 251 event sourcing, which as of 2.56.0 is every event
 suite the shared library has, and 69 document. On JasperFx **2.56.0** / Weasel **9.27.0**.
@@ -1154,6 +1154,27 @@ against our own appends, and checking outside the transaction would prove nothin
 A boundary over an *empty* result still enforces consistency — `LastSeenSequence` is 0, and any
 matching event appearing later has a sequence above it. That is what makes a boundary usable as a
 "this must not exist yet" assertion.
+
+### A boundary aggregate needs no identity
+
+An aggregate reached only through a tag boundary is keyed to no stream, so `[BoundaryAggregate]`
+(`JasperFx.Events.Aggregation`) is an explicit opt-out of single-stream identity and
+`AggregateIdentity.ResolveIdType` answers `typeof(string)` for one — the vestigial `TId` the source
+generator already keys a marked type's evolver on. Before #135 Fisher required the `Id` anyway.
+
+**Fisher is the first Critter Stack store to honour it.** #135 filed this as a Fisher-only divergence
+because Polecat's DCB page documents the marker as the cross-stack answer — but Polecat's source never
+mentions it, and an identity-less boundary aggregate throws there too, out of `DocumentMapping`'s
+constructor. Confirmed by running it against the Polecat tree, and filed as polecat#521. What Fisher is
+now aligned with is the attribute's documented contract, not with a sibling's behaviour.
+
+**That gap is invisible from the empty-boundary path**, which is what made it late-breaking rather
+than obvious: `FetchForWritingByTags` folds only when the query finds events, so the "this must not
+exist yet" assertion above worked either way and the throw arrived on first real use. The shared suite
+does not catch it either — every DCB aggregate in it happens to carry an identity, which is filed as
+jasperfx#718. An unmarked
+identity-less aggregate is still refused, and the message now names the boundary case rather than
+sending its author after an `Id` their model has no use for.
 
 ### Batched queries exist for parity, not for speed
 

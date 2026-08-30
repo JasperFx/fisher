@@ -3269,6 +3269,37 @@ than from the hydration context the single-stream reads use.
 
 Guid tag values bind as lowercase canonical text, same trap as `SqliteGuidIdentification`.
 
+**A boundary aggregate needs no single-stream identity** (fisher#135). `AggregateIdentity.ResolveIdType`
+treats `JasperFx.Events.Aggregation.BoundaryAggregateAttribute` as an explicit opt-out and answers
+`typeof(string)` — the vestigial `TId` the source generator already keys a marked identity-less type's
+evolver on, so it is the only answer that finds the dispatcher.
+
+**Fisher is the first store to actually honour it, which is not what fisher#135 assumed.** The issue
+filed this as a Fisher-only divergence on the strength of Polecat's DCB page, which documents the
+marker as the answer across the stack. Polecat's *source* has no mention of it: its
+`IAggregationSourceFactory.Build<TDoc>()` resolves identity through `DocumentMapping`, whose
+constructor throws for a type with no `Id`. Verified by running it rather than by reading — a
+`[BoundaryAggregate]` aggregate with no identity fails there with *"must have a public property named
+'Id'"*, from `DocumentMapping..ctor`. So the divergence being closed here is between Fisher and the
+attribute's documented contract, and Polecat's docs are wrong (polecat#521). **The shared suite catches
+neither, because every DCB aggregate in it happens to carry an identity** — jasperfx#718 is the request
+to add an identity-less one, which has to fold *with events present* or it passes on a broken store.
+
+- **The marker is the whole exemption, and the message names it.** An unmarked identity-less aggregate
+  is still refused, because it is far more often a forgotten `Id` than a deliberate boundary aggregate
+  — the same reason the generator emits nothing for one. What changed beside the exemption is that the
+  refusal now mentions `[BoundaryAggregate]`, since the old text ("single stream aggregates need an
+  `Id`") was accurate for the aggregate it was written about and misleading for this one.
+- **Not inherited.** The generator reads the attribute off the declaring type in its own compilation,
+  so a subclass inheriting the marker here would resolve to `string` and then fail to find a dispatcher
+  of its own.
+- **The empty boundary is why this bites late, and why the coverage has to have events.**
+  `FetchForWritingByTags` folds only when the query finds something, so a boundary over an empty result
+  — the ordinary "this must not exist yet" assertion — succeeded before this was honoured. A suite
+  exercising only that path is green over a model that throws on first real use.
+  `boundary_aggregates.fetch_for_writing_by_tags_folds_an_identity_less_aggregate` is the discriminating
+  test; `concurrent_boundary_appends` dropped the unused `Id` it carried as the workaround.
+
 **`AssignTagWhere` is a client of the LINQ `WhereClauseParser`**, as Marten builds it. The only piece
 it needed was `EventMemberFactory`, an `IMemberResolver` resolving `IEvent` members to `fi_events`
 columns instead of `json_extract` paths — which is why `IMemberResolver` is an interface rather than

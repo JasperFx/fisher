@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using JasperFx;
 using JasperFx.Events;
+using JasperFx.Events.Aggregation;
 
 namespace Fisher.Storage;
 
@@ -48,6 +49,7 @@ internal static class AggregateIdentity
     ///     for <paramref name="aggregateType" />.
     /// </summary>
     /// <remarks>
+    ///     <para>
     ///     An identity member is required even though live aggregation never reads one — it takes
     ///     <c>TId</c> from the stream. What needs it is JasperFx's source generator, which keys the
     ///     dispatcher it emits on <c>(TDoc, TId)</c> and skips a type it cannot resolve an identity for.
@@ -55,16 +57,36 @@ internal static class AggregateIdentity
     ///     defaulting to the stream identity primitive here would only push the failure to
     ///     <c>AssembleAndAssertValidity</c> with a message about a missing generated dispatcher rather
     ///     than about the missing <c>Id</c> that actually caused it.
+    ///     </para>
+    ///     <para>
+    ///     <see cref="BoundaryAggregateAttribute" /> is the one exemption, and it exists because a DCB
+    ///     boundary aggregate is <em>defined</em> by spanning streams by tag rather than being keyed to
+    ///     one — so "single stream aggregates need an Id" is telling its author to add a member their
+    ///     model has no use for. The marker is the generator's own opt-in: it emits an
+    ///     <c>IGeneratedSyncEvolver&lt;TDoc, string&gt;</c> for a marked identity-less type, so
+    ///     <c>string</c> is the only answer that finds that dispatcher. It is vestigial — nothing on the
+    ///     DCB path reads it — but it has to agree.
+    ///     </para>
     /// </remarks>
     internal static Type ResolveIdType(Type aggregateType, StreamIdentity streamIdentity)
     {
         var streamIdType = streamIdentity == StreamIdentity.AsGuid ? typeof(Guid) : typeof(string);
 
-        var member = FindIdMember(aggregateType)
-            ?? throw new InvalidOperationException(
+        var member = FindIdMember(aggregateType);
+
+        if (member is null)
+        {
+            // A boundary aggregate has opted out of single-stream identity, so there is nothing to
+            // resolve and typeof(string) is the answer the generator already committed to.
+            if (IsBoundaryAggregate(aggregateType)) return typeof(string);
+
+            throw new InvalidOperationException(
                 $"Aggregate type '{aggregateType.FullName}' has no identity member. Single stream " +
                 $"aggregates need a public {streamIdType.Name} member named 'Id', or one marked with " +
-                "[Identity].");
+                "[Identity]. An aggregate reached only through a DCB tag boundary has no stream to be " +
+                "keyed to — mark it [BoundaryAggregate] (JasperFx.Events.Aggregation) instead of giving " +
+                "it an identity it has no use for.");
+        }
 
         // Unwrap Nullable<T> so a `PublicId? Id` closes the projection over PublicId. The source
         // generator unwraps the same way; a mismatch here means the generated evolver would never be
@@ -112,6 +134,18 @@ internal static class AggregateIdentity
                 break;
         }
     }
+
+    /// <summary>
+    ///     Whether the aggregate type has opted out of single-stream identity with
+    ///     <see cref="BoundaryAggregateAttribute" />.
+    /// </summary>
+    /// <remarks>
+    ///     Not inherited: the attribute is what makes the source generator emit an evolver, and the
+    ///     generator reads it off the declaring type in its own compilation. A subclass that inherited
+    ///     the marker here would resolve to <c>string</c> and then fail to find a dispatcher of its own.
+    /// </remarks>
+    private static bool IsBoundaryAggregate(Type aggregateType)
+        => aggregateType.GetCustomAttribute<BoundaryAggregateAttribute>(false) is not null;
 
     private static Type MemberType(MemberInfo member) => member switch
     {
