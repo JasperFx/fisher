@@ -254,12 +254,18 @@ def main() -> int:
         document_total,
     )
 
+    # Until JasperFx 2.59.0 every shipped suite was an enrolled suite, so one number served both and
+    # the sentence read "ships **N suites, M tests**". 2.59.0 broke that: it added two opt-in suites
+    # Fisher does not enroll (jasperfx#724, whose precondition Fisher cannot construct at all -- see
+    # jasperfx#727 -- and jasperfx#725, which needs a fixture seam). The claim now has to separate what
+    # the library ships from what Fisher enrolls, and only the second is checkable from a test run.
     ships = re.search(
-        r"`JasperFx\.Events\.ComplianceTests` ([\d.]+) ships \*\*(\d+) suites, (\d+) tests\*\*",
+        r"`JasperFx\.Events\.ComplianceTests` ([\d.]+) ships \d+ suites; "
+        r"Fisher enrolls \*\*(\d+) of them, (\d+) tests\*\*",
         handoff,
     )
     if ships is None:
-        failures.expect("HANDOFF compliance section, 'ships N suites, M tests'", None,
+        failures.expect("HANDOFF compliance section, 'ships N suites; Fisher enrolls M of them, K tests'", None,
                         f"{len(compliance)} suites, {compliance_total} tests")
     else:
         failures.expect("compliance section, suites", ships.group(2), len(compliance))
@@ -335,14 +341,17 @@ def main() -> int:
         failures.expect("compliance section, package version", ships.group(1), compliance_pinned)
 
     # ---- the enrollment file's own prose count -------------------------------------------------
+    # Same wording change as `ships` above, and for the same reason: "All <n> that ship ... are
+    # enrolled" stopped being true at JasperFx 2.59.0.
     enrolled_claim = re.search(
-        r"All ([\w-]+) that ship in\s*\n?\s*\*?\s*JasperFx\.Events\.ComplianceTests ([\d.]+) are enrolled",
+        r"([\w-]+) are enrolled from\s*\n?\s*\*?\s*JasperFx\.Events\.ComplianceTests ([\d.]+)",
         (root / ENROLLMENT).read_text(encoding="utf-8"),
     )
     if enrolled_claim is None:
         failures.add(
-            f"{ENROLLMENT}: could not find its 'All <n> that ship in ... are enrolled' comment. "
-            f"It is the third place these numbers live; update this script if it was reworded."
+            f"{ENROLLMENT}: could not find its '<n> are enrolled from JasperFx.Events.ComplianceTests "
+            f"<version>' comment. It is the third place these numbers live; update this script if it "
+            f"was reworded."
         )
     else:
         failures.expect("enrollment comment, suite count", enrolled_claim.group(1),
