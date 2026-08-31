@@ -26,8 +26,23 @@ namespace Fisher.Internal;
 ///         contention against itself rather than throughput.
 ///     </para>
 /// </remarks>
-internal partial class FisherSession : IDocumentSession, ITenantOperations, IStorageSession, IAsyncDisposable
+internal partial class FisherSession : IDocumentSession, ITenantOperations, IStorageSession, IEventTenancySource,
+    IAsyncDisposable
 {
+    /// <summary>
+    ///     The event store's tenancy style, for the shared single-stream projection base.
+    /// </summary>
+    /// <remarks>
+    ///     <b>fisher#139.</b> <c>JasperFxSingleStreamProjectionBase.BuildSlicer</c> reads this to decide
+    ///     whether to set <c>ForceSingleTenancy</c> on the slicer it builds. On a single-tenanted store,
+    ///     events whose tenant ids disagree must still fold into one aggregate rather than being sliced
+    ///     per tenant — wolverine#2053 / marten#4085, which only ever bit the async daemon, since live
+    ///     and inline aggregation fold the same events correctly. Marten got that fix by overriding
+    ///     <c>BuildSlicer</c> in its own subclass; ours is an empty class body, so we went without it
+    ///     until jasperfx#723 moved the decision into the base. Answering here is the whole of our side.
+    /// </remarks>
+    public JasperFx.MultiTenancy.TenancyStyle EventTenancyStyle => Options.Events.TenancyStyle;
+
     private readonly List<Weasel.Storage.IStorageOperation> _operations;
 
     /// <summary>

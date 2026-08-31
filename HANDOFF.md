@@ -12,10 +12,15 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1408 tests green on net9.0 and net10.0**, with no known intermittent failures — 1353 in
-`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 320 of
-them are shared cross-store compliance tests — 251 event sourcing, which as of 2.56.0 is every event
-suite the shared library has, and 69 document. On JasperFx **2.56.0** / Weasel **9.27.0**.
+**1417 tests green on net9.0 and net10.0**, with no known intermittent failures — 1362 in
+`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 329 of
+them are shared cross-store compliance tests — 260 event sourcing and 69 document. On JasperFx **2.59.0** / Weasel **9.27.0**.
+
+Note that 260 is no longer *every* event suite the shared library has: 2.59.0 added
+`SingleTenantedEventSlicingCompliance` (jasperfx#724) and `CompositeProjectionCompliance`
+(jasperfx#725), both opt-in and neither enrolled here. The first cannot construct its precondition on
+Fisher at all — see jasperfx#727 — and the second needs an `AddCompositeProjection` seam on the
+fixture.
 
 ## Closed since the comparison
 
@@ -452,8 +457,8 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.56.0 ships **37 suites, 320 tests**. Fisher passes **all 320, all
-37 suites**. Every suite compiles; every one is also subclassed and running.
+`JasperFx.Events.ComplianceTests` 2.59.0 ships 39 suites; Fisher enrolls **37 of them, 329 tests**.
+Fisher passes **all 329, all 37 suites**. Every suite compiles; every one is also subclassed and running.
 
 **What that does and does not claim, because the difference is load-bearing** (fisher#124). The suite
 pins **API portability, not behavioural equivalence**: code written against one store compiles and
@@ -486,7 +491,7 @@ shape: `DocumentLoadAndStoreCompliance` gained three tests for `LoadAsync<T>(obj
 fisher#89) and `DocumentComplianceConfig` gained `ValueTypes`. Diffing the suite *list* would have
 reported a clean bump — diff the contents.
 
-The library is now two halves. The **event sourcing** half is 30 suites and 251 tests, and its
+The library is now two halves. The **event sourcing** half is 30 enrolled suites and 260 tests, and its
 upstream backlog has been empty since 2.45.0 — that is the whole of it rather than a snapshot. The
 **document** half arrived in 2.47.0 (jasperfx#647) and is now seven suites, 69 tests, over the
 store-agnostic document contract Fisher implements for fisher#68. Every suite added since 2.49.0 has
@@ -526,13 +531,13 @@ and `Query<T>` were already `notnull`. See "The store-agnostic document contract
 **Green on all thirty-seven is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 37 suites, 320 tests
+### Green — 37 suites, 329 tests
 
-Event sourcing — 30 suites, 251 tests:
+Event sourcing — 30 suites, 260 tests:
 
 | Suite | Tests |
 |---|---|
-| `DcbTagQueryAndConsistencyCompliance` | 26 |
+| `DcbTagQueryAndConsistencyCompliance` | 28 |
 | `StringStreamIdentityCompliance` | 19 |
 | `AggregateWriteCacheCompliance` | 14 |
 | `FetchForWritingCompliance` | 13 |
@@ -548,7 +553,7 @@ Event sourcing — 30 suites, 251 tests:
 | `ConjoinedEventTenancyCompliance` | 8 |
 | `FetchLatestCompliance` | 7 |
 | `LiveAggregationCompliance` | 7 |
-| `EventStoreExplorerCompliance` | 7 |
+| `EventStoreExplorerCompliance` | 14 |
 | `StringIdentitySingleStreamCompliance` | 6 |
 | `StreamArchivingCompliance` | 6 |
 | `SnapshotLifecycleCompliance` | 6 |
