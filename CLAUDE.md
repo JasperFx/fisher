@@ -513,6 +513,59 @@ Six things that are decisions rather than mechanics:
   `EventStoreOptions.HighWaterLivenessInterval` bounds it (five seconds; zero turns it off and leaves
   the health check on the gap heuristic alone).
 
+**The hosted service is the store's `IProjectionCoordinator`** (fisher#138). It registered only as an
+`IHostedService` over an internal class implementing nothing else, so **both** documented routes to the
+running daemon failed — the service was not resolvable, and the
+`GetServices<IHostedService>().OfType<IProjectionCoordinator>()` fallback found nothing either. Marten
+and Polecat have registered JasperFx's interface since jasperfx#430, so store-agnostic code could do
+daemon operations against them and not against Fisher. **No shared suite covers this** — Fisher passed
+all 37 suites throughout, which is jasperfx#732, the third instance of the pattern after jasperfx#700
+and jasperfx#718.
+
+- **JasperFx's interface, not a Fisher-local sub-interface.** Both siblings have a local one that adds
+  no members; theirs are historical (Marten's predates the lift, Polecat copied it) and a
+  store-agnostic consumer resolves the shared one anyway. Nothing new lands on Fisher's public API.
+- **No `ProjectionCoordinatorBase`.** The siblings close over it for leadership election across nodes;
+  Fisher refuses `HotCold` outright, so what is left of a coordinator here is the daemon cache and the
+  pause/resume pair, which this class already had in all but name.
+- **One instance, registered as the coordinator and resolved from there as the hosted service.**
+  Registering them separately would run two daemons over one file — two writers contending for one
+  write lock, which is the thing `_running` exists to prevent.
+- **`StartAsync` had to learn to resume**, and this is the non-obvious half. It only ever called
+  `StartAnyNewDaemonsAsync`, which *skips* a database already in `_running` — so after a pause it
+  would have started nothing at all. It now restarts agents on the daemons it holds first, which makes
+  a second `StartAsync` equivalent to `PauseAsync` + `StartAsync`, the property JasperFx's own
+  coordinator base establishes and the one `ResumeAsync` rests on.
+- **Pausing stops the tenant poller too.** It builds and starts daemons of its own, so leaving it
+  running would let a tenant appearing mid-pause quietly begin projecting; "paused" has to mean paused
+  for tenants that do not exist yet.
+- **An ancillary store gets `IProjectionCoordinator<T>` and not the unmarked one**, so resolving
+  `IProjectionCoordinator` is never ambiguous about whose daemons come back.
+
+**`Advanced.ResetAllDataAsync` pauses a hosted daemon around the wipe, and that is a deliberate
+divergence from Marten**, which leaves its daemon alone. The wipe deletes `fi_event_progression` out
+from under agents holding their positions in memory: they carry on from where they were, record nothing
+against an event store that now starts at zero, and every later `WaitForNonStaleData` times out naming
+shards that recorded no progress. Silent until something waits.
+
+- **The reason to diverge is that the alternative was unreachable rather than merely manual.** Until
+  the coordinator existed there was no handle on the running daemon, so the caller this method
+  overwhelmingly has — a spec fixture resetting between scenarios — could not have paused it by hand.
+- **`DocumentStore.RunningDaemons` is the seam**, set by the hosted service on start and cleared on
+  stop, because `Advanced` reaches the store and not the container. It is a claim about *right now*
+  rather than about registration, and it is deliberately not a general escape hatch — application code
+  resolves `IProjectionCoordinator` from DI, which is the store-agnostic route.
+  **Unwrapped through `SecondaryStoreProxy`**, or an ancillary store — which arrives as its marker
+  proxy rather than as a `DocumentStore` — would silently get the old behaviour.
+- **The resume is in a `finally`.** A half-done wipe with the daemon left paused is the worse of the
+  two failures: the caller sees the exception either way, and a daemon that never resumes turns one
+  failed reset into every subsequent projection silently not running.
+- **Only a daemon this process hosts is paused.** `ExternallyManaged`, a hand-built store, or another
+  process all keep the hazard, which is the honest outcome since nothing here can reach them.
+- `a_reset_leaves_the_running_daemon_able_to_project_again` needs **two rounds** — the first
+  establishes real in-memory positions to be stranded, and a single-round test passes against the old
+  behaviour. Verified by reverting: it fails with the reported `TimeoutException` verbatim.
+
 WAL is what lets the daemon read while a session writes. It is on by default via
 `SqlitePragmaSettings.Default`; `BuildProjectionDaemonAsync` warns when it is not, because without it
 the daemon and every writer serialize against each other and that presents as a slow projection

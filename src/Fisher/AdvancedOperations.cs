@@ -29,10 +29,54 @@ public class AdvancedOperations
     /// <summary>
     ///     Delete every document and every event belonging to this store, keeping the schema.
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>A running async daemon is paused around the wipe and resumed afterwards</b>
+    ///         (fisher#138), and without that the wipe strands it. The delete takes
+    ///         <c>fi_event_progression</c> out from under agents that hold their positions in memory,
+    ///         so they carry on from where they were, record no progress against an event store that
+    ///         now starts at zero, and every later <c>WaitForNonStaleData</c> times out with a message
+    ///         about shards that have recorded nothing. Silent until something waits.
+    ///     </para>
+    ///     <para>
+    ///         <b>This is a divergence from Marten, which leaves its daemon alone here.</b> The reason
+    ///         to take it is that the alternative was unreachable rather than merely manual: until
+    ///         fisher#138 there was no way to get at the running daemon from application code at all,
+    ///         so a spec fixture resetting between scenarios — the caller this method overwhelmingly
+    ///         has — could not have paused it by hand.
+    ///     </para>
+    ///     <para>
+    ///         Only a daemon <em>this process is hosting</em> is paused, since that is the only one the
+    ///         store knows about. <c>DaemonMode.ExternallyManaged</c>, a store built by
+    ///         <see cref="DocumentStore.For(System.Action{StoreOptions})" />, or a daemon in another
+    ///         process are all unaffected and keep the hazard above — which is the honest outcome, as
+    ///         nothing here can reach them.
+    ///     </para>
+    /// </remarks>
     public async Task ResetAllDataAsync(CancellationToken token = default)
     {
-        await Clean.DeleteAllDocumentsAsync(token).ConfigureAwait(false);
-        await Clean.DeleteAllEventDataAsync(token).ConfigureAwait(false);
+        var daemons = _store.RunningDaemons;
+
+        if (daemons is not null)
+        {
+            await daemons.PauseAsync().ConfigureAwait(false);
+        }
+
+        try
+        {
+            await Clean.DeleteAllDocumentsAsync(token).ConfigureAwait(false);
+            await Clean.DeleteAllEventDataAsync(token).ConfigureAwait(false);
+        }
+        finally
+        {
+            // In a finally, because a half-done wipe with the daemon left paused is the worse of the
+            // two failures: the caller sees the exception either way, and a paused daemon that never
+            // resumes turns one failed reset into every subsequent projection silently not running.
+            if (daemons is not null)
+            {
+                await daemons.ResumeAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>
