@@ -269,6 +269,11 @@ public static class FisherServiceCollectionExtensions
             }
         }
 
+        // fisher#141. After the contribution chain, not before: the host switch is the outer statement,
+        // and applying it first would let a per-store instrumentation default clobber it. It only ever
+        // adds, so a store that asked for extended tracking itself is unaffected either way.
+        options.ReadJasperFxOptions(services.GetService<JasperFx.JasperFxOptions>());
+
         return options;
     }
 
