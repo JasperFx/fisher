@@ -167,6 +167,34 @@ services.ConfigureFisher((serviceProvider, options) =>
 Contributions run after the `AddFisher(...)` lambda, in registration order, and may be registered
 either side of it — they are resolved when the store is built, not when the call is made.
 
+## Host-level JasperFx options
+
+`AddJasperFx(...)` configures the whole application rather than one store, and Fisher reads it when
+each store is built:
+
+```cs
+builder.Services.AddJasperFx(o => o.EnableAdvancedTracking = true);
+builder.Services.AddFisher(options => options.Connection("Data Source=app.db"));
+```
+
+`EnableAdvancedTracking` is the switch a CritterWatch host throws, and it turns on
+`Events.EnableExtendedProgressionTracking` for **every** Fisher store the container builds — the
+primary and every `AddFisherStore<T>` alike — so extended per-shard state reaches a monitoring
+console without naming each store.
+
+::: tip
+It only ever **adds**. A host that leaves `EnableAdvancedTracking` at its default does not switch off
+a store that asked for extended tracking in its own configuration, and the read runs *after* the
+`IConfigureFisher` chain so a per-store contribution cannot clobber the host's opt-in.
+:::
+
+::: warning
+Before 1.0.6 Fisher never read `JasperFxOptions` at all, so this switch lit up Marten and Polecat and
+silently did nothing here ([#141](https://github.com/JasperFx/fisher/issues/141)). A console then
+showed no per-shard state for Fisher stores with nothing to indicate why, which is the same failure
+shape as having nothing to report.
+:::
+
 ## Session Factories
 
 By default, the scoped `IDocumentSession` is a lightweight session. Supply your own `ISessionFactory`

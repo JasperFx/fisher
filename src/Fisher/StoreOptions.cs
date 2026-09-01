@@ -114,6 +114,43 @@ public class StoreOptions
     public EventStoreOptions Events { get; } = new();
 
     /// <summary>
+    ///     Apply the host-level <see cref="JasperFxOptions" /> to this store, so a switch thrown once for
+    ///     the application reaches every Critter Stack store in it (fisher#141).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <see cref="JasperFxOptions.EnableAdvancedTracking" /> is documented as telling <em>all</em>
+    ///         Critter Stack tools to opt into advanced tracking, and is what a CritterWatch host sets.
+    ///         Fisher had <see cref="EventStoreOptions.EnableExtendedProgressionTracking" /> and no way
+    ///         for that switch to reach it, so a host lighting up Marten and Polecat left its Fisher
+    ///         stores reporting
+    ///         nothing — and the absence of monitoring data is indistinguishable from having none to
+    ///         report, which is why this was silent.
+    ///     </para>
+    ///     <para>
+    ///         <b>One-way.</b> A false <see cref="JasperFxOptions.EnableAdvancedTracking" /> is the
+    ///         default rather than a statement, so it must not turn <em>off</em> a store that asked for
+    ///         extended tracking in its own configuration. The host opt-in can only add.
+    ///     </para>
+    ///     <para>
+    ///         Called from one place — <c>FisherServiceCollectionExtensions.Configured</c>, which every
+    ///         registration path already funnels through, primary and ancillary alike. Marten and Polecat
+    ///         each call their equivalent at two sites because their two paths are separate; the single
+    ///         choke point here is what makes "and the ancillary stores too" true by construction rather
+    ///         than by remembering.
+    ///     </para>
+    /// </remarks>
+    internal void ReadJasperFxOptions(JasperFxOptions? options)
+    {
+        if (options is null) return;
+
+        if (options.EnableAdvancedTracking)
+        {
+            Events.EnableExtendedProgressionTracking = true;
+        }
+    }
+
+    /// <summary>
     ///     Settings for the async projection daemon.
     /// </summary>
     public DaemonSettings DaemonSettings { get; } = new();

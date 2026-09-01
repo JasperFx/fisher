@@ -2013,6 +2013,25 @@ hosted services. The store is a singleton, sessions are scoped, and the returned
   a non-WAL store projects correctly, just serialised against its writers.
 - **`AutoCreate.None` wins over `ApplyAllDatabaseChangesOnStartup()`.** The hosted service starts and
   does nothing, rather than the registration being the thing that quietly overrides schema policy.
+- **The host-level `JasperFxOptions` is read in `Configured`, which is one call where the siblings
+  need two** (fisher#141). `JasperFxOptions.EnableAdvancedTracking` is documented as telling *all*
+  Critter Stack tools to opt in and is what a CritterWatch host sets; Fisher had
+  `Events.EnableExtendedProgressionTracking` and read `JasperFxOptions` **nowhere**, so the same host
+  configuration lit up Marten and Polecat and silently did nothing here. Silent in the direction that
+  hurts: a console showing no per-shard state is indistinguishable from a store with none to report.
+  - **Every registration path already funnels through `Configured`**, primary and ancillary alike, so
+    "and the ancillary stores too" holds by construction. Marten and Polecat each call their
+    equivalent at two sites because their two paths are separate, and a third path added there is a
+    third place to remember.
+  - **After the `IConfigureFisher` chain, not before**, so a per-store instrumentation default cannot
+    clobber the host's opt-in. `the_host_opt_in_outranks_a_store_level_contribution` pins it and is
+    the only test that fails when the call is moved.
+  - **One-way.** A false `EnableAdvancedTracking` is the default rather than a statement, so it must
+    not turn *off* a store that opted in for itself — which a plain assignment would do.
+  - `JasperFxOptions.ApplicationAssemblyReuseWarning` is deliberately **not** read. Polecat buffers it
+    in the same method and logs it from an always-registered activator; Fisher has no unconditional
+    startup hosted service to log it from, so surfacing it means registering one. Filed rather than
+    folded in as fisher#142.
 
 **Everything Fisher hands a container now implements `IDisposable` as well as `IAsyncDisposable`** —
 `DocumentStore`, `FisherDatabase`, `FisherSession`, and `IQuerySession` with them. That is not a
