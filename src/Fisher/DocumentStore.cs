@@ -100,6 +100,26 @@ public partial class DocumentStore : IDocumentStore
     /// </summary>
     public AdvancedOperations Advanced => _advanced ??= new AdvancedOperations(this);
 
+    /// <summary>
+    ///     The projection coordinator currently running this store's daemons, or null when none is.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Set by <c>FisherDaemonHostedService</c> when the host starts it and cleared when it
+    ///         stops, so it is a fact about <em>right now</em> rather than about registration:
+    ///         <c>AddAsyncDaemon(DaemonMode.ExternallyManaged)</c> leaves it null, and so does a store
+    ///         built directly with <see cref="For(System.Action{StoreOptions})" />.
+    ///     </para>
+    ///     <para>
+    ///         It exists because <see cref="AdvancedOperations.ResetAllDataAsync" /> has to pause the
+    ///         daemon around the wipe (fisher#138) and reaches the store, not the container. Deliberately
+    ///         <b>not</b> a general escape hatch onto the coordinator — application code resolves
+    ///         <c>IProjectionCoordinator</c> from DI, which is the store-agnostic route and the one the
+    ///         siblings offer.
+    ///     </para>
+    /// </remarks>
+    internal JasperFx.Events.Daemon.IProjectionCoordinator? RunningDaemons { get; set; }
+
     private AdvancedOperations? _advanced;
 
     internal EventGraph EventGraph => Options.EventGraph;

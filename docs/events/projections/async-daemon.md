@@ -175,6 +175,71 @@ await daemon.RewindSubscriptionAsync("ReleasedTally", token, sequenceFloor: 0);
 Sharing a published type between two projections is legal and costs nothing until somebody rebuilds,
 so Fisher warns rather than refusing.
 
+## Reaching the running daemon
+
+`AddAsyncDaemon()` registers a JasperFx `IProjectionCoordinator`, which is how application code gets
+at the daemons the host is running:
+
+```cs
+var coordinator = services.GetRequiredService<IProjectionCoordinator>();
+
+var daemon = coordinator.DaemonForMainDatabase();
+await daemon.WaitForNonStaleData(TimeSpan.FromSeconds(30));
+
+// Under database-per-tenant, one daemon per file.
+var forTenant = await coordinator.DaemonForDatabase("tenant-a");
+var all = await coordinator.AllDaemonsAsync();
+```
+
+`PauseAsync()` stops every agent without disposing anything, and `ResumeAsync()` restarts them — which
+is what a maintenance window or a test fixture wants:
+
+```cs
+await coordinator.PauseAsync();
+// ... do the thing the daemon must not be running for ...
+await coordinator.ResumeAsync();
+```
+
+::: tip
+The coordinator **is** the hosted service, registered once and resolved from both places. Two
+registrations would be two daemons over one file, which on SQLite is two writers contending for the
+single write lock.
+:::
+
+::: tip
+Pausing stops the tenant poller too. It builds and starts daemons of its own, so leaving it running
+would let a tenant appearing mid-pause quietly begin projecting.
+:::
+
+::: warning
+The coordinator's daemons exist only once the **host has started** — it is a hosted service. Resolving
+it while the container is still being built and calling `DaemonForMainDatabase()` throws saying so.
+`DaemonMode.Disabled` and `DaemonMode.ExternallyManaged` register no coordinator at all.
+:::
+
+## Resetting data under a running daemon
+
+`Advanced.ResetAllDataAsync()` pauses a daemon this process is hosting, wipes, and resumes it.
+
+Without that the wipe **strands the daemon**: the delete takes `fi_event_progression` out from under
+agents holding their positions in memory, so they carry on from where they were, record nothing
+against an event store that now starts at zero, and every later `WaitForNonStaleData` times out saying
+shards have recorded no progress. Silent until something waits — which for the spec suite that
+reported it ([#138](https://github.com/JasperFx/fisher/issues/138)) was the next scenario.
+
+::: warning
+Only a daemon **this process is hosting** is paused, because that is the only one the store knows
+about. `DaemonMode.ExternallyManaged`, a store built with `DocumentStore.For(...)`, or a daemon in
+another process all keep the hazard — pause them yourself around the wipe.
+:::
+
+::: tip
+This is a deliberate divergence from Marten, which leaves its daemon alone here. The reason to take it
+is that the alternative was unreachable rather than merely manual: before #138 there was no way to get
+at the running daemon at all, so the caller this method overwhelmingly has — a test fixture resetting
+between scenarios — could not have paused it by hand.
+:::
+
 ## Catching up and waiting
 
 ```cs

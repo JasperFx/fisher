@@ -408,9 +408,15 @@ public sealed class FisherStoreConfigurationExpression<T> where T : class, IDocu
         switch (mode)
         {
             case DaemonMode.Solo:
-                _services.AddSingleton<IHostedService>(sp => new FisherDaemonHostedService(
+                // One instance, reachable two ways — as the hosted service that runs it and as the
+                // coordinator application code resolves. Registering the hosted service on its own is
+                // what left the daemon unreachable (fisher#138); registering them separately would run
+                // two daemons over one file, which is two writers contending for one write lock.
+                _services.AddSingleton<IProjectionCoordinator<T>>(sp => new FisherDaemonHostedService<T>(
                     sp.GetRequiredService<T>(),
                     sp.GetService<ILogger<FisherDaemonHostedService>>()));
+                _services.AddSingleton<IHostedService>(sp =>
+                    sp.GetRequiredService<IProjectionCoordinator<T>>());
                 break;
 
             case DaemonMode.HotCold:
@@ -527,7 +533,11 @@ public sealed class FisherConfigurationExpression
         switch (mode)
         {
             case DaemonMode.Solo:
-                _services.AddSingleton<IHostedService, FisherDaemonHostedService>();
+                // See the ancillary overload: one instance, registered as the coordinator and resolved
+                // from there as the hosted service, so the daemon that runs is the daemon you reach.
+                _services.AddSingleton<IProjectionCoordinator, FisherDaemonHostedService>();
+                _services.AddSingleton<IHostedService>(sp =>
+                    sp.GetRequiredService<IProjectionCoordinator>());
                 break;
 
             case DaemonMode.HotCold:
@@ -596,6 +606,23 @@ internal sealed class FisherInitialDataActivator : IHostedService
 ///         opposite situation, and they do not contend at all.
 ///     </para>
 ///     <para>
+///         <b>It is also the store's <see cref="IProjectionCoordinator" />, which is how application
+///         code reaches the running daemon</b> (fisher#138). Before that it held its daemons privately
+///         and implemented nothing else, so neither documented route worked — the service was not
+///         registered, and the <c>GetServices&lt;IHostedService&gt;().OfType&lt;IProjectionCoordinator&gt;()</c>
+///         fallback found nothing. Marten and Polecat have registered the JasperFx interface since
+///         jasperfx#430, so store-agnostic code could do daemon operations against them and not
+///         against Fisher. Fisher registers <em>that</em> interface rather than a Fisher-local
+///         sub-interface: the siblings' local ones add no members and are historical.
+///     </para>
+///     <para>
+///         <b>No leadership loop, deliberately.</b> Polecat and Marten close over JasperFx's
+///         <c>ProjectionCoordinatorBase</c>, which exists to elect a leader across nodes; Fisher
+///         refuses <see cref="DaemonMode.HotCold" /> outright, because a Fisher store is a file. What
+///         is left of a coordinator here is the daemon cache and the pause/resume pair, both of which
+///         this class already had in all but name.
+///     </para>
+///     <para>
 ///         <b>The WAL check runs here, and this is the point of putting it here.</b>
 ///         <c>BuildProjectionDaemonAsync</c> has warned about a non-WAL journal since the daemon
 ///         landed, but only a consumer building a daemon by hand ever saw it. Under a hosted service
@@ -605,7 +632,7 @@ internal sealed class FisherInitialDataActivator : IHostedService
 ///         a non-WAL store still projects correctly, just serialised against its writers.
 ///     </para>
 /// </remarks>
-internal sealed class FisherDaemonHostedService : IHostedService, IDisposable
+internal class FisherDaemonHostedService : IProjectionCoordinator, IDisposable
 {
     private readonly IDocumentStore _store;
     private readonly ILogger<FisherDaemonHostedService> _logger;
@@ -635,6 +662,23 @@ internal sealed class FisherDaemonHostedService : IHostedService, IDisposable
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // Published so Advanced.ResetAllDataAsync can pause around a wipe (fisher#138). Set on every
+        // start rather than in the constructor, because it is a claim that daemons are running, and
+        // unwrapped because an ancillary store arrives here as its marker proxy.
+        if (Concrete() is { } starting) starting.RunningDaemons = this;
+
+        // Drain first, so a second StartAsync is equivalent to PauseAsync followed by StartAsync —
+        // the property JasperFx's own coordinator base establishes, and the one ResumeAsync rests on.
+        await StopPollingAsync().ConfigureAwait(false);
+
+        // Agents on daemons this instance already holds, which is what a resume after PauseAsync
+        // needs: StartAnyNewDaemonsAsync skips a database already in _running, so on its own it would
+        // resume nothing at all.
+        foreach (var daemon in _daemons)
+        {
+            await daemon.StartAllAsync().ConfigureAwait(false);
+        }
+
         await StartAnyNewDaemonsAsync().ConfigureAwait(false);
 
         if (_store.Tenancy.Cardinality != DatabaseCardinality.DynamicMultiple)
@@ -644,6 +688,117 @@ internal sealed class FisherDaemonHostedService : IHostedService, IDisposable
 
         _polling = new CancellationTokenSource();
         _poller = PollForNewTenantsAsync(_polling.Token);
+    }
+
+    /// <inheritdoc />
+    public IProjectionDaemon DaemonForMainDatabase()
+        => _daemons.Count > 0
+            ? _daemons[0]
+            : throw new InvalidOperationException(
+                "No projection daemon is running. AddAsyncDaemon() registers this coordinator as a "
+                + "hosted service, so its daemons exist only once the host has started — resolve it "
+                + "after StartAsync rather than while the container is still being built.");
+
+    /// <inheritdoc />
+    public async ValueTask<IProjectionDaemon> DaemonForDatabase(string databaseIdentifier)
+    {
+        if (TryFindDaemon(databaseIdentifier, out var daemon)) return daemon;
+
+        // A tenant database that has appeared since the last poll has no daemon yet, and the
+        // interface's own contract expects an implementation to go and look. Only worth a sweep under
+        // a tenancy that can gain a database; anywhere else the answer cannot change.
+        if (_store.Tenancy.Cardinality == DatabaseCardinality.DynamicMultiple)
+        {
+            await StartAnyNewDaemonsAsync().ConfigureAwait(false);
+
+            if (TryFindDaemon(databaseIdentifier, out daemon)) return daemon;
+        }
+
+        throw new ArgumentOutOfRangeException(nameof(databaseIdentifier),
+            $"No projection daemon is running for database '{databaseIdentifier}'. Running: "
+            + $"{string.Join(", ", _running)}.");
+    }
+
+    /// <inheritdoc />
+    public ValueTask<IReadOnlyList<IProjectionDaemon>> AllDaemonsAsync()
+        => new((IReadOnlyList<IProjectionDaemon>)_daemons.ToArray());
+
+    /// <summary>
+    ///     Stop every agent without disposing anything, so <see cref="ResumeAsync" /> can restart them.
+    /// </summary>
+    /// <remarks>
+    ///     The tenant poller stops too, and that is the half a caller would not think to ask for: it
+    ///     builds and starts daemons of its own, so leaving it running would let a tenant appearing
+    ///     mid-pause quietly begin projecting. "Paused" has to mean paused for tenants that do not
+    ///     exist yet.
+    /// </remarks>
+    public async Task PauseAsync()
+    {
+        await StopPollingAsync().ConfigureAwait(false);
+
+        foreach (var daemon in _daemons)
+        {
+            try
+            {
+                await daemon.StopAllAsync().ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException e)
+            {
+                // Benign during shutdown, where a second pause can fan out over daemons the first
+                // already disposed. Same reading JasperFx's own coordinator base takes.
+                _logger.LogDebug(e, "Fisher projection daemon was already disposed while pausing.");
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public Task ResumeAsync() => StartAsync(CancellationToken.None);
+
+    /// <summary>
+    ///     The concrete store behind whatever this service was handed — an ancillary store arrives as
+    ///     the <see cref="DispatchProxy" /> over its marker interface, which is not a
+    ///     <see cref="DocumentStore" />.
+    /// </summary>
+    private DocumentStore? Concrete() => SecondaryStoreProxy.Unwrap(_store) as DocumentStore;
+
+    private bool TryFindDaemon(string databaseIdentifier, out IProjectionDaemon daemon)
+    {
+        foreach (var candidate in _daemons)
+        {
+            if (string.Equals(((Events.Daemon.FisherProjectionDaemon)candidate).Database.Identifier,
+                    databaseIdentifier, StringComparison.OrdinalIgnoreCase))
+            {
+                daemon = candidate;
+                return true;
+            }
+        }
+
+        daemon = null!;
+        return false;
+    }
+
+    private async Task StopPollingAsync()
+    {
+        if (_polling is not null)
+        {
+            await _polling.CancelAsync().ConfigureAwait(false);
+        }
+
+        if (_poller is not null)
+        {
+            try
+            {
+                await _poller.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected: that is how the loop ends.
+            }
+        }
+
+        _polling?.Dispose();
+        _polling = null;
+        _poller = null;
     }
 
     private async Task StartAnyNewDaemonsAsync()
@@ -690,27 +845,11 @@ internal sealed class FisherDaemonHostedService : IHostedService, IDisposable
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (_polling is not null)
-        {
-            await _polling.CancelAsync().ConfigureAwait(false);
-        }
+        // Withdrawn before the agents stop, so a wipe racing shutdown does not pause a coordinator
+        // that is on its way out and then resume it.
+        if (Concrete() is { } stopping) stopping.RunningDaemons = null;
 
-        if (_poller is not null)
-        {
-            try
-            {
-                await _poller.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected: that is how the loop ends.
-            }
-        }
-
-        foreach (var daemon in _daemons)
-        {
-            await daemon.StopAllAsync().ConfigureAwait(false);
-        }
+        await PauseAsync().ConfigureAwait(false);
     }
 
     /// <inheritdoc cref="Storage.FisherDatabase.Dispose" />
@@ -725,5 +864,24 @@ internal sealed class FisherDaemonHostedService : IHostedService, IDisposable
 
         _daemons.Clear();
         _running.Clear();
+    }
+}
+
+/// <summary>
+///     The same coordinator, addressable by an ancillary store's marker interface.
+/// </summary>
+/// <remarks>
+///     One non-generic <see cref="IProjectionCoordinator" /> can only mean one store, so a second store
+///     needs a second registration to be reachable at all — which is what JasperFx's marker variant is
+///     for. The primary store keeps the unmarked registration; a marker-typed store gets this and not
+///     that, so resolving <see cref="IProjectionCoordinator" /> is never ambiguous about which store's
+///     daemons it hands back.
+/// </remarks>
+internal sealed class FisherDaemonHostedService<T> : FisherDaemonHostedService, IProjectionCoordinator<T>
+    where T : class
+{
+    public FisherDaemonHostedService(IDocumentStore store, ILogger<FisherDaemonHostedService>? logger = null)
+        : base(store, logger)
+    {
     }
 }
