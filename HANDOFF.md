@@ -14,7 +14,7 @@ scoreboard and the things that are true right now but not obvious from either.
 
 **1440 tests green on net9.0 and net10.0**, with no known intermittent failures — 1385 in
 `Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 329 of
-them are shared cross-store compliance tests — 260 event sourcing and 69 document. On JasperFx **2.60.0** / Weasel **9.27.0**.
+them are shared cross-store compliance tests — 260 event sourcing and 69 document. On JasperFx **2.61.0** / Weasel **9.29.0**.
 
 Note that 260 is no longer *every* event suite the shared library has: 2.59.0 added
 `SingleTenantedEventSlicingCompliance` (jasperfx#724) and `CompositeProjectionCompliance`
@@ -457,7 +457,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.60.0 ships 39 suites; Fisher enrolls **37 of them, 329 tests**.
+`JasperFx.Events.ComplianceTests` 2.61.0 ships 39 suites; Fisher enrolls **37 of them, 329 tests**.
 Fisher passes **all 329, all 37 suites**. Every suite compiles; every one is also subclassed and running.
 
 **What that does and does not claim, because the difference is load-bearing** (fisher#124). The suite

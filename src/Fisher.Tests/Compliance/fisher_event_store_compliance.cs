@@ -9,7 +9,7 @@ namespace Fisher.Tests.Compliance;
  * these tests cannot drift between the products.
  *
  * Suites were added one at a time as Fisher grew into them, and thirty-seven are enrolled from
- * JasperFx.Events.ComplianceTests 2.60.0, which itself ships thirty-nine. The two not enrolled are both
+ * JasperFx.Events.ComplianceTests 2.61.0, which itself ships thirty-nine. The two not enrolled are both
  * opt-in and both new in 2.59.0: SingleTenantedEventSlicingCompliance (jasperfx#724), whose
  * mixed-tenancy precondition cannot be constructed on Fisher at all -- see jasperfx#727 -- and
  * CompositeProjectionCompliance (jasperfx#725), which needs an AddCompositeProjection member on the
