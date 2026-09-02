@@ -3366,9 +3366,11 @@ filed this as a Fisher-only divergence on the strength of Polecat's DCB page, wh
 marker as the answer across the stack. Polecat's *source* has no mention of it: its
 `IAggregationSourceFactory.Build<TDoc>()` resolves identity through `DocumentMapping`, whose
 constructor throws for a type with no `Id`. Verified by running it rather than by reading — a
-`[BoundaryAggregate]` aggregate with no identity fails there with *"must have a public property named
-'Id'"*, from `DocumentMapping..ctor`. So the divergence being closed here is between Fisher and the
-attribute's documented contract, and Polecat's docs are wrong (polecat#521). **The shared suite catches
+`[BoundaryAggregate]` aggregate with no identity failed there with *"must have a public property named
+'Id'"*, from `DocumentMapping..ctor`. So the divergence closed here was between Fisher and the
+attribute's documented contract rather than against a sibling's behaviour. **Polecat has since
+followed** — polecat#521 shipped in Polecat 5.21.0, one day after Fisher 1.0.5 — so the marker now
+means the same thing on both, and the docs caveat that said otherwise is gone. **The shared suite catches
 neither, because every DCB aggregate in it happens to carry an identity** — jasperfx#718 is the request
 to add an identity-less one, which has to fold *with events present* or it passes on a broken store.
 

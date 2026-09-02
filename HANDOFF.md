@@ -1167,11 +1167,12 @@ An aggregate reached only through a tag boundary is keyed to no stream, so `[Bou
 `AggregateIdentity.ResolveIdType` answers `typeof(string)` for one — the vestigial `TId` the source
 generator already keys a marked type's evolver on. Before #135 Fisher required the `Id` anyway.
 
-**Fisher is the first Critter Stack store to honour it.** #135 filed this as a Fisher-only divergence
+**Fisher was the first Critter Stack store to honour it.** #135 filed this as a Fisher-only divergence
 because Polecat's DCB page documents the marker as the cross-stack answer — but Polecat's source never
-mentions it, and an identity-less boundary aggregate throws there too, out of `DocumentMapping`'s
-constructor. Confirmed by running it against the Polecat tree, and filed as polecat#521. What Fisher is
-now aligned with is the attribute's documented contract, not with a sibling's behaviour.
+mentioned it, and an identity-less boundary aggregate threw there too, out of `DocumentMapping`'s
+constructor. Confirmed by running it against the Polecat tree, and filed as polecat#521, which shipped
+in Polecat 5.21.0 a day later. So the marker now behaves the same on both; what Fisher aligned with was
+the attribute's documented contract rather than a sibling.
 
 **That gap is invisible from the empty-boundary path**, which is what made it late-breaking rather
 than obvious: `FetchForWritingByTags` folds only when the query finds events, so the "this must not

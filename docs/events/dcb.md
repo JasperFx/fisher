@@ -114,11 +114,12 @@ assertion — works either way, and the failure arrives the first time the bound
 something.
 :::
 
-::: warning
-`[BoundaryAggregate]` is a JasperFx marker rather than a Fisher one, so a model carrying it is
-portable in *source*. It is not yet portable in behaviour: as of Polecat 5.20.0 an identity-less
-boundary aggregate still fails there, from its own document-identity resolution, despite Polecat's
-DCB page documenting the marker. See [polecat#521](https://github.com/JasperFx/polecat/issues/521).
+::: tip
+`[BoundaryAggregate]` is a JasperFx marker rather than a Fisher one, so a model carrying it ports
+between the stores. Fisher honoured it first, in 1.0.5; Polecat's DCB page documented it well before
+its source implemented it, which Polecat closed in 5.21.0
+([polecat#521](https://github.com/JasperFx/polecat/issues/521)). Against an older Polecat an
+identity-less boundary aggregate still fails there.
 :::
 
 ## How tag rows are stored

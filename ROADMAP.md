@@ -5,14 +5,60 @@ architecture and the SQLite-specific decisions.
 
 Status: **one open issue, and it is not next-release work.**
 [#109](https://github.com/JasperFx/fisher/issues/109) is the downstream half of
-[jasperfx#684](https://github.com/JasperFx/jasperfx/issues/684), an epic rather than a next-release
-item; it is filed so the Fisher half is not rediscovered later rather than because it is actionable
-now. Three upstream issues are outstanding and are Fisher's to write:
-[jasperfx#712](https://github.com/JasperFx/jasperfx/issues/712), promoting seven of
-`event_store_usage.cs`'s nine tests into the shared suite;
-[jasperfx#718](https://github.com/JasperFx/jasperfx/issues/718), an identity-less boundary aggregate
-in the DCB suite; and [polecat#521](https://github.com/JasperFx/polecat/issues/521), which is a
-sibling's bug rather than Fisher's but was found here.
+[jasperfx#684](https://github.com/JasperFx/jasperfx/issues/684), and it got *more* blocked rather than
+less: analysis on that epic found the stage graph does not record enrichment edges, so the
+no-dependency gate the issue rests on is not decidable from configuration today, and it closes on an
+unanswered question. Fisher's half cannot be specified until that settles.
+
+Two upstream issues are outstanding.
+[jasperfx#712](https://github.com/JasperFx/jasperfx/issues/712) promotes seven of
+`event_store_usage.cs`'s nine tests into the shared suite,
+and [jasperfx#732](https://github.com/JasperFx/jasperfx/issues/732) asks for shared coverage that a
+store registers a reachable `IProjectionCoordinator`.
+
+Two filed since 1.0.5 have already **shipped**.
+[jasperfx#718](https://github.com/JasperFx/jasperfx/issues/718) is in 2.59.0 — the identity-less
+boundary aggregate is now in `DcbTagQueryAndConsistencyCompliance`, so 1.0.5's #135 fix is held by a
+cross-store guard rather than by Fisher's own tests. And
+[polecat#521](https://github.com/JasperFx/polecat/issues/521), the sibling bug that fix turned up, is
+in Polecat 5.21.0, so `[BoundaryAggregate]` now means the same thing on both stores.
+
+**1.0.6** is one real bug fix, a dependency bump, and three monitoring-and-hosting gaps that were all
+silent in the same direction. No new public API; nothing in it changes what an existing call does.
+
+[#139](https://github.com/JasperFx/fisher/issues/139) is the bug, and it produced a **wrong read
+model** rather than an error: on a single-tenanted store, events whose tenant ids disagree were sliced
+per tenant by an async single-stream projection and folded into several partial aggregates instead of
+one. Only the async daemon was affected — live and inline aggregation fold the same events correctly,
+which is why it stayed invisible. Marten fixed its half by overriding `BuildSlicer` in its own
+`SingleStreamProjection`; Fisher's is an empty class body, so it never had it.
+**The right fix was to wait**: [jasperfx#723](https://github.com/JasperFx/jasperfx/issues/723) hoisted
+the decision into the shared base, so Fisher's whole side is answering `IEventTenancySource` on the
+session — one member, on the one session class, covering every path including tenant scopes. Copying
+Marten's override would have reproduced exactly what jasperfx#649 was filed about.
+
+[#138](https://github.com/JasperFx/fisher/issues/138) is the running daemon being unreachable.
+`AddAsyncDaemon` registered only an `IHostedService` over an internal class implementing nothing else,
+so **both** documented routes failed and store-agnostic code could drive Marten's and Polecat's daemons
+and not Fisher's. It now registers JasperFx's `IProjectionCoordinator` — that interface rather than a
+Fisher-local sub-interface, since both siblings' local ones add no members and are historical.
+`Advanced.ResetAllDataAsync` pauses a hosted daemon around the wipe, **a deliberate divergence from
+Marten**, taken because the alternative was unreachable rather than merely manual: until this landed
+there was no handle on the running daemon, so the caller this method overwhelmingly has could not have
+paused it by hand.
+
+[#141](https://github.com/JasperFx/fisher/issues/141) and
+[#142](https://github.com/JasperFx/fisher/issues/142) are both "Fisher never read `JasperFxOptions`".
+`EnableAdvancedTracking` is the one switch a CritterWatch host throws and it lit up two stores of
+three; the application-assembly reuse warning is one JasperFx detects and explicitly leaves consumers
+to surface, and Fisher surfaced nothing. Both are read in `Configured`, which is **one** call site
+where the siblings need two, because every Fisher registration path already funnels through it.
+#142 needed no startup activator in the end, which is what its own issue assumed and weighed against
+declining — `Configured` already runs once per store with the container in hand.
+
+**Three of the four were invisible to a full compliance enrollment**, which is the through-line worth
+keeping: Fisher passed all 37 suites throughout. That is now filed as a pattern
+([jasperfx#732](https://github.com/JasperFx/jasperfx/issues/732)) rather than as three more fixes.
 
 **1.0.5** is one behaviour fix, its coverage, and a documentation correction. No new public API, and
 nothing in it changes what an existing call does.
