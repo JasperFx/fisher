@@ -23,6 +23,16 @@ cross-store guard rather than by Fisher's own tests. And
 [polecat#521](https://github.com/JasperFx/polecat/issues/521), the sibling bug that fix turned up, is
 in Polecat 5.21.0, so `[BoundaryAggregate]` now means the same thing on both stores.
 
+**1.0.7** is a dependency bump and nothing else — JasperFx **2.59.0 → 2.61.0** and Weasel
+**9.27.0 → 9.29.0**. No production change, no test change, no new public API.
+
+The JasperFx side crosses two releases, and **the compliance delta is genuinely nothing**: the suite
+is byte-identical between 2.59.0 and 2.61.0 — same 39 files, no content change in any of them, and the
+same 333 facts. That was established by diffing the extracted `contentFiles` rather than the file
+list, which is the check that actually settles it — 2.49.0 is the precedent for a bump whose suite
+*list* was unchanged while an existing suite gained tests and demanded real production work.
+Enrollment stands at 37 of 39 suites and 329 tests.
+
 **1.0.6** is one real bug fix, a dependency bump, and three monitoring-and-hosting gaps that were all
 silent in the same direction. No new public API; nothing in it changes what an existing call does.
 
