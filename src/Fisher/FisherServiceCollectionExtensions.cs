@@ -272,10 +272,54 @@ public static class FisherServiceCollectionExtensions
         // fisher#141. After the contribution chain, not before: the host switch is the outer statement,
         // and applying it first would let a per-store instrumentation default clobber it. It only ever
         // adds, so a store that asked for extended tracking itself is unaffected either way.
-        options.ReadJasperFxOptions(services.GetService<JasperFx.JasperFxOptions>());
+        var jasperFx = services.GetService<JasperFx.JasperFxOptions>();
+        options.ReadJasperFxOptions(jasperFx);
+        WarnAboutApplicationAssemblyReuse(services, options, jasperFx);
 
         return options;
     }
+
+    /// <summary>
+    ///     Surface JasperFx's application-assembly-reuse warning, which JasperFx detects and leaves to
+    ///     its consumers to say out loud (fisher#142).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Logged here rather than from a startup activator, which is where the siblings put
+    ///         it.</b> Polecat logs it from <c>PolecatActivator</c>, an always-registered hosted service;
+    ///         all three of Fisher's are conditional (<c>ApplyAllDatabaseChangesOnStartup</c>,
+    ///         <c>SeedInitialDataOnStartup</c>, <c>AddAsyncDaemon</c>), so a plain <c>AddFisher</c> has no
+    ///         startup hook at all. Registering an unconditional one for a single rare warning would
+    ///         change what every consumer's container holds, and <c>Configured</c> already runs exactly
+    ///         once per store with the container in hand.
+    ///     </para>
+    ///     <para>
+    ///         <b>Once per container, not once per store or once per process.</b> The condition belongs
+    ///         to the host, so several Fisher stores in one container would otherwise each repeat the
+    ///         same four-sentence warning. A process-wide flag would be worse than the noise it saves:
+    ///         the warning exists <em>because</em> a second host started in this process, so suppressing
+    ///         repeats globally would silence it for precisely the host that needs it. Keying on the
+    ///         <see cref="JasperFx.JasperFxOptions" /> instance — one per container — draws the line in
+    ///         the right place, and the weak table lets a finished container's entry go.
+    ///     </para>
+    /// </remarks>
+    private static void WarnAboutApplicationAssemblyReuse(IServiceProvider services, StoreOptions options,
+        JasperFx.JasperFxOptions? jasperFx)
+    {
+        if (options.ApplicationAssemblyReuseWarning is not { } warning || jasperFx is null) return;
+
+        lock (WarnedContainers)
+        {
+            if (!WarnedContainers.TryAdd(jasperFx, WarnedContainers)) return;
+        }
+
+        services.GetService<ILoggerFactory>()?
+            .CreateLogger(typeof(DocumentStore))
+            .LogWarning("{Warning}", warning);
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<JasperFx.JasperFxOptions, object>
+        WarnedContainers = new();
 
     [UnconditionalSuppressMessage("Trimming", "IL2055:MakeGenericType",
         Justification = "IConfigureFisher<T> is closed over a marker interface the caller supplied to "

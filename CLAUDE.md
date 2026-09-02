@@ -2081,10 +2081,25 @@ hosted services. The store is a singleton, sessions are scoped, and the returned
     the only test that fails when the call is moved.
   - **One-way.** A false `EnableAdvancedTracking` is the default rather than a statement, so it must
     not turn *off* a store that opted in for itself — which a plain assignment would do.
-  - `JasperFxOptions.ApplicationAssemblyReuseWarning` is deliberately **not** read. Polecat buffers it
-    in the same method and logs it from an always-registered activator; Fisher has no unconditional
-    startup hosted service to log it from, so surfacing it means registering one. Filed rather than
-    folded in as fisher#142.
+  - **`JasperFxOptions.ApplicationAssemblyReuseWarning` is surfaced from `Configured` too**
+    (fisher#142), where the siblings log it from an always-registered startup activator. All three of
+    Fisher's hosted services are conditional — `ApplyAllDatabaseChangesOnStartup`,
+    `SeedInitialDataOnStartup`, `AddAsyncDaemon` — so a plain `AddFisher` has no startup hook at all,
+    and registering an unconditional one for a single rare warning would change what every consumer's
+    container holds. `Configured` already runs exactly once per store with the container in hand.
+    JasperFx only *detects* the condition and says plainly that consumers surface it, so a warning
+    nobody prints is a warning that does not exist.
+    - **Once per container**, keyed on the `JasperFxOptions` instance through a
+      `ConditionalWeakTable`. Several Fisher stores share one host condition and would otherwise each
+      repeat the same four-sentence warning. **A process-wide flag would be worse than the noise it
+      saves**: the warning exists *because* a second host started in this process, so suppressing
+      repeats globally would silence it for precisely the host that needs it.
+      `a_second_host_in_the_same_process_gets_its_own_warning` is that half.
+    - **The value is planted by reflection in the tests, and that is the right amount of test.** The
+      setter is internal to JasperFx and reproducing the real condition needs two hosts from two
+      assemblies in one process in a fixed order — an intermittent under xUnit's parallel collections
+      rather than a test. What is Fisher's to get right is read it, buffer it, log it once; detecting
+      it is JasperFx's and is tested there.
 
 **Everything Fisher hands a container now implements `IDisposable` as well as `IAsyncDisposable`** —
 `DocumentStore`, `FisherDatabase`, `FisherSession`, and `IQuerySession` with them. That is not a

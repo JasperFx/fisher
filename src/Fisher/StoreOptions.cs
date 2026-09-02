@@ -148,7 +148,24 @@ public class StoreOptions
         {
             Events.EnableExtendedProgressionTracking = true;
         }
+
+        // fisher#142. Buffered rather than logged here, because options construction is not where a
+        // logger belongs; FisherServiceCollectionExtensions.Configured logs it immediately after this
+        // returns. ??= so the first non-null value wins and a later null cannot clobber it.
+        ApplicationAssemblyReuseWarning ??= options.ApplicationAssemblyReuseWarning;
     }
+
+    /// <summary>
+    ///     JasperFx's GH-3521 warning that this host adopted an application assembly pinned by an
+    ///     earlier host in the same process, buffered on its way to the log.
+    /// </summary>
+    /// <remarks>
+    ///     JasperFx only detects the condition and says plainly that consumers surface it. It bites a
+    ///     test harness that stands up several Critter Stack hosts across different assemblies, where a
+    ///     later implicit host silently scans the first host's assembly — order-dependent, and it
+    ///     presents as a type this host registered simply not being discovered.
+    /// </remarks>
+    internal string? ApplicationAssemblyReuseWarning { get; set; }
 
     /// <summary>
     ///     Settings for the async projection daemon.
