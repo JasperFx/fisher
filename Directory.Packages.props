@@ -13,7 +13,7 @@
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
         <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.60.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.59.0" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.60.0" />
 
         <!-- Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
              source. Weasel.Storage: the dialect-neutral closed-shape document + event storage
