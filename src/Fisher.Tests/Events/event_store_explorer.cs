@@ -1,3 +1,5 @@
+using System.Text.Json;
+using JasperFx.Descriptors;
 using JasperFx;
 using JasperFx.Events;
 
@@ -44,6 +46,85 @@ public class event_store_explorer : IAsyncLifetime
     }
 
     private IEventStore TheExplorer => _store;
+
+    [Fact]
+    public async Task read_stream_returns_every_event_in_version_order()
+    {
+        var records = new List<EventRecord>();
+        await foreach (var record in TheExplorer.ReadStreamAsync(_streamId.ToString(),
+                           TestContext.Current.CancellationToken))
+        {
+            records.Add(record);
+        }
+
+        records.Select(x => x.StreamVersion).ShouldBe([1, 2]);
+        records.Select(x => x.EventTypeName).ShouldBe(["quest_started", "member_joined"]);
+        records.Select(x => x.StreamId).Distinct().Single().ShouldBe(_streamId.ToString());
+        records.Select(x => x.Sequence).ShouldBe(records.Select(x => x.Sequence).Order());
+    }
+
+    [Fact]
+    public async Task read_stream_carries_the_body_as_raw_json()
+    {
+        // The explorer's contract is that a caller WITHOUT the consumer's event assemblies can still
+        // render the body — so it travels as JSON rather than as a hydrated CLR instance.
+        var records = new List<EventRecord>();
+        await foreach (var record in TheExplorer.ReadStreamAsync(_streamId.ToString(),
+                           TestContext.Current.CancellationToken))
+        {
+            records.Add(record);
+        }
+
+        // Asserted on the raw text rather than by property name on purpose: the casing is the
+        // store serializer's business, and this contract is only that the BODY travels as JSON.
+        records[0].Data.ValueKind.ShouldBe(JsonValueKind.Object);
+        records[0].Data.GetRawText().ShouldContain("Find the ring");
+        records[1].Data.GetRawText().ShouldContain("Frodo");
+    }
+
+    [Fact]
+    public async Task read_stream_accepts_an_uppercase_guid()
+    {
+        // Same trap as GetStreamMetadataAsync: fi_events.stream_id holds the lowercase canonical
+        // form and SQLite's default collation is case-sensitive, so an unnormalised id matches
+        // nothing and the caller sees an empty stream rather than an error.
+        var records = new List<EventRecord>();
+        await foreach (var record in TheExplorer.ReadStreamAsync(_streamId.ToString().ToUpperInvariant(),
+                           TestContext.Current.CancellationToken))
+        {
+            records.Add(record);
+        }
+
+        records.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task read_stream_for_an_unknown_stream_is_empty_rather_than_throwing()
+    {
+        var records = new List<EventRecord>();
+        await foreach (var record in TheExplorer.ReadStreamAsync(Guid.NewGuid().ToString(),
+                           TestContext.Current.CancellationToken))
+        {
+            records.Add(record);
+        }
+
+        records.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task read_stream_for_a_null_tenant_is_store_global()
+    {
+        // The tenant-scoped overload delegates for a null tenant by contract (jasperfx#503), so both
+        // spellings must agree on a single-tenant store.
+        var withTenant = new List<EventRecord>();
+        await foreach (var record in TheExplorer.ReadStreamAsync(_streamId.ToString(), null,
+                           TestContext.Current.CancellationToken))
+        {
+            withTenant.Add(record);
+        }
+
+        withTenant.Count.ShouldBe(2);
+    }
 
     /// <summary>
     ///     The trap this exists for: <c>fi_streams.id</c> holds the lowercase canonical Guid, SQLite's
