@@ -195,6 +195,20 @@ showed no per-shard state for Fisher stores with nothing to indicate why, which 
 shape as having nothing to report.
 :::
 
+### The application-assembly reuse warning
+
+JasperFx pins the application assembly used for discovery **process-wide**, to whichever Critter Stack
+host starts first. A later host registered from a different assembly therefore gets discovery over
+somebody else's assembly, and JasperFx sets a warning saying so. Fisher logs it once per container
+when the store is built.
+
+::: tip
+It typically only bites a **test harness** that stands up several hosts across different assemblies.
+The symptom without the warning is a type this host registered simply not being discovered — silent,
+and dependent on which host happened to start first. Set the application assembly explicitly on the
+later host if you hit it.
+:::
+
 ## Session Factories
 
 By default, the scoped `IDocumentSession` is a lightweight session. Supply your own `ISessionFactory`
