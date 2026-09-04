@@ -268,5 +268,7 @@ public static class QueryableExtensions
     private static FisherQueryProvider ProviderFor<T>(IQueryable<T> queryable)
         => queryable.Provider as FisherQueryProvider
            ?? throw new InvalidOperationException(
-               "This async operator only works on a query created by Fisher's session.Query<T>().");
+               "This async operator only works on a query created by Fisher's session.Query<T>(). "
+               + "For QueryStreamStates() (jasperfx#740), use the shared terminators in "
+               + "JasperFx.Events.Documents.DocumentQueryableExtensions instead.");
 }

@@ -98,6 +98,16 @@ internal static class StreamCompacting
         // DeleteEvents already treats as a no-op.
         session.Events.DeleteEvents(events.Take(events.Count - 1).Select(x => x.Sequence).ToArray());
 
+        // The jasperfx#740 compaction watermark: the version compacted through — the caller's cutoff
+        // for a partial compaction, the stream's version for a full one (so un-compacted growth reads
+        // zero). Queued onto the same unit of work as the replace and the deletes, so the watermark
+        // can never disagree with the compaction it describes.
+        session.QueueOperation(new Fisher.Events.Storage.RecordCompactionWatermarkOperation(
+            session.Options.EventGraph,
+            request.StreamId?.ToString() ?? request.StreamKey!,
+            session.Events.TenantId,
+            last.Version));
+
         await session.SaveChangesAsync(request.CancellationToken).ConfigureAwait(false);
     }
 

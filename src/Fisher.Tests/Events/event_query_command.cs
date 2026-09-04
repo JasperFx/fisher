@@ -76,73 +76,14 @@ public class event_query_command : IAsyncLifetime
 
     /// <summary>
     ///     Execute the command with stdout captured, and hand back the parsed JSON report alongside
-    ///     the command's success/failure return.
+    ///     the command's success/failure return. Capture + parse live in <see cref="CliJsonCapture" />,
+    ///     shared with the other CLI e2e classes.
     /// </summary>
-    private async Task<(bool Success, JsonDocument Report)> runAsync(EventQueryInput input)
+    private Task<(bool Success, JsonDocument Report)> runAsync(EventQueryInput input)
     {
         input.HostBuilder = fisherHostBuilder();
 
-        var original = Console.Out;
-        var captured = new StringWriter();
-
-        bool success;
-        try
-        {
-            Console.SetOut(captured);
-            success = await new EventQueryCommand().Execute(input);
-        }
-        finally
-        {
-            Console.SetOut(original);
-        }
-
-        return (success, parseReport(captured.ToString()));
-    }
-
-    /// <summary>
-    ///     Extract the report from the captured text by brace-counting from the first opening brace,
-    ///     so a stray console line from a concurrently running test cannot break the parse the way a
-    ///     bare <c>JsonDocument.Parse(captured)</c> would.
-    /// </summary>
-    private static JsonDocument parseReport(string captured)
-    {
-        var start = captured.IndexOf('{');
-        start.ShouldBeGreaterThanOrEqualTo(0, $"no JSON object in captured output: '{captured}'");
-
-        var depth = 0;
-        var inString = false;
-        for (var i = start; i < captured.Length; i++)
-        {
-            var c = captured[i];
-
-            if (inString)
-            {
-                if (c == '\\')
-                {
-                    i++;
-                }
-                else if (c == '"')
-                {
-                    inString = false;
-                }
-
-                continue;
-            }
-
-            switch (c)
-            {
-                case '"':
-                    inString = true;
-                    break;
-                case '{':
-                    depth++;
-                    break;
-                case '}' when --depth == 0:
-                    return JsonDocument.Parse(captured[start..(i + 1)]);
-            }
-        }
-
-        throw new ShouldAssertException($"unbalanced JSON object in captured output: '{captured}'");
+        return CliJsonCapture.RunAsync(() => new EventQueryCommand().Execute(input));
     }
 
     [Fact]
