@@ -252,11 +252,11 @@ public class read_only_event_store : IAsyncLifetime
     ///     sequence 1 is a <c>quest_started</c>, which the filter then removes.
     /// </summary>
     /// <remarks>
-    ///     This duplicates the intent of the upstream <c>paging_composes_with_filtering</c> compliance
-    ///     fact, which as of JasperFx.Events.ComplianceTests 2.62.0-local737 cannot pass on any store:
-    ///     its seed loop (<c>i</c> in 0..9, <c>i % 3 == 0</c> → noise) writes 4 noise + 6 matching
-    ///     events while every assertion expects the stated 7 matches. Fisher passing here is the
-    ///     evidence that the red fact is the seed's off-by-one, not this store's paging.
+    ///     A store-side pin on the same contract as the upstream <c>paging_composes_with_filtering</c>
+    ///     compliance fact. Enrolling that suite caught a seed off-by-one in the fact (6 matching
+    ///     events seeded, 7 asserted — unpassable on any store), fixed upstream in jasperfx#739 before
+    ///     2.62.0 shipped; this test is what showed the red fact was the seed's arithmetic and not this
+    ///     store's paging, and it stays as coverage that survives suite churn.
     /// </remarks>
     [Fact]
     public async Task paging_composes_with_filtering()

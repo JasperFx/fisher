@@ -113,11 +113,10 @@ public class subscription_compliance
  * registered), so all forty-one facts run — see EventOperations.SupportedEventQueryFilters for the
  * flags a differently-configured store honestly drops.
  *
- * ⚠️ KNOWN RED at 2.62.0-local737, upstream not Fisher: paging_composes_with_filtering seeds 6
- * matching events (i in 0..9 with i % 3 == 0 as noise is 4 noise + 6 matches) while asserting the
- * stated 7, so it cannot pass on any store. Fisher's own
- * read_only_event_store.paging_composes_with_filtering covers the fact's intent with a correct
- * seed. Expect 41/41 once the suite's seed is fixed upstream for the real 2.62.0.
+ * Enrolling this suite caught an upstream seed off-by-one in paging_composes_with_filtering (6
+ * matching events seeded, 7 asserted — unpassable on any store), fixed in jasperfx#739 before
+ * 2.62.0 shipped. Fisher's own read_only_event_store.paging_composes_with_filtering keeps a
+ * store-side pin on the same contract.
  */
 
 public class event_query_compliance
