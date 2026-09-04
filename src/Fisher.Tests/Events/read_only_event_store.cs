@@ -225,18 +225,77 @@ public class read_only_event_store : IAsyncLifetime
     }
 
     /// <summary>
-    ///     The gate that matters. <c>causation_id</c> and <c>user_name</c> are not on this store's
-    ///     <c>fi_events</c> at all, because the options that create them are off — so applying the filter
-    ///     would be a <c>no such column</c> error rather than an empty result. <c>EventQuery</c> says such
-    ///     a filter is only honoured when the store captures the column, so it is ignored.
+    ///     The gate that matters, with jasperfx#737's polarity. <c>causation_id</c> and <c>user_name</c>
+    ///     are not on this store's <c>fi_events</c> at all, because the options that create them are off
+    ///     — so applying the filter would be a <c>no such column</c> error. This used to be silently
+    ///     ignored, per <c>EventQuery</c>'s original field docs; the guard rail reverses that, because
+    ///     the four unfiltered events would read as "four events match nobody's user name". The refusal
+    ///     names the fields, so a monitoring tool can say which filter the store cannot answer.
     /// </summary>
     [Fact]
-    public async Task a_filter_on_a_column_this_store_does_not_write_is_ignored()
+    public async Task a_filter_on_a_column_this_store_does_not_write_is_refused_by_name()
+    {
+        var exception = await Should.ThrowAsync<NotSupportedException>(() =>
+            TheReadStore.QueryEventsAsync(
+                new EventQuery { CausationId = "never-written", UserName = "nobody" },
+                TestContext.Current.CancellationToken));
+
+        exception.Message.ShouldContain(nameof(EventQuery.CausationId));
+        exception.Message.ShouldContain(nameof(EventQuery.UserName));
+        // CorrelationId capture IS on for this store, so it is not among the refused fields.
+        exception.Message.ShouldNotContain(nameof(EventQuery.CorrelationId));
+    }
+
+    /// <summary>
+    ///     Paging applies to the FILTERED, sequence-ordered result, never before the filter. With this
+    ///     store's seed a page-before-filter store answers page 1 with nothing at all: unfiltered
+    ///     sequence 1 is a <c>quest_started</c>, which the filter then removes.
+    /// </summary>
+    /// <remarks>
+    ///     A store-side pin on the same contract as the upstream <c>paging_composes_with_filtering</c>
+    ///     compliance fact. Enrolling that suite caught a seed off-by-one in the fact (6 matching
+    ///     events seeded, 7 asserted — unpassable on any store), fixed upstream in jasperfx#739 before
+    ///     2.62.0 shipped; this test is what showed the red fact was the seed's arithmetic and not this
+    ///     store's paging, and it stays as coverage that survives suite churn.
+    /// </remarks>
+    [Fact]
+    public async Task paging_composes_with_filtering()
+    {
+        var pages = new List<PagedEvents>();
+        for (var pageNumber = 1; pageNumber <= 3; pageNumber++)
+        {
+            pages.Add(await TheReadStore.QueryEventsAsync(
+                new EventQuery { EventTypeName = "member_joined", PageNumber = pageNumber, PageSize = 1 },
+                TestContext.Current.CancellationToken));
+        }
+
+        foreach (var page in pages)
+        {
+            // The filtered total on every page, including the one past the end.
+            page.TotalCount.ShouldBe(2);
+            page.Events.ShouldAllBe(x => x.Data is MemberJoined);
+        }
+
+        // The two member_joined events sit at sequences 2 and 3, one per page, in order — and the
+        // page past the end is empty with the total intact.
+        pages[0].Events.Single().Sequence.ShouldBe(2);
+        pages[1].Events.Single().Sequence.ShouldBe(3);
+        pages[2].Events.ShouldBeEmpty();
+    }
+
+    /// <summary>
+    ///     The other half of the same rule: a supported filter that merely matches nothing stays an
+    ///     empty answer, never a throw — "no event carries this" and "I cannot answer this" must not
+    ///     read alike. Correlation capture is on for this store, so the filter is honored.
+    /// </summary>
+    [Fact]
+    public async Task a_supported_filter_matching_nothing_is_an_empty_answer_not_a_refusal()
     {
         var page = await TheReadStore.QueryEventsAsync(
-            new EventQuery { CausationId = "never-written", UserName = "nobody" },
+            new EventQuery { CorrelationId = "never-written" },
             TestContext.Current.CancellationToken);
 
-        page.TotalCount.ShouldBe(4);
+        page.TotalCount.ShouldBe(0);
+        page.Events.ShouldBeEmpty();
     }
 }

@@ -8,8 +8,8 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and thirty-seven are enrolled from
- * JasperFx.Events.ComplianceTests 2.61.0, which itself ships thirty-nine. The two not enrolled are both
+ * Suites were added one at a time as Fisher grew into them, and thirty-eight are enrolled from
+ * JasperFx.Events.ComplianceTests 2.62.0, which itself ships forty. The two not enrolled are both
  * opt-in and both new in 2.59.0: SingleTenantedEventSlicingCompliance (jasperfx#724), whose
  * mixed-tenancy precondition cannot be constructed on Fisher at all -- see jasperfx#727 -- and
  * CompositeProjectionCompliance (jasperfx#725), which needs an AddCompositeProjection member on the
@@ -103,6 +103,24 @@ public class conjoined_event_tenancy_compliance
 
 public class subscription_compliance
     : SubscriptionCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * fisher#148 / jasperfx#737 — the broadened cross-stream EventQuery behind
+ * IReadOnlyEventStore.QueryEventsAsync: every filter field including the inclusive timestamp and
+ * sequence windows, the multi-type union, and the folded DCB tag conditions, plus the
+ * sequence-ascending ordering and paging/TotalCount contracts. Fisher declares the full
+ * EventQueryFilters set for the suite's configuration (correlation + user-name capture on, tag type
+ * registered), so all forty-one facts run — see EventOperations.SupportedEventQueryFilters for the
+ * flags a differently-configured store honestly drops.
+ *
+ * Enrolling this suite caught an upstream seed off-by-one in paging_composes_with_filtering (6
+ * matching events seeded, 7 asserted — unpassable on any store), fixed in jasperfx#739 before
+ * 2.62.0 shipped. Fisher's own read_only_event_store.paging_composes_with_filtering keeps a
+ * store-side pin on the same contract.
+ */
+
+public class event_query_compliance
+    : EventQueryCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
 /*
  * fisher#93 — binary event serialization, arriving in JasperFx.Events.ComplianceTests 2.50.0 and
