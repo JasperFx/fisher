@@ -1,8 +1,11 @@
 using System.Linq.Expressions;
 using Fisher.Events.Internal;
+using Fisher.Events.Storage;
 using Fisher.Linq.Members;
 using Fisher.Linq.Parsing;
+using Fisher.Storage;
 using JasperFx.Events;
+using JasperFx.Events.Tags;
 
 namespace Fisher.Events;
 
@@ -100,27 +103,49 @@ public partial class EventOperations
     ///     <para>
     ///         The paging read behind <see cref="IReadOnlyEventStore" /> — CritterWatch's Event Explorer
     ///         is the caller. Unlike the predicate overload above, <see cref="EventQuery" /> is a flat
-    ///         bag of optional exact-match filters rather than an expression, so no
-    ///         <see cref="Fisher.Linq.Parsing.WhereClauseParser" /> is involved: every field maps to one
-    ///         <c>fi_events</c> column and an <c>=</c>.
+    ///         bag of optional filters rather than an expression, so no
+    ///         <see cref="Fisher.Linq.Parsing.WhereClauseParser" /> is involved: the exact-match fields
+    ///         each map to one <c>fi_events</c> column and an <c>=</c>, the two inclusive windows map to
+    ///         <c>&gt;=</c>/<c>&lt;=</c> pairs, and the tag conditions reuse the
+    ///         <c>seq_id in (select …)</c> shape <see cref="QueryByTagsAsync" /> established.
     ///     </para>
     ///     <para>
-    ///         <b>The three metadata filters are gated on the options that create their columns.</b>
-    ///         <c>correlation_id</c>, <c>causation_id</c> and <c>user_name</c> only exist when the
-    ///         matching <c>Enable*</c> option is on, so filtering on one otherwise is not merely
-    ///         unhelpful — it is a <c>no such column</c> error. Ignoring the filter is what
-    ///         <see cref="EventQuery" /> asks for ("only honored when the store advertises and captures
-    ///         the metadata column"), and is what Polecat does.
+    ///         <b>The three metadata filters are gated on the options that create their columns —
+    ///         by REFUSAL, not by silence (jasperfx#737).</b> <c>correlation_id</c>,
+    ///         <c>causation_id</c> and <c>user_name</c> only exist when the matching <c>Enable*</c>
+    ///         option is on, so filtering on one otherwise is not merely unhelpful — it is a
+    ///         <c>no such column</c> error. Such a filter used to be silently ignored, as
+    ///         <see cref="EventQuery" />'s field docs once permitted; the jasperfx#737 guard rail
+    ///         reverses that, because unfiltered results read as filtered. The store now declares only
+    ///         the filters its configuration can honor and
+    ///         <see cref="EventQuery.AssertFiltersAreSupported" /> throws a
+    ///         <see cref="NotSupportedException" /> naming the field.
     ///     </para>
     ///     <para>
-    ///         <c>TenantId</c> is ignored: Fisher's multi-tenancy stops at a tenant id column and
-    ///         <see cref="EventQuery" /> says a store without a tenant dimension ignores it. The
-    ///         session's own tenant scope still applies on a conjoined store, as it does everywhere else.
+    ///         <b><c>TenantId</c> selects the tenant partition on a conjoined store.</b> When supplied it
+    ///         replaces the session's own tenant scope — <see cref="IReadOnlyEventStore" /> reads through
+    ///         a default-tenant session, and the whole point of the field (jasperfx#555) is to let the
+    ///         Event Explorer scope that read to one tenant. When null, the session's own scope applies,
+    ///         as it does everywhere else. On a store without conjoined tenancy the field is ignored,
+    ///         which is what <see cref="EventQuery" /> documents for a store without a tenant dimension —
+    ///         the one documented ignore, not a guard-rail violation.
+    ///     </para>
+    ///     <para>
+    ///         The timestamp window compares ISO-8601 text. That is sound because
+    ///         <see cref="SqliteTimestamp" /> renders every stored value and both bounds in one
+    ///         fixed-width UTC format, which orders lexicographically exactly as it orders temporally —
+    ///         the property the column format was chosen for. Bounds are rendered at the store's own
+    ///         millisecond precision, so a bound taken from a read-back <see cref="IEvent.Timestamp" />
+    ///         compares equal to its own row, which is what makes the window inclusive in practice.
     ///     </para>
     /// </remarks>
     public async Task<PagedEvents> QueryEventsAsync(EventQuery query, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(query);
+
+        // jasperfx#737: refuse — loudly, naming the field — any supplied filter this store's
+        // configuration cannot honor, rather than returning unfiltered results that read as filtered.
+        query.AssertFiltersAreSupported(SupportedEventQueryFilters());
 
         var options = _session.Options.Events;
 
@@ -203,26 +228,87 @@ public partial class EventOperations
     }
 
     /// <summary>
+    ///     The <see cref="EventQueryFilters" /> this store honors, given its configuration — what the
+    ///     jasperfx#737 guard rail asserts against.
+    /// </summary>
+    /// <remarks>
+    ///     Everything except the metadata columns the store was not configured to write:
+    ///     <c>correlation_id</c>, <c>causation_id</c> and <c>user_name</c> only exist on
+    ///     <c>fi_events</c> when the matching <c>Enable*</c> option was on when the schema was built,
+    ///     so a filter over a missing one cannot be honored and must be refused.
+    ///     <see cref="EventQueryFilters.TenantId" /> stays declared even without conjoined tenancy:
+    ///     <see cref="EventQuery.TenantId" /> documents that a store without a tenant dimension ignores
+    ///     it, so ignoring there is the field's contract rather than a silent drop.
+    /// </remarks>
+    private EventQueryFilters SupportedEventQueryFilters()
+    {
+        var options = _session.Options.Events;
+        var filters = EventQueryFilters.All;
+
+        if (!options.EnableCorrelationId)
+        {
+            filters &= ~EventQueryFilters.CorrelationId;
+        }
+
+        if (!options.EnableCausationId)
+        {
+            filters &= ~EventQueryFilters.CausationId;
+        }
+
+        if (!options.EnableUserName)
+        {
+            filters &= ~EventQueryFilters.UserName;
+        }
+
+        return filters;
+    }
+
+    /// <summary>
     ///     Append the query's <c>where</c> clause, shared by the page read and the count so the two
     ///     cannot disagree about what matches.
     /// </summary>
     private void AppendEventQueryFilters(Weasel.Sqlite.CommandBuilder builder, EventQuery query)
     {
-        var options = _session.Options.Events;
         var first = true;
 
-        void Clause(string column, object value)
+        void Prefix()
         {
             builder.Append(first ? " where " : " and ");
-            builder.Append(column);
-            builder.Append(" = ");
-            builder.AppendParameter(value);
             first = false;
         }
 
-        if (query.EventTypeName is not null)
+        void Clause(string column, string comparison, object value)
         {
-            Clause("type", query.EventTypeName);
+            Prefix();
+            builder.Append(column);
+            builder.Append(comparison);
+            builder.AppendParameter(value);
+        }
+
+        // One code path for both spellings of the event type filter, so the single/plural union
+        // semantics stay upstream in CombinedEventTypeNames (jasperfx#737): distinct names OR'd, an
+        // unknown name contributing nothing. `in` gives both for free, and a duplicated name cannot
+        // double-count because the filter selects rows rather than joining against them.
+        var eventTypeNames = query.CombinedEventTypeNames();
+        if (eventTypeNames.Count == 1)
+        {
+            Clause("type", " = ", eventTypeNames[0]);
+        }
+        else if (eventTypeNames.Count > 1)
+        {
+            Prefix();
+            builder.Append("type in (");
+            for (var i = 0; i < eventTypeNames.Count; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append(", ");
+                }
+
+                builder.AppendParameter(eventTypeNames[i]);
+            }
+
+            builder.Append(')');
         }
 
         if (query.StreamId is not null)
@@ -232,42 +318,145 @@ public partial class EventOperations
             // nothing. Same trap SqliteGuidIdentification exists for, and the same normalisation
             // GetStreamMetadataAsync does. An unparseable value under Guid identity is left as text, so
             // it matches nothing rather than throwing at a monitoring tool.
-            if (IsGuidIdentity)
+            if (IsGuidIdentity && Guid.TryParse(query.StreamId, out var streamId))
             {
-                if (Guid.TryParse(query.StreamId, out var streamId))
-                {
-                    Clause("stream_id", streamId.ToString());
-                }
-                else
-                {
-                    Clause("stream_id", query.StreamId);
-                }
+                Clause("stream_id", " = ", streamId.ToString());
             }
             else
             {
-                Clause("stream_id", query.StreamId);
+                Clause("stream_id", " = ", query.StreamId);
             }
         }
 
-        if (query.CorrelationId is not null && options.EnableCorrelationId)
+        // No Enable* gates here any more: AssertFiltersAreSupported already refused a metadata filter
+        // this store's schema cannot answer, so reaching one of these means the column exists.
+        if (query.CorrelationId is not null)
         {
-            Clause("correlation_id", query.CorrelationId);
+            Clause("correlation_id", " = ", query.CorrelationId);
         }
 
-        if (query.CausationId is not null && options.EnableCausationId)
+        if (query.CausationId is not null)
         {
-            Clause("causation_id", query.CausationId);
+            Clause("causation_id", " = ", query.CausationId);
         }
 
-        if (query.UserName is not null && options.EnableUserName)
+        if (query.UserName is not null)
         {
-            Clause("user_name", query.UserName);
+            Clause("user_name", " = ", query.UserName);
+        }
+
+        // The inclusive timestamp window (jasperfx#737). Text comparison over SqliteTimestamp's one
+        // fixed-width UTC format, in which lexicographic and temporal order coincide — see the method
+        // remarks. Bounds render at the store's own millisecond precision, so a bound equal to a
+        // stored value compares equal and the window is inclusive at both ends.
+        if (query.TimestampFrom is not null)
+        {
+            Clause("timestamp", " >= ", SqliteTimestamp.ToDatabaseValue(query.TimestampFrom.Value));
+        }
+
+        if (query.TimestampTo is not null)
+        {
+            Clause("timestamp", " <= ", SqliteTimestamp.ToDatabaseValue(query.TimestampTo.Value));
+        }
+
+        // The inclusive sequence window (jasperfx#737). An inverted window — floor above ceiling — is
+        // two contradictory comparisons on one column: a well-formed range containing nothing, which
+        // is exactly the contract (an empty page and TotalCount 0, never an error).
+        if (query.SequenceFloor is not null)
+        {
+            Clause("seq_id", " >= ", query.SequenceFloor.Value);
+        }
+
+        if (query.SequenceCeiling is not null)
+        {
+            Clause("seq_id", " <= ", query.SequenceCeiling.Value);
+        }
+
+        if (query.TagConditions is not null)
+        {
+            Prefix();
+            AppendTagConditionsFilter(builder, query.TagConditions);
         }
 
         if (IsConjoined)
         {
-            Clause("tenant_id", TenantId);
+            // The query's tenant selects the partition when supplied (jasperfx#555 — the read-only
+            // store reads through a default-tenant session, and this field is how the Event Explorer
+            // scopes it); the session's own scope applies otherwise, as it does everywhere else.
+            Clause("tenant_id", " = ", query.TenantId ?? TenantId);
         }
+    }
+
+    /// <summary>
+    ///     Render <see cref="EventQuery.TagConditions" /> — the wire form of a DCB tag query — as one
+    ///     parenthesised group AND-composed with the rest of the query's filters.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The spec's types are resolved against this store's registered tag and event graph, the
+    ///         same graph <see cref="QueryByTagsAsync" /> queries by CLR type; an unregistered type is a
+    ///         loud <see cref="UnknownTagQueryTypeException" /> rather than an empty answer, because
+    ///         "that tag type does not exist here" and "no event carries that tag" must not read alike.
+    ///     </para>
+    ///     <para>
+    ///         Each condition is the same <c>seq_id in (select seq_id from &lt;tag table&gt; …)</c>
+    ///         subselect <see cref="QueryByTagsAsync" /> uses, OR'd — chosen there over a join because a
+    ///         join multiplies rows when an event carries more than one matching tag, and here that
+    ///         choice is additionally what keeps <see cref="PagedEvents.TotalCount" /> counting distinct
+    ///         events rather than condition hits.
+    ///     </para>
+    /// </remarks>
+    private void AppendTagConditionsFilter(Weasel.Sqlite.CommandBuilder builder, EventTagQuerySpec spec)
+    {
+        var knownTypes = Graph.TagTypes.Select(x => x.TagType)
+            .Concat(Graph.AllKnownEventTypes().Select(x => x.EventType));
+
+        var tagQuery = spec.Resolve(EventTagQuerySpec.ResolverFor(knownTypes));
+
+        if (tagQuery.Conditions.Count == 0)
+        {
+            // Zero OR'd conditions select no events — the same answer FetchForWritingByTags refuses to
+            // build a boundary over and QueryByTagsAsync returns [] for. Rendered as a false predicate
+            // rather than skipped, because a supplied filter must never widen the result.
+            builder.Append("0 = 1");
+            return;
+        }
+
+        builder.Append('(');
+
+        for (var i = 0; i < tagQuery.Conditions.Count; i++)
+        {
+            var condition = tagQuery.Conditions[i];
+
+            if (i > 0)
+            {
+                builder.Append(" or ");
+            }
+
+            var registration = Graph.FindTagType(condition.TagType)
+                               ?? throw new InvalidOperationException(
+                                   $"Tag type '{condition.TagType.Name}' is not registered on this event store. "
+                                   + $"Call RegisterTagType<{condition.TagType.Name}>() before querying by it.");
+
+            builder.Append("(seq_id in (select seq_id from ");
+            builder.Append(Graph.TagTableName(registration));
+            builder.Append(" where value = ");
+            builder.AppendParameter(EventTagWriter.ToDatabaseValue(registration.ExtractValue(condition.TagValue)));
+            builder.Append(')');
+
+            // A condition may additionally narrow to one event type. Matching on the stored
+            // event_type_name rather than the .NET type name, so a renamed CLR type with a stable
+            // alias still matches — the same rule as AppendConditions on the CLR-typed path.
+            if (condition.EventType is not null)
+            {
+                builder.Append(" and type = ");
+                builder.AppendParameter(Graph.EventMappingFor(condition.EventType).EventTypeName);
+            }
+
+            builder.Append(')');
+        }
+
+        builder.Append(')');
     }
 
     /// <summary>

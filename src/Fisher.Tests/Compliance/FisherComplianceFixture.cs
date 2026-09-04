@@ -56,6 +56,14 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
                 options.Events.EnableCausationId = true;
             }
 
+            // Opt-in like correlation, and a schema decision the same way: user_name only exists on
+            // fi_events when this was on when the schema was built (jasperfx#737 — the event query
+            // suite filters on the column).
+            if (config.EnableUserNameTracking)
+            {
+                options.Events.EnableUserName = true;
+            }
+
             if (config.EnableHeaders)
             {
                 options.Events.EnableHeaders = true;
@@ -163,6 +171,15 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
 
     public override void SetCorrelationId(IDocumentSession session, string? correlationId)
         => AsFisherSession(session).CorrelationId = correlationId;
+
+    /// <summary>
+    ///     Fisher spells the seam's "user name (last-modified-by)" as
+    ///     <see cref="IDocumentOperations.CurrentUserName" /> — one value stamped onto appended events
+    ///     when <c>EnableUserName</c> is on and onto documents whose type enabled the column, the same
+    ///     one-source-two-destinations shape as the correlation pair above it.
+    /// </summary>
+    public override void SetUserName(IDocumentSession session, string? userName)
+        => session.CurrentUserName = userName;
 
     /// <summary>
     ///     Wipe event data between tests.
