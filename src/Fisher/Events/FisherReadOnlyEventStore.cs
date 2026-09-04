@@ -52,6 +52,33 @@ internal sealed class FisherReadOnlyEventStore : IReadOnlyEventStore
         => ReadAsync(events => events.QueryEventsAsync(query, token));
 
     /// <summary>
+    ///     The streams table as a composable <see cref="IQueryable{T}" /> of
+    ///     <see cref="StreamState" /> (jasperfx#740). See <see cref="StreamStateQueryProvider" /> for
+    ///     the translation; execution opens a session per terminator, the same lifetime rule as
+    ///     <see cref="ReadAsync{T}" /> — a queryable that captured one would pin a pooled connection
+    ///     for as long as the caller keeps composing on it.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    ///     A non-null <paramref name="tenantId" /> on a store without conjoined event tenancy. Refused
+    ///     rather than ignored, per the contract: the unscoped streams table would read as one
+    ///     tenant's, which is the jasperfx#737 silently-unfiltered failure mode.
+    /// </exception>
+    public IQueryable<StreamState> QueryStreamStates(string? tenantId = null)
+    {
+        if (tenantId is not null
+            && _store.Options.EventGraph.TenancyStyle != JasperFx.MultiTenancy.TenancyStyle.Conjoined)
+        {
+            throw new NotSupportedException(
+                $"This event store is not multi-tenanted, so QueryStreamStates cannot scope to tenantId "
+                + $"'{tenantId}': fi_streams has no tenant dimension, and the unscoped streams would read "
+                + "as that tenant's. Set StoreOptions.Events.TenancyStyle = TenancyStyle.Conjoined before "
+                + "the schema is created, or omit the tenant id.");
+        }
+
+        return new StreamStateQueryProvider(_store, tenantId).CreateRoot();
+    }
+
+    /// <summary>
     ///     Run one read against a session of its own, disposed before the result is handed back.
     /// </summary>
     /// <remarks>

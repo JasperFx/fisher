@@ -42,5 +42,13 @@ internal class StreamsTable : Table
         }
 
         AddColumn("is_archived", "INTEGER").NotNull().DefaultValue(0);
+
+        // The compaction watermark (jasperfx#740): the stream version through which events have been
+        // folded into a Compacted<T> snapshot. 0 means never compacted — including streams compacted
+        // before this column existed, which is the honest default for metadata that was never
+        // recorded. NOT NULL DEFAULT 0 is what makes the upgrade a plain ALTER TABLE ADD COLUMN on an
+        // existing file, and what keeps every INSERT (all of which name their columns explicitly)
+        // untouched.
+        AddColumn("compacted_version", "INTEGER").NotNull().DefaultValue(0);
     }
 }

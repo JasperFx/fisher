@@ -11,7 +11,8 @@ namespace Fisher.Events.Internal;
 /// </summary>
 internal static class FisherStreamsRowReader
 {
-    internal const string SelectColumns = "id, type, version, created, timestamp, tenant_id, is_archived";
+    internal const string SelectColumns =
+        "id, type, version, created, timestamp, tenant_id, is_archived, compacted_version";
 
     /// <summary>
     ///     Read the current row into a <see cref="StreamState" />.
@@ -39,6 +40,10 @@ internal static class FisherStreamsRowReader
         state.Created = SqliteTimestamp.FromDatabaseValue(reader.GetString(3));
         state.LastTimestamp = SqliteTimestamp.FromDatabaseValue(reader.GetString(4));
         state.IsArchived = reader.GetInt64(6) != 0;
+
+        // The jasperfx#740 compaction watermark. 0 means never compacted — the column's default, so
+        // a stream written (or even compacted) before the column existed reads honestly as 0.
+        state.CompactedVersion = reader.GetInt64(7);
 
         return state;
     }

@@ -8,8 +8,8 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and thirty-eight are enrolled from
- * JasperFx.Events.ComplianceTests 2.62.0, which itself ships forty. The two not enrolled are both
+ * Suites were added one at a time as Fisher grew into them, and thirty-nine are enrolled from
+ * JasperFx.Events.ComplianceTests 2.63.0, which itself ships forty-one. The two not enrolled are both
  * opt-in and both new in 2.59.0: SingleTenantedEventSlicingCompliance (jasperfx#724), whose
  * mixed-tenancy precondition cannot be constructed on Fisher at all -- see jasperfx#727 -- and
  * CompositeProjectionCompliance (jasperfx#725), which needs an AddCompositeProjection member on the
@@ -121,6 +121,21 @@ public class subscription_compliance
 
 public class event_query_compliance
     : EventQueryCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * fisher#151 / jasperfx#740 — the streams table as an IQueryable<StreamState> behind
+ * IReadOnlyEventStore.QueryStreamStates, executed through the shared IDocumentQueryExecutor hook,
+ * plus the CompactedVersion compaction watermark (recorded by CompactStreamAsync: partial = the
+ * cutoff version, full = the stream version, never = 0). Fifteen facts: one Where() per public get
+ * member with per-member decoys, the compaction-policy selector verbatim
+ * (AggregateType == typeof(X) && Version - CompactedVersion > N && !IsArchived), the stated
+ * ordering (Created ascending, Id tiebreak) with truthful paging, and the shared terminators.
+ * The untranslatable-member and tenantless-tenant refusals cannot be pinned upstream (both
+ * reference stores translate the full set), so Fisher's own stream_state_queries pins them.
+ */
+
+public class stream_state_query_compliance
+    : StreamStateQueryCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
 /*
  * fisher#93 — binary event serialization, arriving in JasperFx.Events.ComplianceTests 2.50.0 and
