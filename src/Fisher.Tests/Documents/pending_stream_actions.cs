@@ -1,6 +1,5 @@
 using Fisher.Tests.Events;
 using JasperFx;
-using JasperFx.Events;
 using JasperFx.Events.Documents;
 using JasperFx.MultiTenancy;
 
@@ -23,6 +22,11 @@ namespace Fisher.Tests.Documents;
 ///         work's</em>. Fisher answers the second question, because that is the one the accessor exists
 ///         to ask: a pre-commit hook told what is about to be written and then handed only part of it
 ///         is wrong about the commit it is bracketing.
+///     </para>
+///     <para>
+///         Nothing the shared suite already states is restated here — the shape of the answer,
+///         including the non-covariance trap the contract's throwing default exists to catch, is
+///         <c>pending_stream_actions_compliance</c>'s to own.
 ///     </para>
 /// </remarks>
 public class pending_stream_actions : IAsyncLifetime
@@ -122,28 +126,5 @@ public class pending_stream_actions : IAsyncLifetime
 
         taken.ShouldHaveSingleItem();
         ((IDocumentSessionOperations)session).PendingStreams.Count.ShouldBe(2);
-    }
-
-    /// <remarks>
-    ///     The non-covariance trap, pinned rather than described. Fisher has a member <em>named</em>
-    ///     <c>PendingStreams</c> on <c>EventOperations</c> with a different collection type, so the
-    ///     interesting question is not whether the values agree but whether the contract member is
-    ///     implemented at all — an unimplemented one throws from the shared default, with a clean build
-    ///     either way.
-    /// </remarks>
-    [Fact]
-    public void the_contract_member_and_the_native_spelling_agree()
-    {
-        var streamId = Guid.NewGuid();
-
-        using var session = _store.LightweightSession("north");
-        session.Events.StartStream(streamId, new QuestStarted("North"));
-
-        var native = session.Events.PendingStreams.ShouldHaveSingleItem();
-        var contract = ((IDocumentSessionOperations)session).PendingStreams.ShouldHaveSingleItem();
-
-        contract.ShouldBeSameAs(native);
-        contract.Id.ShouldBe(streamId);
-        contract.ActionType.ShouldBe(StreamActionType.Start);
     }
 }
