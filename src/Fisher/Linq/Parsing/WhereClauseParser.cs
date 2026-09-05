@@ -133,6 +133,13 @@ internal class WhereClauseParser
             return lengthFragment!;
         }
 
+        // x.Tags.Count() > 2 / x.Tags.Count > 2 / x.Depths.Length > 2, either way round
+        if (TryParseCollectionCount(binary.Left, binary.Right, op, out var countFragment)
+            || TryParseCollectionCount(binary.Right, binary.Left, ReverseOperator(op), out countFragment))
+        {
+            return countFragment!;
+        }
+
         if (TryResolveMemberAndValue(binary.Left, binary.Right, out var member, out var value))
         {
             return BuildComparisonFilter(member!, value, op);
@@ -303,6 +310,62 @@ internal class WhereClauseParser
             Found = true;
             return node;
         }
+    }
+
+    /// <summary>
+    ///     <c>x.Tags.Count() &gt; 2</c> — also the <c>List.Count</c> property, an array's
+    ///     <c>Length</c>, and the filtered <c>Count(c =&gt; …)</c> overload — compared as a
+    ///     <c>count(*)</c> sub-query over <c>json_each</c>.
+    /// </summary>
+    /// <remarks>
+    ///     An absent member and one stored as JSON null both count as zero — the same "the key is not
+    ///     there is an honest empty" reading <c>IsEmpty()</c> documents — where in-memory LINQ over a
+    ///     null collection would throw. String <c>Length</c> is not claimed here (the element-type test
+    ///     rejects strings), so it keeps its <c>length()</c> translation.
+    /// </remarks>
+    private bool TryParseCollectionCount(Expression memberSide, Expression valueSide, string op,
+        out ISqlFragment? fragment)
+    {
+        fragment = null;
+
+        var stripped = StripConvert(memberSide);
+        Expression? collectionExpr = null;
+        LambdaExpression? filter = null;
+
+        if (stripped is MethodCallExpression { Method.Name: "Count", Object: null } call
+            && call.Method.DeclaringType == typeof(Enumerable)
+            && call.Arguments.Count is 1 or 2)
+        {
+            collectionExpr = call.Arguments[0];
+            filter = call.Arguments.Count == 2 ? Methods.ChildCollections.LambdaOf(call.Arguments[1]) : null;
+        }
+        else if (stripped is MemberExpression { Member.Name: "Count" or "Length" } property
+                 && property.Expression is MemberExpression inner)
+        {
+            collectionExpr = inner;
+        }
+        // An array's Length is not a member access in an expression tree — the compiler emits a
+        // dedicated ArrayLength unary node.
+        else if (stripped is UnaryExpression { NodeType: ExpressionType.ArrayLength } arrayLength)
+        {
+            collectionExpr = arrayLength.Operand;
+        }
+
+        if (collectionExpr == null
+            || !Methods.ChildCollections.IsCollectionDocumentMember(collectionExpr))
+        {
+            return false;
+        }
+
+        var collection = Methods.ChildCollections.ResolveCollection(_memberFactory, collectionExpr, "Count");
+
+        var where = filter == null
+            ? null
+            : Methods.ChildCollections.ParseElementPredicate(collection, filter, "Count");
+
+        fragment = new CollectionCountFilter(collection.JsonEachSource, collection.Alias, where, op,
+            ExtractValue(valueSide)!);
+        return true;
     }
 
     private bool TryParseModulo(BinaryExpression binary, string op, out ISqlFragment? fragment)

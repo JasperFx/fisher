@@ -27,15 +27,61 @@
 
 ## Collections
 
+A member that is a collection — a `List<T>`, an array, anything `IEnumerable<T>`-shaped except
+strings, byte arrays and dictionaries — is stored as a JSON array and queried through a correlated
+sub-query over SQLite's `json_each` table-valued function:
+
 ```cs
+// scalar elements — string, number, Guid, enum
 .Where(x => x.Tags.Contains("urgent"))
+// exists (select 1 from json_each(data, '$.tags') as each_1
+//         where each_1.key is not null and each_1.value = @p0)
+
+.Where(x => x.Tags.Any())                       // holds anything at all
+.Where(x => x.Tags.Count() > 2)                 // also .Count property and array .Length
+.Where(x => x.Stops.Count(s => s.Days < 5) == 2)
+
+// child objects — member predicates on the element
+.Where(x => x.Stops.Any(s => s.Port == "Oslo"))
+.Where(x => x.Stops.Any(s => s.Days > 5 && s.Resupplied))
+.Where(x => x.Stops.Any(s => s.Cargo.Contains("fuel")))   // nests, with a fresh alias per depth
+.Where(x => x.Stops.All(s => s.Days < 5))
+
+// membership the other way round — a value set, not a collection member
 .Where(x => names.Contains(x.Name))          // in (…)
 .Where(x => x.Name.IsOneOf("a", "b", "c"))   // the same, from the other direction
 .Where(x => x.Name.In(allowed))
+
 .Where(x => x.Tags.IsEmpty())
-.Where(x => x.Tags.Any())
-.Where(x => x.Tags.Count() > 2)
 ```
+
+Element values go through the same conversion as a document member of the same type, so an enum
+element honours `EnumStorage` and the serializer's naming policy, a Guid element matches its
+lowercase canonical text, and a bool element matches the stored 1/0.
+
+**The degenerate shapes are handled honestly.** An absent member, an empty array and a member stored
+as JSON `null` all hold no elements: `Any()` is false, `Contains` matches nothing, `Count()`
+compares as zero (where in-memory LINQ over a null collection would throw), and `All(...)` is
+vacuously true, matching `Enumerable.All` over an empty sequence. The `key is not null` guard in the
+generated SQL is what keeps a null member from matching — `json_each` over JSON `null` yields one
+phantom row, and that row is the only one whose `key` is NULL.
+
+**Refused rather than mis-translated**, each with a `BadLinqExpressionException` naming the problem:
+
+- A predicate referencing anything outside the element's own scope — the outer document
+  (`x.Stops.Any(s => s.Port == x.Name)`), or an enclosing lambda's element. Compare against locals
+  or constants instead.
+- A member access on a scalar element (`x.Tags.Any(t => t.Length > 3)`) — the elements are plain
+  values with no members to extract.
+- A bare element comparison (`x.Tags.Any(t => t == "urgent")`) — use `Contains`.
+- `Contains` against another document member, and `Contains` over child-object elements — use
+  `Any(c => …)` with a predicate on the element's members.
+
+::: tip
+Predicates inside `Any`/`All`/`Count` follow **SQL null semantics**, consistently with the rest of
+the provider: an element for which the predicate is NULL (say a null `Port` compared with `!=`) has
+not satisfied it, so it fails `All` and is not counted — where C# would call `null != "Oslo"` true.
+:::
 
 ::: tip
 `IsEmpty()` has to test null **as well as** length. `json_extract` yields SQL NULL for an absent key
@@ -150,4 +196,6 @@ rather than through a slow query:
 - A second `Select`
 - After a join: keyset paging, JSON reads, and `Select` / `GroupBy` / `Distinct` / `DistinctBy`
 - Ordering or range-comparing a string-stored enum
+- Inside a collection predicate: outer-scope references, member access on scalar elements, and bare
+  element comparisons — see [Collections](#collections)
 - A soft-delete or tenancy operator against a type that has no such column

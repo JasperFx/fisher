@@ -24,7 +24,13 @@ internal static class MethodCallParserRegistry
         new StringToUpper(),
         new StringTrim(),
         new IsOneOf(),
+        // Before EnumerableContains: a Contains whose receiver is a collection-typed document member
+        // belongs to the json_each sub-query, whichever shape its argument takes — including the
+        // member-vs-member shape, which gets a refusal naming the actual problem.
+        new CollectionContains(),
         new EnumerableContains(),
+        new CollectionAny(),
+        new CollectionAll(),
         new IsEmpty(),
         new ObjectEquals()
     ];
