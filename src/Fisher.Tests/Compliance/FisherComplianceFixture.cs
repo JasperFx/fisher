@@ -1,4 +1,5 @@
 using Fisher.Events;
+using Fisher.Projections;
 using JasperFx;
 using JasperFx.Events;
 using JasperFx.Events.ComplianceTests;
@@ -418,6 +419,35 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
 
         public void AddProjection(ProjectionBase projection, ProjectionLifecycle lifecycle)
             => _options.Projections.Add(projection, lifecycle);
+
+        /// <summary>
+        ///     jasperfx#725 — build a composite projection and populate its stages, enrolling
+        ///     <c>CompositeProjectionCompliance</c>.
+        /// </summary>
+        /// <remarks>
+        ///     The seam exists because a composite cannot be constructed by a suite at all:
+        ///     <see cref="Fisher.Projections.FisherCompositeProjection" /> keeps its constructor
+        ///     internal, needing the store's options, so one only comes into being through
+        ///     <c>Projections.CompositeProjectionFor(name, configure)</c> — whose <c>configure</c> is
+        ///     typed to Fisher's own subclass. This is the forward-plus-adapter the shared registrar's
+        ///     remarks predict, and the adapter carries the one member the suite needs
+        ///     (<c>Snapshot&lt;T&gt;(stageNumber)</c>), which all three stores spell identically.
+        /// </remarks>
+        public void AddCompositeProjection(string name, Action<IComplianceCompositeBuilder> configure)
+            => _options.Projections.CompositeProjectionFor(name,
+                composite => configure(new ComplianceCompositeBuilder(composite)));
+
+        /// <inheritdoc cref="AddCompositeProjection" />
+        private sealed class ComplianceCompositeBuilder : IComplianceCompositeBuilder
+        {
+            private readonly FisherCompositeProjection _composite;
+
+            internal ComplianceCompositeBuilder(FisherCompositeProjection composite)
+                => _composite = composite;
+
+            public void Snapshot<TDoc>(int stageNumber) where TDoc : notnull
+                => _composite.Snapshot<TDoc>(stageNumber);
+        }
 
         /// <summary>
         ///     Register the shared compliance subscription with Fisher's async daemon.
