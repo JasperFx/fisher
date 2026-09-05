@@ -8,12 +8,14 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and thirty-nine are enrolled from
- * JasperFx.Events.ComplianceTests 2.63.0, which itself ships forty-one. The two not enrolled are both
- * opt-in and both new in 2.59.0: SingleTenantedEventSlicingCompliance (jasperfx#724), whose
- * mixed-tenancy precondition cannot be constructed on Fisher at all -- see jasperfx#727 -- and
- * CompositeProjectionCompliance (jasperfx#725), which needs an AddCompositeProjection member on the
- * fixture. Neither is a suite Fisher declines on behaviour.
+ * Suites were added one at a time as Fisher grew into them, and forty are enrolled from
+ * JasperFx.Events.ComplianceTests 2.63.0, which itself ships forty-one. The one not enrolled is
+ * SingleTenantedEventSlicingCompliance (jasperfx#724, new in 2.59.0), and it is opt-in for a reason
+ * that is a precondition rather than a behaviour: the suite plants events whose tenant ids disagree
+ * on a single-tenanted store and drives the daemon over them, and Fisher cannot construct that state
+ * at all -- see jasperfx#727. The suite's own guard reads the events back and skips when the store
+ * normalised the tenant ids away, so enrolling it would be forty-odd facts that skip themselves;
+ * the non-enrollment stays documented here instead. It is not a suite Fisher declines on behaviour.
  *
  * Nothing in the fixture throws any more, but the discipline stands for the next seam member that
  * arrives ahead of the feature: a member Fisher cannot honour throws a NotSupportedException naming
@@ -136,6 +138,24 @@ public class event_query_compliance
 
 public class stream_state_query_compliance
     : StreamStateQueryCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * fisher#154 / jasperfx#725 — composite projections: several members sharing one shard, one
+ * progression row and one event batch, executed in stage order and torn down together on rebuild.
+ * Opt-in through the registrar's AddCompositeProjection, whose throwing default is what kept this
+ * suite unenrolled — never a behaviour Fisher declined: Projections.CompositeProjectionFor is
+ * fisher#19, and composite_member_teardown is one of the two local regression tests (with Polecat's
+ * Bug_439) whose existence is the suite's own argument for being shared.
+ *
+ * The suite's load-bearing fact is the rebuild one, with deliberately additive members: a store that
+ * replayed the stream over surviving rows instead of tearing each member down reads back exactly
+ * doubled — the fisher#63 / marten#5175 class of bug. The single-shard fact pins what a composite
+ * is; a store expanding one into a shard per member would pass the other two and still have changed
+ * the model.
+ */
+
+public class composite_projection_compliance
+    : CompositeProjectionCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
 /*
  * fisher#93 — binary event serialization, arriving in JasperFx.Events.ComplianceTests 2.50.0 and
