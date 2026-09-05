@@ -258,7 +258,9 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
             var builder = new Weasel.Sqlite.CommandBuilder();
             operation.ConfigureCommand(builder, context);
 
-            var command = builder.Compile();
+            // Disposed like every other compiled command — an undisposed SqliteCommand keeps its
+            // native prepared statement alive until finalization.
+            await using var command = builder.Compile();
             command.Connection = connection;
             command.Transaction = transaction;
             command.CommandTimeout = _store.Options.CommandTimeout;
