@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Fisher.Internal;
 using Fisher.Storage;
 using JasperFx.Events;
@@ -43,18 +44,24 @@ internal sealed class AppendPlanner
         IReadOnlyCollection<StreamAction> streams, SqliteConnection connection, SqliteTransaction transaction,
         CancellationToken token)
     {
-        var operations = new List<Weasel.Storage.IStorageOperation>(streams.Count);
+        var actionable = CollectActionableStreams(streams);
 
-        foreach (var stream in streams)
+        if (actionable.Count == 0)
         {
-            if (stream.Events.Count == 0)
-            {
-                continue;
-            }
+            return [];
+        }
 
-            ApplySessionMetadata(stream);
+        // One set-based read for every stream in the unit of work, not one scalar query per stream.
+        // This read runs inside the write transaction, holding SQLite's exclusive write lock, so
+        // shrinking N round trips to one is worth the most exactly here.
+        var versions = await ReadCurrentVersionsAsync(actionable, connection, transaction, token)
+            .ConfigureAwait(false);
 
-            var mode = await PlanStreamAsync(stream, connection, transaction, token).ConfigureAwait(false);
+        var operations = new List<Weasel.Storage.IStorageOperation>(actionable.Count);
+
+        foreach (var stream in actionable)
+        {
+            var mode = PlanStream(stream, versions[stream]);
 
             var operation = (Storage.FisherQuickAppendEventsOperation)QuickAppendEvents(stream);
             operation.Mode = mode;
@@ -78,7 +85,37 @@ internal sealed class AppendPlanner
     public async Task AssignVersionsAheadOfProjectionsAsync(IReadOnlyList<StreamAction> streams,
         CancellationToken token)
     {
+        var actionable = CollectActionableStreams(streams);
+
+        if (actionable.Count == 0)
+        {
+            return;
+        }
+
         var connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
+
+        // One set-based read for the whole pass, mirroring PlanAsync. Deliberately NOT merged with
+        // the in-transaction read and NOT used to seed it: this pass runs outside the write lock so
+        // inline projections have versions to fold, and the authoritative read, the optimistic
+        // concurrency check and the final numbering must all still happen under the lock — seeding
+        // one from the other is exactly the race the class remarks forbid.
+        var versions = await ReadCurrentVersionsAsync(actionable, connection, transaction: null, token)
+            .ConfigureAwait(false);
+
+        foreach (var stream in actionable)
+        {
+            AssignVersions(stream, versions[stream] ?? 0);
+        }
+    }
+
+    /// <summary>
+    ///     The streams that will actually be written — everything with at least one event, with the
+    ///     session's metadata applied. Both planning passes share this so they agree about which
+    ///     streams a version read has to cover.
+    /// </summary>
+    private List<StreamAction> CollectActionableStreams(IReadOnlyCollection<StreamAction> streams)
+    {
+        var actionable = new List<StreamAction>(streams.Count);
 
         foreach (var stream in streams)
         {
@@ -88,20 +125,14 @@ internal sealed class AppendPlanner
             }
 
             ApplySessionMetadata(stream);
-
-            var current = await ReadCurrentVersionAsync(stream, connection, transaction: null, token)
-                .ConfigureAwait(false);
-
-            AssignVersions(stream, current ?? 0);
+            actionable.Add(stream);
         }
+
+        return actionable;
     }
 
-    private async Task<Storage.StreamWriteMode> PlanStreamAsync(StreamAction stream, SqliteConnection connection,
-        SqliteTransaction transaction, CancellationToken token)
+    private Storage.StreamWriteMode PlanStream(StreamAction stream, long? currentVersion)
     {
-        var currentVersion = await ReadCurrentVersionAsync(stream, connection, transaction, token)
-            .ConfigureAwait(false);
-
         if (stream.ActionType == StreamActionType.Start)
         {
             if (currentVersion is not null)
@@ -239,37 +270,98 @@ internal sealed class AppendPlanner
     }
 
     /// <summary>
-    ///     The stream's current version, or null when the stream row does not exist.
+    ///     Every stream's current version in one set-based read — null for a stream whose row does not
+    ///     exist.
     /// </summary>
-    private async Task<long?> ReadCurrentVersionAsync(StreamAction stream, SqliteConnection connection,
-        SqliteTransaction? transaction, CancellationToken token)
+    /// <remarks>
+    ///     <para>
+    ///         Replaces one interpolated scalar query per stream, which with inline projections on cost
+    ///         a multi-stream save 2N round trips — N of them under the exclusive write lock. The ids
+    ///         travel as a JSON array unpacked by <c>json_each</c>, the same shape
+    ///         <c>FisherDocumentStorage</c>'s load-many uses, so the parameter count does not vary with
+    ///         the stream count.
+    ///     </para>
+    ///     <para>
+    ///         Semantics are exactly the per-stream read's: a missing row reads as null (create, or
+    ///         collide on <c>Start</c>), and there is deliberately no <c>is_archived</c> filter — an
+    ///         archived stream's version is still its version, as before.
+    ///     </para>
+    ///     <para>
+    ///         Under conjoined tenancy the read is one statement per distinct tenant in the unit of
+    ///         work, because the row key is <c>(tenant_id, id)</c> and one save can span tenants via
+    ///         <c>ForTenant</c>. A single-tenant save — the ordinary case — is still one statement.
+    ///     </para>
+    /// </remarks>
+    private async Task<Dictionary<StreamAction, long?>> ReadCurrentVersionsAsync(
+        IReadOnlyList<StreamAction> streams, SqliteConnection connection, SqliteTransaction? transaction,
+        CancellationToken token)
     {
-        var conjoined = _graph.TenancyStyle == TenancyStyle.Conjoined;
+        var versions = new Dictionary<StreamAction, long?>(streams.Count);
+
+        foreach (var stream in streams)
+        {
+            versions[stream] = null;
+        }
+
+        if (_graph.TenancyStyle == TenancyStyle.Conjoined)
+        {
+            foreach (var tenant in streams.GroupBy(x => x.TenantId))
+            {
+                await ReadVersionsAsync([.. tenant], tenant.Key, connection, transaction, versions, token)
+                    .ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            await ReadVersionsAsync(streams, tenantId: null, connection, transaction, versions, token)
+                .ConfigureAwait(false);
+        }
+
+        return versions;
+    }
+
+    private async Task ReadVersionsAsync(IReadOnlyList<StreamAction> streams, string? tenantId,
+        SqliteConnection connection, SqliteTransaction? transaction,
+        Dictionary<StreamAction, long?> versions, CancellationToken token)
+    {
+        // Keyed by the database's own rendering of the id — for a Guid identity that is the lowercase
+        // canonical text SqliteStorageDialect writes, so the row that comes back matches the key that
+        // went in without any per-row parsing.
+        var byDatabaseId = new Dictionary<string, StreamAction>(streams.Count, StringComparer.Ordinal);
+
+        foreach (var stream in streams)
+        {
+            byDatabaseId[DatabaseIdFor(stream)] = stream;
+        }
 
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = conjoined
-            ? $"select version from {_graph.StreamsTableName} where id = @id and tenant_id = @tenant_id"
-            : $"select version from {_graph.StreamsTableName} where id = @id";
+        command.CommandText = tenantId is null
+            ? $"select id, version from {_graph.StreamsTableName} where id in (select value from json_each(@ids))"
+            : $"select id, version from {_graph.StreamsTableName} where tenant_id = @tenant_id and id in (select value from json_each(@ids))";
 
-        var id = _graph.StreamIdentity == StreamIdentity.AsGuid
-            ? SqliteStorageDialect<Guid>.ToDatabaseValue(stream.Id)
-            : stream.Key!;
-
-        command.Parameters.Add(new SqliteParameter("id", id) { SqliteType = SqliteType.Text });
-
-        if (conjoined)
+        command.Parameters.Add(new SqliteParameter("ids", JsonSerializer.Serialize(byDatabaseId.Keys))
         {
-            command.Parameters.Add(new SqliteParameter("tenant_id", stream.TenantId)
-            {
-                SqliteType = SqliteType.Text
-            });
+            SqliteType = SqliteType.Text
+        });
+
+        if (tenantId is not null)
+        {
+            command.Parameters.Add(new SqliteParameter("tenant_id", tenantId) { SqliteType = SqliteType.Text });
         }
 
-        var result = await command.ExecuteScalarAsync(token).ConfigureAwait(false);
+        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
 
-        return result is null or DBNull ? null : Convert.ToInt64(result);
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
+        {
+            versions[byDatabaseId[reader.GetString(0)]] = reader.GetInt64(1);
+        }
     }
+
+    private string DatabaseIdFor(StreamAction stream)
+        => _graph.StreamIdentity == StreamIdentity.AsGuid
+            ? (string)SqliteStorageDialect<Guid>.ToDatabaseValue(stream.Id)
+            : stream.Key!;
 
     private Weasel.Storage.IStorageOperation QuickAppendEvents(StreamAction stream)
         => _graph.StreamIdentity == StreamIdentity.AsGuid
