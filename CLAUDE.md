@@ -356,6 +356,8 @@ Working, with tests:
   step-through, so a monitoring console sees the document half as well as the event half
 - **Tracing** — an `ActivitySource` named `Fisher`, with spans for commits, queries and loads and a
   retry event that says a call waited on the write lock
+- **Metrics** — a `Meter` named `Fisher`, with opt-in instruments for the write-lock wait, busy
+  retries, events appended and documents written
 - **Session logging** — `IFisherLogger` / `IFisherSessionLogger`, `StoreOptions.Logger(...)` and
   `session.Logger`, with the SQL, the parameters, the commit counts and both failure shapes
 - **Multi-store registration** — `AddFisherStore<T>` and `IConfigureFisher`, so several independently
@@ -2972,6 +2974,60 @@ Two things learned while writing the tests, both worth keeping:
 - **An `ActivityListener` is process-wide, and xUnit runs collections in parallel.** A test that
   asserts `Single(...)` over recorded spans is green alone and red in the full suite. Filter by a tag
   the test's own store sets.
+
+### Metrics
+
+`Services/OpenTelemetryOptions.cs` (fisher#208) — a `Meter` named `Fisher`, matching the
+`ActivitySource`, reached through `StoreOptions.OpenTelemetry`. Derives from the lifted
+`JasperFx.OpenTelemetry.OpenTelemetryOptions` so the `Meter` and the shape are the Critter Stack's
+rather than a second copy. **Everything is opt-in and no instrument exists until a `Track…` call
+creates it**, so a store that opts into nothing pays a null field read per commit.
+
+- ⚠️ **A `SQLITE_BUSY` retry counter alone is the wrong instrument, and that is a measurement rather
+  than an opinion.** It is the obvious one — the Polly pipeline already emits a `fisher.retry`
+  activity event and `Fisher.Benchmarks`' `RetryCounter` counts them — and under fisher#163's
+  concurrent-writers scenario it reads **zero** while throughput collapses, because a contended writer
+  sits inside `BEGIN IMMEDIATE` under the connection string's busy timeout and eventually succeeds. A
+  dashboard built on it shows a flat line through the exact incident it exists to diagnose, which is
+  worse than no instrument: a flat line reads as "not the database".
+  So the instrument is **`fisher.write_lock.wait`**, a histogram of the elapsed time inside
+  `BeginTransactionAsync` at all three `BEGIN IMMEDIATE` sites — the session commit, the daemon batch
+  and the rebuild teardown — tagged `fisher.write_lock.holder`. `fisher.write_lock.retries` is created
+  *beside* it by the same `TrackWriteLockContention()` call, never instead of it, so neither can be
+  charted without the other: a rising histogram with no retries is contention absorbed by the busy
+  timeout, and a retry means the timeout was exceeded or the failure was `SQLITE_BUSY_SNAPSHOT`, which
+  the timeout does not cover.
+  `a_contended_commit_is_visible_in_the_wait_and_invisible_in_the_retries` asserts both halves against
+  a real 400 ms lock hold, and it measures the hold rather than a threshold — it passes at 380 ms.
+- **The holder tag is what separates "the application is contended" from "the daemon is starving the
+  application."** From a session's side alone the two look identical, and one is a capacity problem
+  while the other is a projection to move to its own file.
+- **`TrackConnections` is inherited and refused by name**, following `SessionOptions.IsolationLevel`'s
+  precedent. Deriving from the lifted base is right (do not reinvent a Critter Stack type), and it
+  brings a member Fisher cannot honour honestly: a SQLite connection is a *file handle*, Weasel's
+  `SqliteDataSource` is a factory rather than a pool (fisher#59 measured exactly that), and the pooling
+  beneath it is Microsoft.Data.Sqlite's, keyed process-wide by connection string and not attributable
+  to a store at all. A count charted beside Marten's would read as the same quantity and be a different
+  one. **Refused rather than ignored**, because a knob that silently does nothing is the failure mode
+  this codebase keeps meeting.
+- **`fisher.events.appended` matches Marten's `TrackEventCounters` and earns its place for an extra
+  reason**: on one file every appending writer is queued behind every other, so append volume charted
+  against the wait separates "more work arrived" from "the same work is now waiting".
+  `fisher.documents.written` has no Marten equivalent and exists for the same reason — three tag values
+  rather than three instruments, because the useful chart is the commit's *mix*.
+- **Every measurement carries `fisher.store`**, for the reason `FisherTracing` tags every span with it:
+  two Fisher stores in one process are usually two *files* with a write lock each, so an untagged
+  series adds two unrelated queues together. It is also what lets the tests filter a process-wide
+  `MeterListener` down to their own store — the `ActivityListener` lesson, met again.
+  `StoreName` is stamped onto the options in `DocumentStore`'s constructor rather than read from
+  `StoreOptions`, because these options are constructed *inside* that constructor and the name is not
+  final until an `IConfigureFisher` contribution has run.
+- **The change-set counters are a session listener** (`FisherCommitMetrics`), registered only when
+  something opted in — so a store with no counters carries no extra listener, and an empty unit of work
+  fires no listeners at all. A failing counter is caught and logged rather than thrown: it runs after
+  the commit, so throwing would surface to the caller as though a durable write had failed.
+  They describe a **user session's** unit of work; the daemon's batch deliberately does not fire session
+  listeners, and counting its raised events here would put the daemon's work on the application's series.
 
 ### Session logging
 

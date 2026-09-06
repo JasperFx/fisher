@@ -246,8 +246,17 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         await Options.ResiliencePipeline.ExecuteAsync(async ct =>
         {
             await using var connection = await target.OpenConnectionAsync(ct).ConfigureAwait(false);
+
+            // fisher#208. The third writer, and the one whose wait an operator is most likely to be
+            // watching in the moment — a rebuild's teardown blocks behind live traffic, and the
+            // holder tag is what keeps that spike off the session series.
+            var waitedFrom = Options.OpenTelemetry.StartWriteLockWait();
+
             await using var transaction = (Microsoft.Data.Sqlite.SqliteTransaction)await connection
                 .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+
+            Options.OpenTelemetry.RecordWriteLockWait(
+                waitedFrom, Services.OpenTelemetryOptions.RebuildHolder);
 
             await using (var command = connection.CreateCommand())
             {
