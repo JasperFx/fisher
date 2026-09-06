@@ -51,6 +51,12 @@ public class no_data_returned_operations : IAsyncLifetime
             options.AutoCreateSchemaObjects = AutoCreate.All;
             options.Schema.For<Bait>().SoftDeleted();
             options.Schema.For<Rod>().UseOptimisticConcurrency();
+
+            // Registering an aggregate that declares a natural key is what puts fi_natural_key_order
+            // into the migration, which the replay operation below needs to execute against
+            // (fisher#206). Nothing here appends to it — the audit only wants the statement's shape.
+            options.Projections.Add(new natural_keys.OrderProjection(),
+                JasperFx.Events.Projections.ProjectionLifecycle.Inline);
         });
 
         await _store.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
@@ -203,6 +209,13 @@ public class no_data_returned_operations : IAsyncLifetime
             session.HardDeleteWhere<Bait>(x => x.Depth > 5);
             session.UndoDeleteWhere<Bait>(x => x.Depth > 5);
             session.DeleteWhere<Rod>(x => x.Length > 5);
+
+            // The natural key lookup's replay write (fisher#206). Queued directly rather than reached
+            // through an append, because the path that produces one is the daemon's rather than a
+            // session's — and what the audit wants is the statement, not the route to it.
+            session.QueueOperation(new Fisher.Events.Storage.NaturalKeyReplayOperation(
+                _store.Options.EventGraph, typeof(natural_keys.Order), "AUDIT",
+                Guid.NewGuid().ToString("D"), "*DEFAULT*"));
 
             return session.TakePendingOperations();
         }

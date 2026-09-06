@@ -37,12 +37,26 @@ await store.Advanced.WriteCreationScriptToFileAsync(args[0]);
 An in-memory connection string is enough — the script describes the *configuration*, not an existing
 database.
 
+## One script per feature
+
+```cs
+await store.Advanced.WriteScriptsByTypeAsync("schema/");
+```
+
+One `.sql` per feature — the event store, each document type, Hi-Lo, each flat table — plus an
+`all.sql` that runs them in order. For a deployment that reviews schema changes per feature rather
+than as one wall of DDL.
+
+::: warning
+The directory is **cleaned first**, so point it at one this store owns.
+:::
+
 ## What it does not do
 
 ::: warning
 This generates a **creation** script, not a **migration** script. It describes the schema as
-configured, not the difference between two versions. For an existing database, apply the configuration
-and let Weasel compute the delta.
+configured, not the difference between two versions. For the difference, see
+[Previewing a migration](/schema/migrations#previewing-a-migration).
 :::
 
 ::: warning

@@ -40,16 +40,50 @@ namespace Fisher.Events.Daemon;
 ///         </item>
 ///     </list>
 ///     <para>
-///         Together those mean committed <c>seq_id</c>s are contiguous, so the high-water mark simply
-///         <em>is</em> <c>max(seq_id)</c> and <see cref="DetectInSafeZone" /> has no separate answer to
-///         give. Do not reintroduce gap-skipping here on the assumption that Fisher must need it too;
-///         it would be machinery guarding against a state that cannot occur.
+///         Together those mean the high-water mark simply <em>is</em> <c>max(seq_id)</c>, and
+///         <see cref="DetectInSafeZone" /> has no separate answer to give. Do not reintroduce
+///         gap-skipping here on the assumption that Fisher must need it too; it would be machinery
+///         guarding against a state that cannot occur.
 ///     </para>
 ///     <para>
-///         What remains load-bearing is the <c>AUTOINCREMENT</c> keyword itself. A bare
-///         <c>INTEGER PRIMARY KEY</c> aliases the rowid, which SQLite <em>reuses</em> after a delete —
-///         a reused sequence would appear below the mark and be invisible to every async projection.
-///         See <c>EventsTable</c>.
+///         <strong>Say precisely what those two facts buy, because the obvious shorthand — "committed
+///         sequences are contiguous" — is stronger than what is true and invites a wrong conclusion.</strong>
+///         What holds is narrower and is exactly what the daemon needs:
+///     </para>
+///     <para>
+///         <em>A sequence at or below the mark can never later become a committed row the daemon has
+///         not read.</em>
+///     </para>
+///     <para>
+///         Contiguity itself is <em>not</em> unconditional. Deleting events leaves permanent holes, and
+///         deleting the newest events drops <c>max(seq_id)</c> below a mark already recorded — see
+///         <see cref="TryCorrectProgressInDatabaseAsync" />, which exists for that state, and fisher#174,
+///         which found it. Neither is a gap in the sense Marten's machinery guards against: a hole is a
+///         sequence that is <em>gone</em>, not one that is <em>coming</em>. The daemon's loader pages a
+///         range rather than counting rows, so it steps over a hole; and the mark cannot follow a fallen
+///         ceiling down, because <c>HighWaterStatistics.HasChanged</c> is <c>CurrentMark &gt; LastMark</c>.
+///     </para>
+///     <para>
+///         What remains load-bearing is the <c>AUTOINCREMENT</c> keyword itself, and the narrow property
+///         above is exactly what it supplies. A bare <c>INTEGER PRIMARY KEY</c> aliases the rowid, which
+///         SQLite <em>reuses</em> after a delete — a reused sequence would appear below the mark and be
+///         invisible to every async projection. See <c>EventsTable</c>.
+///     </para>
+///     <para>
+///         ⚠️ <strong>One reachable state would break it, and it is closed one repository away.</strong>
+///         SQLite cannot alter most of a table, so any migration beyond <c>ALTER TABLE ADD COLUMN</c>
+///         rebuilds it — create, copy, drop, rename — and a bare rebuild resets <c>sqlite_sequence</c>
+///         to the highest <em>surviving</em> row. On a <c>fi_events</c> whose newest rows a tenant wipe
+///         or a compaction had removed, that reissues numbers already handed out, which is precisely the
+///         reuse the keyword is here to forbid. Weasel's <c>TableDelta</c> emits the carry-over that
+///         prevents it; <c>high_water_contiguity_audit</c> is what pins the dependency, since nothing in
+///         Fisher would otherwise notice it going away and the symptom is a projection permanently
+///         missing events with nothing anywhere to say why.
+///     </para>
+///     <para>
+///         <c>high_water_contiguity_audit</c> is the whole argument as tests — a crashed writer through
+///         WAL recovery, WAL checkpointing, <c>VACUUM</c>, concurrent writers, two stores over one file,
+///         the deletion paths, and the migration above.
 ///     </para>
 /// </remarks>
 internal sealed class FisherHighWaterDetector : IHighWaterDetector

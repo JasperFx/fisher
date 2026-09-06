@@ -82,9 +82,16 @@ internal sealed class DecrementMemberMap : IColumnMap
     ///     event to an implicit zero row, so a first event carrying <c>5</c> must leave the column at
     ///     <c>-5</c>: a decrement must never leave a column higher than it found it, and inserting
     ///     the parameter unchanged made a decrement raise it. Marten was the only store that had this
-    ///     right; Fisher, Polecat and the lifted Weasel DSL were the majority and the majority was
-    ///     wrong. <c>-@p1</c> inside a <c>values (…)</c> list is valid SQLite, which is why the
-    ///     negation lives here rather than behind a dialect hook (weasel#574).
+    ///     right; Fisher, Polecat and the first cut of the lifted Weasel DSL were the majority and the
+    ///     majority was wrong. <c>-@p1</c> inside a <c>values (…)</c> list is valid SQLite, which is
+    ///     why the negation lives here rather than behind a dialect hook.
+    ///     <para>
+    ///     <b>The shared DSL has since agreed</b> — weasel#574 shipped the same negation in
+    ///     <c>Weasel.Storage.Flattened.DecrementMemberMap</c> in 9.31.0, so adopting that DSL would
+    ///     no longer cost this fix. It is not adopted yet for the reasons the flat-table section of
+    ///     CLAUDE.md gives; this comment exists so the next reader does not have to re-check whether
+    ///     the ruling reached upstream.
+    ///     </para>
     /// </remarks>
     public string InsertExpression(string parameterName) => "-" + parameterName;
 }

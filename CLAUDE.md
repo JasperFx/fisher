@@ -158,6 +158,38 @@ own storage decisions — asymmetry that breaks quietly under a provider upgrade
 uses schema `main`, so nothing ever renders as qualified SQL. This is what gives logical-store and
 test isolation inside one database file without ATTACH lifecycle on every pooled connection.
 
+### Serialization is Weasel's, and so is the adapter
+
+`Fisher.Serialization.Serializer` is a **subclass of `Weasel.Core.SystemTextJsonSerializer` with an
+empty body** (weasel#555). It and Polecat's were byte-identical — the same options plumbing, the same
+`ToJson`/`FromJson` matrix, and, the part worth naming, the same `[UnconditionalSuppressMessage]`
+justifications on every reflection-based member. All of that is upstream now, suppressions included,
+so **the trim/AOT contract Fisher documents is the one the shared base declares** rather than a second
+copy free to drift from it.
+
+What stays in Fisher is the identity: the type name `StoreOptions.Serializer` defaults to and that
+applications subclass, in Fisher's namespace, declaring Fisher's two interfaces. Both declarations are
+satisfied entirely by inheritance, and neither is redundant —
+
+- `Fisher.Serialization.ISerializer` extends `Weasel.Core.ISerializer` with the two string-based
+  overloads. The shared base carries both, with the propagating
+  `[RequiresUnreferencedCode]`/`[RequiresDynamicCode]` those two, and only those two, are meant to
+  have.
+- `Weasel.Storage.IStorageSerializer` lives in Weasel.Storage, which references Weasel.Core, so the
+  base *cannot* declare it — but it carries every member with BCL-typed signatures, which is what lets
+  a subclass declare the interface and satisfy it by inheriting. That is why
+  `StorageSerializerAdapter.For` hands the default serializer straight back rather than wrapping it.
+
+**`Fisher.Serialization.StorageSerializerAdapter` is deleted**; `Weasel.Storage.StorageSerializerAdapter`
+(public since 9.31.0) is the same class and is what the three call sites use. Note that
+`EventGraph.BuildClosedShapeEventStorage` names it fully qualified: that file imports
+`Fisher.Serialization`, so an unqualified reference would be ambiguous the moment anyone reintroduces
+a local one — which is exactly the signal wanted.
+
+`shared_serializer` pins the shape rather than the behaviour, on purpose: behaviour is covered
+everywhere a document or event round-trips, and what a subclass can silently lose is an interface
+declaration that stops being satisfied by inheritance and quietly falls through to the adapter.
+
 ### Closed upstream gap — weasel#423
 
 Historical note, in case the shape of the session's execute loop looks over-engineered. Fisher used
@@ -282,6 +314,10 @@ Working, with tests:
 - **The command line** — `ISystemPart` and `IDatabaseSource` registered from both `AddFisher` and
   `AddFisherStore<T>`, so `db-apply` / `db-assert` / `db-patch` / `db-dump`, the `resources` commands
   and `describe` all see a Fisher store; plus `AssertDatabaseMatchesConfigurationOnStartup()`
+- **Schema preview, programmatically** — `Advanced.CreateMigrationAsync` (the default database, one
+  tenant, or every database), `WriteMigrationFileAsync`, `WriteScriptsByTypeAsync`, `AllObjects` and
+  `AllSchemaNames`, so a deployment or a test can ask what a migration *would* change without
+  applying it or shelling out to `db-patch`
 - **Flat-table projections** — `FlatTableProjection`, projecting into a plain relational table
   through declarative column mappings rather than into a document
 - **Soft delete** — `is_deleted` / `deleted_at`, `HardDelete`, `DeleteWhere` / `HardDeleteWhere` /
@@ -472,10 +508,27 @@ shapes are its, and four things are not.
 row, so a first event carrying 5 lands the column at -5. Put the other way, which is the form worth
 holding onto: a decrement event must never leave a column higher than it found it. Fisher inserted the
 parameter unchanged until this wave, so a stream whose first event was a decrement of 5 landed at +5.
-Marten was the only store that had it right; Fisher, Polecat and the lifted Weasel DSL were the
-majority and the majority was the wrong side. **The by-column form still inserts 0** — that half of
-jasperfx#773 is open, all four stores agree, and it is no longer symmetric with `IncrementMap`, which
-moved to inserting 1 in marten#5341.
+Marten was the only store that had it right; Fisher, Polecat and the first cut of the lifted Weasel
+DSL were the majority and the majority was the wrong side. **The by-column form still inserts 0** —
+that half of jasperfx#773 is open, all four stores agree, and it is no longer symmetric with
+`IncrementMap`, which moved to inserting 1 in marten#5341.
+
+**Weasel has since caught up**: weasel#574 shipped the same negation in
+`Weasel.Storage.Flattened.DecrementMemberMap` in **9.31.0**, so the shared DSL and Fisher now agree
+and adopting the DSL would no longer cost fisher#183's fix. That was the reason to check before
+deferring the adoption, and it is not the reason it stayed deferred — see below.
+
+**The shared flat-table DSL (weasel#568/#569) is deliberately not adopted yet.** What Weasel lifted is
+the mapping model plus an `IFlatTableSqlDialect` seam; what Fisher would have to move across it is
+where the cost is, and none of it is mechanical. Its column maps are `internal` and render through
+`SchemaUtils.QuoteName` directly rather than through a dialect's `Quote`/`Existing` context, so every
+one of them is a rewrite rather than a swap; `FlatTable : Table` exists to fold the store's logical
+schema into the physical name, which is Fisher's isolation boundary and has no counterpart in
+`FlatTableStatementBuilder`; and `FlatTableFeatureSchema` puts the table in the store's migration
+rather than creating it lazily, which is the divergence from Polecat this section opens with. Set
+against a shared model Fisher already matches behaviourally, that is churn through a projection type
+the compliance suite covers, for no behaviour change. Worth doing on its own node with the fisher#183
+semantics pinned first, not as a rider.
 
 The primary key holds a stream id, so it is TEXT and bound through the lowercase-canonical conversion —
 the `SqliteGuidIdentification` trap, in the one place a flat table meets it. Bound any other way, the
@@ -503,9 +556,32 @@ Six things that are decisions rather than mechanics:
   IDENTITY hands out numbers outside the transaction — a writer can hold 7 uncommitted while 8
   commits ahead of it. On SQLite one writer per file plus `BEGIN IMMEDIATE` means a transaction's
   sequences fully commit before the next writer allocates any, and a rollback returns the number
-  (`sqlite_sequence` is an ordinary table and rolls back with it). Committed sequences are contiguous,
-  so `DetectInSafeZone` has no separate answer to give. **Do not reintroduce gap-skipping** — it would
-  guard a state that cannot occur.
+  (`sqlite_sequence` is an ordinary table and rolls back with it). So `DetectInSafeZone` has no separate
+  answer to give. **Do not reintroduce gap-skipping** — it would guard a state that cannot occur.
+  **The opt-out was audited rather than left asserted** (fisher#195), and it holds — but say what it
+  buys precisely, because "committed sequences are contiguous" is stronger than what is true and is
+  what sent one agent looking for a bug. The property is narrower and is exactly the one the daemon
+  needs: **a sequence at or below the mark can never later become a committed row the daemon has not
+  read.** Two facts give it — allocation happens only while the writer holds the file's one write lock,
+  and `AUTOINCREMENT` never reissues a number.
+  - **Contiguity itself is not unconditional, and that is not a gap.** Deleting events leaves permanent
+    holes, and deleting the newest events drops `max(seq_id)` below a mark already recorded — which is
+    what fisher#174 found. A hole is a sequence that is *gone*, not one that is *coming*: the loader
+    pages a range rather than counting rows so it steps over one, and the mark cannot follow a fallen
+    ceiling down because `HighWaterStatistics.HasChanged` is `CurrentMark > LastMark`.
+    `DeleteAllEventDataAsync` — the one operation that empties the table outright — clears
+    `fi_event_progression` in the same pass, so the two can never disagree.
+  - ⚠️ **One reachable state would break it, and it is closed one repository away.** SQLite cannot
+    alter most of a table, so any migration beyond `ALTER TABLE ADD COLUMN` rebuilds it, and a bare
+    rebuild resets `sqlite_sequence` to the highest *surviving* row — reissuing, on a table whose newest
+    rows had been deleted, numbers already handed out. Weasel's `TableDelta` emits the carry-over that
+    prevents it. `high_water_contiguity_audit.a_table_rebuild_carries_the_autoincrement_counter_forward`
+    pins the dependency, because nothing in Fisher would otherwise notice it going away and the symptom
+    is a projection permanently missing events with nothing to say why.
+  - **`high_water_contiguity_audit` is the argument as tests** — a crashed writer through WAL recovery
+    (the database and its `-wal` copied out from under a live uncommitted transaction, which is what a
+    machine that lost power would have on disk), WAL checkpointing, `VACUUM`, concurrent writers, two
+    stores over one file, every deletion path, and the migration above.
 - **Non-stale is decided against the shards the store *registers*, not the rows
   `fi_event_progression` holds** (fisher#102). Reading it off the rows makes a shard that has not run
   yet invisible — with no row it has no sequence to be behind — so a store with two async projections
@@ -526,6 +602,25 @@ Six things that are decisions rather than mechanics:
   `one_shard_at_the_head_does_not_speak_for_a_shard_that_never_ran` is the discriminating fact, and it
   needs *two* registered shards: with no rows at all the old rule waited too, so a store where nothing
   has run cannot tell the two rules apart.
+  **The correlation itself is `JasperFx.Events.Daemon.ProjectionLagCalculator`'s now, not Fisher's**
+  (jasperfx#619). That type's xmldoc names Marten's `WaitForNonStaleDataAsync` as one of the three
+  independent implementations of exactly this semantic that the lift exists to collapse, and Fisher's
+  was the third — so this is the shared spelling of fisher#102's rule rather than a change to it.
+  Adopting it also brings two rules Fisher's own version did not have: a progression row is only ever
+  consulted at the shard's *current version*, and a row whose name does not parse as a shard identity
+  is dropped rather than string-compared (marten#5161). `IEventDatabase.FetchProjectionLagAsync` is
+  the shared read the same correlation backs, and Fisher inherits it as a default interface method —
+  no implementation, and the numbers rather than the wait for a caller who wants them.
+  - ⚠️ **The wait's bar stays `max(seq_id)`, not `ProjectionLag.HighWaterMark`**, so
+    `HasProgressionRow` and `Sequence` are what it reads and `IsCaughtUp`/`Lag` deliberately are not.
+    The calculator measures each cell against the *persisted high-water row*, which is right for a
+    status endpoint — a shard cannot pass a mark the agent has not published — and wrong for this
+    caller: a session that just committed is asking about its own events, which are at `max(seq_id)`
+    and may sit above a mark the agent has not reached. On SQLite that ceiling is honest with no
+    safe-zone reasoning behind it, since committed sequences are contiguous, so it is strictly
+    stricter than the mark. `a_mark_that_trails_the_committed_events_does_not_make_the_store_current`
+    is the discriminating fact — it asserts every cell reports `IsCaughtUp` and requires the wait to
+    time out anyway, so swapping the check for `IsCaughtUp` fails it by returning.
 - **The session's operation queue is guarded, because the daemon is not a single caller.** JasperFx's
   `ExecutionStage` fans its executions out with `Task.WhenAll` and they all queue onto the *same*
   Fisher session, so two projection slices can call `QueueOperation` at the same instant.
@@ -566,6 +661,17 @@ Six things that are decisions rather than mechanics:
   It honours `SkipUnknownEvents` and otherwise throws `UnknownEventTypeException`, which implements
   JasperFx's `IEventFailureContext` so the shard failure can be classified without knowing Fisher's
   exception types.
+  **`Weasel.Storage.EventLoaderBase` (weasel#566) is not adopted yet, and that is a judgement rather
+  than an oversight.** The base is well shaped for Fisher — the paging, skip accounting, ceiling
+  calculation and cancellation translation are all there behind an `IEventPagingDialect` seam, and it
+  carries `ReportLastObservedSequence` (jasperfx#667), which Fisher genuinely lacks: a full batch whose
+  every row was skipped currently takes a ceiling from a page with no surviving event. What it would
+  cost is a SQLite `IEventPagingDialect` (page SQL *and* the skip-ahead probe, which Fisher has no
+  caller for), a mapping of the loader's constructor-time allow-list work onto `EventTypeAllowList` —
+  including fisher#191's expansion of a transformation's *source* names, which is the half that fails
+  silently if it is lost — and a home for the `DaemonTrace.Record` call, for which the base offers no
+  hook. Worth its own node with fisher#153 and fisher#191 pinned first, since both are regressions the
+  compliance suites structurally cannot catch.
 - **The generic interface's `IEventDatabase` parameter carries the answer** (fisher#57), where for a
   long time every one of them was ignored on the true-enough grounds that a Fisher store was one file.
   Under database-per-tenant it is not, and ignoring it would read one tenant's events and write every
@@ -2295,6 +2401,60 @@ which is `db-assert` answering "everything matches" about a store it never looke
 swapping it; two tests printing JSON objects at once made the existing `event_query_command` capture
 parse somebody else's report. Same family as the process-wide `ActivityListener` lesson in tracing.
 
+#### Previewing a migration programmatically — fisher#210
+
+fisher#172 closed the **command-line** half of "preview and assert": `db-patch` writes the outstanding
+DDL to a file, `db-assert` fails a build against a drifted database, and
+`AssertDatabaseMatchesConfigurationAsync` / `AssertDatabaseMatchesConfigurationOnStartup()` put the
+assertion on the store and on the host. **What it did not give an application was the delta as an
+object**, so the two questions a deployment actually asks — *is there anything outstanding*, *what
+exactly would change* — meant shelling out to the CLI. `ToDatabaseScript()` cannot answer either: it
+describes the configuration and never looks at the database in front of it.
+
+`AdvancedOperations` is where they land, beside `ToDatabaseScript` / `WriteCreationScriptToFileAsync`,
+which is what Marten hangs off `IMartenStorage` and Fisher already hangs off `Advanced`. **No new
+store-level interface**, because `IDocumentStore.Advanced` is already declared — a second facade would
+be a parallel place for the same five members to be reached through.
+
+| Marten's `IMartenStorage` | Fisher | Where it came from |
+|---|---|---|
+| `AssertDatabaseMatchesConfigurationAsync` | `store.AssertDatabaseMatchesConfigurationAsync` | **fisher#172** |
+| `ApplyAllConfiguredChangesToDatabaseAsync` | `store.ApplyAllConfiguredChangesToDatabaseAsync` | original |
+| `ToDatabaseScript` / `WriteCreationScriptToFile` | `Advanced.ToDatabaseScript` / `WriteCreationScriptToFileAsync` | fisher#42 |
+| `CreateMigrationAsync` | `Advanced.CreateMigrationAsync` | fisher#210 |
+| `WriteScriptsByType` | `Advanced.WriteScriptsByTypeAsync` | fisher#210 |
+| `AllObjects` / `AllSchemaNames` | `Advanced.AllObjects` / `AllSchemaNames` | fisher#210 |
+| — | `Advanced.WriteMigrationFileAsync` | fisher#210 (`db-patch`'s programmatic form) |
+
+**Every one of them is Weasel's, inherited through `FisherDatabase : SqliteDatabase : DatabaseBase`.**
+That is the finding rather than the shortcut, and it is the same shape fisher#120 had: nothing about
+the gap was dialect-specific, so no decision existed to prompt anybody to look — the members had been
+on the database object the whole time and were reachable only by naming `store.Database`.
+
+- **`CreateMigrationAsync()` is the default database, and the two tenant-aware members exist because
+  that is not the whole store.** Marten's carries the same restriction and documents it; here
+  `CreateMigrationAsync(tenantId)` names one file and `CreateAllMigrationsAsync()` returns one
+  migration per database identifier. Collapsing N tenants into one answer would report about whichever
+  file came first — the same reason `ApplyAllConfiguredChangesToDatabaseAsync` reports per database and
+  `TenantMigrationException` names which tenants are current. Dynamic tenants are refreshed first, so a
+  tenant nothing has resolved yet is still previewed.
+- **An unknown tenant throws**, through `Tenancy.DatabaseFor`, rather than quietly previewing the
+  default — the rule every other tenant-scoped member on `Advanced` follows, and the one that stops a
+  per-tenant deployment check from silently checking the wrong file.
+- ⚠️ **`AllSchemaNames()` is always `["main"]` here, and is deliberately not reinterpreted.** SQLite
+  has one schema and Fisher folds `DatabaseSchemaName` into the table prefix instead, so the isolation
+  between two logical stores in one file is a prefix this method cannot see. Answering with the prefix
+  or with the logical schema name would make the member mean something different here than it means on
+  Marten, which is worse than a constant a caller can read. `the_schema_names_are_always_main` pins the
+  constant under both a default and a named schema so it reads as a decision.
+- **The tests apply what they preview.** A delta object with the right `SchemaPatchDifference` whose
+  rendered DDL does not run would pass every shape assertion, so
+  `the_migration_file_is_ddl_that_actually_creates_the_schema` executes the patch file against the real
+  database, reads `sqlite_master`, and then asserts the store agrees nothing is outstanding — which is
+  what says the patch was the *whole* delta rather than part of it.
+- **Computing a delta is a read**, so it is available under `AutoCreate.None` — the deployment most
+  likely to want it, and the one where a preview that emitted DDL as a side effect would be a bug.
+
 **Everything Fisher hands a container now implements `IDisposable` as well as `IAsyncDisposable`** —
 `DocumentStore`, `FisherDatabase`, `FisherSession`, and `IQuerySession` with them. That is not a
 politeness: a `ServiceProvider` disposed synchronously **refuses outright** to dispose a service
@@ -2526,6 +2686,23 @@ ADO.NET — for its relational tables, in the same file, which is the natural th
 embedded database, cannot write both atomically without this. Worse, it cannot write both *at all*
 without contending against itself: the two transactions are two writers on one file, and one waits or
 fails with `SQLITE_BUSY`. On PostgreSQL the equivalent is a nicety.
+
+**`Fisher.ITransactionParticipant` is a one-line alias now**, deriving from
+`Weasel.Storage.ITransactionParticipant<SqliteConnection, SqliteTransaction>` (weasel#561) and
+declaring no members of its own. **Adopting it is a simplification rather than a loss, and the reason
+is that the shared contract is Fisher's**: `AfterCommitAsync`'s default — the "reconcile whatever
+`BeforeCommitAsync` left pending, now that it is durable" half that the two-attempt retry rule creates
+— was Fisher's member, and the lift took it upstream as the contract for all three stores. So the
+retry rule and its answer are documented once, in Weasel, and Fisher's file carries only the two facts
+the shared remarks cannot: `BeforeCommitAsync` occupies the position fisher#4 pinned, and
+`AfterCommitAsync` does not fire at all for an enlisted session.
+
+What contravariance does and does not give is worth stating, because the shared interface is
+contravariant in both parameters and that reads like more than it is. A participant written against
+the base `DbConnection`/`DbTransaction` pair *converts to* the closed shape; it still has to **declare**
+`Fisher.ITransactionParticipant` to be handed to `AddTransactionParticipant`. Porting a participant
+between the three stores is therefore a change to its base declaration and nothing else, which is what
+the shared contract's own remarks promise.
 
 - **The inverse of enlistment, and both are worth having.** `SessionOptions.ForTransaction` lets a
   caller hand Fisher a transaction they own; this lets a participant join one Fisher owns. Which fits
@@ -3033,18 +3210,21 @@ the async daemon. Ported in shape from Polecat's `Events/Schema` + `Events/Proje
 set, with four things different and each of them a decision:
 
 - **No `is_archived` column on the lookup table.** Polecat copies the flag from `pc_streams` and keeps
-  it in sync from a projection watching for the `Archived` event — which then needs a second,
-  rebuild-time entry point, because a daemon rebuild replays events without appending streams and
-  would otherwise leave the table empty after teardown. Fisher archives with a direct operation rather
-  than an event, so there is nothing to watch; and the lookup joins `fi_streams` anyway, so reading the
-  flag off the join makes the streams table the only place that knows. Removing the filter makes
-  `an_archived_stream_no_longer_resolves` fail.
-- **The rows are written from the session, not from an inline projection.** A natural key row is an
-  index over streams, not a projection of them. Being a projection is exactly what forces Polecat's
-  rebuild path; nothing here is reachable from a rebuild, so there is nothing to repopulate.
-  `NaturalKeyWriter` runs beside `EventTagWriter`, inside the append's transaction, because a key
-  registered outside it leaves either a stream no key resolves to or a key naming a stream that does
-  not exist.
+  it in sync from a projection watching for the `Archived` event. Fisher archives with a direct
+  operation rather than an event, so there is nothing to watch; and the lookup joins `fi_streams`
+  anyway, so reading the flag off the join makes the streams table the only place that knows. Removing
+  the filter makes `an_archived_stream_no_longer_resolves` fail. **This is the one decision fisher#206
+  did not overturn, and it got stronger** — see the replay section below for why a replay rewriting a
+  lookup row is harmless here and would need care on either sibling.
+- ⚠️ **The rows are written by an inline projection with a replay path, and this reversed a decision**
+  (fisher#206). `NaturalKeyWriter` used to run from `FisherSession.SaveChangesAsync` beside
+  `EventTagWriter`, and argued that a key row is an index over streams rather than a projection of
+  them, so the sibling stores' second rebuild-time entry point was a cost their shape imposed and
+  Fisher's did not. **The premise was right and the conclusion was backwards**: the writer drove off
+  the unit of work's `StreamAction`s, and only an *append* produces one — so a natural key could never
+  be backfilled onto a stream that already existed, and a rebuild could never repopulate the table.
+  Adopting a key on a live store left its whole history unreachable by the identifier it was created
+  with, permanently and with nothing to say so. See "Natural keys have a replay path" below.
 - **A second stream claiming a key is refused, where Polecat repoints.** Polecat's `MERGE` updates the
   stream id on conflict, so the newcomer silently takes the key and the original stream becomes
   unreachable by the identifier it was created with. Fisher's conflict clause carries
@@ -3092,6 +3272,56 @@ Two more things:
 `DeleteAllEventDataAsync` clears the lookup tables with the rest. Leaving them behind is not cosmetic:
 the duplicate guard would then fire on data that no longer exists, and the compliance fixture cleans
 before every test.
+
+#### Natural keys have a replay path — fisher#206
+
+`Events/Storage/NaturalKeyProjection.cs` and `NaturalKeyOperations.cs` replace `NaturalKeyWriter`.
+**One set of SQL, two entry points**, which is Marten's shape (`NaturalKeyProjection` +
+`QueueUpsertsForEvents`) rather than a new one:
+
+| Path | Where | Statement |
+|---|---|---|
+| Append | `FisherSession.ApplyInlineProjectionsAsync` → a queued `NaturalKeyClaimOperation` | guarded upsert, `returning`, refuses a live duplicate |
+| Replay | `DocumentStore.StartProjectionBatchAsync` → a queued `NaturalKeyReplayOperation` | unguarded upsert, last-writer-wins |
+
+- ⚠️ **The refusal stays in the SQL and must not become a pre-flight read** (marten#5349). A probing
+  `SELECT` before the write races: two sessions both find the key free and the loser's upsert repoints
+  the row exactly as an unguarded one would. The guard is a `where` on the `do update`, so a
+  conflicting claimant matches no row and the `returning` clause yields nothing —
+  `the_claim_refuses_in_the_statement_rather_than_after_a_read` asserts the mechanism, because a store
+  could pass the behavioural compliance fact with a pre-flight read and be wrong only under
+  contention.
+- **The claim moved from executing directly to being queued**, which is what the conversion bought and
+  also its one behavioural nuance: the refusal is now raised from `PostprocessAsync` and collected by
+  `ExecuteBatchAsync` rather than thrown mid-flight, so the operations after it still run before the
+  batch throws. Nothing survives either way — it is all one transaction — and it is the shape
+  `NaturalKeyClaimOperation` shares with the optimistic document upsert's version guard.
+- ⚠️ **The replay must not re-adjudicate** (marten#4966). Refusing on replay would turn a pre-existing
+  data condition into a shard that can never advance again, with no caller present to correct the key
+  derivation the refusal blames — and there is nothing legitimate to refuse anyway, since a refused
+  append rolls its own events back, so a replay never meets the losing stream's events.
+  `a_replay_does_not_re_adjudicate_a_duplicate_key` plants the condition the only way it can occur:
+  events written while no key was declared.
+- **Every daemon page, not only a rebuild.** The hook is in `StartProjectionBatchAsync` because that
+  is where the range's events are, and it writes onto the batch's own session so the rows commit with
+  the shard's progression row. A fresh async shard catching up from zero backfills exactly as a
+  rebuild does, and there is no reason to make the two differ.
+- **Not registered on the projection graph.** Marten's is an `IInlineProjection` plus a direct hook
+  rather than an `IProjectionSource`, and Fisher follows: giving it a shard would put a
+  separately-rebuildable projection in front of an operator that indexes streams they never registered
+  anything for.
+- **An archived stream is doubly protected, and the first guard was not designed for this.** The event
+  loader excludes an archived stream's events unless a shard asks for them, so the replay never sees
+  the stream at all — pinned by `a_replay_cannot_resurrect_an_archived_streams_key`, which asserts the
+  table stays empty. And *if* a shard did include archived events, the row coming back would still be
+  harmless, because Fisher's lookup carries no `is_archived` column and the answer is read off the
+  join. Polecat and Marten keep the flag on the row and would have to be careful.
+- **Fisher's rebuild teardown still does not clear the lookup**, and that is unchanged: the sweep
+  looks at mapped document types and `IPublishesTables`, and the lookup is neither. So
+  `a_rebuild_repopulates_a_lookup_that_was_emptied` plants the emptied state directly rather than
+  waiting for a teardown to produce it — the property worth having is "a replay can rebuild this
+  table", and a rebuild-then-fetch test would instead be asserting that teardown happens to leave it
+  alone.
 
 ### The `IEventStoreOperations` surface
 

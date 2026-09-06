@@ -33,56 +33,45 @@ namespace Fisher;
 ///         participant wrong.
 ///     </para>
 /// </remarks>
+/// <remarks>
+///     <para>
+///         <b>The members are the shared contract's</b> —
+///         <see cref="Weasel.Storage.ITransactionParticipant{TConnection,TTransaction}" /> (weasel#561),
+///         closed over Microsoft.Data.Sqlite's connection and transaction pair. This declaration is
+///         the alias, and nothing else: the two-attempt rule on <c>BeforeCommitAsync</c> and the
+///         <c>AfterCommitAsync</c> default that answers it are both documented upstream, and the
+///         default <em>came from here</em> — Fisher was the store that had it, so adopting the generic
+///         shape is a simplification rather than a loss.
+///     </para>
+///     <para>
+///         The generic interface is contravariant in both parameters, so a participant written against
+///         the base <c>DbConnection</c> / <c>DbTransaction</c> pair satisfies this too, and a
+///         participant written against the closed shape ports to Polecat or Marten by changing its
+///         base declaration alone.
+///     </para>
+///     <para>
+///         The two Fisher-specific facts the shared remarks cannot carry:
+///     </para>
+///     <list type="bullet">
+///         <item>
+///             <description>
+///                 <c>BeforeCommitAsync</c> runs at the same position
+///                 <c>IMessageBatch.BeforeCommitAsync</c> occupies, whose visibility semantics fisher#4
+///                 pinned by probing over a separate connection.
+///             </description>
+///         </item>
+///         <item>
+///             <description>
+///                 <c>AfterCommitAsync</c> runs outside <c>StoreOptions.ResiliencePipeline</c>, and
+///                 <b>does not fire at all for an enlisted session</b> — under
+///                 <see cref="SessionOptions.ForTransaction" /> the commit is the caller's and Fisher is
+///                 never told it happened, so a participant enlisted that way is invoked exactly once
+///                 and has nothing to reconcile until its caller commits. A participant wanting a
+///                 genuine post-commit side effect should still use <c>IDocumentSessionListener</c>
+///                 (fisher#32).
+///             </description>
+///         </item>
+///     </list>
+/// </remarks>
 public interface ITransactionParticipant
-{
-    /// <summary>
-    ///     Write, on the supplied connection and inside the supplied transaction.
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         Called as the last thing inside the transaction, immediately before the commit — the same
-    ///         position <c>IMessageBatch.BeforeCommitAsync</c> occupies, whose visibility semantics
-    ///         fisher#4 already pinned by probing over a separate connection. So nothing this writes is
-    ///         visible to anyone else until Fisher commits, and throwing here rolls back Fisher's work
-    ///         along with the participant's.
-    ///     </para>
-    ///     <para>
-    ///         <b>This may be called more than once for one unit of work</b>, and a participant has to
-    ///         survive it. A retried <c>SQLITE_BUSY</c> re-executes the whole write delegate — the
-    ///         property fisher#12 established for the projection batch's own input and fisher#4 for the
-    ///         outbox — so whatever this writes must still be pending on the second attempt. The failed
-    ///         attempt's transaction rolled back, so re-writing is correct; <em>not</em> re-writing is
-    ///         the silent failure, because Fisher's own work commits either way. See
-    ///         <see cref="AfterCommitAsync" /> for the other half of that.
-    ///     </para>
-    /// </remarks>
-    Task BeforeCommitAsync(SqliteConnection connection, SqliteTransaction transaction, CancellationToken token);
-
-    /// <summary>
-    ///     Reconcile whatever <see cref="BeforeCommitAsync" /> left pending, now that the write is
-    ///     durable. Does nothing unless a participant overrides it.
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         <b>This is not a post-commit side-effect hook</b>, and a participant wanting one of those
-    ///         should still use <c>IDocumentSessionListener</c> (fisher#32), which gets the "everyone
-    ///         can see this now" semantics right and is the application's seam rather than a
-    ///         participant's. This exists for the narrower job the retry rule above creates: a
-    ///         participant that has to keep its writes replayable across attempts needs one place to
-    ///         stop keeping them, and only Fisher knows when the commit happened.
-    ///     </para>
-    ///     <para>
-    ///         Runs <b>outside</b> <c>StoreOptions.ResiliencePipeline</c>, so it fires once for a
-    ///         transaction that committed rather than once per attempt.
-    ///     </para>
-    ///     <para>
-    ///         <b>It does not fire for an enlisted session</b>, which is the same rule the outbox's
-    ///         after-commit hook and the append observer follow: under
-    ///         <c>SessionOptions.ForTransaction</c> the commit is the caller's and Fisher is never told
-    ///         it happened. A participant enlisted that way is invoked exactly once — there is no retry
-    ///         either — so it has nothing to reconcile until its caller commits, and reconciling before
-    ///         that would claim a durability Fisher cannot see.
-    ///     </para>
-    /// </remarks>
-    Task AfterCommitAsync(CancellationToken token) => Task.CompletedTask;
-}
+    : Weasel.Storage.ITransactionParticipant<SqliteConnection, SqliteTransaction>;
