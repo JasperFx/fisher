@@ -96,6 +96,17 @@ jobs:
       - name: The scoreboard agrees with the run
         run: python3 scripts/check_scoreboard.py --tfm ${{ matrix.tfm }} --configuration Release
 
+      # fisher#223. A literal NUL in DocumentMapping.cs made git treat one of the most-edited files
+      # in the repository as binary: no diffs, no automatic merge, and grep skipping it silently.
+      # The cost recurred on every change to that file, so this is what stops it coming back.
+      #
+      # Runs even on a red suite, unlike the step above: that one reads the run's results, so a
+      # failure makes its answer unverifiable rather than wrong. This one reads only the source
+      # tree, and a NUL byte is worth reporting either way.
+      - name: Source files are text, not binary
+        if: ${{ !cancelled() }}
+        run: python3 scripts/check_source_is_text.py
+
       - name: Report results
         uses: dorny/test-reporter@v3
         if: ${{ !cancelled() }}
