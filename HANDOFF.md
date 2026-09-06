@@ -12,36 +12,31 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1761 tests on net9.0 and net10.0**, four of them red — 1706 in
+**1761 tests on net9.0 and net10.0**, two of them red — 1706 in
 `Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 509 of
-them are shared cross-store compliance tests — 440 event sourcing and 69 document. On JasperFx **2.64.0** / Weasel **9.29.0**.
+them are shared cross-store compliance tests — 440 event sourcing and 69 document. On JasperFx **2.65.0** / Weasel **9.29.0**.
 
-### Red — 4 facts
-
-**All four are fixed upstream and merged, and all four go green on the JasperFx 2.65.0 release.**
-Verified by packing `jasperfx` main plus jasperfx#784 to a local feed and running Fisher's whole
-suite against it: every one of them green, nothing else moved. They are red here only because 2.64.0 is the
-newest published package and Fisher pins a published one.
+### Red — 2 facts
 
 - `Fisher.Tests.Compliance.stream_archiving_compliance.capturing_an_archived_event_archives_a_string_identified_stream`
 - `Fisher.Tests.Compliance.stream_archiving_compliance.capturing_an_archived_event_through_an_async_snapshot_archives_the_stream`
-- `Fisher.Tests.Compliance.projection_side_effect_compliance.side_effects_are_suppressed_during_a_rebuild`
-- `Fisher.Tests.Compliance.projection_side_effect_compliance.no_messages_are_published_during_a_rebuild`
 
-The first two are jasperfx#778, a real product bug in `JasperFx.Events` that Fisher found by being
-the store that ran the suite: an `Archived` event the aggregate applies nothing for did not archive
-its stream, on any store. `Archived` carries no state, so an aggregate has no reason to declare an
-`Apply` for it — which left it out of the projection's `AllEventTypes`, so the inline path screened
-the whole stream out before reading anything and the async shard's filter never delivered it.
-jasperfx#780 fixed one gate and #784 the two outside it.
+**Both are jasperfx#778, a real product bug in `JasperFx.Events` that Fisher found by being the store
+that ran the suite**, and both are fixed and merged upstream — the fix simply missed the 2.65.0 cut
+and lands in the release after it. Verified by packing `jasperfx` main plus jasperfx#784 to a local
+feed and running Fisher's whole suite against it: both green, nothing else moved.
 
-The last two are jasperfx#779, a suite bug: both rebuild facts asked the daemon for
-`nameof(ComplianceWatchtowerProjection)`, and a single stream projection's daemon name is the
-*document* type's on every store. Fixed upstream by pinning the projection's own `Name`.
+An `Archived` event the aggregate applies nothing for did not archive its stream, on any store.
+`Archived` carries no state, so an aggregate has no reason to declare an `Apply` for it — which left
+it out of the projection's `AllEventTypes`, so `AppliesTo` answered false, the inline path screened
+the whole stream out *before reading anything*, and the async shard's own filter never delivered the
+event into a slice at all. Marten's four local archiving tests all append a handled event beside the
+marker, which is why it survived there. jasperfx#780 closed the innermost of three gates — and on
+Fisher changed nothing, which is what sent #784 after the two outside it.
 
-**Fisher's own count is unchanged by any of this.** Nothing in `src/Fisher` is implicated in the four
-— the wave's genuine Fisher findings are the five listed under "Wave 13" below, and all five are
-fixed here.
+**Fisher's own count is unchanged by this.** Nothing in `src/Fisher` is implicated — the wave's
+genuine Fisher findings are the five listed under "Wave 13" below, and all five are fixed here.
+jasperfx#779, the suite bug the same enrollment turned up, is already in 2.65.0.
 
 Note that 440 is not quite *every* event suite the shared library has, and three of the shortfall are
 enrolled-and-gated rather than absent:
@@ -497,10 +492,10 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.64.0 ships 52 suites; Fisher enrolls **49 of them, 509 tests**.
-Fisher passes **505 of them, across all
-49 suites**. Every suite compiles; every one is also subclassed and running. The four that do not pass
-are the upstream ones declared at the top of this file, not Fisher behaviour.
+`JasperFx.Events.ComplianceTests` 2.65.0 ships 52 suites; Fisher enrolls **49 of them, 509 tests**.
+Fisher passes **507 of them, across all
+49 suites**. Every suite compiles; every one is also subclassed and running. The two that do not pass
+are the upstream one declared at the top of this file, not Fisher behaviour.
 
 **What that does and does not claim, because the difference is load-bearing** (fisher#124). The suite
 pins **API portability, not behavioural equivalence**: code written against one store compiles and

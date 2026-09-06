@@ -3628,7 +3628,7 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher enrolls 49 of the 52 suites `JasperFx.Events.ComplianceTests` 2.64.0 ships — 509 tests.**
+**Fisher enrolls 49 of the 52 suites `JasperFx.Events.ComplianceTests` 2.65.0 ships — 509 tests.**
 `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
 gate is gone. See HANDOFF.md for the live scoreboard, which is machine-checked against a real run by
 `scripts/check_scoreboard.py`; what follows is the history and the mechanics.
@@ -3640,8 +3640,16 @@ repository enrols only the document suites, so the whole wave arrived compile-ch
 design-reasoned. That makes Fisher's enrollment first-contact runtime validation, and it changes how
 a red fact should be read: as likely an over-tight assertion as a store bug. Nineteen were red on the
 first run and every one was classified — five genuine Fisher bugs (all fixed), two upstream bugs
-(jasperfx#778 product, jasperfx#779 suite; both fixed upstream), three suites gated off for a LINQ
-surface Fisher does not have, one suite deferred to the upcasting node.
+(jasperfx#778 product, jasperfx#779 suite; both fixed upstream, and #779 is already released), three
+suites gated off for a LINQ surface Fisher does not have, one suite deferred to the upcasting node.
+
+**jasperfx#778 is the one worth knowing**, because it is the shape a store-side reader would not
+suspect: an `Archived` event the aggregate applies nothing for did not archive its stream, on any
+store. `Archived` carries no state, so an aggregate has no reason to declare an `Apply` for it, which
+left it out of the projection's `AllEventTypes` — and `ApplyInline`'s opening
+`streams.Where(AppliesTo(...))` then screened the whole stream out before reading anything. Marten's
+own archiving tests all append a handled event beside the marker, which is why it survived until a
+store ran the suite. Two facts stay red on Fisher until the fix ships; see HANDOFF.md.
 
 The five Fisher bugs are worth knowing as a set, because they share a shape — a member that looked
 right, that nothing local had a reason to question:

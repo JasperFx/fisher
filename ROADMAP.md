@@ -20,12 +20,13 @@ It was filed because of fisher#138, where Fisher registered only an `IHostedServ
 implementing nothing else and both documented routes to the running daemon failed while all 37 suites
 passed. Its pause/resume fact targets exactly the `StartAsync` bug that had.
 
-Two upstream issues were **found** by enrolling the 2.64.0 wave and are fixed upstream but not yet
-released: [jasperfx#778](https://github.com/JasperFx/jasperfx/issues/778), a real
-`JasperFx.Events` bug where an `Archived` event the aggregate applies nothing for did not archive its
-stream on any store, and [jasperfx#779](https://github.com/JasperFx/jasperfx/issues/779), a suite
-bug. Four facts are red on Fisher until JasperFx 2.65.0 ships — see HANDOFF.md's "Red" section, which
-names them.
+Two upstream issues were **found** by enrolling the 2.64.0 wave.
+[jasperfx#779](https://github.com/JasperFx/jasperfx/issues/779), a suite bug, is already in 2.65.0.
+[jasperfx#778](https://github.com/JasperFx/jasperfx/issues/778) is the other and is the more
+interesting one: a real `JasperFx.Events` bug where an `Archived` event the aggregate applies nothing
+for did not archive its stream *on any store*. It is fixed and merged upstream but missed the 2.65.0
+cut, so two facts are red on Fisher until the release after it — see HANDOFF.md's "Red" section,
+which names them.
 
 Two filed since 1.0.5 have already **shipped**.
 [jasperfx#718](https://github.com/JasperFx/jasperfx/issues/718) is in 2.59.0 — the identity-less

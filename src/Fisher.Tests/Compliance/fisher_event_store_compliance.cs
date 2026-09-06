@@ -9,7 +9,7 @@ namespace Fisher.Tests.Compliance;
  * these tests cannot drift between the products.
  *
  * Suites were added one at a time as Fisher grew into them, and forty-nine are enrolled from
- * JasperFx.Events.ComplianceTests 2.64.0, which itself ships fifty-two. Two are not enrolled:
+ * JasperFx.Events.ComplianceTests 2.65.0, which itself ships fifty-two. Two are not enrolled:
  * SingleTenantedEventSlicingCompliance, for the precondition reason set out immediately below, and
  * UpcastingCompliance, which is the next node's work rather than this one's — Fisher has no
  * upcasting at all today, so enrolling it would be a suite that skips itself wholesale.
