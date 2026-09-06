@@ -814,14 +814,6 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         {
             await new Events.Storage.EventTagWriter(EventGraph)
                 .WriteAsync(streams, connection, transaction, token).ConfigureAwait(false);
-
-            // Beside the tag writer and for the same reason — a key registered outside the append's
-            // transaction leaves either a stream no key resolves to or a key naming a stream that does
-            // not exist. Unlike a tag row this needs nothing from the appends' postprocessing, since
-            // the stream id was known before any event was written; it runs here so there is one place
-            // that says "and these rows commit with the events too".
-            await new Events.Storage.NaturalKeyWriter(EventGraph, Options.Projections.NaturalKeys)
-                .WriteAsync(streams, connection, transaction, token).ConfigureAwait(false);
         }
 
         // Last thing inside the transaction: an outbox that wants its messages to be atomic with
@@ -991,6 +983,18 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     /// </remarks>
     private async Task ApplyInlineProjectionsAsync(IReadOnlyList<StreamAction> streams, CancellationToken token)
     {
+        // The natural key lookup is maintained by an inline projection of its own (fisher#206), and it
+        // runs whether or not the store has any *registered* inline projections — it is not on the
+        // graph, deliberately, so BuildInlineProjections() does not return it. It needs no event
+        // versions either: a key row names a stream, not a version, so it is applied ahead of the
+        // version assignment rather than behind it.
+        var naturalKeys = Options.Projections.NaturalKeyProjection;
+
+        if (naturalKeys.HasAny)
+        {
+            await naturalKeys.ApplyAsync(this, streams, token).ConfigureAwait(false);
+        }
+
         var projections = Options.Projections.BuildInlineProjections();
 
         if (projections.Length == 0)

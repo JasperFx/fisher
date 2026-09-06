@@ -347,6 +347,100 @@ public class event_database_reads : IAsyncLifetime
     }
 
     /// <summary>
+    ///     jasperfx#619 — the correlation behind the wait is now
+    ///     <see cref="ProjectionLagCalculator" />'s, and a registered shard with no progression row is
+    ///     reported as <em>fully behind</em> rather than as caught up.
+    /// </summary>
+    /// <remarks>
+    ///     This is the shared spelling of fisher#102's rule, reachable through
+    ///     <see cref="IEventDatabase.FetchProjectionLagAsync(IReadOnlyList{ShardName},CancellationToken)" />
+    ///     — a default interface method Fisher inherits, so the read exists for a caller wanting the
+    ///     numbers rather than the wait. <see cref="ProjectionLag.HasProgressionRow" /> is a real field
+    ///     rather than a <c>Sequence == 0</c> sentinel precisely so "never started" and "at zero" stay
+    ///     distinguishable.
+    /// </remarks>
+    [Fact]
+    public async Task a_registered_shard_with_no_row_reports_as_having_none()
+    {
+        await AppendAsync(3);
+        await WriteProgressAsync(ShardState.HighWaterMark, 3);
+        await WriteProgressAsync(TheRegisteredShard, 3);
+
+        var lags = await TheDatabase.FetchProjectionLagAsync(RegisteredShards(),
+            TestContext.Current.CancellationToken);
+
+        var ran = lags.Single(x => x.Shard.Identity == TheRegisteredShard);
+        ran.HasProgressionRow.ShouldBeTrue();
+        ran.IsCaughtUp.ShouldBeTrue();
+        ran.Lag.ShouldBe(0);
+
+        var neverRan = lags.Single(x => x.Shard.Identity == TheOtherRegisteredShard);
+        neverRan.HasProgressionRow.ShouldBeFalse();
+        neverRan.IsCaughtUp.ShouldBeFalse();
+        neverRan.Sequence.ShouldBe(0);
+        neverRan.HighWaterMark.ShouldBe(3);
+    }
+
+    /// <summary>
+    ///     marten#5161 — a bookkeeping row is not a projection that never advances, and the high-water
+    ///     row is the bar rather than a cell of its own.
+    /// </summary>
+    [Fact]
+    public async Task bookkeeping_rows_are_not_reported_as_projections()
+    {
+        await AppendAsync(3);
+        await WriteProgressAsync(ShardState.HighWaterMark, 3);
+        await WriteProgressAsync("some bookkeeping row", 1);
+
+        var lags = await TheDatabase.FetchProjectionLagAsync(RegisteredShards(),
+            TestContext.Current.CancellationToken);
+
+        lags.Count.ShouldBe(2);
+        lags.Select(x => x.Shard.Identity)
+            .ShouldBe([TheRegisteredShard, TheOtherRegisteredShard], ignoreOrder: true);
+        lags.ShouldAllBe(x => x.HighWaterMark == 3);
+        lags.ShouldAllBe(x => x.DatabaseIdentifier == _store.Database.Identifier);
+    }
+
+    /// <summary>
+    ///     <b>The wait's bar is <c>max(seq_id)</c>, not the persisted high-water mark</b> — the one
+    ///     place it deliberately does not read <see cref="ProjectionLag.IsCaughtUp" />.
+    /// </summary>
+    /// <remarks>
+    ///     Every shard here is level with a high-water row that is itself behind the events, which is
+    ///     what a store looks like between a commit and the agent's next poll. Measured against the
+    ///     mark, every cell is caught up and the wait returns — telling a caller who just committed
+    ///     that their own events are projected when nothing has read them. Measured against
+    ///     <c>max(seq_id)</c>, which is the honest committed ceiling on SQLite because committed
+    ///     sequences are contiguous, the store is stale and the wait times out. Swapping the check for
+    ///     <c>IsCaughtUp</c> makes this test fail by returning.
+    /// </remarks>
+    [Fact]
+    public async Task a_mark_that_trails_the_committed_events_does_not_make_the_store_current()
+    {
+        await AppendAsync(3);
+        await WriteProgressAsync(ShardState.HighWaterMark, 1);
+        await WriteProgressAsync(TheRegisteredShard, 1);
+        await WriteProgressAsync(TheOtherRegisteredShard, 1);
+
+        var lags = await TheDatabase.FetchProjectionLagAsync(RegisteredShards(),
+            TestContext.Current.CancellationToken);
+
+        // Against the mark alone, everything looks finished.
+        lags.ShouldAllBe(x => x.IsCaughtUp);
+
+        await Should.ThrowAsync<TimeoutException>(async () =>
+            await TheDatabase.WaitForNonStaleProjectionDataAsync(TimeSpan.FromMilliseconds(250)));
+    }
+
+    /// <summary>
+    ///     The shards the store registers, at their current versions — what the shared correlation
+    ///     anchors on.
+    /// </summary>
+    private IReadOnlyList<ShardName> RegisteredShards()
+        => _store.Options.Projections.AllShards().Select(x => x.Name).ToList();
+
+    /// <summary>
     ///     The identity of a registered async shard — taken from the store rather than spelled out, so
     ///     a change to how a shard is named cannot leave these tests seeding a row that matches nothing
     ///     and passing for the wrong reason.

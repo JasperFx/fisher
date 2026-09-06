@@ -317,6 +317,29 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     internal JasperFx.Events.NaturalKeyDefinition? NaturalKeyFor(Type aggregateType)
         => NaturalKeys.FirstOrDefault(x => x.AggregateType == aggregateType);
 
+    private Fisher.Events.Storage.NaturalKeyProjection? _naturalKeyProjection;
+
+    /// <summary>
+    ///     The projection that maintains the natural key lookup, on the append path and on the daemon's
+    ///     replay alike (fisher#206).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Built lazily and cached, because <see cref="NaturalKeys" /> walks every registered
+    ///         projection on every read and both of its callers are on a hot path — the session's
+    ///         commit and the daemon's batch.
+    ///     </para>
+    ///     <para>
+    ///         <b>Not a member of <see cref="ProjectionGraph{TProjection,TOperations,TQuerySession}.All" />.</b>
+    ///         It is an index over streams rather than a projection anybody registered, so giving it a
+    ///         shard would put a rebuildable projection in front of an operator that indexes streams
+    ///         they did not ask about. Marten's equivalent is likewise an inline projection plus a
+    ///         daemon hook rather than an <c>IProjectionSource</c>.
+    ///     </para>
+    /// </remarks>
+    internal Fisher.Events.Storage.NaturalKeyProjection NaturalKeyProjection
+        => _naturalKeyProjection ??= new Fisher.Events.Storage.NaturalKeyProjection(_events, NaturalKeys);
+
     private IInlineProjection<IDocumentSession>[]? _inlineProjections;
 
     /// <summary>
