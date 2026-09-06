@@ -15,6 +15,9 @@ internal static class MethodCallParserRegistry
 {
     private static readonly IMethodCallParser[] Parsers =
     [
+        // First, and matched on the declaring type alone: the six full-text operators are called on
+        // the document rather than on a member, which no other parser's shape test expects.
+        new FullTextSearchMethods(),
         new StringContains(),
         new StringStartsWith(),
         new StringEndsWith(),

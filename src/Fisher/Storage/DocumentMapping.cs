@@ -175,6 +175,58 @@ public class DocumentMapping
 
             Index(group.Select(x => new[] { x.Member }).ToArray(), name, unique);
         }
+
+        ApplyFullTextAttributes(documentType, members);
+    }
+
+    /// <summary>
+    ///     <c>[FullTextIndex]</c> on the type indexes the whole document; on members it indexes those
+    ///     members, in declaration order, as one index.
+    /// </summary>
+    /// <remarks>
+    ///     The type-level and member-level forms are alternatives rather than additive: a type-level
+    ///     attribute means "index everything", which a member list would then narrow, so declaring
+    ///     both is a contradiction and says so. Two members disagreeing about the tokenizer is the
+    ///     same kind of contradiction — the index has exactly one, so picking a winner would silently
+    ///     make one of the two attributes a lie.
+    /// </remarks>
+    private void ApplyFullTextAttributes(Type documentType, MemberInfo[] members)
+    {
+        var onType = documentType.GetCustomAttribute<FullTextIndexAttribute>();
+
+        var onMembers = members
+            .Select(member => (Member: member, Attribute: member.GetCustomAttribute<FullTextIndexAttribute>()))
+            .Where(x => x.Attribute is not null)
+            .ToArray();
+
+        if (onType is null && onMembers.Length == 0)
+        {
+            return;
+        }
+
+        if (onType is not null && onMembers.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"'{documentType.Name}' carries [FullTextIndex] on the type and on "
+                + $"{string.Join(", ", onMembers.Select(x => x.Member.Name))}. The type-level form "
+                + "indexes the whole stored document, so the members would narrow the very thing it "
+                + "widened — use one or the other.");
+        }
+
+        var tokenizers = onMembers.Select(x => x.Attribute!.Tokenizer).Distinct().ToArray();
+
+        if (tokenizers.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"'{documentType.Name}' declares [FullTextIndex] with more than one tokenizer "
+                + $"({string.Join(" and ", tokenizers)}). A full-text index has exactly one, and it "
+                + "decides which search operators can match at all — say the same one on every "
+                + "member, or declare the index through Schema.For<T>().FullTextIndex(...).");
+        }
+
+        AddFullTextIndex(
+            onType is not null ? [] : onMembers.Select(x => new[] { x.Member }).ToArray(),
+            onType?.Tokenizer ?? tokenizers[0]);
     }
 
     /// <summary>The .NET type being stored.</summary>
@@ -351,6 +403,60 @@ public class DocumentMapping
     ///     <see cref="DocumentMappingExpression{T}.Index{TValue}" />.
     /// </summary>
     internal List<DocumentIndex> Indexes { get; } = [];
+
+    /// <summary>
+    ///     The document's full-text index, or null if it declares none (fisher#215).
+    /// </summary>
+    /// <remarks>
+    ///     One rather than a list, deliberately — see <see cref="FullText.FullTextIndex" /> for why a
+    ///     second would have nothing to disambiguate it and is refused instead.
+    /// </remarks>
+    internal FullText.FullTextIndex? FullTextIndex { get; private set; }
+
+    /// <summary>
+    ///     Register the full-text index over the named member chains, or over the whole stored
+    ///     document when none are named.
+    /// </summary>
+    /// <remarks>
+    ///     Declaring the same index twice is idempotent, the same discipline <see cref="Index" /> and
+    ///     <see cref="Duplicate" /> follow, so a configuration helper that runs more than once does
+    ///     not fail. Declaring a <em>different</em> one is the configuration error the message names.
+    /// </remarks>
+    internal FullText.FullTextIndex AddFullTextIndex(MemberInfo[][] memberChains,
+        FullText.FullTextTokenizer tokenizer)
+    {
+        if (Array.Exists(memberChains, chain => chain.Length == 0))
+        {
+            throw new ArgumentException("A full-text indexed member chain cannot be empty.",
+                nameof(memberChains));
+        }
+
+        var index = new FullText.FullTextIndex(memberChains, tokenizer);
+
+        if (FullTextIndex is { } existing)
+        {
+            if (!existing.MemberNames.SequenceEqual(index.MemberNames, StringComparer.Ordinal)
+                || existing.Tokenizer != index.Tokenizer)
+            {
+                throw new InvalidOperationException(
+                    $"'{DocumentType.Name}' already declares a full-text index over "
+                    + $"{Describe(existing)}. Fisher supports one per document type, because a search "
+                    + "operator names no index and so has no way to say which of two it meant — put "
+                    + "every searchable member in the one declaration.");
+            }
+
+            return existing;
+        }
+
+        FullTextIndex = index;
+
+        return index;
+    }
+
+    private static string Describe(FullText.FullTextIndex index)
+        => index.IsWholeDocument
+            ? "the whole document"
+            : string.Join(", ", index.MemberNames);
 
     /// <summary>
     ///     Sub-classes registered against this type, making it a hierarchy.
