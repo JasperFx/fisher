@@ -134,8 +134,18 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
         await _store.Options.ResiliencePipeline.ExecuteAsync(async ct =>
         {
             await using var connection = await _database.OpenConnectionAsync(ct).ConfigureAwait(false);
+
+            // fisher#208. The daemon is one more writer competing for the file's single write lock, and
+            // charting its wait beside a session's is what tells "the application is contended" apart
+            // from "the daemon is starving the application" — the two look identical from a session's
+            // side alone.
+            var waitedFrom = _store.Options.OpenTelemetry.StartWriteLockWait();
+
             await using var transaction = (SqliteTransaction)await connection
                 .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+
+            _store.Options.OpenTelemetry.RecordWriteLockWait(
+                waitedFrom, Fisher.Services.OpenTelemetryOptions.DaemonHolder);
 
             foreach (var (session, operations) in pending)
             {

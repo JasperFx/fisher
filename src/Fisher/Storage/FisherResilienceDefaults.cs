@@ -25,7 +25,13 @@ internal static class FisherResilienceDefaults
     /// <summary>SQLITE_LOCKED — a table in the database is locked.</summary>
     private const int SqliteLocked = 6;
 
-    public static ResiliencePipelineBuilder AddFisherDefaults(this ResiliencePipelineBuilder builder)
+    /// <param name="options">
+    ///     The store whose <c>OpenTelemetry</c> counters a retry is reported to, or null for a
+    ///     pipeline built with no store behind it. Read at retry time rather than captured as a
+    ///     counter, so an application that opts in after the pipeline is built is still served.
+    /// </param>
+    public static ResiliencePipelineBuilder AddFisherDefaults(this ResiliencePipelineBuilder builder,
+        StoreOptions? options = null)
     {
         return builder.AddRetry(new RetryStrategyOptions
         {
@@ -44,6 +50,13 @@ internal static class FisherResilienceDefaults
             {
                 Internal.FisherTracing.RecordRetry(
                     arguments.AttemptNumber + 1, arguments.RetryDelay, arguments.Outcome.Exception);
+
+                // fisher#208. The metric beside the span event, and the two are not redundant: a span
+                // event is per-trace and answers "why was *this* call slow", where the counter is what
+                // an alert can be hung off. Deliberately NOT the only contention instrument — see
+                // OpenTelemetryOptions.TrackWriteLockContention for the measurement that says a retry
+                // counter alone reads zero through real contention.
+                options?.OpenTelemetry.RecordWriteLockRetry(arguments.Outcome.Exception);
 
                 return default;
             }

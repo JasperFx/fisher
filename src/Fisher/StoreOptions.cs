@@ -33,8 +33,22 @@ public class StoreOptions
         Events.EventGraph = EventGraph;
         Projections = new Fisher.Projections.FisherProjectionOptions(EventGraph);
         Schema = new DocumentSchema(this);
-        ResiliencePipeline = new ResiliencePipelineBuilder().AddFisherDefaults().Build();
+
+        // Before the pipeline: AddFisherDefaults closes its OnRetry over these options and reads
+        // OpenTelemetry when a retry actually happens, so it has to exist by then.
+        OpenTelemetry = new Services.OpenTelemetryOptions();
+
+        ResiliencePipeline = new ResiliencePipelineBuilder().AddFisherDefaults(this).Build();
     }
+
+    /// <summary>
+    ///     Fisher's OpenTelemetry meter and the counters this store publishes (fisher#208).
+    /// </summary>
+    /// <remarks>
+    ///     Everything on it is opt-in and nothing is created until it is asked for. An application
+    ///     subscribes with <c>AddMeter("Fisher")</c>, matching the <c>Fisher</c> <c>ActivitySource</c>.
+    /// </remarks>
+    public Services.OpenTelemetryOptions OpenTelemetry { get; }
 
     /// <summary>
     ///     Document type registration, mirroring Marten's <c>StoreOptions.Schema</c>. Registering a
@@ -386,6 +400,40 @@ public class StoreOptions
     /// </remarks>
     public IList<IDocumentSessionListener> Listeners { get; } = new List<IDocumentSessionListener>();
 
+    private IFisherLogger _logger = NulloFisherLogger.Flyweight;
+
+    /// <summary>
+    ///     The logger every session this store opens records its SQL through (fisher#207).
+    /// </summary>
+    /// <remarks>
+    ///     Never null. A store nobody attached a logger to holds <see cref="NulloFisherLogger" />, whose
+    ///     sessions answer <see cref="IFisherSessionLogger.Enabled" /> false and are therefore never
+    ///     asked for anything.
+    /// </remarks>
+    public IFisherLogger Logger() => _logger;
+
+    /// <summary>
+    ///     Attach a logger to this store. Mirrors Marten's <c>StoreOptions.Logger(IMartenLogger)</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <c>AddFisher</c> attaches a <see cref="DefaultFisherLogger" /> over the container's
+    ///     <c>ILogger</c> when nothing has been attached here, so calling this is how an application
+    ///     overrides that rather than how it turns logging on.
+    /// </remarks>
+    public void Logger(IFisherLogger logger)
+        => _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+    /// <summary>
+    ///     Whether the logger <c>AddFisher</c> attaches writes the <em>values</em> bound to a command's
+    ///     parameters. Defaults to <c>false</c>, which is a deliberate divergence from Marten.
+    /// </summary>
+    /// <remarks>
+    ///     Read only when <c>AddFisher</c> builds the default logger — see
+    ///     <see cref="DefaultFisherLogger.LogParameterValues" /> for the reasoning and for why a logger
+    ///     attached through <see cref="Logger(IFisherLogger)" /> decides this for itself.
+    /// </remarks>
+    public bool LogSqlParameterValues { get; set; }
+
     /// <summary>
     ///     Replace the default Polly resilience pipeline with a custom one.
     /// </summary>
@@ -403,7 +451,7 @@ public class StoreOptions
     public void ExtendPolly(Action<ResiliencePipelineBuilder> configure)
     {
         var builder = new ResiliencePipelineBuilder();
-        builder.AddFisherDefaults();
+        builder.AddFisherDefaults(this);
         configure(builder);
         ResiliencePipeline = builder.Build();
     }

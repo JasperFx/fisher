@@ -66,6 +66,83 @@ write lock.
 own store sets.
 :::
 
+## Metrics
+
+Fisher publishes a `Meter` named **`Fisher`**, matching the `ActivitySource`, so one name subscribes
+to both:
+
+```cs
+builder.Services.AddOpenTelemetry().WithMetrics(metrics => metrics.AddMeter("Fisher"));
+```
+
+**Everything is opt-in and nothing is created until it is asked for.** A store that opts into nothing
+publishes no instruments and pays a null check on the commit path.
+
+```cs
+builder.Services.AddFisher(opts =>
+{
+    opts.ConnectionString = connectionString;
+
+    opts.OpenTelemetry.TrackWriteLockContention();
+    opts.OpenTelemetry.TrackEventCounters();
+    opts.OpenTelemetry.TrackDocumentCounters();
+});
+```
+
+| Instrument | Kind | Tags | What it answers |
+| :--- | :--- | :--- | :--- |
+| `fisher.write_lock.wait` | histogram (ms) | `fisher.store`, `fisher.write_lock.holder` | How long a writer queued for SQLite's one write lock |
+| `fisher.write_lock.retries` | counter | `fisher.store`, `exception.type` | How often a `SQLITE_BUSY` was retried rather than waited out |
+| `fisher.events.appended` | counter | `fisher.store`, `fisher.event.type`, `fisher.tenant` | Append volume, by event type |
+| `fisher.documents.written` | counter | `fisher.store`, `fisher.document.type`, `fisher.document.operation` | Commit shape — inserts, updates, deletions |
+
+`fisher.write_lock.holder` is `session`, `daemon` or `rebuild`. That distinction is what separates
+"the application is contended" from "the daemon is starving the application", which look identical from
+a session's side alone.
+
+### Why the wait, and not just the retries
+
+::: warning
+**A `SQLITE_BUSY` retry counter on its own is the wrong instrument here, and that is a measurement
+rather than an opinion.** Fisher's Polly pipeline already emits a `fisher.retry` activity event, so
+counting retries is the obvious move. Under the benchmark harness's concurrent-writers scenario that
+counter reads **zero** while throughput visibly collapses — a contended writer sits inside
+`BEGIN IMMEDIATE` under the connection string's busy timeout and eventually succeeds, never reaching
+the retry.
+:::
+
+So a dashboard built on retries alone shows a flat line through the exact incident it exists to
+diagnose, which is worse than no instrument at all: a flat line reads as *not the database*.
+`TrackWriteLockContention()` therefore creates **both** — they are opted into together so neither can
+be charted without the other:
+
+- a **rising histogram with no retries** is ordinary contention absorbed by the busy timeout;
+- **retries** mean the timeout was exceeded, or the failure was `SQLITE_BUSY_SNAPSHOT`, which the busy
+  timeout does not cover at all.
+
+### The counters are not Marten's
+
+Marten's interesting number is connection usage against a pooled remote server. Fisher's is contention
+for the one write lock on a file, so the instruments differ:
+
+| Marten | Fisher |
+| :--- | :--- |
+| `TrackConnections` | **refused** — a Fisher connection is a file handle, not a lease on a scarce server resource. Weasel's `SqliteDataSource` builds a fresh connection per open, and the pooling beneath it is Microsoft.Data.Sqlite's, keyed process-wide by connection string and not attributable to a store. Setting it throws, naming `TrackWriteLockContention()` instead. |
+| — | `fisher.write_lock.wait` — no sibling has one, because no sibling serialises every writer on a file |
+| `marten.event.append` (`TrackEventCounters`) | `fisher.events.appended`, same shape. It earns its place here for an extra reason: on one file every appending writer is queued behind every other, so append volume charted against the wait separates *more work arrived* from *the same work is now waiting* |
+| — | `fisher.documents.written` — the other cause of the wait |
+| `ExportCounterOnChangeSets<T>` | same, for a counter specific to your own model |
+
+::: tip
+`TrackConnections` is **refused rather than ignored**, following `SessionOptions.IsolationLevel`, which
+is carried for parity and refuses exactly one value by name. A knob that silently does nothing is worse
+than an error, because the absence of data is indistinguishable from having none to report.
+:::
+
+The event and document counters describe a **user session's** unit of work. An async projection commits
+through the daemon's batch, which deliberately does not fire session listeners — counting those here
+would put the daemon's own work on the same series as the application's.
+
 ## The event store tooling surface
 
 `DocumentStore` implements `IEventStore` **explicitly**, so none of a tooling-only surface lands on the
@@ -170,7 +247,111 @@ var sql = session.ToSql(session.Query<User>().Where(x => x.Internal));
 Parameter *names*, not values, so the text is readable rather than executable. It is the cheapest way
 to check that an implicit filter is actually present.
 
+`ToSql` answers about one statement you already have in hand. For *what a session actually ran*, use
+the logger below.
+
 ## Logging
 
-Fisher logs through `ILogger` where a host supplies one — most notably the WAL warning at daemon
-startup, which is the only place an operator would otherwise see it.
+Fisher logs through `ILogger` where a host supplies one — the WAL warning at daemon startup, and
+every statement a session executes.
+
+### The session logger
+
+`AddFisher` attaches a `DefaultFisherLogger` over the container's `ILogger<IDocumentStore>`, so
+turning Fisher's SQL on is a log-level change and nothing else:
+
+```json
+{ "Logging": { "LogLevel": { "Fisher": "Debug" } } }
+```
+
+Every statement then arrives with its duration, and each `SaveChangesAsync` with what it committed:
+
+```
+Fisher executed in 0.42 ms, SQL: insert into fi_doc_user (id, data, ...) ...
+  @p0: (String)
+  @p1: (String)
+Fisher committed 3 operations in 1.86 ms — 2 updates, 1 inserts, 0 deletions, 4 events across 1 streams
+```
+
+Covered: the write batch (one line per storage operation), a LINQ execution, and a document load —
+the same three boundaries the spans are drawn at. A failed statement is logged with its command, and
+a failed commit is logged again as a message, because "this statement was refused" and "the whole
+unit of work is gone" are different news.
+
+### Parameter values are not logged by default
+
+::: warning
+**This is a deliberate divergence from Marten**, which logs `p.Value` for every parameter at `Debug`.
+Fisher logs the parameter's **name and the CLR type of the bound value** instead — `@p0: (String)`.
+:::
+
+Three things stack up behind it:
+
+- **Fisher already answered this question once, the same way.** `ToSql` renders parameter names and
+  not values, so that the text is readable rather than executable. One store should not hold two
+  opposite answers to "may Fisher write bound values somewhere a human will read them".
+- **What is bound here is the whole document.** A Fisher upsert binds the serialized document body as
+  a single parameter, and an event append binds the event body the same way. "Log the parameter
+  values" means every field of every document and every event, verbatim, at `Debug`.
+- **Fisher is embedded, so the blast radius is different.** Marten's logs are a server-side
+  application's. Fisher runs in-process next to its database file, very often on a desktop, an edge
+  box or a device, where the log is a file on the same disk and is exactly the artifact attached to a
+  support ticket. Turning on `Debug` to find out why a query is slow should not be the same gesture as
+  exporting the database.
+
+::: tip
+The type is not a placeholder for the value — it is the diagnostic for Fisher's sharpest binding trap.
+A `Guid` bound without conversion is written as a 16-byte BLOB that can never match the TEXT the
+schema holds, and every read then silently returns nothing. A line reading `(Guid)` where `(String)`
+belongs says that at once; the value would not.
+:::
+
+Opt in when you need them:
+
+```cs
+builder.Services.AddFisher(opts =>
+{
+    opts.ConnectionString = connectionString;
+    opts.LogSqlParameterValues = true;
+});
+```
+
+This governs the shipped logger only. `IFisherSessionLogger` hands a custom logger the live
+`DbCommand`, values and all — what it does with them is its own decision.
+
+### Per store, per session
+
+```cs
+// The whole store
+options.Logger(new ConsoleFisherLogger());
+
+// Just this one session
+session.Logger = new ConsoleFisherLogger();
+```
+
+`IFisherLogger` is the store-level factory and `IFisherSessionLogger` the per-session recorder,
+mirroring Marten's `IMartenLogger` / `IMartenSessionLogger` so that a logger ports across with a
+rename. Two of Marten's members are deliberately absent:
+
+| Marten member | Why Fisher does not carry it |
+| :--- | :--- |
+| `LogSuccess(NpgsqlBatch)` and its two siblings | There is no batch to log. `SqliteBatch` exists, but Fisher executes one command per storage operation on purpose — 1000 upserts take 4–6 ms as separate commands and 82–192 ms concatenated. The overload could never fire. |
+| `IMartenLogger.SchemaChange(string sql)` | Fisher already has that seam one layer down. All of Fisher's DDL goes through Weasel, and `FisherDatabase` implements `IDatabaseWithMigrationLogger` — so migration output can already be routed anywhere without this interface. Honouring it here would mean displacing the `DefaultMigrationLogger` every Weasel provider type-checks to decide whether a failed DDL statement rethrows with its original stack trace. |
+
+### The unlogged path costs nothing
+
+A store built by hand — `DocumentStore.For(...)`, which is what every test and every non-DI embedded
+use does — holds `NulloFisherLogger`, whose `Enabled` is a constant `false`. Every call site checks
+that **before** constructing any argument, so nothing is built for a logger that will discard it.
+
+::: tip
+That guard is why `IFisherSessionLogger.Enabled` exists at all, and it is fisher#165's lesson held in
+advance: a `DaemonTrace.Record` call site once built its interpolated-string argument ahead of the
+gate that would have rejected it, so a facility documented as free cost an allocation per call.
+`RecordSavedChanges` is the same shape here — it wants an `IChangeSet` that `SaveChangesAsync` would
+not otherwise build. Measured: 0 bytes with the guard, 72 bytes per command without it.
+:::
+
+A store that *has* a logger still records nothing until the level is on — `DefaultFisherLogger.Enabled`
+is `ILogger.IsEnabled(LogLevel.Debug)`, asked every time rather than cached, so a host can change its
+levels while running.
