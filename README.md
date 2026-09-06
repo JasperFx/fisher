@@ -40,9 +40,8 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > feature-complete against Marten. Several Marten features are genuinely missing, and until recently
 > they were missing from this list too: Fisher's parity baseline was drawn against *Polecat*, so
 > anything Marten has and Polecat does not was invisible to its tracking. `Include()`, compiled
-> queries, full-text search, a session logging seam, `MatchesSql`, `Stats(out QueryStatistics)` and
-> `ToAsyncEnumerable()` are all absent; child-collection LINQ is partly landed; and `CreateBatchQuery`
-> lives on `session.Events` rather than on the session. The
+> queries, full-text search and a session logging seam are absent, and child-collection LINQ is only
+> partly landed. The
 > [migration guide](https://fisher.jasperfx.net/migration-guide#marten-features-fisher-does-not-have)
 > names each one, says what to use instead, and marks which are settled decisions rather than unbuilt
 > work.

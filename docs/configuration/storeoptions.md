@@ -139,11 +139,29 @@ Each overrides the one before:
 2. **JasperFx metadata interfaces** (`ISoftDeleted`, `IVersioned`, `IRevisioned`) — intrinsic to the
    type, but saying nothing about this store.
 3. **Schema attributes** (`[Index]`, `[UniqueIndex]`, `[DuplicateField]`, `[HiloSequence]`,
-   `[SoftDeleted]`) — on the type, and about storage.
+   `[SoftDeleted]`, `[DocumentAlias]`, `[MultiTenanted]`, `[UseOptimisticConcurrency]`,
+   `[ForeignKey]`) — on the type, and about storage.
 4. **`opts.Schema.For<T>()`** — naming the type in this store's own configuration.
 
 Weakest first, and the reason reads off the layer. The first three run when the mapping is created;
 the DSL runs afterwards.
+
+```cs
+[DocumentAlias("catches")]
+[MultiTenanted]
+[UseOptimisticConcurrency]
+public class Catch
+{
+    public Guid Id { get; set; }
+
+    [ForeignKey(typeof(Angler), OnDelete = CascadeAction.Cascade)]
+    public Guid AnglerId { get; set; }
+}
+```
+
+Each has a DSL equivalent, and the DSL still wins. `[ForeignKey]` duplicates its member as a side
+effect, because a constraint needs a real column — see
+[foreign keys](/documents/indexing/foreign-keys).
 
 ### Store policies
 

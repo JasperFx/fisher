@@ -100,7 +100,12 @@ Unlike the list above, these are settled decisions rather than unbuilt features.
 | | Why |
 | :--- | :--- |
 | **A message bus** | The [side-effect seam](/events/projections/side-effects) exists; delivery is a bus integration's job here as on both siblings. |
-| **Table partitioning** | SQLite has no partition functions or schemes. |
+| **Table partitioning** | SQLite has no partition functions or schemes. So `PartitionOn`, `MultiTenantedWithPartitioning`, `SoftDeletedWithPartitioning*` and `DoNotPartition` have nothing to mean. |
+| **Row-level security** | `UseRowLevelSecurity` / `DisableRowLevelSecurity` are PostgreSQL policies. SQLite has no such concept; isolate with [database-per-tenant](/configuration/multitenancy#database-per-tenant), which is a file per tenant. |
+| **GIN indexes over the JSON body** | `GinIndexJsonData` and its member form are PostgreSQL's. SQLite indexes an [expression](/documents/indexing/indexes) instead, which is cheaper and needs no column. |
+| **`UniqueIndexType` / `TenancyScope` / `IsConcurrent` / index sort order and casing** | Every one of them describes a *computed column* and a PostgreSQL index. A Fisher index is an expression index and a duplicated field is a `VIRTUAL` generated column that cannot drift, so there is nothing for `Computed` vs `DuplicatedField` to choose between, no direction worth naming, and no casing to apply — SQLite's default collation is case-sensitive and the [string operators](/documents/querying/linq/strings) are ordinal to match. |
+| **`PropertySearching`, `DdlTemplate`, `StructuralTyped`, per-type `DatabaseSchemaName`** | Not SQLite concepts. `DatabaseSchemaName` is store-wide here and folds into the table prefix. |
+| **`UseIdentityKey`** | A database-assigned identity would need the write path to read the id back rather than assign it client-side. [`IdStrategy`](/documents/identity#supplying-the-identity-strategy) is the seam for a custom strategy; a database-assigned one is a different write path. |
 | **`DaemonMode.HotCold`** | Leader election across nodes means several processes sharing one file. |
 | **Newtonsoft.Json** | System.Text.Json only. |
 | **`CreatedSince` / `CreatedBefore`** | There is no `created_at` column unless you enable one; answering from `last_modified` would be a different question. |

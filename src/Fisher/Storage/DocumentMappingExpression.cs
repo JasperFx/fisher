@@ -162,11 +162,11 @@ public class DocumentMappingExpression<T> where T : notnull
     ///     </para>
     /// </remarks>
     public DocumentMappingExpression<T> Index<TValue>(Expression<Func<T, TValue>> member,
-        string? name = null, bool unique = false)
+        string? name = null, bool unique = false, Expression<Func<T, bool>>? predicate = null)
     {
         ArgumentNullException.ThrowIfNull(member);
 
-        Mapping.Index([ChainOf(member)], name, unique);
+        Mapping.Index([ChainOf(member)], name, unique, RenderPredicate(predicate));
         return this;
     }
 
@@ -178,7 +178,7 @@ public class DocumentMappingExpression<T> where T : notnull
     ///     indexed expressions and not a trailing one.
     /// </remarks>
     public DocumentMappingExpression<T> Index(Expression<Func<T, object?>>[] members,
-        string? name = null, bool unique = false)
+        string? name = null, bool unique = false, Expression<Func<T, bool>>? predicate = null)
     {
         ArgumentNullException.ThrowIfNull(members);
 
@@ -187,7 +187,7 @@ public class DocumentMappingExpression<T> where T : notnull
             throw new ArgumentException("An index needs at least one member.", nameof(members));
         }
 
-        Mapping.Index(Array.ConvertAll(members, ChainOf), name, unique);
+        Mapping.Index(Array.ConvertAll(members, ChainOf), name, unique, RenderPredicate(predicate));
         return this;
     }
 
@@ -201,13 +201,13 @@ public class DocumentMappingExpression<T> where T : notnull
     ///     member, which is what the equivalent does on both siblings.
     /// </remarks>
     public DocumentMappingExpression<T> UniqueIndex<TValue>(Expression<Func<T, TValue>> member,
-        string? name = null)
-        => Index(member, name, unique: true);
+        string? name = null, Expression<Func<T, bool>>? predicate = null)
+        => Index(member, name, unique: true, predicate);
 
-    /// <inheritdoc cref="UniqueIndex{TValue}(Expression{Func{T, TValue}}, string?)" />
+    /// <inheritdoc cref="UniqueIndex{TValue}(Expression{Func{T, TValue}}, string?, Expression{Func{T, bool}}?)" />
     public DocumentMappingExpression<T> UniqueIndex(Expression<Func<T, object?>>[] members,
-        string? name = null)
-        => Index(members, name, unique: true);
+        string? name = null, Expression<Func<T, bool>>? predicate = null)
+        => Index(members, name, unique: true, predicate);
 
     /// <summary>
     ///     Declare a real foreign key from a member of <typeparamref name="T" /> to
@@ -325,6 +325,235 @@ public class DocumentMappingExpression<T> where T : notnull
         }
 
         return this;
+    }
+
+    /// <summary>
+    ///     Index the <c>last_modified</c> column (fisher#218).
+    /// </summary>
+    /// <remarks>
+    ///     A plain column index, not an expression one: <c>last_modified</c> is a real column on every
+    ///     document table, written on every upsert. It is what <c>ModifiedSince</c> /
+    ///     <c>ModifiedBefore</c> compare against, and it holds <c>SqliteTimestamp</c>'s fixed-width UTC
+    ///     form so a B-tree over it orders as instants.
+    /// </remarks>
+    public DocumentMappingExpression<T> IndexLastModified(string? name = null)
+    {
+        Mapping.ColumnIndex([Mapping.Metadata.LastModified.Name], name, isUnique: false);
+        return this;
+    }
+
+    /// <summary>
+    ///     Index the <c>created_at</c> column (fisher#218).
+    /// </summary>
+    /// <remarks>
+    ///     <b>Enables the column as well as indexing it</b>, because <c>created_at</c> is opt-in and an
+    ///     index over a column that does not exist is not a weaker version of this — it fails the
+    ///     migration. Mapping a metadata member already enables its column for the same reason.
+    /// </remarks>
+    public DocumentMappingExpression<T> IndexCreatedAt(string? name = null)
+    {
+        Mapping.Metadata.CreatedAt.Enable();
+        Mapping.ColumnIndex([Mapping.Metadata.CreatedAt.Name], name, isUnique: false);
+        return this;
+    }
+
+    /// <summary>
+    ///     Index the <c>tenant_id</c> column (fisher#218).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Refused for a type that is not <see cref="MultiTenanted" />, because there is no column
+    ///         to index and silently doing nothing would look like it worked — the same rule the
+    ///         tenancy query operators follow.
+    ///     </para>
+    ///     <para>
+    ///         Worth less here than on either sibling and offered for parity: <c>tenant_id</c> already
+    ///         <em>leads</em> the conjoined primary key, so the implicit tenant filter is served by that
+    ///         index already. It earns its place for a query that filters on tenant and orders on
+    ///         nothing the primary key covers.
+    ///     </para>
+    /// </remarks>
+    public DocumentMappingExpression<T> IndexTenantId(string? name = null)
+    {
+        if (Mapping.TenancyStyle != JasperFx.MultiTenancy.TenancyStyle.Conjoined)
+        {
+            throw new InvalidOperationException(
+                $"'{typeof(T).Name}' is not MultiTenanted(), so its table has no tenant_id column to "
+                + "index. Call MultiTenanted() first, or drop the IndexTenantId() call.");
+        }
+
+        Mapping.ColumnIndex([Mapping.Metadata.TenantId.Name], name, isUnique: false);
+        return this;
+    }
+
+    /// <summary>
+    ///     Soft delete this type, and index the live rows (fisher#218).
+    /// </summary>
+    /// <remarks>
+    ///     Marten's <c>SoftDeletedWithIndex</c>. A <b>partial</b> index over <c>is_deleted</c>
+    ///     restricted to the live rows, which is the shape that actually helps: every ordinary read
+    ///     carries <c>is_deleted = 0</c>, and an index holding only those rows is the size of the live
+    ///     set rather than of the table's whole history.
+    /// </remarks>
+    public DocumentMappingExpression<T> SoftDeletedWithIndex(string? name = null)
+    {
+        SoftDeleted();
+
+        Mapping.ColumnIndex([SoftDelete.IsDeletedColumn], name, isUnique: false,
+            predicate: $"{SoftDelete.IsDeletedColumn} = 0");
+
+        return this;
+    }
+
+    /// <summary>
+    ///     Leave an index alone that Fisher did not create (fisher#218).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         For an index added out of band — by hand, by a DBA, by a migration tool. Without this
+    ///         the schema comparison sees an index the configuration does not declare and reports it as
+    ///         surplus, so <c>db-assert</c> fails and <c>db-apply</c> drops it.
+    ///     </para>
+    ///     <para>
+    ///         Ignoring a name Fisher itself declares is refused by Weasel rather than silently
+    ///         preferring one of the two — that is a collision, not an exemption.
+    ///     </para>
+    /// </remarks>
+    public DocumentMappingExpression<T> IgnoreIndex(string indexName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(indexName);
+
+        Mapping.IgnoredIndexes.Add(indexName);
+        return this;
+    }
+
+    /// <summary>
+    ///     Name the identity member explicitly — <c>Identity(x =&gt; x.Key)</c> (fisher#218).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The DSL form of JasperFx's <c>[Identity]</c> attribute, for a type whose identity member
+    ///         is not called <c>Id</c> and which you would rather not annotate — a type from another
+    ///         assembly, or one shared with code that should not know about Fisher.
+    ///     </para>
+    ///     <para>
+    ///         The mapping is created lazily on first use and the storage provider is built from it
+    ///         later still, so this has to run during configuration. That is the same rule every other
+    ///         member here follows; what makes it worth saying is that identity is the one thing
+    ///         resolved in the mapping's own constructor.
+    ///     </para>
+    /// </remarks>
+    public DocumentMappingExpression<T> Identity<TValue>(Expression<Func<T, TValue>> member)
+    {
+        ArgumentNullException.ThrowIfNull(member);
+
+        var chain = ChainOf(member);
+
+        if (chain.Length != 1)
+        {
+            throw new ArgumentException(
+                $"'{member}' is not a member of {typeof(T).Name} itself. A document's identity has to "
+                + "be one of its own members, not one reached through another.", nameof(member));
+        }
+
+        Mapping.UseIdentityMember(chain[0]);
+        return this;
+    }
+
+    /// <summary>
+    ///     Supply the identity strategy instead of letting Fisher derive one from the id's type
+    ///     (fisher#218).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Fisher otherwise picks by <c>IdType</c>: a version-7 Guid, an externally-assigned
+    ///         string, a Hi-Lo <c>int</c> or <c>long</c>, or the unwrapping strategy for a strong-typed
+    ///         wrapper. This is the seam for anything else — a ULID in a string key, a snowflake
+    ///         <c>long</c>, a tenant-prefixed key.
+    ///     </para>
+    ///     <para>
+    ///         <b>Marten's <c>IdStrategy(IIdGeneration)</c> has no direct counterpart and this is the
+    ///         honest translation.</b> That type is a code-generation contract; Fisher's strategies are
+    ///         ordinary objects from the shared Weasel identity runtime, so the seam is that runtime
+    ///         interface — two members to implement rather than a generator to write.
+    ///     </para>
+    ///     <para>
+    ///         ⚠️ <b>A Guid strategy is wrapped so the id still crosses the ADO.NET boundary as
+    ///         lowercase canonical text.</b> Binding a raw <see cref="Guid" /> writes the UPPERCASE
+    ///         form, SQLite's default collation is case-sensitive, and the result is rows that can
+    ///         never be read back — every load null, every id match empty, silently. That conversion
+    ///         lives in the identity strategy, so a caller-supplied one is exactly where it could have
+    ///         been lost; <c>DocumentProviderRegistry</c> puts it back rather than leaving the trap
+    ///         open.
+    ///     </para>
+    /// </remarks>
+    public DocumentMappingExpression<T> IdStrategy<TId>(
+        Weasel.Core.Identity.IIdentification<T, TId> strategy) where TId : notnull
+    {
+        ArgumentNullException.ThrowIfNull(strategy);
+
+        if (!Mapping.HasIdentity)
+        {
+            throw new InvalidOperationException(
+                $"'{typeof(T).Name}' has no identity member for a strategy to assign to. Name one with "
+                + "Identity(x => x.Member) before IdStrategy(...), or mark it with [Identity].");
+        }
+
+        if (typeof(TId) != Mapping.IdType)
+        {
+            throw new ArgumentException(
+                $"'{typeof(T).Name}' is identified by '{Mapping.IdType.Name}', so its strategy has to "
+                + $"be an IIdentification<{typeof(T).Name}, {Mapping.IdType.Name}>. Call Identity(...) "
+                + "first if the identity member itself is not the one Fisher resolved.",
+                nameof(strategy));
+        }
+
+        Mapping.IdStrategy = strategy;
+        return this;
+    }
+
+    /// <summary>
+    ///     Configure the Hi-Lo sequence backing an <c>int</c> or <c>long</c> identity (fisher#218).
+    /// </summary>
+    /// <remarks>
+    ///     The method form of <c>Mapping.HiloSettings</c>, so a block of configuration reads the same
+    ///     as Marten's. <c>SequenceName</c> is what makes two document types share one allocation
+    ///     rather than each holding a private lo range over the same row; <c>MaxLo</c> trades how many
+    ///     identities are lost on an unclean shutdown against how often the sequence is advanced.
+    ///     Ignored for a Guid or string identity, which needs no sequence.
+    /// </remarks>
+    public DocumentMappingExpression<T> HiloSettings(Weasel.Core.Sequences.HiloSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        Mapping.HiloSettings = settings;
+        return this;
+    }
+
+    /// <summary>
+    ///     Render an index's partial predicate to literal SQL.
+    /// </summary>
+    /// <remarks>
+    ///     Through the same <c>WhereClauseParser</c> and <c>MemberFactory</c> a query goes through,
+    ///     which is what makes the index usable: SQLite reaches a partial index only when the query's
+    ///     <c>WHERE</c> implies the index's, over the terms as written. See
+    ///     <c>LiteralRenderingCommandBuilder</c> for why the values are rendered rather than bound and
+    ///     what that costs.
+    /// </remarks>
+    private string? RenderPredicate(Expression<Func<T, bool>>? predicate)
+    {
+        if (predicate is null)
+        {
+            return null;
+        }
+
+        var members = new Linq.Members.MemberFactory(Mapping.StoreOptions, Mapping);
+        var fragment = new Linq.Parsing.WhereClauseParser(members).Parse(predicate.Body);
+
+        var builder = new Linq.SqlGeneration.LiteralRenderingCommandBuilder();
+        fragment.Apply(builder);
+
+        return builder.ToString();
     }
 
     /// <summary>

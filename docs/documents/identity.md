@@ -55,6 +55,13 @@ opts.HiloSequenceDefaults.MaxLo = 100;
 <sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/document_samples.cs#L245-L252' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_documents_hilo' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
+There is a method form too, so a block of configuration reads the same as Marten's:
+
+```cs
+opts.Schema.For<Invoice>()
+    .HiloSettings(new Weasel.Core.Sequences.HiloSettings { MaxLo = 100, SequenceName = "shared" });
+```
+
 Or declaratively:
 
 ```cs
@@ -162,6 +169,65 @@ public class Report
     public Guid Key { get; set; }
 }
 ```
+
+Or in configuration, for a type you would rather not annotate — one from another assembly, or one
+shared with code that should not know about Fisher:
+
+```cs
+opts.Schema.For<Report>().Identity(x => x.Key);
+```
+
+::: tip
+This has to run during configuration, which is the same rule every other member of the DSL follows.
+What makes it worth saying is that identity is the one thing resolved when the mapping is *created* —
+so a type with no usable identity member is refused when the store is built rather than when
+`Schema.For<T>()` is called, precisely so that naming one can rescue it.
+:::
+
+## Supplying the identity strategy
+
+```cs
+opts.Schema.For<Boat>()
+    .Identity(x => x.Registration)
+    .IdStrategy(new PrefixedKeys());
+```
+
+Fisher otherwise picks by the id's type: a version-7 Guid, an externally-assigned string, a Hi-Lo
+`int` or `long`, or the unwrapping strategy for a strong-typed wrapper. This is the seam for anything
+else — a ULID in a string key, a snowflake `long`, a tenant-prefixed key.
+
+A strategy is a `Weasel.Core.Identity.IIdentification<TDoc, TId>`, which is two members:
+
+```cs
+public class PrefixedKeys : IIdentification<Boat, string>
+{
+    public string Identity(Boat document) => document.Registration;
+
+    public string AssignIfMissing(Boat document, ISequenceSource sequences)
+    {
+        if (string.IsNullOrEmpty(document.Registration))
+        {
+            document.Registration = "boat-" + Guid.NewGuid().ToString("N")[..8];
+        }
+
+        return document.Registration;
+    }
+}
+```
+
+::: warning
+**Marten's `IdStrategy(IIdGeneration)` has no direct counterpart, and this is the honest
+translation.** That type is a code-generation contract; Fisher's strategies are ordinary objects from
+the shared Weasel identity runtime, so the seam is that runtime interface — an object to write rather
+than a generator.
+:::
+
+::: danger
+**A Guid strategy is wrapped, never taken raw.** The lowercase-canonical conversion above lives in the
+identity strategy, so replacing the strategy is exactly where it could be lost — and losing it writes
+rows that can never be read back, silently and only for Guid-identified types. Fisher puts the wrapper
+back rather than leaving the trap open.
+:::
 
 ## Aggregate identity
 
