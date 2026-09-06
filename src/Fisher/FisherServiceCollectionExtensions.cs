@@ -456,7 +456,48 @@ public static class FisherServiceCollectionExtensions
         options.ReadJasperFxOptions(jasperFx);
         WarnAboutApplicationAssemblyReuse(services, options, jasperFx);
 
+        AttachDefaultLogger(services, options);
+
         return options;
+    }
+
+    /// <summary>
+    ///     Give the store a <see cref="DefaultFisherLogger" /> over the container's logging, unless
+    ///     something already attached one (fisher#207).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Mirrors what <c>AddMarten</c> does, and for the same reason: without it
+    ///         <c>session.Logger</c> in a hosted application would be a property whose default does
+    ///         nothing, so the parity would be a compiling API rather than a working one. The check is
+    ///         reference identity against the flyweight, so a store that named its own logger — through
+    ///         the configuration lambda or through an <see cref="IConfigureFisher" />, both of which
+    ///         have already run by here — keeps it.
+    ///     </para>
+    ///     <para>
+    ///         <b>Attaching one does not turn logging on.</b>
+    ///         <see cref="DefaultFisherLogger.Enabled" /> is <c>ILogger.IsEnabled(LogLevel.Debug)</c>,
+    ///         so an application at its default levels still records nothing and still builds no
+    ///         change set — what it costs over the unattached path is one <c>IsEnabled</c> call per
+    ///         command, which is what Marten pays unconditionally. The genuinely free path stays
+    ///         available and is what a hand-built <c>DocumentStore</c> takes.
+    ///     </para>
+    ///     <para>
+    ///         In <see cref="Configured" /> rather than at the two <c>new DocumentStore(...)</c> sites,
+    ///         for the reason fisher#141 put the JasperFx read here: it is the one funnel both the
+    ///         primary and the ancillary registration paths already pass through, so an added third
+    ///         path gets this without a third place to remember.
+    ///     </para>
+    /// </remarks>
+    private static void AttachDefaultLogger(IServiceProvider services, StoreOptions options)
+    {
+        if (!ReferenceEquals(options.Logger(), NulloFisherLogger.Flyweight)) return;
+
+        var logger = services.GetService<ILogger<IDocumentStore>>();
+
+        if (logger is null) return;
+
+        options.Logger(new DefaultFisherLogger(logger, options.LogSqlParameterValues));
     }
 
     /// <summary>
