@@ -3078,18 +3078,21 @@ the async daemon. Ported in shape from Polecat's `Events/Schema` + `Events/Proje
 set, with four things different and each of them a decision:
 
 - **No `is_archived` column on the lookup table.** Polecat copies the flag from `pc_streams` and keeps
-  it in sync from a projection watching for the `Archived` event — which then needs a second,
-  rebuild-time entry point, because a daemon rebuild replays events without appending streams and
-  would otherwise leave the table empty after teardown. Fisher archives with a direct operation rather
-  than an event, so there is nothing to watch; and the lookup joins `fi_streams` anyway, so reading the
-  flag off the join makes the streams table the only place that knows. Removing the filter makes
-  `an_archived_stream_no_longer_resolves` fail.
-- **The rows are written from the session, not from an inline projection.** A natural key row is an
-  index over streams, not a projection of them. Being a projection is exactly what forces Polecat's
-  rebuild path; nothing here is reachable from a rebuild, so there is nothing to repopulate.
-  `NaturalKeyWriter` runs beside `EventTagWriter`, inside the append's transaction, because a key
-  registered outside it leaves either a stream no key resolves to or a key naming a stream that does
-  not exist.
+  it in sync from a projection watching for the `Archived` event. Fisher archives with a direct
+  operation rather than an event, so there is nothing to watch; and the lookup joins `fi_streams`
+  anyway, so reading the flag off the join makes the streams table the only place that knows. Removing
+  the filter makes `an_archived_stream_no_longer_resolves` fail. **This is the one decision fisher#206
+  did not overturn, and it got stronger** — see the replay section below for why a replay rewriting a
+  lookup row is harmless here and would need care on either sibling.
+- ⚠️ **The rows are written by an inline projection with a replay path, and this reversed a decision**
+  (fisher#206). `NaturalKeyWriter` used to run from `FisherSession.SaveChangesAsync` beside
+  `EventTagWriter`, and argued that a key row is an index over streams rather than a projection of
+  them, so the sibling stores' second rebuild-time entry point was a cost their shape imposed and
+  Fisher's did not. **The premise was right and the conclusion was backwards**: the writer drove off
+  the unit of work's `StreamAction`s, and only an *append* produces one — so a natural key could never
+  be backfilled onto a stream that already existed, and a rebuild could never repopulate the table.
+  Adopting a key on a live store left its whole history unreachable by the identifier it was created
+  with, permanently and with nothing to say so. See "Natural keys have a replay path" below.
 - **A second stream claiming a key is refused, where Polecat repoints.** Polecat's `MERGE` updates the
   stream id on conflict, so the newcomer silently takes the key and the original stream becomes
   unreachable by the identifier it was created with. Fisher's conflict clause carries
@@ -3137,6 +3140,56 @@ Two more things:
 `DeleteAllEventDataAsync` clears the lookup tables with the rest. Leaving them behind is not cosmetic:
 the duplicate guard would then fire on data that no longer exists, and the compliance fixture cleans
 before every test.
+
+#### Natural keys have a replay path — fisher#206
+
+`Events/Storage/NaturalKeyProjection.cs` and `NaturalKeyOperations.cs` replace `NaturalKeyWriter`.
+**One set of SQL, two entry points**, which is Marten's shape (`NaturalKeyProjection` +
+`QueueUpsertsForEvents`) rather than a new one:
+
+| Path | Where | Statement |
+|---|---|---|
+| Append | `FisherSession.ApplyInlineProjectionsAsync` → a queued `NaturalKeyClaimOperation` | guarded upsert, `returning`, refuses a live duplicate |
+| Replay | `DocumentStore.StartProjectionBatchAsync` → a queued `NaturalKeyReplayOperation` | unguarded upsert, last-writer-wins |
+
+- ⚠️ **The refusal stays in the SQL and must not become a pre-flight read** (marten#5349). A probing
+  `SELECT` before the write races: two sessions both find the key free and the loser's upsert repoints
+  the row exactly as an unguarded one would. The guard is a `where` on the `do update`, so a
+  conflicting claimant matches no row and the `returning` clause yields nothing —
+  `the_claim_refuses_in_the_statement_rather_than_after_a_read` asserts the mechanism, because a store
+  could pass the behavioural compliance fact with a pre-flight read and be wrong only under
+  contention.
+- **The claim moved from executing directly to being queued**, which is what the conversion bought and
+  also its one behavioural nuance: the refusal is now raised from `PostprocessAsync` and collected by
+  `ExecuteBatchAsync` rather than thrown mid-flight, so the operations after it still run before the
+  batch throws. Nothing survives either way — it is all one transaction — and it is the shape
+  `NaturalKeyClaimOperation` shares with the optimistic document upsert's version guard.
+- ⚠️ **The replay must not re-adjudicate** (marten#4966). Refusing on replay would turn a pre-existing
+  data condition into a shard that can never advance again, with no caller present to correct the key
+  derivation the refusal blames — and there is nothing legitimate to refuse anyway, since a refused
+  append rolls its own events back, so a replay never meets the losing stream's events.
+  `a_replay_does_not_re_adjudicate_a_duplicate_key` plants the condition the only way it can occur:
+  events written while no key was declared.
+- **Every daemon page, not only a rebuild.** The hook is in `StartProjectionBatchAsync` because that
+  is where the range's events are, and it writes onto the batch's own session so the rows commit with
+  the shard's progression row. A fresh async shard catching up from zero backfills exactly as a
+  rebuild does, and there is no reason to make the two differ.
+- **Not registered on the projection graph.** Marten's is an `IInlineProjection` plus a direct hook
+  rather than an `IProjectionSource`, and Fisher follows: giving it a shard would put a
+  separately-rebuildable projection in front of an operator that indexes streams they never registered
+  anything for.
+- **An archived stream is doubly protected, and the first guard was not designed for this.** The event
+  loader excludes an archived stream's events unless a shard asks for them, so the replay never sees
+  the stream at all — pinned by `a_replay_cannot_resurrect_an_archived_streams_key`, which asserts the
+  table stays empty. And *if* a shard did include archived events, the row coming back would still be
+  harmless, because Fisher's lookup carries no `is_archived` column and the answer is read off the
+  join. Polecat and Marten keep the flag on the row and would have to be careful.
+- **Fisher's rebuild teardown still does not clear the lookup**, and that is unchanged: the sweep
+  looks at mapped document types and `IPublishesTables`, and the lookup is neither. So
+  `a_rebuild_repopulates_a_lookup_that_was_emptied` plants the emptied state directly rather than
+  waiting for a teardown to produce it — the property worth having is "a replay can rebuild this
+  table", and a rebuild-then-fetch test would instead be asserting that teardown happens to leave it
+  alone.
 
 ### The `IEventStoreOperations` surface
 
