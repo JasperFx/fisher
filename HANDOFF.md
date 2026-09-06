@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1808 tests green on net9.0 and net10.0** — 1753 in
+**1813 tests green on net9.0 and net10.0** — 1758 in
 `Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 516 of
 them are shared cross-store compliance tests — 447 event sourcing and 69 document. On JasperFx **2.66.0** / Weasel **9.31.0**.
 
@@ -213,14 +213,19 @@ As with the daemon, **the definition and the discovery are JasperFx's** — `Nat
 Fisher supplies the storage seam. Four divergences from Polecat, each verified:
 
 - **No `is_archived` column on the lookup table.** Polecat copies the flag from `pc_streams` and keeps
-  it in sync from a projection watching for the `Archived` event, which is then why it needs a second
-  rebuild-time entry point: a daemon rebuild replays events without appending streams, so the table
-  would be left empty after teardown. Fisher archives with a direct operation rather than an event, and
-  the lookup joins `fi_streams` anyway — reading the flag off the join makes the streams table the only
-  place that knows, and removes the sync step, the projection and the rebuild path together.
-- **The rows are written from the session rather than from an inline projection**, next to
-  `EventTagWriter` and inside the append's transaction. A key registered outside it leaves either a
-  stream no key resolves to or a key naming a stream that does not exist.
+  it in sync from a projection watching for the `Archived` event. Fisher archives with a direct
+  operation rather than an event, and the lookup joins `fi_streams` anyway — reading the flag off the
+  join makes the streams table the only place that knows, and removes the sync step and the projection
+  together. **The one divergence fisher#206 left standing**, and it is stronger for it: a replay
+  rewriting a lookup row cannot resurrect an archived stream's key here, where on either sibling the
+  flag on the row would have to be handled.
+- ⚠️ **The rows were written from the session rather than from an inline projection, and that is
+  reversed** (fisher#206). The old note argued that being a projection is what forces the siblings'
+  second rebuild-time entry point, and Fisher needed none. True, and backwards: the writer drove off
+  the unit of work's `StreamAction`s, so a key could never be backfilled onto a stream that already
+  existed and a rebuild could never repopulate the table. `NaturalKeyProjection` is now an inline
+  projection on the append path with a replay hook in `StartProjectionBatchAsync`; the refusal stays
+  in the SQL and the replay stays last-writer-wins.
 - **A second stream claiming an existing key is refused.** Polecat's `MERGE` repoints, so the newcomer
   silently takes the key and the original becomes unreachable by the identifier it was created with.
   The conflict clause is guarded and the statement returns the row it settled on; "no row" is the
