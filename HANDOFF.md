@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1715 tests on net9.0 and net10.0**, four of them red — 1660 in
+**1761 tests on net9.0 and net10.0**, four of them red — 1706 in
 `Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 509 of
 them are shared cross-store compliance tests — 440 event sourcing and 69 document. On JasperFx **2.64.0** / Weasel **9.29.0**.
 
@@ -20,7 +20,7 @@ them are shared cross-store compliance tests — 440 event sourcing and 69 docum
 
 **All four are fixed upstream and merged, and all four go green on the JasperFx 2.65.0 release.**
 Verified by packing `jasperfx` main plus jasperfx#784 to a local feed and running Fisher's whole
-suite against it: 1655 green, nothing else moved. They are red here only because 2.64.0 is the
+suite against it: every one of them green, nothing else moved. They are red here only because 2.64.0 is the
 newest published package and Fisher pins a published one.
 
 - `Fisher.Tests.Compliance.stream_archiving_compliance.capturing_an_archived_event_archives_a_string_identified_stream`
