@@ -314,6 +314,10 @@ Working, with tests:
 - **The command line** — `ISystemPart` and `IDatabaseSource` registered from both `AddFisher` and
   `AddFisherStore<T>`, so `db-apply` / `db-assert` / `db-patch` / `db-dump`, the `resources` commands
   and `describe` all see a Fisher store; plus `AssertDatabaseMatchesConfigurationOnStartup()`
+- **Schema preview, programmatically** — `Advanced.CreateMigrationAsync` (the default database, one
+  tenant, or every database), `WriteMigrationFileAsync`, `WriteScriptsByTypeAsync`, `AllObjects` and
+  `AllSchemaNames`, so a deployment or a test can ask what a migration *would* change without
+  applying it or shelling out to `db-patch`
 - **Flat-table projections** — `FlatTableProjection`, projecting into a plain relational table
   through declarative column mappings rather than into a document
 - **Soft delete** — `is_deleted` / `deleted_at`, `HardDelete`, `DeleteWhere` / `HardDeleteWhere` /
@@ -352,6 +356,8 @@ Working, with tests:
   step-through, so a monitoring console sees the document half as well as the event half
 - **Tracing** — an `ActivitySource` named `Fisher`, with spans for commits, queries and loads and a
   retry event that says a call waited on the write lock
+- **Session logging** — `IFisherLogger` / `IFisherSessionLogger`, `StoreOptions.Logger(...)` and
+  `session.Logger`, with the SQL, the parameters, the commit counts and both failure shapes
 - **Multi-store registration** — `AddFisherStore<T>` and `IConfigureFisher`, so several independently
   configured stores live in one container
 - **Database-per-tenant** — `ITenancy` and a SQLite file per tenant, with per-database migration, the
@@ -2395,6 +2401,60 @@ which is `db-assert` answering "everything matches" about a store it never looke
 swapping it; two tests printing JSON objects at once made the existing `event_query_command` capture
 parse somebody else's report. Same family as the process-wide `ActivityListener` lesson in tracing.
 
+#### Previewing a migration programmatically — fisher#210
+
+fisher#172 closed the **command-line** half of "preview and assert": `db-patch` writes the outstanding
+DDL to a file, `db-assert` fails a build against a drifted database, and
+`AssertDatabaseMatchesConfigurationAsync` / `AssertDatabaseMatchesConfigurationOnStartup()` put the
+assertion on the store and on the host. **What it did not give an application was the delta as an
+object**, so the two questions a deployment actually asks — *is there anything outstanding*, *what
+exactly would change* — meant shelling out to the CLI. `ToDatabaseScript()` cannot answer either: it
+describes the configuration and never looks at the database in front of it.
+
+`AdvancedOperations` is where they land, beside `ToDatabaseScript` / `WriteCreationScriptToFileAsync`,
+which is what Marten hangs off `IMartenStorage` and Fisher already hangs off `Advanced`. **No new
+store-level interface**, because `IDocumentStore.Advanced` is already declared — a second facade would
+be a parallel place for the same five members to be reached through.
+
+| Marten's `IMartenStorage` | Fisher | Where it came from |
+|---|---|---|
+| `AssertDatabaseMatchesConfigurationAsync` | `store.AssertDatabaseMatchesConfigurationAsync` | **fisher#172** |
+| `ApplyAllConfiguredChangesToDatabaseAsync` | `store.ApplyAllConfiguredChangesToDatabaseAsync` | original |
+| `ToDatabaseScript` / `WriteCreationScriptToFile` | `Advanced.ToDatabaseScript` / `WriteCreationScriptToFileAsync` | fisher#42 |
+| `CreateMigrationAsync` | `Advanced.CreateMigrationAsync` | fisher#210 |
+| `WriteScriptsByType` | `Advanced.WriteScriptsByTypeAsync` | fisher#210 |
+| `AllObjects` / `AllSchemaNames` | `Advanced.AllObjects` / `AllSchemaNames` | fisher#210 |
+| — | `Advanced.WriteMigrationFileAsync` | fisher#210 (`db-patch`'s programmatic form) |
+
+**Every one of them is Weasel's, inherited through `FisherDatabase : SqliteDatabase : DatabaseBase`.**
+That is the finding rather than the shortcut, and it is the same shape fisher#120 had: nothing about
+the gap was dialect-specific, so no decision existed to prompt anybody to look — the members had been
+on the database object the whole time and were reachable only by naming `store.Database`.
+
+- **`CreateMigrationAsync()` is the default database, and the two tenant-aware members exist because
+  that is not the whole store.** Marten's carries the same restriction and documents it; here
+  `CreateMigrationAsync(tenantId)` names one file and `CreateAllMigrationsAsync()` returns one
+  migration per database identifier. Collapsing N tenants into one answer would report about whichever
+  file came first — the same reason `ApplyAllConfiguredChangesToDatabaseAsync` reports per database and
+  `TenantMigrationException` names which tenants are current. Dynamic tenants are refreshed first, so a
+  tenant nothing has resolved yet is still previewed.
+- **An unknown tenant throws**, through `Tenancy.DatabaseFor`, rather than quietly previewing the
+  default — the rule every other tenant-scoped member on `Advanced` follows, and the one that stops a
+  per-tenant deployment check from silently checking the wrong file.
+- ⚠️ **`AllSchemaNames()` is always `["main"]` here, and is deliberately not reinterpreted.** SQLite
+  has one schema and Fisher folds `DatabaseSchemaName` into the table prefix instead, so the isolation
+  between two logical stores in one file is a prefix this method cannot see. Answering with the prefix
+  or with the logical schema name would make the member mean something different here than it means on
+  Marten, which is worse than a constant a caller can read. `the_schema_names_are_always_main` pins the
+  constant under both a default and a named schema so it reads as a decision.
+- **The tests apply what they preview.** A delta object with the right `SchemaPatchDifference` whose
+  rendered DDL does not run would pass every shape assertion, so
+  `the_migration_file_is_ddl_that_actually_creates_the_schema` executes the patch file against the real
+  database, reads `sqlite_master`, and then asserts the store agrees nothing is outstanding — which is
+  what says the patch was the *whole* delta rather than part of it.
+- **Computing a delta is a read**, so it is available under `AutoCreate.None` — the deployment most
+  likely to want it, and the one where a preview that emitted DDL as a side effect would be a bug.
+
 **Everything Fisher hands a container now implements `IDisposable` as well as `IAsyncDisposable`** —
 `DocumentStore`, `FisherDatabase`, `FisherSession`, and `IQuerySession` with them. That is not a
 politeness: a `ServiceProvider` disposed synchronously **refuses outright** to dispose a service
@@ -2912,6 +2972,78 @@ Two things learned while writing the tests, both worth keeping:
 - **An `ActivityListener` is process-wide, and xUnit runs collections in parallel.** A test that
   asserts `Single(...)` over recorded spans is green alone and red in the full suite. Filter by a tag
   the test's own store sets.
+
+### Session logging
+
+`IFisherLogger.cs` / `DefaultFisherLogger.cs` / `ConsoleFisherLogger.cs` (fisher#207) — Marten's
+`IMartenLogger` + `IMartenSessionLogger` pair, so a logger ports across with a rename.
+`StoreOptions.Logger(...)` is the store-level attachment and `session.Logger` the per-session
+override; `AddFisher` attaches a `DefaultFisherLogger` over `ILogger<IDocumentStore>` unless one is
+already there, exactly as `AddMarten` does. Statements are logged at the write batch, the LINQ
+execution and the document load — the same three boundaries the spans are drawn at, and for the same
+reasons.
+
+**Parameter values are omitted by default, which is the one deliberate divergence from Marten**, whose
+`DefaultMartenLogger` logs `p.Value` at Debug. Fisher logs the parameter's name and the CLR type of the
+bound value (`@p0: (String)`) unless `LogSqlParameterValues` is set. Three reasons, and the first is
+the deciding one:
+
+- **Fisher already answered this question, the same way.** `ToSql` renders parameter *names*, "so the
+  text is readable rather than executable". Defaulting the logger the other way leaves one store
+  holding two opposite answers to whether Fisher may write bound values where a human reads them, and
+  the quieter one would be the one nobody chose.
+- **What is bound is the whole document.** An upsert binds the serialized body as a single parameter,
+  as does an event append — so "log the parameter values" is "log every field of every document",
+  verbatim, at Debug. (True of Marten too; the next one is not.)
+- **Fisher is embedded, so the blast radius differs.** The log is very often a file on the same disk as
+  the database, on a desktop or an edge box, and is what gets attached to a support ticket. Turning on
+  Debug to find out why a query is slow should not be the same gesture as exporting the database.
+- **The type shown is a diagnostic rather than a redaction marker**, which is what makes the default
+  useful rather than merely safe: a `Guid` bound without conversion is a BLOB that can never match the
+  TEXT the schema holds, and `(Guid)` where `(String)` belongs says so at once.
+
+**Two Marten members are deliberately not ported**, each recorded on the interface:
+
+- **The three `NpgsqlBatch` overloads** — Fisher executes one command per storage operation on
+  purpose (4–6 ms vs 82–192 ms concatenated), so a batch overload could never fire, and a logger
+  author would have to implement it to find that out. `SqliteBatch` exists; this is a decision, not a
+  missing provider feature.
+- **`IMartenLogger.SchemaChange(string sql)`** — Fisher already has that seam one layer down. All DDL
+  goes through Weasel, and `FisherDatabase` derives from `DatabaseBase<T>` and so already implements
+  `IDatabaseWithMigrationLogger`. A second switch for one stream of output would be bad; honouring it
+  would be worse, because every Weasel provider's `executeDelta` branches on
+  `logger is DefaultMigrationLogger` to decide whether a failed DDL statement rethrows with its
+  original stack trace or is handed to `OnFailure` and then swallowed when `failureIsFatal` is false.
+
+**`IFisherSessionLogger.Enabled` is Fisher's own member and is the whole hot-path story.** Marten's
+`NulloMartenLogger` derives from `DefaultMartenLogger` over a `NullLogger`, so an unlogged Marten
+command still makes a virtual call and an `IsEnabled` check per execution. Fisher's answers `false`
+from a constant, and `FisherSession.IsLogging` checks a cached reference comparison first — so a
+store built by hand pays a bool field read and a branch.
+
+- ⚠️ **Every call site tests `IsLogging` *before* constructing any argument not already in hand.** That
+  is fisher#165's shape held in advance: a `DaemonTrace.Record` call site whose interpolated-string
+  argument was built ahead of the gate that would have rejected it. The one here is
+  `RecordSavedChanges`, which wants an `IChangeSet` that `SaveChangesAsync` otherwise builds only when
+  a listener is registered — so an unguarded call would put a per-commit allocation on every store to
+  serve the ones that log. `SaveChangesAsync` builds it at most once for the logger and the listeners
+  together.
+- **Measured rather than argued.** `the_no_logger_path_allocates_nothing` asserts an exact zero from
+  `GC.GetAllocatedBytesForCurrentThread` over 10,000 guarded calls; removing the guard makes it 720,000
+  bytes (72 per command). `a_disabled_logger_is_never_asked_for_a_change_set` covers the other half —
+  a logger answering `Enabled` false whose `RecordSavedChanges` being called *at all* is the evidence
+  the guard moved inside the logger. Both were verified by reverting.
+- **A tenant scope forwards `Logger` and `IsLogging` to its parent** rather than holding a copy. A
+  scope shares the parent's unit of work, so its writes are the parent's commands; a scope with a
+  logger of its own would split one transaction's log across two, and a caller who set `session.Logger`
+  would not see reads made through `ForTenant`.
+- **`RecordSavedChanges` fires for an enlisted session, where `IDocumentSessionListener.AfterCommitAsync`
+  does not.** A listener is a side effect that must wait for visibility only the caller's commit can
+  grant; a log line records that the statements ran, which they did.
+- **`DefaultFisherLogger.StartSession` returns `this`**, as Marten's does, so a session costs no
+  allocation — at the price of a shared stopwatch field, so under concurrency the *duration* on a line
+  can be another session's. The SQL and the parameters are always right. A logger needing exact
+  per-session timing returns a new instance instead.
 
 ### The document-side tooling surface
 

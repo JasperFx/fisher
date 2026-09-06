@@ -1,6 +1,8 @@
+using Fisher.Storage;
 using JasperFx.Events.Daemon;
 using JasperFx.Events.Projections;
 using JasperFx.Events.Protected;
+using Weasel.Core;
 using Weasel.Core.Sequences;
 
 namespace Fisher;
@@ -385,6 +387,158 @@ public class AdvancedOperations
     /// <inheritdoc cref="ToDatabaseScript" />
     public Task WriteCreationScriptToFileAsync(string path, CancellationToken token = default)
         => _store.Database.WriteCreationScriptToFileAsync(path, token);
+
+    // ---- previewing a migration rather than applying one (fisher#210) ----
+
+    /// <summary>
+    ///     The difference between this store's configuration and what the database actually holds,
+    ///     computed and handed back rather than applied.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>The gap fisher#172 left open.</b> That issue made the <em>command line</em> able to
+    ///         preview and assert a Fisher store — <c>db-patch</c> writes the outstanding DDL to a file
+    ///         and <c>db-assert</c> fails a build against a drifted database — and gave the store
+    ///         <see cref="DocumentStore.AssertDatabaseMatchesConfigurationAsync" /> to go with it. What
+    ///         it did not give an application was the delta as an <em>object</em>: everything Fisher
+    ///         could say about a migration in code was <see cref="ToDatabaseScript" />, which describes
+    ///         the schema as configured and knows nothing about the database in front of it.
+    ///     </para>
+    ///     <para>
+    ///         So the two questions a deployment actually asks were unanswerable without shelling out
+    ///         to the CLI: <em>is there anything outstanding</em> —
+    ///         <see cref="SchemaMigration.Difference" /> is <see cref="SchemaPatchDifference.None" /> —
+    ///         and <em>what exactly would change</em>, from <see cref="SchemaMigration.Deltas" />. A
+    ///         test asserting "this PR adds no migration" is the same question a third time.
+    ///     </para>
+    ///     <para>
+    ///         <b>This is the default database only</b>, which under database-per-tenant is one file of
+    ///         many. Marten's <c>CreateMigrationAsync</c> carries the same restriction and says so;
+    ///         here <see cref="CreateMigrationAsync(string,CancellationToken)" /> names a tenant and
+    ///         <see cref="CreateAllMigrationsAsync" /> spans every database, because "which tenants are
+    ///         behind" is the question this store's migration path already answers per database (see
+    ///         <c>TenantMigrationException</c>).
+    ///     </para>
+    ///     <para>
+    ///         Computing a migration reads the schema and writes nothing, so it is honoured under
+    ///         <see cref="JasperFx.AutoCreate.None" /> like any other read.
+    ///     </para>
+    /// </remarks>
+    public Task<SchemaMigration> CreateMigrationAsync(CancellationToken token = default)
+        => _store.Database.CreateMigrationAsync(token);
+
+    /// <summary>
+    ///     The outstanding migration for one tenant's database under database-per-tenant.
+    /// </summary>
+    /// <remarks>
+    ///     Resolved through <see cref="ITenancy.DatabaseFor" />, so an unknown tenant throws rather
+    ///     than quietly reporting the default database's delta — the same rule every other
+    ///     tenant-scoped member here follows. Under <c>DefaultTenancy</c> every tenant resolves the one
+    ///     database, which is the honest answer for a store that is not database-per-tenant.
+    /// </remarks>
+    public async Task<SchemaMigration> CreateMigrationAsync(string tenantId, CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+
+        await _store.RefreshTenantsAsync(token).ConfigureAwait(false);
+
+        return await _store.Tenancy.DatabaseFor(tenantId).CreateMigrationAsync(token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     The outstanding migration for every database this store spans, keyed by database identifier.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Per database, because that is what the answer is.</b>
+    ///         <see cref="DocumentStore.ApplyAllConfiguredChangesToDatabaseAsync" /> already reports
+    ///         success and failure per tenant rather than collapsing them, for the reason
+    ///         <c>TenantMigrationException</c> gives: a hundred tenants migrated to the fortieth is a
+    ///         mixed store, and which forty is the thing the caller needs. Previewing collapses to one
+    ///         migration only for a store with one database, and pretending otherwise would answer
+    ///         about whichever file happened to be first.
+    ///     </para>
+    ///     <para>
+    ///         Sequentially, for the same reason the migration itself runs sequentially: each read is
+    ///         against its own file, and holding N connections open at once buys nothing on a pool
+    ///         ceiling that sizes one file.
+    ///     </para>
+    ///     <para>
+    ///         Under dynamic tenancy the tenants are refreshed first, so a tenant nothing has resolved
+    ///         yet is still previewed — the omission <c>db-apply</c> had to close for the same reason.
+    ///     </para>
+    /// </remarks>
+    public async Task<IReadOnlyDictionary<string, SchemaMigration>> CreateAllMigrationsAsync(
+        CancellationToken token = default)
+    {
+        await _store.RefreshTenantsAsync(token).ConfigureAwait(false);
+
+        var migrations = new Dictionary<string, SchemaMigration>();
+
+        foreach (var database in _store.Tenancy.AllDatabases())
+        {
+            migrations[database.Identifier] = await database.CreateMigrationAsync(token).ConfigureAwait(false);
+        }
+
+        return migrations;
+    }
+
+    /// <summary>
+    ///     Write the outstanding migration for the default database to a file, the way <c>db-patch</c>
+    ///     does, without applying any of it.
+    /// </summary>
+    /// <remarks>
+    ///     The difference from <see cref="WriteCreationScriptToFileAsync" /> is the difference between a
+    ///     patch and a dump: this is the delta against the database as it stands, so a store already up
+    ///     to date writes a file with nothing in it to run.
+    /// </remarks>
+    public Task WriteMigrationFileAsync(string path, CancellationToken token = default)
+        => _store.Database.WriteMigrationFileAsync(path, token);
+
+    /// <summary>
+    ///     Write one creation script per feature — the event store, each document type, Hi-Lo, each flat
+    ///     table — into a directory, plus an <c>all.sql</c> that runs them in order.
+    /// </summary>
+    /// <remarks>
+    ///     <b>The directory is cleaned first</b>, by Weasel, so point it at one this store owns.
+    ///     For a deployment that reviews schema changes per feature rather than as one script; the
+    ///     features are the same set <see cref="ToDatabaseScript" /> writes in one file.
+    /// </remarks>
+    public Task WriteScriptsByTypeAsync(string directory, CancellationToken token = default)
+        => _store.Database.WriteScriptsByTypeAsync(directory, token);
+
+    /// <summary>
+    ///     Every schema object this store's configuration describes, in dependency order, without
+    ///     touching the database.
+    /// </summary>
+    /// <remarks>
+    ///     Tables and indexes for the event store, every registered document type, Hi-Lo and every flat
+    ///     table. The same feature set a migration applies, which is why a type that has never been
+    ///     registered is absent from both.
+    /// </remarks>
+    public IEnumerable<ISchemaObject> AllObjects() => _store.Database.AllObjects();
+
+    /// <summary>
+    ///     The schema names the objects above live in. <b>On Fisher this is always exactly
+    ///     <c>["main"]</c></b>, and that is a statement about SQLite rather than about this store.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         SQLite has one schema per connection and no <c>CREATE SCHEMA</c>, so Fisher folds
+    ///         <see cref="StoreOptions.DatabaseSchemaName" /> into the <em>table prefix</em> instead
+    ///         (see <c>FisherTableNaming</c>) — <c>fi_events</c> against <c>main</c>,
+    ///         <c>reporting_fi_events</c> under a logical schema called <c>reporting</c>. The isolation
+    ///         between two logical stores in one file is that prefix, and this method cannot see it.
+    ///     </para>
+    ///     <para>
+    ///         <b>Carried anyway, and deliberately not reinterpreted.</b> It is on Marten's
+    ///         <c>IMartenStorage</c>, so store-agnostic code calls it; answering with the prefix or with
+    ///         the logical schema name would make it mean something different here than it means there,
+    ///         which is worse than a constant. <c>the_schema_names_are_always_main</c> pins the constant
+    ///         so it reads as a decision rather than as an oversight.
+    ///     </para>
+    /// </remarks>
+    public string[] AllSchemaNames() => _store.Database.AllSchemaNames();
 
     // ---- the daemon's progression: reading it, and the two ways of unsticking it (fisher#173) ----
 
