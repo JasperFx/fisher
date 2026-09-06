@@ -153,7 +153,7 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     private object BuildClosedShapeEventStorage()
     {
         var dialect = new Storage.SqliteEventStoreDialect();
-        var serializer = StorageSerializerAdapter.For(Serializer);
+        var serializer = Weasel.Storage.StorageSerializerAdapter.For(Serializer);
 
         return StreamIdentity == StreamIdentity.AsGuid
             ? Weasel.Storage.EventStorageBuilder.Build<Guid>(dialect, AppendMode, this, serializer)
