@@ -15,6 +15,39 @@ builder.Services.AddFisher(opts => { … }).ApplyAllDatabaseChangesOnStartup();
 await store.ApplyAllConfiguredChangesToDatabaseAsync();
 ```
 
+## Asserting the schema
+
+The read half of applying it: throw if the database does not already match the configuration, and
+change nothing.
+
+```cs
+// At startup — the host refuses to start against a drifted database
+builder.Services.AddFisher(opts => { … }).AssertDatabaseMatchesConfigurationOnStartup();
+
+// Or explicitly
+await store.AssertDatabaseMatchesConfigurationAsync();
+```
+
+For a deployment that applies its schema out of band, and for the CI step that proves the deployed
+database still matches what the code configures. It spans **every** database — under
+database-per-tenant, asserting one file and calling the store verified is the answer most likely to
+be wrong — and stops at the first mismatch.
+
+::: warning
+`AssertDatabaseMatchesConfigurationOnStartup()` and `ApplyAllDatabaseChangesOnStartup()` are
+**alternatives**, and asking for both throws. Applying the changes at startup would make the
+assertion a check on the schema that same startup just wrote.
+:::
+
+::: tip
+`AutoCreate.None` is deliberately *not* consulted here. That setting says the schema is not Fisher's
+to change, and asserting changes nothing — declining to verify because the store was told not to
+write would make the strictest configuration the one with the fewest guarantees.
+:::
+
+To see the difference rather than throw on it, see
+[Previewing a migration](/schema/migrations#previewing-a-migration).
+
 ## AutoCreate
 
 ```cs

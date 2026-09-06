@@ -282,6 +282,10 @@ Working, with tests:
 - **The command line** — `ISystemPart` and `IDatabaseSource` registered from both `AddFisher` and
   `AddFisherStore<T>`, so `db-apply` / `db-assert` / `db-patch` / `db-dump`, the `resources` commands
   and `describe` all see a Fisher store; plus `AssertDatabaseMatchesConfigurationOnStartup()`
+- **Schema preview, programmatically** — `Advanced.CreateMigrationAsync` (the default database, one
+  tenant, or every database), `WriteMigrationFileAsync`, `WriteScriptsByTypeAsync`, `AllObjects` and
+  `AllSchemaNames`, so a deployment or a test can ask what a migration *would* change without
+  applying it or shelling out to `db-patch`
 - **Flat-table projections** — `FlatTableProjection`, projecting into a plain relational table
   through declarative column mappings rather than into a document
 - **Soft delete** — `is_deleted` / `deleted_at`, `HardDelete`, `DeleteWhere` / `HardDeleteWhere` /
@@ -2292,6 +2296,60 @@ which is `db-assert` answering "everything matches" about a store it never looke
 `ConsoleWritingCollection`, because `Console.SetOut` is process-wide and `CliJsonCapture` was already
 swapping it; two tests printing JSON objects at once made the existing `event_query_command` capture
 parse somebody else's report. Same family as the process-wide `ActivityListener` lesson in tracing.
+
+#### Previewing a migration programmatically — fisher#210
+
+fisher#172 closed the **command-line** half of "preview and assert": `db-patch` writes the outstanding
+DDL to a file, `db-assert` fails a build against a drifted database, and
+`AssertDatabaseMatchesConfigurationAsync` / `AssertDatabaseMatchesConfigurationOnStartup()` put the
+assertion on the store and on the host. **What it did not give an application was the delta as an
+object**, so the two questions a deployment actually asks — *is there anything outstanding*, *what
+exactly would change* — meant shelling out to the CLI. `ToDatabaseScript()` cannot answer either: it
+describes the configuration and never looks at the database in front of it.
+
+`AdvancedOperations` is where they land, beside `ToDatabaseScript` / `WriteCreationScriptToFileAsync`,
+which is what Marten hangs off `IMartenStorage` and Fisher already hangs off `Advanced`. **No new
+store-level interface**, because `IDocumentStore.Advanced` is already declared — a second facade would
+be a parallel place for the same five members to be reached through.
+
+| Marten's `IMartenStorage` | Fisher | Where it came from |
+|---|---|---|
+| `AssertDatabaseMatchesConfigurationAsync` | `store.AssertDatabaseMatchesConfigurationAsync` | **fisher#172** |
+| `ApplyAllConfiguredChangesToDatabaseAsync` | `store.ApplyAllConfiguredChangesToDatabaseAsync` | original |
+| `ToDatabaseScript` / `WriteCreationScriptToFile` | `Advanced.ToDatabaseScript` / `WriteCreationScriptToFileAsync` | fisher#42 |
+| `CreateMigrationAsync` | `Advanced.CreateMigrationAsync` | fisher#210 |
+| `WriteScriptsByType` | `Advanced.WriteScriptsByTypeAsync` | fisher#210 |
+| `AllObjects` / `AllSchemaNames` | `Advanced.AllObjects` / `AllSchemaNames` | fisher#210 |
+| — | `Advanced.WriteMigrationFileAsync` | fisher#210 (`db-patch`'s programmatic form) |
+
+**Every one of them is Weasel's, inherited through `FisherDatabase : SqliteDatabase : DatabaseBase`.**
+That is the finding rather than the shortcut, and it is the same shape fisher#120 had: nothing about
+the gap was dialect-specific, so no decision existed to prompt anybody to look — the members had been
+on the database object the whole time and were reachable only by naming `store.Database`.
+
+- **`CreateMigrationAsync()` is the default database, and the two tenant-aware members exist because
+  that is not the whole store.** Marten's carries the same restriction and documents it; here
+  `CreateMigrationAsync(tenantId)` names one file and `CreateAllMigrationsAsync()` returns one
+  migration per database identifier. Collapsing N tenants into one answer would report about whichever
+  file came first — the same reason `ApplyAllConfiguredChangesToDatabaseAsync` reports per database and
+  `TenantMigrationException` names which tenants are current. Dynamic tenants are refreshed first, so a
+  tenant nothing has resolved yet is still previewed.
+- **An unknown tenant throws**, through `Tenancy.DatabaseFor`, rather than quietly previewing the
+  default — the rule every other tenant-scoped member on `Advanced` follows, and the one that stops a
+  per-tenant deployment check from silently checking the wrong file.
+- ⚠️ **`AllSchemaNames()` is always `["main"]` here, and is deliberately not reinterpreted.** SQLite
+  has one schema and Fisher folds `DatabaseSchemaName` into the table prefix instead, so the isolation
+  between two logical stores in one file is a prefix this method cannot see. Answering with the prefix
+  or with the logical schema name would make the member mean something different here than it means on
+  Marten, which is worse than a constant a caller can read. `the_schema_names_are_always_main` pins the
+  constant under both a default and a named schema so it reads as a decision.
+- **The tests apply what they preview.** A delta object with the right `SchemaPatchDifference` whose
+  rendered DDL does not run would pass every shape assertion, so
+  `the_migration_file_is_ddl_that_actually_creates_the_schema` executes the patch file against the real
+  database, reads `sqlite_master`, and then asserts the store agrees nothing is outstanding — which is
+  what says the patch was the *whole* delta rather than part of it.
+- **Computing a delta is a read**, so it is available under `AutoCreate.None` — the deployment most
+  likely to want it, and the one where a preview that emitted DDL as a side effect would be a bug.
 
 **Everything Fisher hands a container now implements `IDisposable` as well as `IAsyncDisposable`** —
 `DocumentStore`, `FisherDatabase`, `FisherSession`, and `IQuerySession` with them. That is not a

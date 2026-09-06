@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1784 tests green on net9.0 and net10.0** — 1729 in
+**1795 tests green on net9.0 and net10.0** — 1740 in
 `Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 516 of
 them are shared cross-store compliance tests — 447 event sourcing and 69 document. On JasperFx **2.66.0** / Weasel **9.29.0**.
 
@@ -79,6 +79,37 @@ patching (#35) · bulk insert (#36) · composite projections (#19) · event body
 sessions, `SessionOptions` and enlistment (#30) · **LINQ joins (#25)** · aggregates and `Last` over a
 join (#54) · `IgnoreDuplicates` (#53) · patch `Insert` at an index (#52) · **document metadata and
 `MetadataForAsync` (#29)** · **natural keys (#40)**.
+
+## Migration preview — what fisher#172 already covered, and what it did not
+
+Worth reading before assuming this node built more than it did, because **most of the parity was
+already there and in two different places.**
+
+Already present, from **fisher#172** (PR #176) and from `Advanced` parity (fisher#42):
+
+- `db-apply` / `db-assert` / `db-patch` / `db-dump`, end to end, over registered `ISystemPart` and
+  `IDatabaseSource` — and `src/Fisher.Tests/Configuration/command_line_integration.cs` *runs* the
+  commands rather than asserting registrations, which is the distinction that made them real.
+- `IDocumentStore.AssertDatabaseMatchesConfigurationAsync`, spanning every tenant database, and
+  `AssertDatabaseMatchesConfigurationOnStartup()` on both configuration expressions.
+- `Advanced.ToDatabaseScript()` and `WriteCreationScriptToFileAsync`.
+
+Added by **fisher#210**, all on `AdvancedOperations`: `CreateMigrationAsync()` /
+`CreateMigrationAsync(tenantId)` / `CreateAllMigrationsAsync()`, `WriteMigrationFileAsync`,
+`WriteScriptsByTypeAsync`, `AllObjects()` and `AllSchemaNames()`.
+
+**Every one of the six is Weasel's, reached through `FisherDatabase : SqliteDatabase : DatabaseBase`
+— they were on the database object the whole time.** Same shape as fisher#120: nothing about the gap
+was dialect-specific, so no decision existed to prompt anybody to look, and it survived. The only
+member with an argument behind it is the tenant-aware pair, because a store that is
+database-per-tenant has N deltas rather than one and collapsing them would answer about whichever
+file came first. `AllSchemaNames()` is carried as a constant `["main"]` and deliberately not
+reinterpreted — see CLAUDE.md's "Previewing a migration programmatically" for why the prefix is the
+wrong answer to give it.
+
+`src/Fisher.Tests/Schema/migration_preview.cs` (11 tests) **applies what it previews**: the patch
+file is executed against the real database and `sqlite_master` read back, because a delta object
+carrying the right `SchemaPatchDifference` whose DDL does not run would pass every shape assertion.
 
 ## Natural keys — and the end of the last partial member
 
