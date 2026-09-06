@@ -27,6 +27,7 @@ namespace Fisher.Tests.Events;
 ///         <see cref="runAsync" />.
 ///     </para>
 /// </remarks>
+[Collection(ConsoleWritingCollection.Name)]
 public class event_query_command : IAsyncLifetime
 {
     private readonly TemporaryDatabase _database = TemporaryDatabase.Create("cli_event_query");

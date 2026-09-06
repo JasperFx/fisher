@@ -110,6 +110,9 @@ public interface IDocumentStore : IDisposable, IAsyncDisposable,
     /// <inheritdoc cref="DocumentStore.ApplyAllConfiguredChangesToDatabaseAsync" />
     Task ApplyAllConfiguredChangesToDatabaseAsync(CancellationToken token = default);
 
+    /// <inheritdoc cref="DocumentStore.AssertDatabaseMatchesConfigurationAsync" />
+    Task AssertDatabaseMatchesConfigurationAsync(CancellationToken token = default);
+
     /// <inheritdoc cref="DocumentStore.BuildProjectionDaemonAsync" />
     ValueTask<IProjectionDaemon> BuildProjectionDaemonAsync(
         string? tenantIdOrDatabaseIdentifier = null, ILogger? logger = null);
