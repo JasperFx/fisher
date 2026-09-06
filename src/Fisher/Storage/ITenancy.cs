@@ -194,7 +194,27 @@ public sealed class DynamicTenancy : ITenancy
     {
         _options = options;
         _source = source;
+
+        // Without this a suspension only takes effect for a tenant nothing has resolved yet, because
+        // DatabaseFor answers from the cache below and never asks the source again — see
+        // ITenantSource.OnTenantRevoked. Disposed synchronously rather than through
+        // ForgetTenantAsync's async path, because a source revokes from a synchronous method; the
+        // difference is only that a pooled connection's close is not awaited, and clearing the pool
+        // leaves a checked-out connection working either way.
+        source.OnTenantRevoked = tenantId =>
+        {
+            if (_databases.TryRemove(tenantId, out var database))
+            {
+                database.Dispose();
+            }
+        };
     }
+
+    /// <summary>
+    ///     The source this tenancy asks. Exposed so an application can reach a source it did not keep a
+    ///     reference to — <see cref="MasterTableTenantSource" />'s runtime lifecycle in particular.
+    /// </summary>
+    public ITenantSource Source => _source;
 
     public DatabaseCardinality Cardinality => DatabaseCardinality.DynamicMultiple;
 
@@ -227,7 +247,9 @@ public sealed class DynamicTenancy : ITenancy
                 $"This store's ITenantSource does not know the default tenant '{StorageConstants.DefaultTenantId}', "
                 + "and a database-per-tenant store has no store-level file to fall back on — so there is "
                 + "nothing for an operation that names no tenant to run against. Register it "
-                + $"(source.Add(\"{StorageConstants.DefaultTenantId}\", connectionString)), or use "
+                + $"(source.Add(\"{StorageConstants.DefaultTenantId}\", connectionString)), seed it "
+                + "under MultiTenantedDatabasesInRegistry(...) with "
+                + "SeedDatabases.RegisterDefault(connectionString), or use "
                 + "MultiTenantedDatabasesInDirectory(...), whose convention answers for any tenant id.");
         }
     }
