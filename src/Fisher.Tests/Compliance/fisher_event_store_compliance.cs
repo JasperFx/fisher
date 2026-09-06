@@ -8,11 +8,9 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and forty-nine are enrolled from
- * JasperFx.Events.ComplianceTests 2.65.0, which itself ships fifty-two. Two are not enrolled:
- * SingleTenantedEventSlicingCompliance, for the precondition reason set out immediately below, and
- * UpcastingCompliance, which is the next node's work rather than this one's — Fisher has no
- * upcasting at all today, so enrolling it would be a suite that skips itself wholesale.
+ * Suites were added one at a time as Fisher grew into them, and fifty are enrolled from
+ * JasperFx.Events.ComplianceTests 2.65.0, which itself ships fifty-two. One is not enrolled:
+ * SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
  * reason recorded at the flag on FisherComplianceFixture rather than here:
@@ -300,6 +298,28 @@ public class aggregate_to_linq_operator_compliance
 
 public class aggregate_to_many_compliance
     : AggregateToManyCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * jasperfx#752 / fisher#191 — event upcasting: a transformation registered against
+ * EventRegistry.Upcasters reinterprets an old stored event schema as the current CLR event type on
+ * every read path, so no read — stream fetch, live aggregation, FetchForWriting, the daemon — ever
+ * hands application code the old schema.
+ *
+ * ⚠️ This suite was written BEFORE any store implemented the contract, which is unique in the
+ * library: its gate ships closed and the suite IS the specification. Fisher is the first store to
+ * flip it, so every one of these facts is running for the first time anywhere.
+ *
+ * Two of them are worth naming. `an_async_only_upcast_applies_on_the_async_read_path` is why Fisher's
+ * row hydration became asynchronous: an async-only transformation's synchronous delegate throws
+ * UpcastingException by design, so a store hydrating synchronously could not honour one at all — and
+ * every Fisher read path was already inside an `await reader.ReadAsync(...)` loop, so the change cost
+ * a ValueTask per row. And `a_typed_append_of_the_old_event_type_does_not_shadow_the_upcaster` is the
+ * marten#4680 authority rule: the stored dotnet_type hint does not get a vote, which is why the
+ * registry is consulted BEFORE ResolveEventType rather than as a fallback after it.
+ */
+
+public class upcasting_compliance
+    : UpcastingCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
 /*
  * fisher#93 — binary event serialization, arriving in JasperFx.Events.ComplianceTests 2.50.0 and

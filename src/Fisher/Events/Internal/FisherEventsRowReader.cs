@@ -87,10 +87,10 @@ internal static class FisherEventsRowReader
     ///     Returns null when <c>dotnet_type</c> does not resolve to a type this process knows, so
     ///     callers can skip with a single <c>continue</c>.
     /// </summary>
-    internal static IEvent? ReadEventAsGuid(DbDataReader reader, in EventHydrationContext ctx,
-        in MetadataSlots slots)
+    internal static async ValueTask<IEvent?> ReadEventAsGuid(DbDataReader reader, EventHydrationContext ctx,
+        MetadataSlots slots, CancellationToken token)
     {
-        var @event = ReadEventCore(reader, ctx, slots);
+        var @event = await ReadEventCore(reader, ctx, slots, token).ConfigureAwait(false);
 
         if (@event is null)
         {
@@ -104,10 +104,10 @@ internal static class FisherEventsRowReader
     /// <summary>
     ///     Read the current row as a hydrated <see cref="IEvent" /> for a string-identified stream.
     /// </summary>
-    internal static IEvent? ReadEventAsString(DbDataReader reader, in EventHydrationContext ctx,
-        in MetadataSlots slots)
+    internal static async ValueTask<IEvent?> ReadEventAsString(DbDataReader reader, EventHydrationContext ctx,
+        MetadataSlots slots, CancellationToken token)
     {
-        var @event = ReadEventCore(reader, ctx, slots);
+        var @event = await ReadEventCore(reader, ctx, slots, token).ConfigureAwait(false);
 
         if (@event is null)
         {
@@ -130,10 +130,10 @@ internal static class FisherEventsRowReader
     ///     wrong id. <c>stream_id</c> is at ordinal 2 of <see cref="CoreSelectColumns" />, which is why
     ///     this belongs here rather than at the call site.
     /// </remarks>
-    internal static IEvent? ReadEventAcrossStreams(DbDataReader reader, in EventHydrationContext ctx,
-        in MetadataSlots slots, bool isGuidIdentity)
+    internal static async ValueTask<IEvent?> ReadEventAcrossStreams(DbDataReader reader,
+        EventHydrationContext ctx, MetadataSlots slots, bool isGuidIdentity, CancellationToken token)
     {
-        var @event = ReadEventCore(reader, ctx, slots);
+        var @event = await ReadEventCore(reader, ctx, slots, token).ConfigureAwait(false);
 
         if (@event is null)
         {
@@ -189,10 +189,66 @@ internal static class FisherEventsRowReader
     }
 
     /// <summary>
+    ///     Run the registered upcast transformation for this row's stored event type name, if there is
+    ///     one, and return the transformed body. Null means "no transformation" — hydrate normally.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>The stored event type name decides, and the <c>dotnet_type</c> hint does not get a
+    ///         vote</b> — the marten#4680 authority rule, which the shared registry states as: a
+    ///         registered transformation is the authoritative interpretation of its source name. It is
+    ///         consulted <em>before</em> <c>ResolveEventType</c> for exactly that reason. The case it
+    ///         exists for is a store that still has the old CLR type in its codebase: a typed append of
+    ///         it writes both the source name and a <c>dotnet_type</c> pointing at the old type, and
+    ///         letting the hint win would read those rows back as the old schema while every row
+    ///         written by the previous deployment upcast correctly. Same store, same event type name,
+    ///         two answers.
+    ///     </para>
+    ///     <para>
+    ///         <b>Guarded on <c>HasAny</c> first</b>, so a store with no upcasts pays one boolean field
+    ///         read per row and nothing else — no dictionary probe, no payload struct, no state
+    ///         machine, since the method completes synchronously.
+    ///     </para>
+    /// </remarks>
+    private static async ValueTask<object?> TryUpcast(DbDataReader reader, EventHydrationContext ctx,
+        MetadataSlots slots, string typeName, CancellationToken token)
+    {
+        var upcasters = ctx.EventGraph.Upcasters;
+
+        if (!upcasters.HasAny || !upcasters.TryFindTransformation(typeName, out var transformation))
+        {
+            return null;
+        }
+
+        var binary = reader.IsDBNull(slots.BinaryDataIdx)
+            ? null
+            : (byte[])reader.GetValue(slots.BinaryDataIdx);
+
+        var payload = new Upcasting.FisherUpcastPayload(ctx.EventGraph, ctx.Serializer,
+            reader.GetString(4), binary, typeName);
+
+        // The async delegate, always — never the sync one. An async-only registration's synchronous
+        // delegate throws UpcastingException by design, and Fisher has no synchronous read path to
+        // reserve it for; a transformation registered the ordinary way wraps its sync delegate here
+        // and completes without awaiting anything.
+        return await transformation.UpcastAsync(payload, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
     ///     Everything except the stream identity, which the specialized wrappers assign.
     /// </summary>
-    private static IEvent? ReadEventCore(DbDataReader reader, in EventHydrationContext ctx,
-        in MetadataSlots slots)
+    /// <remarks>
+    ///     <para>
+    ///         <b>Asynchronous because upcasting can be</b> (fisher#191). The shared contract lets a
+    ///         transformation be registered async-only, whose synchronous delegate throws by design —
+    ///         so a store that hydrated synchronously could not honour one at all. Every Fisher read
+    ///         path that reaches here is already inside an <c>await reader.ReadAsync(...)</c> loop, so
+    ///         the change costs a <c>ValueTask</c> per row and nothing else; the ordinary path never
+    ///         awaits anything and completes synchronously.
+    ///     </para>
+    /// </remarks>
+    private static async ValueTask<IEvent?> ReadEventCore(DbDataReader reader, EventHydrationContext ctx,
+        MetadataSlots slots, CancellationToken token)
     {
         var seqId = reader.GetInt64(0);
         var eventId = Guid.Parse(reader.GetString(1));
@@ -204,7 +260,9 @@ internal static class FisherEventsRowReader
         var dotNetTypeName = reader.IsDBNull(8) ? null : reader.GetString(8);
         var isArchived = reader.GetInt64(9) != 0;
 
-        var resolvedType = ctx.EventGraph.ResolveEventType(dotNetTypeName);
+        var upcast = await TryUpcast(reader, ctx, slots, typeName, token).ConfigureAwait(false);
+
+        var resolvedType = upcast?.GetType() ?? ctx.EventGraph.ResolveEventType(dotNetTypeName);
 
         if (resolvedType is null)
         {
@@ -217,9 +275,9 @@ internal static class FisherEventsRowReader
         // never by the event type's current setting (fisher#93). That is what makes marking a type
         // [BinaryEvent] an in-place change: rows written before the change still carry JSON, and this
         // still reads them. A dispatch on the type would misread every one of them instead.
-        var data = reader.IsDBNull(slots.BinaryDataIdx)
+        var data = upcast ?? (reader.IsDBNull(slots.BinaryDataIdx)
             ? ctx.Serializer.FromJson(resolvedType, reader.GetString(4))
-            : DeserializeBinary(reader, slots, mapping, resolvedType);
+            : DeserializeBinary(reader, slots, mapping, resolvedType));
 
         var @event = mapping.Wrap(data);
 
