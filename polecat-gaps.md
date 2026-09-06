@@ -1,5 +1,13 @@
 # Polecat Features Not Yet in Fisher
 
+> ⚠️ **This is a Polecat comparison, not a Marten parity statement, and it is dated.** Everything
+> below was established against Polecat on 2026-08-08, on JasperFx 2.45.0. **A feature Marten has and
+> Polecat does not is invisible to it** — `Include()`, full-text search, compiled queries and
+> `IMartenLogger` are all absent from Fisher *and* absent from this file, because Polecat does not have
+> them either. Do not read a clean row here as parity with Marten. The Marten-facing list lives in
+> [the migration guide](docs/migration-guide.md#marten-features-fisher-does-not-have) and is the one to
+> keep current; the README points at it.
+
 Everything [Polecat](https://github.com/JasperFx/polecat) (SQL Server) has that Fisher (SQLite) does
 not, as of 2026-08-08, on JasperFx 2.45.0. Polecat is the comparison rather than Marten because
 Fisher mirrors Polecat's internals by design — CLAUDE.md's rule is "mirror Marten's public API surface
@@ -154,4 +162,4 @@ Recorded so they are not rediscovered as omissions. None of these has an issue.
 | A message bus / durable outbox | [fisher#8](https://github.com/JasperFx/fisher/issues/8), closed wontfix. `NulloMessageOutbox` is the intended end state; delivery is a bus integration's job here as on both siblings. |
 | `IChangeListener` (Polecat's local spelling) | Fisher uses JasperFx's lifted `IDaemonChangeListener`. Polecat's is the older spelling of the same thing; new code should not copy it. |
 | An inline equivalent of subscriptions | "Inline" would be code in the caller's own unit of work. A subscription needs the daemon. |
-| Compiled queries | Polecat declines them too. |
+| Compiled queries | Declined on a measurement — [fisher#195](https://github.com/JasperFx/fisher/issues/195). **This row used to read "Polecat declines them too", which was not a reason and inherited a wrong one**: Polecat's own note says SQL Server's query plan caching handles it natively, and that conflates two different costs. A plan cache saves the *server* re-planning SQL it has seen; a compiled query saves the *client* walking an expression tree and rendering SQL, which the database never sees. Measured on Fisher, that client-side half is 4–11% of an ordinary query, 22.5% of the cheapest one, and 35–78% of a query's allocations — real, but ~2 µs, and a filter-shape plan cache collects nearly all of it with no public API. |

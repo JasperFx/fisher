@@ -199,3 +199,14 @@ rather than through a slow query:
 - Inside a collection predicate: outer-scope references, member access on scalar elements, and bare
   element comparisons — see [Collections](#collections)
 - A soft-delete or tenancy operator against a type that has no such column
+
+## Marten operators that are absent
+
+Not refused by name — these simply do not exist, so a ported file naming one will not compile:
+`Include()`, `MatchesSql(…)`, `Stats(out QueryStatistics)`, `ToAsyncEnumerable()`, and the full-text
+operators (`Search`, `PlainTextSearch`, `PhraseSearch`, `WebStyleSearch`, `NgramSearch`). Compiled
+queries (`ICompiledQuery<T>`) are absent too, on a
+[measurement](https://github.com/JasperFx/fisher/issues/195) rather than by omission.
+
+The [migration guide](/migration-guide#marten-features-fisher-does-not-have) lists each with what to
+use instead.

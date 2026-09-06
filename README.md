@@ -36,11 +36,18 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > lists them, which is also why Fisher is not a drop-in test double for a Marten or Polecat
 > application.
 >
-> 1.0 means the API is stable and the semantics above are settled — not that Fisher is
-> feature-complete against Marten. The gaps that remain are **decisions**, documented in
-> [HANDOFF.md](HANDOFF.md) rather than filed as issues.
+> 1.0 means the API is stable and the semantics above are settled — **not** that Fisher is
+> feature-complete against Marten. Several Marten features are genuinely missing, and until recently
+> they were missing from this list too: Fisher's parity baseline was drawn against *Polecat*, so
+> anything Marten has and Polecat does not was invisible to its tracking. `Include()`, compiled
+> queries, full-text search, a session logging seam, `MatchesSql`, `Stats(out QueryStatistics)` and
+> `ToAsyncEnumerable()` are all absent; child-collection LINQ is partly landed; and `CreateBatchQuery`
+> lives on `session.Events` rather than on the session. The
+> [migration guide](https://fisher.jasperfx.net/migration-guide#marten-features-fisher-does-not-have)
+> names each one, says what to use instead, and marks which are settled decisions rather than unbuilt
+> work.
 >
-> The one thing that is *not* there is deliberate and permanent: **no message bus.** The projection
+> One absence is deliberate and permanent rather than a gap: **no message bus.** The projection
 > side-effect seam exists and the default outbox drops every message, because delivery is a bus
 > integration's job here as it is on both siblings.
 

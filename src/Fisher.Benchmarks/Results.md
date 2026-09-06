@@ -261,3 +261,61 @@ Notes:
   command 22 ms, 250 per command 59 ms) and **every chunk size measured is worse than a command per
   operation**, so there is no sweet spot to tune to. See `FisherSession.ExecuteBatchAsync`'s remarks
   for that and for why the `NextResult` walk it needs could not be made safe on this provider anyway.
+
+---
+
+## Query construction vs execution — the compiled-query measurement (fisher#195)
+
+`QueryConstructionBenchmarks`, macOS 26 / Apple Silicon (Arm64), .NET 10.0.1, in-process toolchain,
+10 warmup + 25 measured iterations, one warm session shared by both halves of each pair.
+
+**Construct** is `session.ToSql(query)` — `BuildStatement` + `Statement.Apply` +
+`CommandBuilder.Compile`, the same three calls `FisherQueryProvider.CommandFor` makes minus the
+ensured-table cache hit. It is exactly the work a compiled query would skip, and if anything a slight
+over-count of it (a compiled query would still bind parameter values). **Full** is the ordinary LINQ
+terminal on the same session.
+
+```
+| Method         |      Mean |   StdDev | Allocated |
+|--------------- |----------:|---------:|----------:|
+| PageConstruct  |  3.838 us | 0.132 us |    8.9 KB |
+| PageFull       | 92.481 us | 1.148 us |  25.58 KB |
+| CountConstruct |  3.124 us | 0.151 us |   5.85 KB |
+| CountFull      | 70.861 us | 2.021 us |   7.47 KB |
+| FirstConstruct |  2.222 us | 0.101 us |    4.3 KB |
+| FirstFull      | 20.337 us | 0.393 us |  10.08 KB |
+| ByIdConstruct  |  2.176 us | 0.062 us |   3.87 KB |
+| ByIdFull       |  9.668 us | 0.202 us |    9.1 KB |
+```
+
+Read as shares — the construct half as a fraction of the whole call:
+
+```
+shape                              time      allocations
+filtered ordered page (10 docs)     4.1%          34.8%
+filtered count (0 rows read)        4.4%          78.3%
+first by member (200-row scan)     10.9%          42.7%
+first by id (index seek)           22.5%          42.5%
+```
+
+- **Wall clock says no and allocations say yes**, which is the whole result. Construction is 4-11% of
+  an ordinary query and **22.5% of the cheapest query the store can run** — an index seek returning
+  one row, which is the ceiling by construction. But it is **35-78% of every query's allocations**,
+  because the execute half of an embedded store allocates almost nothing: `CountFull` adds 1.6 KB to
+  `CountConstruct`'s 5.85 KB.
+- **The ratio really is much higher than Marten's, and that argument still does not carry.** On
+  PostgreSQL the construct half sits in front of a network round trip and is a low single-digit
+  percentage; here there is no round trip for it to be a fraction of, so it rises to 22.5% at the
+  ceiling. The absolute number is what decides it: 2.2 us saved off a 9.7 us call, against
+  `ICompiledQuery` / `ICompiledListQuery` and their AspNetCore streaming variants as new public API.
+- **This is the number fisher#181 deferred, and it confirms that note.** Caching the config-only
+  halves (select list per storage, `MemberFactory` per mapping) moved allocations ~1%, because what is
+  left is per-query: the expression walk, an `IQueryableMember` per referenced member, the `Statement`
+  and the render. That residue is the 35-78% above.
+- **A filter-shape plan cache (marten#5013) collects almost all of it with no public API.** Keyed on
+  the shape of the predicate, it removes member resolution, statement construction and the SQL render
+  for *every* query, leaving only a cheaper structural walk. A compiled query removes that walk too —
+  a fraction of an already-small 2-4 us — for a whole new API surface and a rewrite of each call site.
+- **What would change the answer**: a plan cache that lands and leaves a residue still worth 10%+ of a
+  query, or a workload dominated by trivially-executing queries at high rate. Re-run this class rather
+  than re-arguing it.
