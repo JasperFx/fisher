@@ -66,6 +66,20 @@ public partial class DocumentStore : IDocumentStore
 
         // Built once here rather than per session: BuildForInline compiles each projection.
         options.Projections.BuildInlineProjections();
+
+        // fisher#208. The change-set counters, if any were asked for. Registered here rather than at
+        // opt-in time because a Track… call may come from an IConfigureFisher contribution long after
+        // the configuration lambda ran, and this is the first moment the set is final — the same
+        // reason the flat-table rename above happens here. Conditional, so a store with no counters
+        // carries no extra listener at all.
+        // Stamped here rather than in StoreOptions' constructor, where the name is not set yet and an
+        // IConfigureFisher contribution has not run.
+        options.OpenTelemetry.StoreName = options.StoreName;
+
+        if (options.OpenTelemetry.Applications.Count > 0)
+        {
+            options.Listeners.Add(new Services.FisherCommitMetrics(options.OpenTelemetry.Applications));
+        }
     }
 
     /// <summary>

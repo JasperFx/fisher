@@ -66,6 +66,83 @@ write lock.
 own store sets.
 :::
 
+## Metrics
+
+Fisher publishes a `Meter` named **`Fisher`**, matching the `ActivitySource`, so one name subscribes
+to both:
+
+```cs
+builder.Services.AddOpenTelemetry().WithMetrics(metrics => metrics.AddMeter("Fisher"));
+```
+
+**Everything is opt-in and nothing is created until it is asked for.** A store that opts into nothing
+publishes no instruments and pays a null check on the commit path.
+
+```cs
+builder.Services.AddFisher(opts =>
+{
+    opts.ConnectionString = connectionString;
+
+    opts.OpenTelemetry.TrackWriteLockContention();
+    opts.OpenTelemetry.TrackEventCounters();
+    opts.OpenTelemetry.TrackDocumentCounters();
+});
+```
+
+| Instrument | Kind | Tags | What it answers |
+| :--- | :--- | :--- | :--- |
+| `fisher.write_lock.wait` | histogram (ms) | `fisher.store`, `fisher.write_lock.holder` | How long a writer queued for SQLite's one write lock |
+| `fisher.write_lock.retries` | counter | `fisher.store`, `exception.type` | How often a `SQLITE_BUSY` was retried rather than waited out |
+| `fisher.events.appended` | counter | `fisher.store`, `fisher.event.type`, `fisher.tenant` | Append volume, by event type |
+| `fisher.documents.written` | counter | `fisher.store`, `fisher.document.type`, `fisher.document.operation` | Commit shape — inserts, updates, deletions |
+
+`fisher.write_lock.holder` is `session`, `daemon` or `rebuild`. That distinction is what separates
+"the application is contended" from "the daemon is starving the application", which look identical from
+a session's side alone.
+
+### Why the wait, and not just the retries
+
+::: warning
+**A `SQLITE_BUSY` retry counter on its own is the wrong instrument here, and that is a measurement
+rather than an opinion.** Fisher's Polly pipeline already emits a `fisher.retry` activity event, so
+counting retries is the obvious move. Under the benchmark harness's concurrent-writers scenario that
+counter reads **zero** while throughput visibly collapses — a contended writer sits inside
+`BEGIN IMMEDIATE` under the connection string's busy timeout and eventually succeeds, never reaching
+the retry.
+:::
+
+So a dashboard built on retries alone shows a flat line through the exact incident it exists to
+diagnose, which is worse than no instrument at all: a flat line reads as *not the database*.
+`TrackWriteLockContention()` therefore creates **both** — they are opted into together so neither can
+be charted without the other:
+
+- a **rising histogram with no retries** is ordinary contention absorbed by the busy timeout;
+- **retries** mean the timeout was exceeded, or the failure was `SQLITE_BUSY_SNAPSHOT`, which the busy
+  timeout does not cover at all.
+
+### The counters are not Marten's
+
+Marten's interesting number is connection usage against a pooled remote server. Fisher's is contention
+for the one write lock on a file, so the instruments differ:
+
+| Marten | Fisher |
+| :--- | :--- |
+| `TrackConnections` | **refused** — a Fisher connection is a file handle, not a lease on a scarce server resource. Weasel's `SqliteDataSource` builds a fresh connection per open, and the pooling beneath it is Microsoft.Data.Sqlite's, keyed process-wide by connection string and not attributable to a store. Setting it throws, naming `TrackWriteLockContention()` instead. |
+| — | `fisher.write_lock.wait` — no sibling has one, because no sibling serialises every writer on a file |
+| `marten.event.append` (`TrackEventCounters`) | `fisher.events.appended`, same shape. It earns its place here for an extra reason: on one file every appending writer is queued behind every other, so append volume charted against the wait separates *more work arrived* from *the same work is now waiting* |
+| — | `fisher.documents.written` — the other cause of the wait |
+| `ExportCounterOnChangeSets<T>` | same, for a counter specific to your own model |
+
+::: tip
+`TrackConnections` is **refused rather than ignored**, following `SessionOptions.IsolationLevel`, which
+is carried for parity and refuses exactly one value by name. A knob that silently does nothing is worse
+than an error, because the absence of data is indistinguishable from having none to report.
+:::
+
+The event and document counters describe a **user session's** unit of work. An async projection commits
+through the daemon's batch, which deliberately does not fire session listeners — counting those here
+would put the daemon's own work on the same series as the application's.
+
 ## The event store tooling surface
 
 `DocumentStore` implements `IEventStore` **explicitly**, so none of a tooling-only surface lands on the

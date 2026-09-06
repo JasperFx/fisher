@@ -32,8 +32,22 @@ public class StoreOptions
         Events.EventGraph = EventGraph;
         Projections = new Fisher.Projections.FisherProjectionOptions(EventGraph);
         Schema = new DocumentSchema(this);
-        ResiliencePipeline = new ResiliencePipelineBuilder().AddFisherDefaults().Build();
+
+        // Before the pipeline: AddFisherDefaults closes its OnRetry over these options and reads
+        // OpenTelemetry when a retry actually happens, so it has to exist by then.
+        OpenTelemetry = new Services.OpenTelemetryOptions();
+
+        ResiliencePipeline = new ResiliencePipelineBuilder().AddFisherDefaults(this).Build();
     }
+
+    /// <summary>
+    ///     Fisher's OpenTelemetry meter and the counters this store publishes (fisher#208).
+    /// </summary>
+    /// <remarks>
+    ///     Everything on it is opt-in and nothing is created until it is asked for. An application
+    ///     subscribes with <c>AddMeter("Fisher")</c>, matching the <c>Fisher</c> <c>ActivitySource</c>.
+    /// </remarks>
+    public Services.OpenTelemetryOptions OpenTelemetry { get; }
 
     /// <summary>
     ///     Document type registration, mirroring Marten's <c>StoreOptions.Schema</c>. Registering a
@@ -379,7 +393,7 @@ public class StoreOptions
     public void ExtendPolly(Action<ResiliencePipelineBuilder> configure)
     {
         var builder = new ResiliencePipelineBuilder();
-        builder.AddFisherDefaults();
+        builder.AddFisherDefaults(this);
         configure(builder);
         ResiliencePipeline = builder.Build();
     }

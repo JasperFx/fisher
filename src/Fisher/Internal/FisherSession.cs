@@ -770,8 +770,19 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
                 // SQLite would not take the write lock until that write, leaving a window where two
                 // sessions both read version N. IMMEDIATE takes the lock up front, which is Fisher's
                 // stand-in for Marten's advisory lock and Polecat's UPDLOCK/HOLDLOCK read.
+                //
+                // fisher#208. Taking the lock up front is also what makes this the one place worth
+                // measuring: every millisecond a contended writer spends waiting is spent HERE, inside
+                // this await, under the connection string's busy timeout — not in a Polly retry, which
+                // is why a retry counter alone reads zero through real contention. Zero when nothing
+                // asked for the histogram, so an unwatched store does not even read the clock.
+                var waitedFrom = Options.OpenTelemetry.StartWriteLockWait();
+
                 await using var transaction = (SqliteTransaction)await connection
                     .BeginTransactionAsync(SessionOptions.IsolationLevel, ct).ConfigureAwait(false);
+
+                Options.OpenTelemetry.RecordWriteLockWait(
+                    waitedFrom, Services.OpenTelemetryOptions.SessionHolder);
 
                 await WriteAsync(connection, transaction, queued, streams, ct).ConfigureAwait(false);
 
