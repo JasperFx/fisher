@@ -157,6 +157,65 @@ public static class FullTextSearchExtensions
         => Rank(source, nameof(ThenByRelevanceDescending), columnWeights);
 
     /// <summary>
+    ///     The matching fragment of the indexed text, with the matched terms marked — FTS5's
+    ///     <c>snippet()</c> (<a href="https://github.com/JasperFx/fisher/issues/220">fisher#220</a>).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///     <b>Only inside a <c>Select</c>, on a query that carries a full-text predicate.</b> It is a
+    ///     projected column rather than a document member — the value is computed by the match, so
+    ///     there is nothing on the document to read it from, and no in-memory meaning to fall back to.
+    ///     </para>
+    ///     <code>
+    ///     session.Query&lt;Article&gt;()
+    ///         .Where(x =&gt; x.Search("corrosion"))
+    ///         .Select(x =&gt; new { x.Title, Extract = x.Snippet() })
+    ///     </code>
+    ///     <para>
+    ///     Takes the best-matching column, which is FTS5's own <c>-1</c>. Defaults are
+    ///     <c>&lt;b&gt;</c>/<c>&lt;/b&gt;</c> markers, <c>…</c> for the elision and 32 tokens.
+    ///     </para>
+    /// </remarks>
+    public static string Snippet<T>(this T document)
+        => throw OnlyInASelect(nameof(Snippet));
+
+    /// <inheritdoc cref="Snippet{T}(T)" />
+    /// <param name="document">The document being projected. Never read.</param>
+    /// <param name="startMarker">Written before each matched term.</param>
+    /// <param name="endMarker">Written after each matched term.</param>
+    /// <param name="ellipsis">Written where text was elided.</param>
+    /// <param name="maxTokens">Length budget, in tokens. FTS5 caps this at 64.</param>
+    public static string Snippet<T>(this T document, string startMarker, string endMarker,
+        string ellipsis, int maxTokens)
+        => throw OnlyInASelect(nameof(Snippet));
+
+    /// <summary>
+    ///     One indexed column in full, with the matched terms marked — FTS5's <c>highlight()</c>
+    ///     (<a href="https://github.com/JasperFx/fisher/issues/220">fisher#220</a>).
+    /// </summary>
+    /// <param name="document">The document being projected. Never read.</param>
+    /// <param name="column">
+    ///     Which indexed member to highlight, named as the member is. <b>Required, unlike
+    ///     <see cref="Snippet{T}(T)" />'s.</b> FTS5 accepts <c>-1</c> here and returns an EMPTY STRING
+    ///     for it rather than an error, so a default of "whichever column matched" would be a silent
+    ///     wrong answer, and a default of "the first one" would be a wrong answer whenever the match
+    ///     was elsewhere.
+    /// </param>
+    public static string Highlight<T>(this T document, string column)
+        => throw OnlyInASelect(nameof(Highlight));
+
+    /// <inheritdoc cref="Highlight{T}(T,string)" />
+    public static string Highlight<T>(this T document, string column, string startMarker,
+        string endMarker)
+        => throw OnlyInASelect(nameof(Highlight));
+
+    private static NotSupportedException OnlyInASelect(string name)
+        => new($"'{name}' is only meaningful inside a Fisher LINQ query's Select — "
+               + "session.Query<T>().Where(x => x.Search(\"…\")).Select(x => new { Value = x."
+               + name + "() }). It reads a value the full-text match computes, so it has no "
+               + "in-memory equivalent and nothing on the document to fall back to.");
+
+    /// <summary>
     ///     Rebuilds the call as an expression node the provider's parser sees, which is what makes
     ///     these ordinary members of the ordering chain rather than a terminal that has to be last.
     /// </summary>
