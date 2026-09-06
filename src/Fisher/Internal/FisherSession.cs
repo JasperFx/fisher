@@ -108,6 +108,72 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     private int _tempTableNumber;
     private FisherVersionTracker? _versionTracker;
 
+    private IFisherSessionLogger _logger = NulloFisherLogger.Flyweight;
+    private bool _unlogged = true;
+
+    /// <summary>
+    ///     This session's logger (fisher#207). Assignable, so one session can be traced without
+    ///     turning logging on for the whole store — <c>session.Logger = new ConsoleFisherLogger()</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <b>A tenant scope forwards to the session that created it</b>, rather than holding a copy.
+    ///     A scope shares the parent's unit of work, so its writes are the parent's commands and are
+    ///     logged there; splitting one transaction's log across two loggers would be wrong, and a
+    ///     caller who set <c>session.Logger</c> and then wrote through <c>ForTenant</c> would silently
+    ///     not see those reads.
+    /// </remarks>
+    public IFisherSessionLogger Logger
+    {
+        get => _parent is null ? _logger : _parent.Logger;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+
+            if (_parent is not null)
+            {
+                _parent.Logger = value;
+                return;
+            }
+
+            _logger = value;
+
+            // Cached rather than re-derived, because IsLogging is read on the hot path — see its
+            // remarks. Recomputed here so that assigning the flyweight back turns the fast path on
+            // again rather than leaving the session permanently on the slower branch.
+            _unlogged = ReferenceEquals(value, NulloFisherLogger.Flyweight);
+        }
+    }
+
+    /// <summary>
+    ///     Whether anything would be recorded if this session logged right now. <b>Check this before
+    ///     constructing any logging argument that is not already in hand.</b>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>fisher#165's lesson, applied before it could happen again.</b> That was a
+    ///         <c>DaemonTrace.Record</c> call site whose interpolated-string argument was built ahead
+    ///         of the gate that would have rejected it, so a facility documented as free cost an
+    ///         allocation per call. The equivalent here is <c>RecordSavedChanges</c>, which needs a
+    ///         <see cref="Services.IChangeSet" /> that <see cref="SaveChangesAsync" /> otherwise builds
+    ///         only when a listener is registered.
+    ///     </para>
+    ///     <para>
+    ///         Two tiers, cheapest first. <see cref="_unlogged" /> is a field read settled once per
+    ///         session, and it is what makes a store built by hand — every test in this repository, and
+    ///         every embedded use that never touches a container — pay a branch on a bool and nothing
+    ///         else, with no interface dispatch at all. Only a session that actually has a logger goes
+    ///         on to ask it, which <see cref="DefaultFisherLogger" /> answers with
+    ///         <c>ILogger.IsEnabled(LogLevel.Debug)</c> — asked every time rather than cached, because
+    ///         a host can change its levels while running.
+    ///     </para>
+    ///     <para>
+    ///         <c>logging_seam.the_no_logger_path_allocates_nothing</c> pins the allocation claim
+    ///         directly, and <c>a_disabled_logger_is_never_asked_for_a_change_set</c> pins that the
+    ///         guard is at the call site rather than inside the logger.
+    ///     </para>
+    /// </remarks>
+    internal bool IsLogging => _parent is null ? !_unlogged && _logger.Enabled : _parent.IsLogging;
+
     public FisherSession(StoreOptions options, FisherDatabase database, string tenantId)
         : this(options, database, new SessionOptions { TenantId = tenantId })
     {
@@ -130,6 +196,10 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             : new Sessions.OwnedConnectionLifetime(database);
 
         Events = new EventOperations(this);
+
+        // Through the property, so the fast-path flag is derived rather than being a second thing to
+        // remember. A store with no logger hands back the flyweight, so this allocates nothing.
+        Logger = options.Logger().StartSession(this);
 
         // Seed distributed tracing context onto the session so appended events carry it without the
         // application passing anything. Root, not Id: the correlation id identifies the whole trace,
@@ -193,6 +263,9 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         _operationsLock = parent._operationsLock;
 
         Events = new EventOperations(this, tenantId);
+
+        // Nothing to do for the logger: a scope forwards Logger and IsLogging to its parent rather
+        // than holding its own. See the Logger property for why.
     }
 
     /// <inheritdoc cref="IDocumentSession.ForTenant" />
@@ -584,6 +657,17 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             // successful one — and the retry events recorded underneath it would then read as noise
             // rather than as the story of what went wrong.
             activity.RecordFailure(e);
+
+            // The commit-level failure, beside the statement-level one ExecuteBatchAsync already
+            // logged. Both are wanted: the statement says what SQLite refused, this says that the
+            // whole unit of work is gone — which is the part a caller reading the log needs, since a
+            // failed operation and a rolled-back transaction are not the same news. The message is a
+            // constant, so nothing is built ahead of the guard.
+            if (IsLogging)
+            {
+                Logger.LogFailure(e, "Fisher could not commit the unit of work");
+            }
+
             throw;
         }
 
@@ -616,22 +700,45 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         // invoked inside it fires twice for a transaction that already committed. The second is
         // SessionOptions.ForTransaction's: "everyone can see this now" is a claim only the caller's
         // commit can make, and Fisher is not told when that happens.
-        if (Listeners.Count > 0 && EnlistedTransaction is null)
-        {
-            // Typed as Fisher's IChangeSet rather than left to var, and that is not style. From
-            // fisher#104 IDocumentSessionListener also carries jasperfx#679's
-            // AfterCommitAsync(IDocumentSessionOperations, IDocumentChangeSet, CancellationToken),
-            // and ChangeSet implements both change-set interfaces while this session implements both
-            // session interfaces — so a `var` local leaves the call below with two applicable
-            // overloads, resolved today only by IDocumentSession being the more derived first
-            // argument. Naming the type makes the shared overload inapplicable instead of
-            // second-best, so the listener Fisher invokes cannot quietly change if either hierarchy
-            // moves.
-            Services.IChangeSet commit = new Services.ChangeSet(queued, streams);
+        var notifyListeners = Listeners.Count > 0 && EnlistedTransaction is null;
 
+        // fisher#207. The change set is what both consumers want, and it is built at most once for
+        // the two of them — which is the whole reason this is a local rather than two `new`s.
+        //
+        // ⚠️ Neither clause may be reordered so that the construction happens first. That is
+        // fisher#165's shape exactly: a facility that costs nothing when off, given an argument built
+        // before the gate that would have rejected it. A store with no logger and no listeners — every
+        // test in this repository, and every embedded use that never registers one — must leave this
+        // null, and `a_disabled_logger_is_never_asked_for_a_change_set` is what says so.
+        var logging = IsLogging;
+
+        // Typed as Fisher's IChangeSet rather than left to var, and that is not style. From
+        // fisher#104 IDocumentSessionListener also carries jasperfx#679's
+        // AfterCommitAsync(IDocumentSessionOperations, IDocumentChangeSet, CancellationToken),
+        // and ChangeSet implements both change-set interfaces while this session implements both
+        // session interfaces — so a `var` local leaves the call below with two applicable
+        // overloads, resolved today only by IDocumentSession being the more derived first
+        // argument. Naming the type makes the shared overload inapplicable instead of
+        // second-best, so the listener Fisher invokes cannot quietly change if either hierarchy
+        // moves.
+        Services.IChangeSet? commit = logging || notifyListeners
+            ? new Services.ChangeSet(queued, streams)
+            : null;
+
+        // Before the listeners, so the duration reported is the unit of work's rather than the unit of
+        // work plus whatever an application's post-commit hooks went on to do. And unlike them it runs
+        // for an enlisted session: a listener is a side effect that must wait for visibility only the
+        // caller's commit can grant, where a log line records that the statements ran — which they did.
+        if (logging)
+        {
+            Logger.RecordSavedChanges(this, commit!);
+        }
+
+        if (notifyListeners)
+        {
             foreach (var listener in Listeners)
             {
-                await listener.AfterCommitAsync(this, commit, token).ConfigureAwait(false);
+                await listener.AfterCommitAsync(this, commit!, token).ConfigureAwait(false);
             }
         }
     }
@@ -1152,6 +1259,11 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     {
         var exceptions = new List<Exception>();
 
+        // Settled once for the whole batch rather than per operation: a hundred-document save should
+        // not ask the logger a hundred times whether it is on, and a level change mid-batch would
+        // otherwise log some of one transaction's statements and not others.
+        var logging = IsLogging;
+
         await using var reused = new ReusedCommand(connection, transaction, CommandTimeout);
 
         foreach (var operation in operations)
@@ -1164,13 +1276,31 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             // statement to finalization.
             var command = reused.Take(builder.Compile());
 
+            if (logging)
+            {
+                Logger.OnBeforeExecute(command);
+            }
+
             try
             {
                 await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
                 await operation.PostprocessAsync(reader, exceptions, token).ConfigureAwait(false);
+
+                if (logging)
+                {
+                    Logger.LogSuccess(command);
+                }
             }
             catch (Exception e)
             {
+                // Before the transform, so the log carries the provider's own account of what SQLite
+                // refused — a transformed ExistingStreamIdCollisionException no longer says which
+                // constraint failed, which is the thing worth having beside the statement.
+                if (logging)
+                {
+                    Logger.LogFailure(command, e);
+                }
+
                 throw TransformOperationException(operation, e);
             }
         }
@@ -1445,8 +1575,8 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
 
     /// <remarks>
     ///     The closed-shape storage's read seam, so this is where a document load gets its span
-    ///     (fisher#48). It covers executing the statement, not materializing the document — the same
-    ///     boundary the LINQ path draws, and for the same reason.
+    ///     (fisher#48) and its log line (fisher#207). It covers executing the statement, not
+    ///     materializing the document — the same boundary the LINQ path draws, and for the same reason.
     /// </remarks>
     public async Task<DbDataReader> ExecuteReaderAsync(DbCommand command, CancellationToken token = default)
     {
@@ -1459,7 +1589,35 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
 
         await ConfigureCommandAsync(command, token).ConfigureAwait(false);
 
-        return await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        // Read once and reused below, so the two halves of one execution cannot disagree — a level
+        // change between them would otherwise time a command whose start was never recorded.
+        var logging = IsLogging;
+
+        if (logging)
+        {
+            Logger.OnBeforeExecute(command);
+        }
+
+        try
+        {
+            var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+
+            if (logging)
+            {
+                Logger.LogSuccess(command);
+            }
+
+            return reader;
+        }
+        catch (Exception e)
+        {
+            if (logging)
+            {
+                Logger.LogFailure(command, e);
+            }
+
+            throw;
+        }
     }
 
     /// <summary>

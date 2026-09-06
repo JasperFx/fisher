@@ -328,6 +328,40 @@ public class StoreOptions
     /// </remarks>
     public IList<IDocumentSessionListener> Listeners { get; } = new List<IDocumentSessionListener>();
 
+    private IFisherLogger _logger = NulloFisherLogger.Flyweight;
+
+    /// <summary>
+    ///     The logger every session this store opens records its SQL through (fisher#207).
+    /// </summary>
+    /// <remarks>
+    ///     Never null. A store nobody attached a logger to holds <see cref="NulloFisherLogger" />, whose
+    ///     sessions answer <see cref="IFisherSessionLogger.Enabled" /> false and are therefore never
+    ///     asked for anything.
+    /// </remarks>
+    public IFisherLogger Logger() => _logger;
+
+    /// <summary>
+    ///     Attach a logger to this store. Mirrors Marten's <c>StoreOptions.Logger(IMartenLogger)</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <c>AddFisher</c> attaches a <see cref="DefaultFisherLogger" /> over the container's
+    ///     <c>ILogger</c> when nothing has been attached here, so calling this is how an application
+    ///     overrides that rather than how it turns logging on.
+    /// </remarks>
+    public void Logger(IFisherLogger logger)
+        => _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+    /// <summary>
+    ///     Whether the logger <c>AddFisher</c> attaches writes the <em>values</em> bound to a command's
+    ///     parameters. Defaults to <c>false</c>, which is a deliberate divergence from Marten.
+    /// </summary>
+    /// <remarks>
+    ///     Read only when <c>AddFisher</c> builds the default logger — see
+    ///     <see cref="DefaultFisherLogger.LogParameterValues" /> for the reasoning and for why a logger
+    ///     attached through <see cref="Logger(IFisherLogger)" /> decides this for itself.
+    /// </remarks>
+    public bool LogSqlParameterValues { get; set; }
+
     /// <summary>
     ///     Replace the default Polly resilience pipeline with a custom one.
     /// </summary>

@@ -1310,6 +1310,8 @@ public partial class FisherQueryProvider : IQueryProvider
     ///     returns, so covering materialization would mean a span per terminal — five copies of the
     ///     same three lines, one of which would eventually be forgotten. And the question the span
     ///     exists to answer is where the time went waiting for SQLite, which is entirely inside it.
+    ///     The session logger's success and failure lines (fisher#207) are drawn at the same boundary
+    ///     and converge here for the same reason.
     /// </remarks>
     private async Task<System.Data.Common.DbDataReader> ExecuteReaderAsync(Statement statement,
         CancellationToken token)
@@ -1317,7 +1319,33 @@ public partial class FisherQueryProvider : IQueryProvider
         using var activity = StartQueryActivity(statement);
 
         var command = await CommandFor(statement, token).ConfigureAwait(false);
-        return await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        var logging = _session.IsLogging;
+
+        if (logging)
+        {
+            _session.Logger.OnBeforeExecute(command);
+        }
+
+        try
+        {
+            var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+
+            if (logging)
+            {
+                _session.Logger.LogSuccess(command);
+            }
+
+            return reader;
+        }
+        catch (Exception e)
+        {
+            if (logging)
+            {
+                _session.Logger.LogFailure(command, e);
+            }
+
+            throw;
+        }
     }
 
     /// <inheritdoc cref="ExecuteReaderAsync" />
@@ -1326,7 +1354,33 @@ public partial class FisherQueryProvider : IQueryProvider
         using var activity = StartQueryActivity(statement);
 
         var command = await CommandFor(statement, token).ConfigureAwait(false);
-        return await command.ExecuteScalarAsync(token).ConfigureAwait(false);
+        var logging = _session.IsLogging;
+
+        if (logging)
+        {
+            _session.Logger.OnBeforeExecute(command);
+        }
+
+        try
+        {
+            var result = await command.ExecuteScalarAsync(token).ConfigureAwait(false);
+
+            if (logging)
+            {
+                _session.Logger.LogSuccess(command);
+            }
+
+            return result;
+        }
+        catch (Exception e)
+        {
+            if (logging)
+            {
+                _session.Logger.LogFailure(command, e);
+            }
+
+            throw;
+        }
     }
 
     /// <summary>
