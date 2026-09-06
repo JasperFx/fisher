@@ -190,81 +190,74 @@ BenchmarkDotNet ShortRun, in-process toolchain.
 | FilteredPage  |         31.65 KB |        31.35 KB | -0.30  |
 | FilteredCount |         13.34 KB |        13.23 KB | -0.11  |
 | FirstByMember |         16.17 KB |        15.84 KB | -0.33  |
-## Prepared-statement reuse in the write batch — fisher#171 (2026-09-05, `perf/write-batch`)
+## Prepared-statement reuse in the write batch — fisher#171 (2026-09-06, `perf/write-batch`)
 
 `FisherSession.ExecuteBatchAsync` prepared and disposed one `SqliteCommand` per queued operation
-inside the exclusive `BEGIN IMMEDIATE` transaction. It now keeps the last prepared command and
-reuses it while consecutive operations compile to identical SQL, so a run of N same-shape writes is
-one `sqlite3_prepare_v2` rather than N. Each operation still executes on its own against its own
-reader — nothing about result-set handling moved.
+inside the exclusive `BEGIN IMMEDIATE` transaction. It now keeps the last prepared command and reuses
+it while consecutive operations compile to identical SQL, so a run of N same-shape writes costs one
+`sqlite3_prepare_v2` rather than N. Each operation still executes on its own against its own reader —
+nothing about result-set handling moved. `EventTagWriter` and `NaturalKeyWriter`, which run after the
+batch and still inside the lock, share the same coalescing.
 
 ```
-Fisher.Benchmarks — 2026-09-05 19:41 -05:00
+Fisher.Benchmarks — 2026-09-06 (Apple Silicon)
   OS:        macOS 26.4.1 (Arm64)
   .NET:      .NET 10.0.1
   CPUs:      18
   Config:    Release
 ```
 
-**Measured paired and alternating**, baseline worktree at `origin/main` (7a6e552) against this
-branch, one run each per pair, back to back — the run-to-run noise on this machine is wider than the
-effect at 100 docs, so a before-block and an after-block recorded minutes apart would not have been
-readable. Medians of six pairs (`doc-save --rounds 11`) and five pairs (`concurrent-writers`):
+**Measured paired and alternating**, a detached baseline worktree at `origin/main` (e2f7ede) against
+this branch, one run each per pair, back to back. The run-to-run noise on this machine is wider than
+the effect, so a before-block and an after-block recorded minutes apart would not have been readable;
+what is quoted is the median of the pairs and how many pairs ran the same way.
 
 ```
-== doc-save, median commit ==
+== doc-save, median commit (--rounds 11, 6 pairs) ==
                           before      after
-  100 docs/commit          1.65 ms    1.35 ms     ~1.2x   (5 of 6 pairs favour after)
-  1000 docs/commit         15.0 ms    10.2 ms     ~1.5x   (6 of 6 pairs favour after)
+  100 docs/commit          1.2 ms     0.8 ms     ~1.5x    6 of 6 pairs favour after
+  1000 docs/commit        13.35 ms    8.75 ms    ~1.5x    6 of 6 pairs favour after
 
-== concurrent-writers (5 docs/commit), total wall clock ==
+== concurrent-writers, total wall clock (5 docs/commit, 5 pairs) ==
                           before      after
-  8 writers x 50 commits  119.8 ms    90.6 ms     ~1.3x   (5 of 5 pairs favour after)
-  1 writer x 400 commits   55.2 ms    51.9 ms
-  contention ratio           2.17x      1.75x
+  8 writers x 50 commits  144.9 ms   112.4 ms    ~1.3x    4 of 5 pairs favour after
+  1 writer x 400 commits   57.7 ms    49.9 ms
+  contention ratio           2.51x      2.25x
   fisher.retry events            0          0
 ```
 
-Per-pair, for the two that carry the signal:
+Per-pair, so the spread is visible rather than hidden behind a median:
 
 ```
-doc-save 1000    before  36.9  15.7  15.0  14.6  15.0  14.4
-                  after  10.0  10.9  10.4  12.8   9.9   9.6
+doc-save 100      before   1.1   1.1   1.3   1.4   1.5   1.1
+                   after   0.8   0.8   1.0   0.8   0.7   1.1
 
-concurrent 8w    before 158.6 106.6 119.8 124.9 119.7
-                  after 123.1  75.8  75.5 107.1  90.6
+doc-save 1000     before  14.1  12.7  12.0  13.8  13.1  13.6
+                   after   8.7   8.6   8.4   8.8   9.2   9.3
+
+concurrent 8w     before 150.3 124.0  98.9 175.8 144.9
+                   after  94.0 150.0  85.8 124.0 112.4
 ```
 
 Notes:
 
-- **Allocations are the number, and the means are not quoted.** The allocation column is exactly
-  reproducible run to run (13.34 KB and 16.17 KB came back identical across three baseline runs);
-  the ShortRun means moved 70–101 µs for `FilteredPage` across runs of *identical* code, so no
-  timing claim is made from them. `--job medium` reports NA on this harness — the default toolchain
-  cannot build the benchmark out of process — so the in-process ShortRun is what there is.
-- **It is a ~1% change, and that is the honest size of the config-only half.** What was removed is
-  a `string.Join` over a cached array and a `MemberFactory` construction per query. The per-query
-  allocation that remains is the expression visit, one `IQueryableMember` per referenced member with
-  its interpolated locator, the `Statement`, and the SQL render — which is the marten#5013-style
-  filter-shape plan cache, deliberately left to a separate node.
-- Nothing else was re-run: this change touches the read path's construction only.
-- **The contention ratio is the number this change was aimed at**, not the single-writer time. The
-  baseline note for this harness records that contention here shows up as waiting inside
-  `BEGIN IMMEDIATE` under the connection's busy timeout with **zero** `fisher.retry` events — still
-  zero on both sides — so the only lever is how long the lock is held. 2.17x → 1.75x is that lever
-  moving.
-- **100 docs is at the noise floor** and should not be quoted as a headline. One commit of 100 is
-  ~1.5 ms total, where connection setup and the transaction dominate the ~100 prepares removed.
-- **The gain scales with the length of a coalesced run**, which is why 1000 docs moves furthest and
-  `concurrent-writers` (5 docs per commit) moves least of the three.
-- **Not moved, and not expected to be:** `event-append` (one operation per stream, so the runs are
-  length 1 in the many-streams shape), `daemon-rebuild`, `cold-start`. Re-run and inside noise.
-- **The first baseline pair at each size is an outlier in both scenarios** (36.9 ms, 158.6 ms) — the
-  first process of a sequence pays JIT and page cache. Left in rather than trimmed, and excluded
-  from the medians quoted above.
-- **Concatenating the batch into one multi-statement command was measured first and rejected**: it is
-  *slower than the code it replaces*, 82–192 ms against 4–6 ms for the same 1000 upserts, because
-  `SqliteParameterCollection` rebinds against the whole collection per prepared statement. Every
-  chunk size measured is worse than a command per operation. See `FisherSession.ExecuteBatchAsync`'s
-  remarks and the CLAUDE.md section for the full numbers and for why the result-set walk it needs
-  could not be made safe on this provider anyway.
+- **`doc-save` is the clean result and `concurrent-writers` is the noisy one.** At 1000 docs every
+  pair separates by 3-5 ms against a spread of ~2 ms, which is a real effect. The contended scenario
+  overlaps between the two sides on one pair of five and its 1-writer contrast threw a 129 ms outlier
+  against a 36-50 ms band, so **1.3x there should be read as "directionally better, same order of
+  magnitude"** rather than quoted as a figure.
+- **The contention ratio is what this change was aimed at**, not single-writer latency. This harness's
+  own baseline note records that contention here is waiting inside `BEGIN IMMEDIATE` under the
+  connection's busy timeout with **zero** `fisher.retry` events — still zero on both sides, so the
+  only lever is how long the lock is held.
+- **The gain scales with the length of a coalesced run**, which is why `concurrent-writers` moves
+  least: 5 documents per commit is a run of 5, against 1000 in `doc-save`.
+- **Not moved, and not expected to be:** `event-append` (the many-streams shape is one operation per
+  stream, so its runs are length 1), `daemon-rebuild`, `cold-start`. Left out rather than padded in.
+- **Concatenating the batch into one multi-statement command was measured first and rejected.** It is
+  *slower than the code it replaces* — 82-192 ms against 4-6 ms for the same 1000 upserts — because
+  `SqliteParameterCollection` rebinds against the whole collection per prepared statement, so N
+  statements sharing 3N parameters is O(N²). Chunking traces the curve (10 per command 10 ms, 50 per
+  command 22 ms, 250 per command 59 ms) and **every chunk size measured is worse than a command per
+  operation**, so there is no sweet spot to tune to. See `FisherSession.ExecuteBatchAsync`'s remarks
+  for that and for why the `NextResult` walk it needs could not be made safe on this provider anyway.
