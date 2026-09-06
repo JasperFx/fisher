@@ -53,6 +53,16 @@ internal sealed class SetStreamArchivedOperation : Weasel.Storage.IStorageOperat
 /// <summary>
 ///     Hard-deletes a stream and its events.
 /// </summary>
+/// <remarks>
+///     <b>Tag rows go first, and that is not tidiness.</b> Every <c>fi_event_tag_*</c> table has a real
+///     foreign key to <c>fi_events(seq_id)</c> and Weasel's default profile turns enforcement on, so
+///     deleting the events first fails the whole unit of work with
+///     <c>FOREIGN KEY constraint failed</c> — meaning a stream with a single tagged event could not be
+///     tombstoned at all. This is the third operation in this family to learn the ordering, after
+///     <c>DeleteAllEventDataAsync</c> (fisher#6) and
+///     <see cref="Protected.DeleteEventsOperation" />; unlike those two it is reached through a public
+///     API, so it is the one where the lesson was most visible.
+/// </remarks>
 internal sealed class TombstoneStreamOperation : Weasel.Storage.IStorageOperation
 {
     private readonly EventGraph _events;
@@ -72,6 +82,18 @@ internal sealed class TombstoneStreamOperation : Weasel.Storage.IStorageOperatio
 
     public void ConfigureCommand(ICommandBuilder builder, IStorageSession session)
     {
+        // The sub-select re-reads the same tenant-and-stream predicate the event delete below uses, so
+        // a tag row can only be reached through an event this operation is already removing.
+        foreach (var registration in _events.TagTypes)
+        {
+            builder.Append($"""
+                            delete from {_events.TagTableName(registration)}
+                            where seq_id in (
+                                select seq_id from {_events.EventsTableName}
+                                where stream_id = @id and tenant_id = @tenant_id);
+                            """);
+        }
+
         builder.Append($"""
                         delete from {_events.EventsTableName}
                         where stream_id = @id and tenant_id = @tenant_id;
