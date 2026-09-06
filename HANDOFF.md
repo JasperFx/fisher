@@ -1341,6 +1341,16 @@ run generated locators against genuinely stored documents:
 
 Each of these is a decision with a reason, not an oversight:
 
+> ⚠️ **This section is not the whole gap list, and the README no longer claims it is.** Everything
+> below is a *decision*; there is a separate set of Marten features that are simply **absent** —
+> `Include()`, full-text search, a session logging seam, `MatchesSql`, `Stats(out QueryStatistics)`,
+> `ToAsyncEnumerable()`, and child-collection LINQ only partly. They were missing from this section for
+> a structural reason worth knowing: **Fisher's parity baseline was drawn against Polecat**
+> (`polecat-gaps.md`), so a feature Marten has and Polecat does not never entered the tracking at all.
+> The Marten-facing list lives in `docs/migration-guide.md` under "Marten features Fisher does not
+> have" and is the one to keep current. Compiled queries are the one member of that set that *has* been
+> decided, on a measurement — [fisher#195](https://github.com/JasperFx/fisher/issues/195).
+
 - **Exclusive appends are the optimistic ones.** `AppendExclusive`, `FetchForExclusiveWriting` and
   `WriteExclusivelyToAggregate` do not lock. SQLite has no row lock; the faithful equivalent would
   hold `BEGIN IMMEDIATE` from fetch to commit, blocking every other writer for as long as a caller

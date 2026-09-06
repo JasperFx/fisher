@@ -44,7 +44,62 @@ opts.DatabaseSchemaName = "reporting";   // reporting_fi_doc_order, not reportin
 SQLite has no schemas. Nothing renders as qualified SQL, and the prefix is what isolates two logical
 stores in one file.
 
+## Marten features Fisher does not have
+
+These are absent rather than different, so a ported file naming one will not compile. They are listed
+here because **Fisher's parity work was measured against Polecat, not Marten** — a feature Marten has
+and Polecat does not was invisible to that tracking, which is exactly the set below and exactly the set
+a migrating Marten user hits first.
+
+| Marten | Status on Fisher | Instead |
+| :--- | :--- | :--- |
+| `Include()` / `Include<T>()` | **Absent.** No related-document loading of any kind. | A [join](/documents/querying/linq/joins) — `Join` and `GroupJoin(…).SelectMany(…)` across document tables, chained. Cheaper here than on either sibling, since a join between two document tables needs no `OPENJSON` and no lateral join. Or two queries; there is no round trip to save. |
+| Compiled queries — `ICompiledQuery<T>`, `ICompiledListQuery<T>`, `ICompiledQuery<TDoc,TOut>` | **Absent, and decided** — see [fisher#195](https://github.com/JasperFx/fisher/issues/195) for the measurement. | Nothing. Building the SQL is 4–11% of an ordinary Fisher query and 22.5% of the cheapest one it can run; the work is real but the absolute saving is ~2 µs. A filter-shape query plan cache would collect nearly all of it with no public API, which is the move that comes first. |
+| Full-text search — `Search`, `PlainTextSearch`, `PhraseSearch`, `WebStyleSearch`, `NgramSearch`, and full-text indexes | **Absent.** Nothing is built over SQLite's FTS5. | `Contains` / `StartsWith` / `EndsWith`, which are ordinal and case-sensitive (see below) and can be served by a [declared index](/documents/indexing/indexes). Not a substitute for ranked search. |
+| A session logging seam — `IMartenLogger` / `IMartenSessionLogger`, `StoreOptions.Logger(…)`, `session.Logger` | **Absent.** There is no per-command or per-session logging hook. | An `ActivitySource` named `Fisher` ([tracing](/diagnostics)), with spans for commits, queries and loads and a retry event that says a call waited on the write lock; and `IDocumentSessionListener` for bracketing the unit of work. Neither one gives you the SQL. |
+| `MatchesSql(…)` | **Absent.** No raw SQL composes into a `Where`. | `session.AdvancedSql.QueryAsync<T>(…)` for a typed raw read and `QueueSqlCommand` for a raw write that joins the unit of work — but as whole statements, not as a LINQ fragment. |
+| `Stats(out QueryStatistics)` | **Absent.** No `QueryStatistics`, no `TotalResults` out-param on an arbitrary query. | `ToPagedListAsync`, whose `IPagedList<T>` carries the total from a second statement, and `CountIgnoringPagingAsync` for the total alone. |
+| `ToAsyncEnumerable()` on a query | **Absent.** | Materialize with `ToListAsync`, or `IAdvancedSql.StreamAsync<T>` for raw SQL. Streaming is scarce here on purpose: a retried `SQLITE_BUSY` re-executes the whole delegate, so a live reader yielded to the caller would resume against a disposed connection. |
+| Child-collection LINQ | **Partly landed** ([fisher#166](https://github.com/JasperFx/fisher/issues/166)). | See the [operators page](/documents/querying/linq/operators) — the shipped and missing halves are below. |
+| `IQuerySession.CreateBatchQuery()` | **Present, on `session.Events`** rather than on the session. | `session.Events.CreateBatchQuery()`. `Fisher.Batching.IBatchedQuery` is wider than its home suggests — `Load`, `LoadMany`, `CheckExists`, `Query`, `QueryByPlan` and the DCB reads — and exists for API parity, not speed: SQLite is embedded, so there are no round trips to collapse. |
+
+### Child collections: what ships and what does not
+
+Querying *into* a document's own collection members works over correlated `json_each` sub-queries:
+
+- `Contains(value)` over **scalar** element collections — strings, numbers, Guids, enums, bools.
+- `Any()`, and `Any(c => …)` with a predicate over a complex element's own members.
+- `All(c => …)`, vacuously true over an absent, empty or JSON-null collection.
+- `Count()` compared to a value in either operand order, the `.Count` property, an array's `.Length`,
+  and `Count(c => …)`.
+- Nesting — `x.Stops.Any(s => s.Cargo.Contains("fuel"))` — one alias deeper per level.
+
+Still missing against Marten, and refused by name rather than answered wrongly:
+
+- **Dictionary members.** `IDictionary<,>` and `IReadOnlyDictionary<,>` are excluded outright, so
+  querying a dictionary member is not expressible at all.
+- **`SelectMany` over a child collection**, and therefore anything that flattens elements into the
+  result — including ordering or projecting by a child element's member.
+- **`Select` projecting a child collection.**
+- A predicate inside `Any` / `All` / `Count` follows **SQL null semantics**, not C#'s: a predicate that
+  evaluates to NULL is not satisfied.
+
+::: tip
+The one to check in ported code is the last bullet, because it compiles either way. The rest are
+`BadLinqExpressionException` at the call, naming the operator — Fisher's LINQ surface refuses rather
+than falling back to client-side evaluation, which is the invariant, not the size of the surface.
+:::
+
+### A note on string ordering
+
+Marten's string-named ordering — `OrderBy(string property, StringComparer)` — exists **only on its
+batched queryable**, not on `IQueryable`, so it is a narrower difference than it looks. Fisher's
+batched query takes a lambda instead (`Query<T>(session => session.Query<T>().OrderBy(x => x.Name))`),
+which expresses the same thing with the member checked at compile time.
+
 ## What is not here, and will not be
+
+Unlike the list above, these are settled decisions rather than unbuilt features.
 
 | | Why |
 | :--- | :--- |

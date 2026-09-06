@@ -73,7 +73,14 @@ every change. For a publishable number, scale up:
    touching T document types, which pays the first-use table-ensure migration once per type (the
    O(types × objects) migration finding). The second, identical commit is the warm contrast, so
    the report can isolate "table-ensure overhead" and "overhead per type".
-6. **`QueryBenchmarks`** (BDN only) — one LINQ query end to end over a deliberately tiny table, so
+6. **`QueryConstructionBenchmarks`** (BDN only) — the same query shapes split into **construct**
+   (`session.ToSql(...)`: walk the expression tree, resolve members, build the `Statement`, render the
+   SQL) and **full** (construct, execute, materialize), on one warm session so the pair is comparable.
+   This is the harness for the compiled-query question: a compiled query removes the construct half
+   and nothing else, so the construct/full ratio *is* the answer. `ByIdConstruct`/`ByIdFull` is the
+   ceiling — an index seek returning one row, the cheapest execution there is, so the largest share
+   construction can hold. See `Results.md` for the numbers and fisher#195 for what they decided.
+7. **`QueryBenchmarks`** (BDN only) — one LINQ query end to end over a deliberately tiny table, so
    parsing the chain and rendering the SQL rather than materializing rows is what the number is
    about. The harness for the query-construction work: allocations are the signal, since the SQLite
    round trip is in-process and the same before and after. The `FilteredCount` and `FirstByMember`
