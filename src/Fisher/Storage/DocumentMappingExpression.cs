@@ -192,6 +192,48 @@ public class DocumentMappingExpression<T> where T : notnull
     }
 
     /// <summary>
+    ///     Declare this document type's full-text index, over SQLite's FTS5 (fisher#215).
+    /// </summary>
+    /// <param name="members">
+    ///     The members to index. Naming none indexes the whole stored document, which is what Marten's
+    ///     member-less <c>FullTextIndex()</c> does too — and note that it makes the JSON's <em>key
+    ///     names</em> matchable terms as well as its values.
+    /// </param>
+    /// <remarks>
+    ///     <para>
+    ///         The index is an external-content FTS5 virtual table kept in step by triggers, and it
+    ///         goes through the ordinary schema migration — so <c>AutoCreate.None</c>, <c>db-apply</c>,
+    ///         <c>db-assert</c> and <c>db-patch</c> all mean what they mean everywhere else. Declaring
+    ///         it on a store that already holds documents populates it as part of creating it; see
+    ///         <see cref="FullText.Fts5Table" />.
+    ///     </para>
+    ///     <para>
+    ///         <b>One per document type.</b> A search operator names no index, so a second would have
+    ///         nothing to tell it apart — put every searchable member in the one declaration.
+    ///     </para>
+    /// </remarks>
+    public DocumentMappingExpression<T> FullTextIndex(params Expression<Func<T, object?>>[] members)
+        => FullTextIndex(FullText.FullTextTokenizer.Porter, members);
+
+    /// <summary>
+    ///     Declare the full-text index with an explicit tokenizer.
+    /// </summary>
+    /// <param name="tokenizer">
+    ///     How the index breaks text into terms. This decides which search operators can match against
+    ///     it at all — <c>NgramSearch</c> requires <see cref="FullText.FullTextTokenizer.Trigram" />
+    ///     and the word-oriented operators refuse one, each by name rather than by returning nothing.
+    /// </param>
+    /// <param name="members">The members to index, or none for the whole stored document.</param>
+    public DocumentMappingExpression<T> FullTextIndex(FullText.FullTextTokenizer tokenizer,
+        params Expression<Func<T, object?>>[] members)
+    {
+        ArgumentNullException.ThrowIfNull(members);
+
+        Mapping.AddFullTextIndex(Array.ConvertAll(members, ChainOf), tokenizer);
+        return this;
+    }
+
+    /// <summary>
     ///     Index a member and require its values to be distinct.
     /// </summary>
     /// <remarks>

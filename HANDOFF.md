@@ -1501,7 +1501,7 @@ Each of these is a decision with a reason, not an oversight:
 
 > ⚠️ **This section is not the whole gap list, and the README no longer claims it is.** Everything
 > below is a *decision*; there is a separate set of Marten features that are simply **absent** —
-> full-text search, a session logging seam, `MatchesSql`, `Stats(out QueryStatistics)`,
+> a session logging seam, `MatchesSql`, `Stats(out QueryStatistics)`,
 > `ToAsyncEnumerable()`, and child-collection LINQ only partly. They were missing from this section for
 > a structural reason worth knowing: **Fisher's parity baseline was drawn against Polecat**
 > (`polecat-gaps.md`), so a feature Marten has and Polecat does not never entered the tracking at all.

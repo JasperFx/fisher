@@ -821,4 +821,78 @@ public class AdvancedOperations
 
         return scenario.ExecuteAsync(token);
     }
+
+    // ---- full-text index maintenance (fisher#215) ----
+
+    /// <summary>
+    ///     Rebuild a document type's full-text index from the documents currently stored.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Not needed in the ordinary course of things, and that is the point of the design.</b>
+    ///         The index is kept in step by database triggers, so it follows every writer on the file
+    ///         rather than only the ones going through Fisher — which is the whole reason the trigger
+    ///         shape was chosen over maintaining the index on the write path.
+    ///     </para>
+    ///     <para>
+    ///         There are two ways to get out of step anyway, and this is the answer to both. A writer
+    ///         that ran with the triggers absent — a bulk load into a copy of the file, a restore, a
+    ///         window between creating the table and creating the triggers. And a <em>table rebuild</em>:
+    ///         SQLite cannot alter most of a table, so Weasel recreates it and copies the rows, which
+    ///         reassigns rowids — and the index is keyed on rowid. Weasel re-emits the triggers it
+    ///         dropped, so writes from then on are fine; the rows copied across are not.
+    ///     </para>
+    ///     <para>
+    ///         Cheap enough to reach for on suspicion: it is FTS5's own <c>rebuild</c> over the
+    ///         content view, which is one statement.
+    ///     </para>
+    /// </remarks>
+    public Task RebuildFullTextIndexAsync<T>(CancellationToken token = default) where T : notnull
+        => ExecuteFullTextCommandAsync<T>("rebuild", token);
+
+    /// <summary>
+    ///     Ask FTS5 whether a document type's full-text index agrees with the documents stored.
+    /// </summary>
+    /// <remarks>
+    ///     Runs the index's own <c>integrity-check</c>, which compares it against its content view and
+    ///     throws if the two disagree. Worth having beside
+    ///     <see cref="RebuildFullTextIndexAsync{T}" /> rather than only the repair: a stale full-text
+    ///     index does not error, it returns fewer rows than it should, so without this there is no way
+    ///     to ask the question at all.
+    /// </remarks>
+    public Task CheckFullTextIndexAsync<T>(CancellationToken token = default) where T : notnull
+        => ExecuteFullTextCommandAsync<T>("integrity-check", token);
+
+    private async Task ExecuteFullTextCommandAsync<T>(string command, CancellationToken token)
+        where T : notnull
+    {
+        var mapping = _store.Options.Schema.MappingFor(typeof(T));
+
+        if (mapping.FullTextIndex is null)
+        {
+            throw new InvalidOperationException(
+                $"'{typeof(T).Name}' declares no full-text index. Declare one with "
+                + $"StoreOptions.Schema.For<{typeof(T).Name}>().FullTextIndex(...) or the "
+                + "[FullTextIndex] attribute.");
+        }
+
+        var table = Weasel.Sqlite.SchemaUtils.QuoteName(
+            Storage.FullText.FullTextSchema.TableNameFor(mapping).Name);
+
+        await _store.Options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await _store.Database.OpenConnectionAsync(ct)
+                .ConfigureAwait(false);
+
+            var builder = new Weasel.Sqlite.CommandBuilder();
+            builder.Append($"insert into {table}({table}) values (");
+            builder.AppendParameter(command);
+            builder.Append(')');
+
+            await using var sql = builder.Compile();
+            sql.Connection = connection;
+
+            await sql.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }, token).ConfigureAwait(false);
+    }
 }
