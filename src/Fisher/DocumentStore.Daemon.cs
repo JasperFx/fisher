@@ -144,9 +144,26 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     ///     Open one transaction's worth of projection work.
     /// </summary>
     /// <remarks>
-    ///     The range's progress is recorded into the batch immediately, so it commits in the same
-    ///     transaction as whatever the projection goes on to write. See
-    ///     <see cref="FisherProjectionBatch" /> for why splitting those is not an option.
+    ///     <para>
+    ///         The range's progress is recorded into the batch immediately, so it commits in the same
+    ///         transaction as whatever the projection goes on to write. See
+    ///         <see cref="FisherProjectionBatch" /> for why splitting those is not an option.
+    ///     </para>
+    ///     <para>
+    ///         <b>This is also the natural key lookup's replay path</b> (fisher#206), and it is here
+    ///         rather than inside the batch because here is where the range's events are. The lookup is
+    ///         maintained by an inline projection on the append side; a replay appends no streams, so
+    ///         without this hook a natural key could never be backfilled onto a stream that already
+    ///         existed and a rebuild could never repopulate the table. Marten's equivalent hangs off the
+    ///         same call for the same reason.
+    ///     </para>
+    ///     <para>
+    ///         <b>Every page of every shard, not only a rebuild.</b> A rebuild is what an operator
+    ///         reaches for to backfill, but a fresh async shard catching up from zero does the same job
+    ///         and there is no reason to make the two behave differently. The writes go onto the batch's
+    ///         own session, so they commit with the shard's progression row rather than in a transaction
+    ///         of their own.
+    ///     </para>
     /// </remarks>
     async ValueTask<IProjectionBatch<IDocumentSession, IQuerySession>>
         IEventStore<IDocumentSession, IQuerySession>.StartProjectionBatchAsync(EventRange range,
@@ -155,6 +172,19 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     {
         var batch = new FisherProjectionBatch(this, EventGraph, DatabaseFrom(database));
         await batch.RecordProgress(range).ConfigureAwait(false);
+
+        var naturalKeys = Options.Projections.NaturalKeyProjection;
+
+        if (naturalKeys.HasAny && range.Events is { Count: > 0 })
+        {
+            // Grouped by tenant, because a session is opened per tenant and an event's own tenant is
+            // what its lookup row has to be written under — the same rule the append path follows by
+            // reading stream.TenantId rather than the session's.
+            foreach (var byTenant in range.Events.GroupBy(x => x.TenantId ?? StorageConstants.DefaultTenantId))
+            {
+                naturalKeys.Replay(batch.SessionForTenant(byTenant.Key), byTenant.ToList());
+            }
+        }
 
         return batch;
     }

@@ -17,16 +17,39 @@ seam, the same division as the async daemon.
 ## Storage
 
 One `fi_natural_key_<alias>` table per definition, holding the key and the stream it resolves to. Rows
-are written inside the append's transaction, beside the tag writer.
+are written by an inline projection, inside the append's transaction — a key registered outside it
+would leave either a stream no key resolves to, or a key naming a stream that does not exist.
+
+## Backfilling a key over history that already exists
+
+**Declaring a natural key on an aggregate whose streams already exist is a supported thing to do.**
+The lookup is also maintained by the projection daemon: every page of events a shard reads writes the
+keys it carries, so running the daemon over the history — a rebuild, or a fresh async projection
+catching up from zero — populates the lookup for streams that were appended long before anybody
+declared the key.
+
+```cs
+// After adding [NaturalKey] to an aggregate on a store that already has data:
+using var daemon = await store.BuildProjectionDaemonAsync();
+await daemon.RebuildProjectionAsync<OrderSummary>(CancellationToken.None);
+
+// Streams that existed before the key was declared now resolve by it.
+var stream = await session.Events.FetchForWritingByNaturalKey<Order, string>("ORD-2024-0001");
+```
 
 ::: tip
-**The rows are written from the session, not from an inline projection.** A natural key row is an
-*index over streams*, not a projection of them. Being a projection is exactly what forces Polecat's
-rebuild-time entry point; nothing here is reachable from a rebuild, so there is nothing to repopulate.
+The same mechanism is what repopulates the lookup if it is ever emptied, and it is why the two paths
+are two different statements. The **append** path *claims* a key and refuses one already mapped to a
+different live stream; the **replay** path is last-writer-wins and refuses nothing. Re-adjudicating on
+a replay would turn a pre-existing data condition into a shard that can never advance again, with
+nobody present to correct it.
 :::
 
-A key registered outside the transaction would leave either a stream no key resolves to, or a key
-naming a stream that does not exist.
+::: warning
+An **archived** stream's events are not read by the daemon, so a rebuild does not put its key back —
+and it would not matter if it did. The lookup carries no `is_archived` column; whether a key resolves
+is read off the join to `fi_streams`, so the presence of a row says nothing on its own.
+:::
 
 ## Archived streams
 
@@ -70,6 +93,12 @@ row" becomes `DuplicateNaturalKeyException`.
 
 Re-asserting the **same** mapping stays idempotent, which it has to be: every event carrying the key
 rewrites the row.
+
+**The refusal is the statement, not a read before it.** A probing `SELECT` to see whether the key is
+free would race — two sessions could both find it free, and the loser's write would repoint the row
+exactly as an unguarded upsert does. The guard is a `where` on the conflict clause instead, so a
+conflicting claimant matches no row and the `returning` clause hands back nothing, and the row lock
+the upsert already takes is what serialises concurrent claimants.
 
 ## Renaming retires the previous key
 
