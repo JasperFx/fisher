@@ -58,6 +58,38 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     ///     error anywhere. Exactly the shape of fisher#12, one layer up.
     /// </remarks>
     private readonly System.Threading.Lock _operationsLock;
+
+    /// <summary>
+    ///     Guards the creation of every lazily-built field on this session.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>The second half of fisher#13.</b> That bug was the async daemon queueing onto one
+    ///         session from several threads, and <see cref="_operationsLock" /> answered it for the
+    ///         operation queue. Every other field here is created by a <c>??=</c>, which is a read, a
+    ///         branch and a write — so two of JasperFx's concurrent projection slices arriving
+    ///         together each construct one and <em>one of them is silently discarded</em>, along with
+    ///         everything recorded on it.
+    ///     </para>
+    ///     <para>
+    ///         <b>That is reachable on the daemon's own untracked sessions, which is why it is not
+    ///         covered by the identity map's "a tracking session is single-threaded" argument below.</b>
+    ///         <see cref="IStorageSession.Versions" /> is resolved by the numeric and optimistic
+    ///         storages while <em>constructing</em> each upsert — on the calling thread, before
+    ///         anything is queued — and the query provider is resolved by <c>Query&lt;T&gt;()</c>,
+    ///         which is how a projection slice reads what it is about to fold into. A discarded
+    ///         version tracker means a later guarded write compares against a version the session no
+    ///         longer remembers reading.
+    ///     </para>
+    ///     <para>
+    ///         Held only across construction, never across use: what has to be true is that exactly
+    ///         one instance ever escapes. <c>marten#4657</c>/<c>#4667</c> is the same bug reached from
+    ///         the other side — projection slices handed separate sessions that <em>shared</em> these
+    ///         fields, where Fisher's slices share the session itself.
+    ///     </para>
+    /// </remarks>
+    private readonly System.Threading.Lock _lazyLock = new();
+
     private List<IChangeTracker>? _changeTrackers;
     private readonly Sessions.IConnectionLifetime _lifetime;
 
@@ -181,15 +213,22 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             return this;
         }
 
-        _tenantScopes ??= new Dictionary<string, FisherSession>();
-
-        if (!_tenantScopes.TryGetValue(tenantId, out var scope))
+        // Guarded for the same reason the operation queue is (fisher#13): a projection applying its
+        // slices concurrently onto one session may reach here from several threads, and two
+        // unsynchronised adds to a Dictionary lose an entry or corrupt it outright. Losing one here
+        // means a whole tenant's queued work is never collected by SaveChangesAsync.
+        lock (_lazyLock)
         {
-            scope = new FisherSession(this, tenantId);
-            _tenantScopes[tenantId] = scope;
-        }
+            _tenantScopes ??= new Dictionary<string, FisherSession>();
 
-        return scope;
+            if (!_tenantScopes.TryGetValue(tenantId, out var scope))
+            {
+                scope = new FisherSession(this, tenantId);
+                _tenantScopes[tenantId] = scope;
+            }
+
+            return scope;
+        }
     }
 
     /// <inheritdoc />
@@ -1168,12 +1207,36 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
 
     // ---- IStorageSession ----
 
-    IStorageSerializer IStorageSession.Serializer
-        => _storageSerializer ??= StorageSerializerAdapter.For(FisherSerializer);
+    IStorageSerializer IStorageSession.Serializer => LazilyCreate(ref _storageSerializer,
+        () => StorageSerializerAdapter.For(FisherSerializer));
 
     IStorageDatabase IStorageSession.Database => FisherDatabase;
 
-    IVersionTracker IStorageSession.Versions => _versionTracker ??= new FisherVersionTracker();
+    IVersionTracker IStorageSession.Versions
+        => LazilyCreate(ref _versionTracker, static () => new FisherVersionTracker());
+
+    /// <summary>
+    ///     Build <paramref name="field" /> once, however many threads ask at once — see
+    ///     <see cref="_lazyLock" /> for why <c>??=</c> is not enough here.
+    /// </summary>
+    /// <remarks>
+    ///     Double-checked: the uncontended read is the same read <c>??=</c> made, so the lock is paid
+    ///     for exactly once per field per session. The field is a reference, and the reference is
+    ///     published by the lock's release, so a caller that saw non-null saw a fully constructed
+    ///     instance.
+    /// </remarks>
+    private T LazilyCreate<T>(ref T? field, Func<T> create) where T : class
+    {
+        if (field is not null)
+        {
+            return field;
+        }
+
+        lock (_lazyLock)
+        {
+            return field ??= create();
+        }
+    }
 
     /// <summary>
     ///     One tracker per document this session read under
@@ -1183,7 +1246,8 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     /// </summary>
     IList<IChangeTracker> IStorageSession.ChangeTrackers => ChangeTrackers;
 
-    private List<IChangeTracker> ChangeTrackers => _changeTrackers ??= new List<IChangeTracker>();
+    private List<IChangeTracker> ChangeTrackers
+        => LazilyCreate(ref _changeTrackers, static () => new List<IChangeTracker>());
 
     /// <summary>
     ///     The identity map, one <c>Dictionary&lt;TId, TDoc&gt;</c> per document type.
@@ -1207,7 +1271,14 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     /// </remarks>
     Dictionary<Type, object> IStorageSession.ItemMap => ItemMap;
 
-    private Dictionary<Type, object> ItemMap => _itemMap ??= new Dictionary<Type, object>();
+    /// <remarks>
+    ///     Its <em>creation</em> is guarded even though its contents are not, which is not an
+    ///     inconsistency: the argument above is that a tracking session has one caller, and it costs
+    ///     nothing to keep that argument about the dictionary's contents alone rather than also about
+    ///     whether two callers can end up holding different dictionaries.
+    /// </remarks>
+    private Dictionary<Type, object> ItemMap
+        => LazilyCreate(ref _itemMap, static () => new Dictionary<Type, object>());
 
     ConcurrencyChecks IStorageSession.Concurrency => ConcurrencyChecks.Enabled;
 

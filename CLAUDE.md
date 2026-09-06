@@ -511,6 +511,25 @@ Six things that are decisions rather than mechanics:
   presented as a multi-stream rebuild intermittently missing one slice's document. Note how closely it
   rhymes with fisher#12: same silent outcome, one layer up. `concurrent_operation_queueing` pins both
   the add and the take.
+- **So is every other lazily-built field on the session, and that half was missed for a year.** The
+  queue got a lock out of fisher#13 and the fields beside it kept their `??=`, which is a read, a
+  branch and a write — so two slices arriving together each construct one and **one is silently
+  discarded with everything recorded on it**. Two of them are on the write path a slice actually
+  takes: `IStorageSession.Versions` is resolved by the numeric and optimistic storages while
+  *constructing* an upsert, on the calling thread, and `_queryProvider` is resolved by `Query<T>()`,
+  which is how a slice reads what it is about to fold into. A discarded version tracker means a later
+  guarded write compares against a version the session no longer remembers reading — a spurious
+  `ConcurrencyException` at best, a stale write accepted at worst. One layer down,
+  `FisherVersionTracker`'s two `Dictionary<Type, object>` fields were mutated unguarded by
+  `ForType`/`RevisionsFor`, which is the shape that loses an entry outright.
+  **This is marten#4657/#4667 reached from the other side**: there, concurrent slices were handed
+  separate sessions that *shared* a `VersionTracker`, an `ItemMap` and a `ChangeTrackers` list; here
+  they share the session itself, which is a shorter route to the same place. `FisherSession.LazilyCreate`
+  is the one place a lazily-built field is now created, and `concurrent_session_tracker_state` pins it
+  — four of its five tests fail without the guards.
+  **The tracker's *inner* dictionaries stay unguarded, deliberately**: they are handed to a storage
+  operation, which writes into one during postprocessing, and postprocessing runs inside
+  `ExecuteBatchAsync`, which is strictly sequential because SQLite takes one writer per file.
 - **The batch must stay atomic.** It commits the projection's document writes *and* the progression
   row in one transaction. Splitting them lets a crash between them either replay events already
   applied or skip events never applied, permanently and with nothing to signal it. Sessions are
@@ -1420,13 +1439,18 @@ of change detection.
   inconsistent and is not: a tracker is a queued write that has not been asked for yet. Pending DCB
   boundaries go too — a boundary guards appends that are being dropped, so keeping it would fail a
   later commit on behalf of a unit of work that no longer exists.
-- **The map and the tracker list are unguarded, and fisher#13 is the reason that needs saying.** They
-  are exactly the kind of shared mutable per-session state the operation queue turned out to be. The
-  difference is that a tracking mode is only ever chosen by whoever opens the session, and the one
-  caller that drives a session from several threads — the async daemon — opens `LightweightSession()`
-  everywhere. `the_daemon_opens_untracked_sessions` pins that, so making the daemon's sessions tracked
-  has to be a deliberate act. Guarding here would also only be half a guard: Weasel's selectors hold
-  their own reference to the same dictionary.
+- **The map's and the tracker list's *contents* are unguarded, and fisher#13 is the reason that needs
+  saying.** They are exactly the kind of shared mutable per-session state the operation queue turned
+  out to be. The difference is that a tracking mode is only ever chosen by whoever opens the session,
+  and the one caller that drives a session from several threads — the async daemon — opens
+  `LightweightSession()` everywhere. `the_daemon_opens_untracked_sessions` and
+  `concurrent_session_tracker_state.the_daemons_own_sessions_are_untracked` both pin that, so making
+  the daemon's sessions tracked has to be a deliberate act. Guarding the contents would also only be
+  half a guard: Weasel's selectors hold their own reference to the same dictionary.
+  **Their *creation* is guarded**, along with every other lazily-built field on the session — see the
+  async daemon section. Not an inconsistency: it keeps the argument above about what the dictionary
+  holds, rather than also about whether two callers can end up holding different dictionaries, and it
+  costs a lock taken once per session.
 - **There is no `QueryOnly` tracking value**, where Marten has one. Marten's names a session that
   cannot write; Fisher has none — `QuerySession()`'s narrowing is a convention — so a mode resolving
   the query-only flavor would make `Store` throw on a session the store hands out as writeable.
