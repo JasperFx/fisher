@@ -174,6 +174,99 @@ session.Query<Order>().TenantIsOneOf("acme", "globex")
 Both *replace* the tenant term rather than composing with it, and both are refused against a type
 that is not `MultiTenanted()` — there is no column to have an opinion about.
 
+## Raw SQL inside a `Where`
+
+```cs
+.Where(x => x.MatchesSql("json_extract(data, '$.weight') > ?", 5))
+.Where(x => x.MatchesSql('^', "json_extract(data, '$.tag') = ^", tag))   // SQL with a literal ?
+```
+
+For the predicate the translator cannot express. Unlike [`AdvancedSql`](/documents/querying/raw-sql),
+which replaces the **whole** query, this is one term among the others — so the ordering, the paging,
+the projection and all three implicit filters still apply, and the fragment is bracketed for you so an
+`or` inside it cannot swallow them.
+
+Columns are the physical ones. `session.ToSql(...)` over an ordinary query shows the spellings.
+
+::: danger
+**The SQL is yours and is not inspected.** Fisher parameterizes everything it composes itself; here
+the text is the caller's by contract, so it is the caller's job not to concatenate untrusted input
+into it.
+
+**Pass values as parameters.** They are bound, never interpolated, and go through the same conversions
+[raw SQL](/documents/querying/raw-sql) applies — a Guid to lowercase canonical text, a timestamp to the
+fixed-width UTC form, a decimal to REAL. Interpolating them instead is not only the injection risk: all
+three of those bind to something Fisher never wrote and match **nothing**, silently, because no rows is
+an ordinary answer.
+
+A placeholder/value count mismatch is refused by name rather than becoming an index error in one
+direction and silence in the other.
+:::
+
+## A total alongside a query
+
+```cs
+var page = await session.Query<Order>()
+    .Where(x => x.Open)
+    .Stats(out var stats)
+    .OrderBy(x => x.Placed).Skip(20).Take(10)
+    .ToListAsync();
+
+stats.TotalResults;   // how many matched, ignoring Take/Skip
+```
+
+The total is a second statement rather than `count(*) over ()`, because a window function returns no
+row at all when the page is past the end — which is when a caller most needs the real total.
+
+Honoured by the terminals that return rows. A **scalar** terminal — `CountAsync`, `AnyAsync`, the
+aggregates — refuses it by name, because it already *is* the number and a `TotalResults` left at zero
+would be a wrong answer the caller cannot see.
+
+## Streaming
+
+```cs
+await foreach (var order in session.Query<Order>().Where(x => x.Open).ToAsyncEnumerable())
+{
+    // …
+}
+```
+
+For a result set large enough that holding it is the problem. Everything `ToListAsync` does still
+applies — the implicit filters, the identity map under a tracking session, a hierarchy resolving to its
+real sub-classes — and a `Select` projection streams too. **A join is refused by name**: its rows are
+stitched from both sides by the join plan, and `ToListAsync` is the operator for those.
+
+::: tip
+This is cheaper here than the raw-SQL `IAdvancedSql.StreamAsync`, which has to run **outside** the
+resilience pipeline and says so. The LINQ path never ran inside it, so this operator forfeits nothing
+`ToListAsync` has.
+:::
+
+## Explaining a query
+
+```cs
+var plan = await session.Query<Catch>().Where(x => x.Species == "Pike").ExplainAsync();
+
+plan.UsesIndex;   // did the planner reach the index you declared?
+plan.Steps;       // SQLite's own rows, in order
+plan.Sql;         // the exact statement that was explained
+```
+
+SQLite's `EXPLAIN QUERY PLAN`, over the exact statement the query would run. It answers the question a
+[declared index](/documents/indexing/indexes) otherwise leaves unanswerable: **is it being used?** The
+planner reaches an expression index only when the query's expression matches the index's, so an index
+built from a hand-written `json_extract` is created without error, never used, and reports nothing
+anywhere.
+
+It plans; it does not execute. Nothing is read and nothing is written.
+
+::: tip
+There is no Marten-portable shape here and none is invented. PostgreSQL's `EXPLAIN (FORMAT JSON)`
+returns a costed, nested tree with an optional execution pass; SQLite's returns four columns of prose
+with no costs and no `ANALYZE`. `Steps` is what SQLite said, in the order it said it, and `UsesIndex`
+is an honest reading of that prose rather than a structured field.
+:::
+
 ## Waiting for projections
 
 ```cs
@@ -203,9 +296,8 @@ rather than through a slow query:
 ## Marten operators that are absent
 
 Not refused by name — these simply do not exist, so a ported file naming one will not compile:
-`Include()`, `MatchesSql(…)`, `Stats(out QueryStatistics)`, `ToAsyncEnumerable()`, and the full-text
-operators (`Search`, `PlainTextSearch`, `PhraseSearch`, `WebStyleSearch`, `NgramSearch`). Compiled
-queries (`ICompiledQuery<T>`) are absent too, on a
+`Include()` and the full-text operators (`Search`, `PlainTextSearch`, `PhraseSearch`,
+`WebStyleSearch`, `NgramSearch`). Compiled queries (`ICompiledQuery<T>`) are absent too, on a
 [measurement](https://github.com/JasperFx/fisher/issues/195) rather than by omission.
 
 The [migration guide](/migration-guide#marten-features-fisher-does-not-have) lists each with what to

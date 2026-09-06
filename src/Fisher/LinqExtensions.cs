@@ -77,4 +77,59 @@ public static class LinqExtensions
         => queryable.Provider.CreateQuery<T>(Expression.Call(
             TenantIsOneOfMethod.MakeGenericMethod(typeof(T)), queryable.Expression,
             Expression.Constant(tenantIds)));
+
+    /// <summary>
+    ///     Compose a raw SQL fragment into a <c>Where</c> — <c>Where(x =&gt; x.MatchesSql("…"))</c>
+    ///     (fisher#202).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         For the predicate the translator cannot express. Unlike
+    ///         <see cref="IQuerySession.AdvancedSql" />, which replaces the <em>whole</em> query, this
+    ///         is one term among the others — so the ordering, the paging, the projection and all
+    ///         three implicit filters (tenant, soft delete, hierarchy) still apply.
+    ///     </para>
+    ///     <para>
+    ///         ⚠️ <b>The SQL is yours and is not inspected.</b> Fisher parameterizes everything it
+    ///         composes itself; here the text is the caller's by contract, so it is the caller's job
+    ///         not to concatenate untrusted input into it. <b>Pass values as
+    ///         <paramref name="parameters" /></b> — they are bound, never interpolated, and go through
+    ///         the same conversions <c>IAdvancedSql</c> applies, so a Guid, a
+    ///         <see cref="DateTimeOffset" /> or a <see cref="decimal" /> matches what Fisher actually
+    ///         stored rather than silently matching nothing.
+    ///     </para>
+    ///     <para>
+    ///         <c>?</c> is the placeholder, matching
+    ///         <see cref="IDocumentSession.QueueSqlCommand(string,object?[])" /> and
+    ///         <c>IAdvancedSql</c>. The count of placeholders and of values must agree, or the query is
+    ///         refused by name. Columns are the physical ones — <c>json_extract(data, '$.name')</c>
+    ///         rather than <c>Name</c>; <c>session.ToSql(...)</c> over an ordinary query shows the
+    ///         spellings, and the fragment is bracketed for you so an <c>or</c> inside it cannot
+    ///         swallow the terms beside it.
+    ///     </para>
+    /// </remarks>
+    /// <exception cref="NotSupportedException">
+    ///     Always, when called outside a Fisher LINQ query. It is a marker the translator recognizes,
+    ///     not something with a runtime meaning of its own.
+    /// </exception>
+    public static bool MatchesSql(this object doc, string sql, params object?[] parameters)
+        => throw OnlyInAQuery();
+
+    /// <summary>
+    ///     <inheritdoc cref="MatchesSql(object,string,object?[])" path="/summary" />
+    /// </summary>
+    /// <remarks>
+    ///     The twin taking a placeholder character, for SQL containing a literal <c>?</c>. A bare
+    ///     <c>?</c> that Fisher does not consume is still SQLite's own anonymous parameter marker, so
+    ///     it does not pass through as text — the same trap
+    ///     <see cref="IQuerySession.AdvancedSql" />'s overloads exist for.
+    ///     <inheritdoc cref="MatchesSql(object,string,object?[])" path="/remarks" />
+    /// </remarks>
+    public static bool MatchesSql(this object doc, char placeholder, string sql,
+        params object?[] parameters)
+        => throw OnlyInAQuery();
+
+    private static NotSupportedException OnlyInAQuery()
+        => new("MatchesSql is a marker for Fisher's LINQ translator and has no meaning outside a "
+               + "session.Query<T>() predicate.");
 }

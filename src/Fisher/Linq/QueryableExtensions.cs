@@ -233,6 +233,55 @@ public static class QueryableExtensions
         return new Pagination.PagedList<T>(items, total, pageNumber, pageSize);
     }
 
+    // ---- streaming ----
+
+    /// <summary>
+    ///     The matching documents, yielded one at a time as SQLite produces them (fisher#202).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         For a result set large enough that holding it is the problem. Everything
+    ///         <c>ToListAsync</c> does still applies — the implicit tenant, soft-delete and hierarchy
+    ///         filters, the identity map under a tracking session, and a hierarchy resolving to its
+    ///         real sub-classes.
+    ///     </para>
+    ///     <para>
+    ///         The reader is held open for the life of the enumeration, on the session's own
+    ///         connection, so a partial enumeration must still be disposed — an <c>await foreach</c>
+    ///         does that, and <c>break</c> inside one is fine.
+    ///     </para>
+    ///     <para>
+    ///         <b>A joined query is refused by name.</b> Its rows are stitched from both sides by the
+    ///         join plan; <c>ToListAsync</c> is the operator for those. A <c>Select</c> projection
+    ///         streams.
+    ///     </para>
+    /// </remarks>
+    public static IAsyncEnumerable<T> ToAsyncEnumerable<T>(this IQueryable<T> queryable,
+        CancellationToken token = default) where T : notnull
+        => ProviderFor(queryable).ToAsyncEnumerable<T>(queryable.Expression, token);
+
+    // ---- diagnostics ----
+
+    /// <summary>
+    ///     SQLite's <c>EXPLAIN QUERY PLAN</c> for this query (fisher#202).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Answers the question a declared index otherwise leaves unanswerable: <b>is it being
+    ///         used?</b> SQLite's planner uses an expression index only when the query's expression
+    ///         matches the index's, so an index built from a hand-written <c>json_extract</c> is
+    ///         created without error, never used, and reports nothing anywhere.
+    ///     </para>
+    ///     <para>
+    ///         The plan is taken over the exact statement the query would run, so the implicit filters
+    ///         and the parameters are the real ones. It plans; it does not execute — no rows are read
+    ///         and nothing is written.
+    ///     </para>
+    /// </remarks>
+    public static Task<QueryPlan> ExplainAsync<T>(this IQueryable<T> queryable,
+        CancellationToken token = default) where T : notnull
+        => ProviderFor(queryable).ExplainAsync<T>(queryable.Expression, token);
+
     // ---- keyset paging ----
 
     /// <summary>

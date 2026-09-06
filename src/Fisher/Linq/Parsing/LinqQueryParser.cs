@@ -122,6 +122,9 @@ internal class LinqQueryParser
     /// <summary>Set by <c>QueryForNonStaleData</c>; how long to wait for the daemon before running.</summary>
     public TimeSpan? NonStaleTimeout { get; private set; }
 
+    /// <summary>Set by <c>Stats</c>; where the unpaged total is to be written.</summary>
+    public QueryStatistics? Statistics { get; private set; }
+
     private GroupingTranslator? _grouping;
 
     /// <summary>The key <c>DistinctBy</c> deduplicates on, or null.</summary>
@@ -302,6 +305,11 @@ internal class LinqQueryParser
             case nameof(Metadata.NonStaleDataExtensions.QueryForNonStaleData)
                 when call.Method.DeclaringType == typeof(Metadata.NonStaleDataExtensions):
                 NonStaleTimeout = (TimeSpan)WhereClauseParser.ExtractValue(call.Arguments[1])!;
+                break;
+
+            case nameof(StatisticsExtensions.Stats)
+                when call.Method.DeclaringType == typeof(StatisticsExtensions):
+                Statistics = (QueryStatistics)WhereClauseParser.ExtractValue(call.Arguments[1])!;
                 break;
 
             case "Take":
