@@ -80,6 +80,20 @@ public static class FisherServiceCollectionExtensions
         services.AddSingleton<JasperFx.Events.IEventStore>(
             sp => sp.GetRequiredService<DocumentStore>());
 
+        // fisher#172 — the two halves of the command-line seam, and they are genuinely two: the
+        // "resources" commands and AddResourceSetupOnStartup() go through ISystemPart, while Weasel's
+        // db-apply / db-assert / db-patch / db-dump resolve IDatabaseSource. Registering only one
+        // leaves the other family reporting an application with no databases in it. Marten satisfies
+        // both because its ITenancy IS an IDatabaseSource; Fisher's is adapted — see
+        // FisherDatabaseSource for why widening the public interface was the wrong trade.
+        //
+        // Both take a factory rather than the resolved store, because the IConfigureFisher chain has
+        // to run before the tenancy means anything and that happens on first store resolution.
+        services.AddSingleton<JasperFx.CommandLine.Descriptions.ISystemPart>(sp
+            => new FisherSystemPart(sp.GetRequiredService<IDocumentStore>));
+        services.AddSingleton<Weasel.Core.Migrations.IDatabaseSource>(sp
+            => new Storage.FisherDatabaseSource(sp.GetRequiredService<IDocumentStore>));
+
         // TryAdd so an application that registers its own factory — to scope sessions to a tenant read
         // off the request, say — keeps it whichever side of AddFisher the registration lands.
         services.TryAddSingleton<ISessionFactory>(
@@ -159,6 +173,20 @@ public static class FisherServiceCollectionExtensions
         // secondary store carries its own StoreName.
         services.AddSingleton<JasperFx.Events.IEventStore>(sp
             => (JasperFx.Events.IEventStore)UnwrapForTooling(sp.GetRequiredService<T>()));
+
+        // fisher#172 — an ancillary store contributes its own database(s) to both command-line seams,
+        // under a subject uri of its own. That distinction matters more here than on either sibling:
+        // two Fisher stores are usually two *files*, so collapsing them would hide one entirely from
+        // `resources list` and migrate only one under `db-apply`.
+        //
+        // Neither registration unwraps the marker proxy, and that is correct rather than an oversight:
+        // both reach the store through IDocumentStore members (Tenancy, Options), which a marker
+        // interface inherits and the proxy therefore implements — unlike the tooling interfaces above,
+        // which are implemented explicitly and are not on IDocumentStore at all.
+        services.AddSingleton<JasperFx.CommandLine.Descriptions.ISystemPart>(sp
+            => new FisherSystemPart<T>(sp.GetRequiredService<T>));
+        services.AddSingleton<Weasel.Core.Migrations.IDatabaseSource>(sp
+            => new Storage.FisherDatabaseSource(() => sp.GetRequiredService<T>()));
 
         return new FisherStoreConfigurationExpression<T>(services);
     }
@@ -431,6 +459,15 @@ public sealed class FisherStoreConfigurationExpression<T> where T : class, IDocu
         return this;
     }
 
+    /// <inheritdoc cref="FisherConfigurationExpression.AssertDatabaseMatchesConfigurationOnStartup" />
+    public FisherStoreConfigurationExpression<T> AssertDatabaseMatchesConfigurationOnStartup()
+    {
+        _services.AddSingleton<IHostedService>(sp
+            => new FisherSchemaAssertionActivator(sp.GetRequiredService<T>()));
+
+        return this;
+    }
+
     /// <inheritdoc cref="FisherConfigurationExpression.SeedInitialDataOnStartup" />
     public FisherStoreConfigurationExpression<T> SeedInitialDataOnStartup()
     {
@@ -518,7 +555,58 @@ public sealed class FisherConfigurationExpression
     /// </remarks>
     public FisherConfigurationExpression ApplyAllDatabaseChangesOnStartup()
     {
+        // Symmetric with the guard in AssertDatabaseMatchesConfigurationOnStartup, because which of the
+        // two was called first must not decide whether the contradiction is reported.
+        if (_services.Any(x => x.ImplementationType == typeof(FisherSchemaAssertionActivator)))
+        {
+            throw new InvalidOperationException(
+                "AssertDatabaseMatchesConfigurationOnStartup() and ApplyAllDatabaseChangesOnStartup() are "
+                + "alternatives: applying the configured changes at startup makes the assertion a check on "
+                + "the schema this same startup just wrote, which proves nothing. Keep the one that matches "
+                + "how this deployment gets its schema.");
+        }
+
         _services.AddSingleton<IHostedService, FisherSchemaActivator>();
+        return this;
+    }
+
+    /// <summary>
+    ///     Refuse to start the host unless every database this store spans already matches the
+    ///     configured schema (fisher#172).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The counterpart to <see cref="ApplyAllDatabaseChangesOnStartup" /> for a deployment where
+    ///         the schema is applied out of band — by <c>db-apply</c> in a release step, or by a DBA
+    ///         running <c>Advanced.ToDatabaseScript()</c>. Marten ships the same pair, and the reason to
+    ///         want the assertion is that the failure it catches is otherwise silent: a store reading a
+    ///         table whose shape has drifted does not error, it answers wrongly.
+    ///     </para>
+    ///     <para>
+    ///         <b>The two are alternatives, and asking for both is refused by name.</b> Applying changes
+    ///         makes the assertion vacuous — it would verify the schema this very startup just wrote —
+    ///         so a host registering both is expressing a contradiction rather than being careful, and
+    ///         silently accepting it would leave somebody believing they had a guard they do not have.
+    ///     </para>
+    ///     <para>
+    ///         <b>Deliberately not gated on <see cref="AutoCreate.None" />.</b> That setting says
+    ///         "the schema is not yours to change", which is the natural companion but not a
+    ///         prerequisite — and the on-demand document table path honours it separately (fisher#81).
+    ///         This one only ever reads.
+    ///     </para>
+    /// </remarks>
+    public FisherConfigurationExpression AssertDatabaseMatchesConfigurationOnStartup()
+    {
+        if (_services.Any(x => x.ImplementationType == typeof(FisherSchemaActivator)))
+        {
+            throw new InvalidOperationException(
+                "ApplyAllDatabaseChangesOnStartup() and AssertDatabaseMatchesConfigurationOnStartup() are "
+                + "alternatives: applying the configured changes at startup makes the assertion a check on "
+                + "the schema this same startup just wrote, which proves nothing. Keep the one that matches "
+                + "how this deployment gets its schema.");
+        }
+
+        _services.AddSingleton<IHostedService, FisherSchemaAssertionActivator>();
         return this;
     }
 
@@ -540,10 +628,14 @@ public sealed class FisherConfigurationExpression
     /// </remarks>
     public FisherConfigurationExpression SeedInitialDataOnStartup()
     {
-        if (_services.All(x => x.ImplementationType != typeof(FisherSchemaActivator)))
+        // Either schema activator satisfies this: what a seeder needs is that the tables exist by the
+        // time it runs, and an assertion that passed is exactly that claim (fisher#172).
+        if (_services.All(x => x.ImplementationType != typeof(FisherSchemaActivator)
+                && x.ImplementationType != typeof(FisherSchemaAssertionActivator)))
         {
             throw new InvalidOperationException(
-                "Call ApplyAllDatabaseChangesOnStartup() before SeedInitialDataOnStartup(). Hosted "
+                "Call ApplyAllDatabaseChangesOnStartup() (or AssertDatabaseMatchesConfigurationOnStartup()) "
+                + "before SeedInitialDataOnStartup(). Hosted "
                 + "services start in registration order, and a seeder that runs before the schema is "
                 + "applied writes to tables that do not exist yet. If the schema is applied some other "
                 + "way, run the seeders that way too.");
@@ -613,6 +705,35 @@ internal sealed class FisherSchemaActivator : IHostedService
         => _store.Options.AutoCreateSchemaObjects == AutoCreate.None
             ? Task.CompletedTask
             : _store.ApplyAllConfiguredChangesToDatabaseAsync(cancellationToken);
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+/// <summary>
+///     Asserts once, at host start, that every database the store spans already matches the configured
+///     schema — and stops the host if one does not (fisher#172).
+/// </summary>
+/// <remarks>
+///     <para>
+///         <b><see cref="AutoCreate.None" /> is not consulted, where
+///         <see cref="FisherSchemaActivator" /> honours it.</b> That is not an inconsistency: the setting
+///         says the schema is not Fisher's to change, and this changes nothing — it reads. Declining to
+///         verify because the store was told not to write would turn the strictest configuration into
+///         the one with the fewest guarantees.
+///     </para>
+///     <para>
+///         The exception propagates rather than being logged, which is the point of the opt-in: a host
+///         that starts against a drifted schema does not fail, it answers wrongly.
+///     </para>
+/// </remarks>
+internal sealed class FisherSchemaAssertionActivator : IHostedService
+{
+    private readonly IDocumentStore _store;
+
+    public FisherSchemaAssertionActivator(IDocumentStore store) => _store = store;
+
+    public Task StartAsync(CancellationToken cancellationToken)
+        => _store.AssertDatabaseMatchesConfigurationAsync(cancellationToken);
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

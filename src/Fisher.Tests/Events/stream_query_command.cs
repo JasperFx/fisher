@@ -17,6 +17,7 @@ namespace Fisher.Tests.Events;
 ///     store discovery, aggregate-type resolution, the queryable translation and the JSON rendering
 ///     meet, including <c>versionsSinceCompaction</c> riding the jasperfx#740 watermark end to end.
 /// </remarks>
+[Collection(ConsoleWritingCollection.Name)]
 public class stream_query_command : IAsyncLifetime
 {
     private readonly TemporaryDatabase _database = TemporaryDatabase.Create("cli_stream_query");

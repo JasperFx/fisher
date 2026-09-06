@@ -301,6 +301,34 @@ public partial class DocumentStore : IDocumentStore
         }
     }
 
+    /// <summary>
+    ///     Throw if any database this store spans does not already match the configured schema, without
+    ///     changing anything (fisher#172).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The read half of <see cref="ApplyAllConfiguredChangesToDatabaseAsync" />, and the same
+    ///         question <c>db-assert</c> asks — so a deployment that applies its schema out of band can
+    ///         verify it, and a host can refuse to start against a database it would silently misread.
+    ///     </para>
+    ///     <para>
+    ///         <b>Every database, not just the default</b>, and reported per database for the same
+    ///         reason the migration is: under database-per-tenant, asserting one file and calling the
+    ///         store verified is the answer most likely to be wrong. Unlike the migration this stops at
+    ///         the first mismatch — there is nothing partial to report, and the caller's next act is to
+    ///         look at the one that failed.
+    ///     </para>
+    /// </remarks>
+    public async Task AssertDatabaseMatchesConfigurationAsync(CancellationToken token = default)
+    {
+        await RefreshTenantsAsync(token).ConfigureAwait(false);
+
+        foreach (var database in Tenancy.AllDatabases())
+        {
+            await database.AssertDatabaseMatchesConfigurationAsync(token).ConfigureAwait(false);
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         GC.SuppressFinalize(this);
