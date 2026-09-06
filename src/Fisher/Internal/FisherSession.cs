@@ -358,6 +358,16 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     public EventOperations Events { get; }
 
     /// <summary>
+    ///     Start a batch of reads to be run together.
+    /// </summary>
+    /// <remarks>
+    ///     Built here rather than on <see cref="Events" />, which now forwards to this. The batch needs
+    ///     both halves — the event operations for the DCB reads and the session for the document ones —
+    ///     so the two spellings differ only in which one the caller happened to reach it through.
+    /// </remarks>
+    public Batching.IBatchedQuery CreateBatchQuery() => new Batching.FisherBatchedQuery(Events, this);
+
+    /// <summary>
     ///     jasperfx#669 — the store-agnostic route from a session to its event store.
     /// </summary>
     /// <remarks>
@@ -770,8 +780,19 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
                 // SQLite would not take the write lock until that write, leaving a window where two
                 // sessions both read version N. IMMEDIATE takes the lock up front, which is Fisher's
                 // stand-in for Marten's advisory lock and Polecat's UPDLOCK/HOLDLOCK read.
+                //
+                // fisher#208. Taking the lock up front is also what makes this the one place worth
+                // measuring: every millisecond a contended writer spends waiting is spent HERE, inside
+                // this await, under the connection string's busy timeout — not in a Polly retry, which
+                // is why a retry counter alone reads zero through real contention. Zero when nothing
+                // asked for the histogram, so an unwatched store does not even read the clock.
+                var waitedFrom = Options.OpenTelemetry.StartWriteLockWait();
+
                 await using var transaction = (SqliteTransaction)await connection
                     .BeginTransactionAsync(SessionOptions.IsolationLevel, ct).ConfigureAwait(false);
+
+                Options.OpenTelemetry.RecordWriteLockWait(
+                    waitedFrom, Services.OpenTelemetryOptions.SessionHolder);
 
                 await WriteAsync(connection, transaction, queued, streams, ct).ConfigureAwait(false);
 

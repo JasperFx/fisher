@@ -162,7 +162,7 @@ returns nothing.
 ## Batched DCB reads
 
 ```cs
-var batch = session.Events.CreateBatchQuery();
+var batch = session.CreateBatchQuery();
 
 var exists = batch.EventsExist(queryA);
 var boundary = batch.FetchForWritingByTags<Basket>(queryB);

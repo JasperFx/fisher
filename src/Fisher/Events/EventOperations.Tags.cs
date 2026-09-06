@@ -16,13 +16,16 @@ namespace Fisher.Events;
 public partial class EventOperations
 {
     /// <summary>
-    ///     Start a batch of DCB reads to be run together.
+    ///     Start a batch of reads to be run together.
     /// </summary>
     /// <remarks>
-    ///     See <see cref="Batching.IBatchedQuery" /> for why this exists on an embedded database, where the
-    ///     round-trip argument the siblings make does not apply.
+    ///     <b>The older spelling, kept as a forwarder.</b> The canonical entry point is
+    ///     <see cref="IQuerySession.CreateBatchQuery" />, which is where Marten and Polecat put it —
+    ///     this one is where Fisher's batch was born, back when it was the DCB read surface and
+    ///     nothing else. Both build the same batch, which
+    ///     <c>batched_queries.both_spellings_build_the_same_batch</c> pins so the two cannot drift.
     /// </remarks>
-    public Batching.IBatchedQuery CreateBatchQuery() => new Batching.FisherBatchedQuery(this, _session);
+    public Batching.IBatchedQuery CreateBatchQuery() => _session.CreateBatchQuery();
 
     /// <summary>
     ///     Fold every event matching the tag query into an aggregate, or null when none match.

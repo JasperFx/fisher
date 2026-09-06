@@ -356,12 +356,18 @@ Working, with tests:
   step-through, so a monitoring console sees the document half as well as the event half
 - **Tracing** — an `ActivitySource` named `Fisher`, with spans for commits, queries and loads and a
   retry event that says a call waited on the write lock
+- **Metrics** — a `Meter` named `Fisher`, with opt-in instruments for the write-lock wait, busy
+  retries, events appended and documents written
 - **Session logging** — `IFisherLogger` / `IFisherSessionLogger`, `StoreOptions.Logger(...)` and
   `session.Logger`, with the SQL, the parameters, the commit counts and both failure shapes
 - **Multi-store registration** — `AddFisherStore<T>` and `IConfigureFisher`, so several independently
   configured stores live in one container
 - **Database-per-tenant** — `ITenancy` and a SQLite file per tenant, with per-database migration, the
   async daemon routed per database, and tenants that appear, suspend and resume at runtime
+- **A tenant registry** — `MultiTenantedDatabasesInRegistry(...)`, Marten's master-table tenancy over
+  Weasel's lifted `MasterTableTenancyBase`: the tenant set held in a control table in a SQLite
+  registry database, durable across restarts and shared between processes, with tenants added,
+  suspended, resumed and removed at runtime — and never deleted
 - **Transaction participants** — `ITransactionParticipant`, so an application's own writes commit in
   Fisher's transaction rather than contending with it for the file's one write lock
 - **The store-agnostic document contract** — `JasperFx.Events.Documents`, implemented by Fisher's own
@@ -1310,6 +1316,104 @@ stitch.
   `Select`/`GroupBy`/`Distinct`/`DistinctBy` after the join. `ToListAsync`, the `First`/`Single`/`Last`
   families, the scalar aggregates, `CountAsync`, `AnyAsync`, `ToPagedListAsync` and `ToSql` all work,
   over a chain as well as over one join.
+
+### The four Marten operators — fisher#202
+
+`MatchesSql`, `Stats(out QueryStatistics)`, `ToAsyncEnumerable()` and `ExplainAsync`. Small, and three
+of the four are decisions rather than mechanics.
+
+- ⚠️ **`MatchesSql` is the one fragment whose SQL text comes from the caller.** Every other fragment
+  in `Linq/SqlGeneration` is composed by the parser out of locators it resolved, which is what the
+  fisher#161/#162 audit rests on — `LiteralSqlFragment`'s own doc comment says it is never built from
+  a caller-supplied value. That invariant is moved rather than weakened: the *text* is the caller's by
+  contract, every *value* is bound, and values go through `SqliteParameterValue.ToDatabaseValue` for
+  the reason raw SQL does — a Guid, a timestamp and a decimal each bind to something Fisher never
+  wrote and match **nothing**, silently.
+  - **The fragment is parenthesized, where Marten's is not.** A statement's `Wheres` are composed with
+    `and`, so an unbracketed `a or b` swallows every term beside it — including the implicit tenant,
+    soft-delete and hierarchy filters. That is the one way this operator could become fisher#51 again.
+  - **A placeholder/value count mismatch is refused by name**, which marten#5289's follow-up had to
+    add after the fact: too few is an `IndexOutOfRangeException` from inside the provider, too many is
+    silence with the surplus never reaching the query.
+  - Registered in `MethodCallParserRegistry` rather than through `WhereClauseParser`'s unused
+    `additionalParsers` seam, so it reaches the event-side predicates too. A method that compiles
+    everywhere and refuses itself in half the places is the worse surface, and the trust model is
+    identical wherever it lands.
+- **`Stats` rides on the expression tree.** Marten mutates its queryable and its own source carries a
+  `TODO -- make this be an expression here!` beside the slot; `FisherQueryable<T>` holds no per-query
+  state and `System.Linq`'s operators return fresh instances, so a slot would be dropped by the next
+  `Where`. Captured in `ExecuteReaderAsync` rather than at each of the seven row-returning terminals —
+  the argument the query span and fisher#74's table provisioning both make. **A scalar terminal
+  refuses it by name**: it already *is* the number, and a `TotalResults` left at zero is a wrong
+  answer the caller cannot see. `CountIgnoringPagingAsync` clears the request, or the count that
+  computes the total would refuse itself.
+- **`ToAsyncEnumerable` is cheaper here than the raw-SQL twin.** `IAdvancedSql.StreamAsync` sits
+  outside `StoreOptions.ResiliencePipeline` because a retried `SQLITE_BUSY` re-executes the whole
+  delegate; the LINQ path never ran inside it, so this forfeits nothing `ToListAsync` has. Validation
+  runs *before* the iterator, since an `async` iterator defers its body to the first `MoveNextAsync`
+  and a refusal written inline would surface at the `await foreach` rather than at the call. A join is
+  refused (its rows are stitched by the join plan); a `Select` projection streams.
+- **`ExplainAsync` is taken over the exact statement the query would run**, prefix and all, because
+  SQLite reaches an expression index only when the query's expression matches the index's — a plan
+  over a re-derivation reports the wrong answer with a straight face. `QueryPlan` is deliberately
+  nothing like Marten's: PostgreSQL returns a costed JSON tree with an optional execution pass, SQLite
+  four columns of prose with no costs and no `ANALYZE`, so `Steps` is what SQLite said and `UsesIndex`
+  is an honest reading of that prose rather than a structured field.
+
+### The mapping registry gaps — fisher#218
+
+`MartenRegistry` members `DocumentMappingExpression<T>` lacked. What was implemented, and what was not.
+
+- **`Identity(x => x.Member)`** — and it forced a real change. `DocumentMapping`'s constructor used to
+  *throw* for a type with no usable identity member, which made the rescue unreachable for exactly the
+  types it exists for: the refusal fired before the line that fixes it could run. Identity is now
+  resolved without being demanded, and `DocumentStore`'s constructor asserts it through
+  `DocumentSchema.AssertEveryMappingHasIdentity`. **The property that mattered is unchanged** — a
+  document type Fisher cannot store is still a configuration-time error naming the type, never an
+  `InvalidOperationException` on somebody's first save. Three tests moved from
+  `Should.Throw(() => options.Schema.For<T>())` to `Should.Throw(() => DocumentStore.For(...))`.
+- **`IdStrategy(IIdentification<T, TId>)`** — Marten's takes an `IIdGeneration`, a code-generation
+  contract with no counterpart here; Fisher's strategies are ordinary objects from the shared Weasel
+  identity runtime, so the seam is that interface and a caller implements two members.
+  ⚠️ **A Guid strategy is wrapped in `SqliteGuidIdentification`, never taken raw.** The
+  lowercase-canonical conversion lives in the identity strategy precisely so a wrapper cannot lose it —
+  so a *replaced* strategy is exactly where it could be lost, and losing it writes rows that can never
+  be read back. `SqliteGuidIdentification`'s constructor was widened from the concrete
+  `SequentialGuidIdentification<TDoc>` to the interface for this.
+- **Partial indexes**, as `Index(member, predicate: x => …)`. The predicate is an ordinary expression
+  through the same `WhereClauseParser` and `MemberFactory` a query goes through — not a SQL string,
+  and that is the point: SQLite reaches a partial index only when the query's `WHERE` implies the
+  index's, over the terms as written, so a hand-spelled predicate is fisher#16's failure again.
+  ⚠️ **`LiteralRenderingCommandBuilder` is the exception to "values are always bound", and it exists
+  because DDL has nowhere to bind them.** What makes it safe is the reach rather than the escaping:
+  the values are constants in a configuration lambda at startup, the same trust class as a
+  `[JsonPropertyName]`. It escapes anyway, and **refuses by name** anything it cannot render
+  unambiguously rather than reaching for `ToString()` — the marten#4954 class one type over.
+- **`IndexLastModified` / `IndexCreatedAt` / `IndexTenantId` / `SoftDeletedWithIndex`** — plain column
+  indexes, since those are real columns. `IndexCreatedAt` *enables* the opt-in column too: an index
+  over a column that does not exist is not a weaker version of the feature, it fails the migration.
+  `IndexTenantId` is refused for a single-tenant type, and is worth less here than on either sibling —
+  `tenant_id` already leads the conjoined primary key.
+- **`IgnoreIndex`** — `Weasel.Core.TableBase` already had it, and `Table.FetchExisting` drops an
+  ignored name from the table it reads back, so the delta never sees it in either direction. Applied
+  *after* the declared indexes deliberately: Weasel refuses to ignore a name the table declares, and
+  that refusal is right — a collision, not an exemption.
+- **`[DocumentAlias]`, `[MultiTenanted]`, `[UseOptimisticConcurrency]`, `[ForeignKey]`** — read in
+  `ApplySchemaAttributes`, layer three of four. `[ForeignKey]` is applied after `[DuplicateField]` on
+  the same member so an explicit duplicate names the column and the type; `Duplicate` is idempotent, so
+  the key's implicit one finds it.
+- **`HiloSettings(settings)`** — the method form of the settable property, so a configuration block
+  reads the same as Marten's.
+
+**Skipped, and why** (recorded in the migration guide's "will not be" table rather than implemented as
+no-ops): the whole partitioning family, row-level security and GIN indexes — none exist in SQLite;
+`UniqueIndexType`, `TenancyScope`, `IsConcurrent`, index sort order and casing — every one describes a
+*computed column* and a PostgreSQL index, where a Fisher index is an expression index and a duplicated
+field is a `VIRTUAL` generated column that cannot drift, so `Computed` vs `DuplicatedField` has nothing
+to choose between; `PropertySearching`, `DdlTemplate`, `StructuralTyped` and per-type
+`DatabaseSchemaName` — not SQLite concepts, and the schema folds into the table prefix; `UseIdentityKey`
+— a database-assigned identity needs the write path to read the id back rather than assign it
+client-side, which is a different write path rather than a strategy.
 
 ### LINQ paging
 
@@ -2789,6 +2893,90 @@ populates deliberately.
   connections" below. `ForgetTenantAsync` is the explicit release for a tenant a process is finished
   with.
 
+#### The tenant registry — fisher#213
+
+`Storage/MasterTableTenantSource.cs` and `Storage/SqliteMasterTenantTableDialect.cs`, reached by
+`StoreOptions.MultiTenantedDatabasesInRegistry(...)`. Marten's **master-table** tenancy: tenant →
+connection string in a control table, with tenants added, suspended, resumed and removed at runtime.
+For a store whose tenants are files, the analogue of the master table is a **tenant-registry
+database** — one small SQLite file holding `fi_tenants`.
+
+**The fourth source, and the first where the tenant set is a *record*.** The other three each fail to
+be one for a different reason: `DirectoryTenantSource` resolves any tenant id at all — the point of
+it, and also why it can never say "that is not one of ours"; `InMemoryTenantSource` holds the set in
+one process's memory, so nothing survives a restart and two nodes disagree; a fixed
+`MultiTenantedDatabases` set is configuration.
+
+**Weasel's lifted `MasterTableTenancyBase` is adopted rather than reimplemented** (weasel#567, Weasel
+9.31.0). The control-table contract, the cache, provisioning-once, the seed list and the whole
+`IDynamicTenantSource<string>` lifecycle are its; Fisher supplies `IMasterTenantTableDialect` and one
+adapter. `SqliteDataSource` *is* a `DbDataSource`, so the lift's seam fits with nothing adapted, and
+Fisher gets the store-agnostic admin surface (`IDynamicTenantSource<string>`,
+`IMasterTableMultiTenancy`) for free — a surface it had no equivalent of.
+
+- ⚠️ **The base is closed over `TenantRegistration`, not over `FisherDatabase`, and that is the whole
+  design.** The base's own remarks say everything it does with a `TDatabase` is cache it, hand it back
+  and dispose it — so closing it over the *registration* makes its cache Fisher's synchronous snapshot
+  of the control table, which is exactly what `ITenantSource.TryFind` needs. Closing it over
+  `FisherDatabase` would have put a second database cache beside `DynamicTenancy`'s — two
+  `SqliteDataSource`s and two connection pools per tenant — and forced `DatabaseFor` to resolve
+  asynchronously. Going through `ITenantSource` instead is also what reuses `DynamicTenancy` whole:
+  the first-use migration, the daemon's tenant poller, `ForgetTenantAsync`, the cleaner, the CLI
+  database source and `DisabledTenantException` all work with nothing added.
+- ⚠️ **Marten's `GetTenant(string)` is `tryFindTenantDatabase(...).GetAwaiter().GetResult()`, and that
+  is the one thing not to copy.** `DatabaseFor` is reached from `OpenSession`, which has no `await` to
+  offer — the reason `TryFind` is synchronous and `AllAsync` is not. So the trade is stated rather
+  than hidden: **a tenant this process has not read does not resolve.** One added through
+  `AddTenantAsync` here is cached as it is written; one added by another process appears on the next
+  refresh (the daemon polls every minute, and every `RefreshAsync` caller refreshes on demand).
+- ⚠️ **The seed list is what makes a default tenant possible at all.** `DynamicTenancy.Default` is read
+  while the store is being *built*, before anything could have read the control table — so a registry
+  naming its tenants only in the table cannot answer for `*DEFAULT*` and the store refuses to
+  construct. `TryFind` therefore falls back to `SeedDatabases`, which is configuration rather than
+  data: known synchronously, and upserted into the table on the first refresh so the two agree. The
+  fallback is checked *after* the disabled set, so suspending a seeded tenant still suspends it.
+- **`tenant_id` is declared `collate nocase`.** The base compares cache keys with the comparer it is
+  handed and Fisher hands it `OrdinalIgnoreCase`, matching its other two tenancies; SQLite's default
+  collation is case-sensitive, so without the collation the cache and the table disagree about whether
+  `Acme` and `acme` are one tenant — a tenant that resolves through one and not the other, which reads
+  as an intermittent.
+- **The upsert does not clear the disabled flag.** The dialect contract explicitly leaves this to the
+  dialect and says the two shipped stores disagree — Polecat's `MERGE` re-enables, Marten's
+  `on conflict` does not. Fisher follows Marten: resuming a suspended tenant as a side effect of
+  correcting its connection string would silently undo a deliberate suspension.
+- **Control-plane reads and writes go through `StoreOptions.ResiliencePipeline`**, via the base's
+  `ExecuteAsync` hook. The registry is a SQLite file and takes one writer, so an operator adding a
+  tenant while a node reads the table is exactly the `SQLITE_BUSY` the pipeline exists for. Polecat
+  overrides the same hook; Marten leaves it on the default.
+- **The table name folds the logical schema in**, like every other Fisher table, so two logical stores
+  sharing one registry file keep separate tenant lists.
+
+**The deletion stance held with no guard, which is the useful finding.** Fisher deprovisions and never
+deletes — deleting a tenant here means deleting a *file*, and Fisher cannot know it is backed up — and
+the lifted base already draws the line in the same place: its `DeleteDatabaseRecordAsync` says the
+tenant's own database is left completely alone. So `SuspendTenantAsync` flips a flag,
+`ForgetTenantAsync` deletes the *row*, and neither touches the `.db`. There is deliberately no member
+on the source that removes one, and `the_source_offers_no_way_to_delete_a_tenants_database` pins that
+by reflection rather than by prose, because "we do not delete" is exactly the rule a later convenience
+method breaks without anybody noticing.
+
+**`ITenantSource.OnTenantRevoked` closes a gap the registry made sharp** — and it applies to all three
+sources. `DynamicTenancy` caches a `FisherDatabase` per tenant and `DatabaseFor` answers from that
+cache, so **suspending a tenant the store had already resolved used to do nothing**; the old
+`runtime_tenants` test said so in a comment and opened a *fresh store* to observe the refusal. That is
+tolerable for a directory convention an operator edits by hand and wrong for a control table, whose
+whole point is runtime effect. The tenancy now sets a revocation callback the source raises, and the
+cached database is evicted and disposed.
+
+- **A callback rather than a check on the resolution path**, because `TryFind` is on the session-open
+  hot path and `DirectoryTenantSource` builds a `SqliteConnectionStringBuilder` on every call —
+  consulting it per session would be a real per-session cost to make a rare event immediate.
+- **Default-implemented on the interface** (`get => null; set { }`), so it is additive: `ITenantSource`
+  is public and implementable outside this repo, and a source that never revokes needs no change.
+- Disposal is synchronous, because a source revokes from a synchronous method. The difference from
+  `ForgetTenantAsync`'s async path is only that a pooled connection's close is not awaited, and
+  clearing the pool leaves a checked-out connection working either way (fisher#59).
+
 ### Releasing pooled connections
 
 `FisherDatabase.ReleasePooledConnections` and `DynamicTenancy.ForgetTenantAsync` (fisher#59).
@@ -2972,6 +3160,60 @@ Two things learned while writing the tests, both worth keeping:
 - **An `ActivityListener` is process-wide, and xUnit runs collections in parallel.** A test that
   asserts `Single(...)` over recorded spans is green alone and red in the full suite. Filter by a tag
   the test's own store sets.
+
+### Metrics
+
+`Services/OpenTelemetryOptions.cs` (fisher#208) — a `Meter` named `Fisher`, matching the
+`ActivitySource`, reached through `StoreOptions.OpenTelemetry`. Derives from the lifted
+`JasperFx.OpenTelemetry.OpenTelemetryOptions` so the `Meter` and the shape are the Critter Stack's
+rather than a second copy. **Everything is opt-in and no instrument exists until a `Track…` call
+creates it**, so a store that opts into nothing pays a null field read per commit.
+
+- ⚠️ **A `SQLITE_BUSY` retry counter alone is the wrong instrument, and that is a measurement rather
+  than an opinion.** It is the obvious one — the Polly pipeline already emits a `fisher.retry`
+  activity event and `Fisher.Benchmarks`' `RetryCounter` counts them — and under fisher#163's
+  concurrent-writers scenario it reads **zero** while throughput collapses, because a contended writer
+  sits inside `BEGIN IMMEDIATE` under the connection string's busy timeout and eventually succeeds. A
+  dashboard built on it shows a flat line through the exact incident it exists to diagnose, which is
+  worse than no instrument: a flat line reads as "not the database".
+  So the instrument is **`fisher.write_lock.wait`**, a histogram of the elapsed time inside
+  `BeginTransactionAsync` at all three `BEGIN IMMEDIATE` sites — the session commit, the daemon batch
+  and the rebuild teardown — tagged `fisher.write_lock.holder`. `fisher.write_lock.retries` is created
+  *beside* it by the same `TrackWriteLockContention()` call, never instead of it, so neither can be
+  charted without the other: a rising histogram with no retries is contention absorbed by the busy
+  timeout, and a retry means the timeout was exceeded or the failure was `SQLITE_BUSY_SNAPSHOT`, which
+  the timeout does not cover.
+  `a_contended_commit_is_visible_in_the_wait_and_invisible_in_the_retries` asserts both halves against
+  a real 400 ms lock hold, and it measures the hold rather than a threshold — it passes at 380 ms.
+- **The holder tag is what separates "the application is contended" from "the daemon is starving the
+  application."** From a session's side alone the two look identical, and one is a capacity problem
+  while the other is a projection to move to its own file.
+- **`TrackConnections` is inherited and refused by name**, following `SessionOptions.IsolationLevel`'s
+  precedent. Deriving from the lifted base is right (do not reinvent a Critter Stack type), and it
+  brings a member Fisher cannot honour honestly: a SQLite connection is a *file handle*, Weasel's
+  `SqliteDataSource` is a factory rather than a pool (fisher#59 measured exactly that), and the pooling
+  beneath it is Microsoft.Data.Sqlite's, keyed process-wide by connection string and not attributable
+  to a store at all. A count charted beside Marten's would read as the same quantity and be a different
+  one. **Refused rather than ignored**, because a knob that silently does nothing is the failure mode
+  this codebase keeps meeting.
+- **`fisher.events.appended` matches Marten's `TrackEventCounters` and earns its place for an extra
+  reason**: on one file every appending writer is queued behind every other, so append volume charted
+  against the wait separates "more work arrived" from "the same work is now waiting".
+  `fisher.documents.written` has no Marten equivalent and exists for the same reason — three tag values
+  rather than three instruments, because the useful chart is the commit's *mix*.
+- **Every measurement carries `fisher.store`**, for the reason `FisherTracing` tags every span with it:
+  two Fisher stores in one process are usually two *files* with a write lock each, so an untagged
+  series adds two unrelated queues together. It is also what lets the tests filter a process-wide
+  `MeterListener` down to their own store — the `ActivityListener` lesson, met again.
+  `StoreName` is stamped onto the options in `DocumentStore`'s constructor rather than read from
+  `StoreOptions`, because these options are constructed *inside* that constructor and the name is not
+  final until an `IConfigureFisher` contribution has run.
+- **The change-set counters are a session listener** (`FisherCommitMetrics`), registered only when
+  something opted in — so a store with no counters carries no extra listener, and an empty unit of work
+  fires no listeners at all. A failing counter is caught and logged rather than thrown: it runs after
+  the commit, so throwing would surface to the caller as though a durable write had failed.
+  They describe a **user session's** unit of work; the daemon's batch deliberately does not fire session
+  listeners, and counting its raised events here would put the daemon's work on the application's series.
 
 ### Session logging
 
@@ -3803,7 +4045,15 @@ database *is* the caller's process, so the round trip is the whole cost rather t
 ### Batched queries, query plans, `CheckExistsAsync` and `ToSql`
 
 fisher#37 widened the DCB-only batch into a general one and moved it from `Fisher.Events.Tags` to
-`Fisher.Batching`, since it is no longer tag-specific. **The framing in its doc comment still stands
+`Fisher.Batching`, since it is no longer tag-specific. **fisher#201 finished the move by putting the
+entry point where Marten and Polecat have it** — `IQuerySession.CreateBatchQuery()`, implemented on
+`FisherSession`, with `session.Events.CreateBatchQuery()` kept as a forwarder. It stayed on `Events`
+for a release because that is where it was *born*, naming the narrowest of its uses, and the cost was
+that ported Marten code batching *document* reads did not compile. The compliance fixture's two
+`(IDocumentSession)` casts are gone with it, which is the smoke test that it landed where the shared
+seam needed it. `both_spellings_build_the_same_batch` asserts equivalence rather than existence: a
+forwarder handing back a batch built against a different session would satisfy "the member is still
+there" and then read the wrong tenant's rows. **The framing in its doc comment still stands
 and should not be softened**: a batch elsewhere collapses network round trips, SQLite is embedded, and
 there are none to collapse. It exists so DCB and document code ports between the stores unchanged. The
 one property that does hold is ordering — the reads run back to back on one connection with nothing

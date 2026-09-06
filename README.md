@@ -27,7 +27,7 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > `Fisher.AspNetCore` and `Fisher.EntityFrameworkCore` companion packages all work and are tested.
 >
 > Fisher passes **all 50 suites and 516 tests** it enrolls from `JasperFx.Events.ComplianceTests`,
-> the shared cross-store suite Marten and Polecat also enroll in, alongside its own 1,815.
+> the shared cross-store suite Marten and Polecat also enroll in, alongside its own 1,892.
 >
 > That suite pins **API portability, not behavioural equivalence** — code written against one store
 > compiles and runs against another. It does not pin that the three behave identically, and they do
@@ -40,9 +40,8 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > feature-complete against Marten. Several Marten features are genuinely missing, and until recently
 > they were missing from this list too: Fisher's parity baseline was drawn against *Polecat*, so
 > anything Marten has and Polecat does not was invisible to its tracking. Compiled
-> queries, a session logging seam, `MatchesSql`, `Stats(out QueryStatistics)` and
-> `ToAsyncEnumerable()` are all absent; child-collection LINQ is partly landed; and `CreateBatchQuery`
-> lives on `session.Events` rather than on the session. The
+> queries and a session logging seam are absent, and child-collection LINQ is only
+> partly landed. The
 > [migration guide](https://fisher.jasperfx.net/migration-guide#marten-features-fisher-does-not-have)
 > names each one, says what to use instead, and marks which are settled decisions rather than unbuilt
 > work.

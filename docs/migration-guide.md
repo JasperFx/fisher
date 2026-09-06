@@ -55,11 +55,7 @@ a migrating Marten user hits first.
 | :--- | :--- | :--- |
 | Compiled queries — `ICompiledQuery<T>`, `ICompiledListQuery<T>`, `ICompiledQuery<TDoc,TOut>` | **Absent, and decided** — see [fisher#195](https://github.com/JasperFx/fisher/issues/195) for the measurement. | Nothing. Building the SQL is 4–11% of an ordinary Fisher query and 22.5% of the cheapest one it can run; the work is real but the absolute saving is ~2 µs. A filter-shape query plan cache would collect nearly all of it with no public API, which is the move that comes first. |
 | A session logging seam — `IMartenLogger` / `IMartenSessionLogger`, `StoreOptions.Logger(…)`, `session.Logger` | **Absent.** There is no per-command or per-session logging hook. | An `ActivitySource` named `Fisher` ([tracing](/diagnostics)), with spans for commits, queries and loads and a retry event that says a call waited on the write lock; and `IDocumentSessionListener` for bracketing the unit of work. Neither one gives you the SQL. |
-| `MatchesSql(…)` | **Absent.** No raw SQL composes into a `Where`. | `session.AdvancedSql.QueryAsync<T>(…)` for a typed raw read and `QueueSqlCommand` for a raw write that joins the unit of work — but as whole statements, not as a LINQ fragment. |
-| `Stats(out QueryStatistics)` | **Absent.** No `QueryStatistics`, no `TotalResults` out-param on an arbitrary query. | `ToPagedListAsync`, whose `IPagedList<T>` carries the total from a second statement, and `CountIgnoringPagingAsync` for the total alone. |
-| `ToAsyncEnumerable()` on a query | **Absent.** | Materialize with `ToListAsync`, or `IAdvancedSql.StreamAsync<T>` for raw SQL. Streaming is scarce here on purpose: a retried `SQLITE_BUSY` re-executes the whole delegate, so a live reader yielded to the caller would resume against a disposed connection. |
 | Child-collection LINQ | **Partly landed** ([fisher#166](https://github.com/JasperFx/fisher/issues/166)). | See the [operators page](/documents/querying/linq/operators) — the shipped and missing halves are below. |
-| `IQuerySession.CreateBatchQuery()` | **Present, on `session.Events`** rather than on the session. | `session.Events.CreateBatchQuery()`. `Fisher.Batching.IBatchedQuery` is wider than its home suggests — `Load`, `LoadMany`, `CheckExists`, `Query`, `QueryByPlan` and the DCB reads — and exists for API parity, not speed: SQLite is embedded, so there are no round trips to collapse. |
 
 ### Child collections: what ships and what does not
 
@@ -102,7 +98,12 @@ Unlike the list above, these are settled decisions rather than unbuilt features.
 | | Why |
 | :--- | :--- |
 | **A message bus** | The [side-effect seam](/events/projections/side-effects) exists; delivery is a bus integration's job here as on both siblings. |
-| **Table partitioning** | SQLite has no partition functions or schemes. |
+| **Table partitioning** | SQLite has no partition functions or schemes. So `PartitionOn`, `MultiTenantedWithPartitioning`, `SoftDeletedWithPartitioning*` and `DoNotPartition` have nothing to mean. |
+| **Row-level security** | `UseRowLevelSecurity` / `DisableRowLevelSecurity` are PostgreSQL policies. SQLite has no such concept; isolate with [database-per-tenant](/configuration/multitenancy#database-per-tenant), which is a file per tenant. |
+| **GIN indexes over the JSON body** | `GinIndexJsonData` and its member form are PostgreSQL's. SQLite indexes an [expression](/documents/indexing/indexes) instead, which is cheaper and needs no column. |
+| **`UniqueIndexType` / `TenancyScope` / `IsConcurrent` / index sort order and casing** | Every one of them describes a *computed column* and a PostgreSQL index. A Fisher index is an expression index and a duplicated field is a `VIRTUAL` generated column that cannot drift, so there is nothing for `Computed` vs `DuplicatedField` to choose between, no direction worth naming, and no casing to apply — SQLite's default collation is case-sensitive and the [string operators](/documents/querying/linq/strings) are ordinal to match. |
+| **`PropertySearching`, `DdlTemplate`, `StructuralTyped`, per-type `DatabaseSchemaName`** | Not SQLite concepts. `DatabaseSchemaName` is store-wide here and folds into the table prefix. |
+| **`UseIdentityKey`** | A database-assigned identity would need the write path to read the id back rather than assign it client-side. [`IdStrategy`](/documents/identity#supplying-the-identity-strategy) is the seam for a custom strategy; a database-assigned one is a different write path. |
 | **`DaemonMode.HotCold`** | Leader election across nodes means several processes sharing one file. |
 | **Newtonsoft.Json** | System.Text.Json only. |
 | **`CreatedSince` / `CreatedBefore`** | There is no `created_at` column unless you enable one; answering from `last_modified` would be a different question. |

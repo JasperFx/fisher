@@ -54,6 +54,36 @@ public interface ITenantSource
     ///     that have appeared since.
     /// </summary>
     ValueTask<IReadOnlyList<TenantRegistration>> AllAsync(CancellationToken token = default);
+
+    /// <summary>
+    ///     Set by <see cref="DynamicTenancy" />, for a source to call when a tenant stops being
+    ///     routable — suspended, or dropped from the source (fisher#213).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Without it, suspending a tenant the store has already resolved does nothing.</b>
+    ///         <see cref="DynamicTenancy" /> caches a <see cref="FisherDatabase" /> per tenant and
+    ///         <see cref="ITenancy.DatabaseFor" /> answers from that cache, so a suspension used to take
+    ///         effect only for a tenant nothing had opened yet — which is the opposite of what an
+    ///         operator switching a tenant off means, and it made "restart the process" part of the
+    ///         procedure.
+    ///     </para>
+    ///     <para>
+    ///         <b>A callback rather than a check on the resolution path</b>, because
+    ///         <see cref="TryFind" /> is on the session-open hot path and the convention source builds
+    ///         a connection string on every call — consulting it per session would be a real cost to
+    ///         make a rare event immediate. Revocation is rare, so it pays for itself.
+    ///     </para>
+    ///     <para>
+    ///         Default-implemented as a no-op pair, so a source written before this — or one that
+    ///         genuinely never revokes — needs no change.
+    ///     </para>
+    /// </remarks>
+    Action<string>? OnTenantRevoked
+    {
+        get => null;
+        set { }
+    }
 }
 
 /// <summary>
@@ -85,10 +115,21 @@ public sealed class DirectoryTenantSource : ITenantSource
         Directory.CreateDirectory(directory);
     }
 
+    /// <inheritdoc />
+    public Action<string>? OnTenantRevoked { get; set; }
+
     /// <summary>
     ///     Suspend a tenant. Its file is untouched; sessions for it are refused until it is resumed.
     /// </summary>
-    public void Suspend(string tenantId) => _suspended[tenantId] = true;
+    /// <remarks>
+    ///     Takes effect immediately, including for a tenant the store has already resolved — see
+    ///     <see cref="ITenantSource.OnTenantRevoked" />.
+    /// </remarks>
+    public void Suspend(string tenantId)
+    {
+        _suspended[tenantId] = true;
+        OnTenantRevoked?.Invoke(tenantId);
+    }
 
     /// <inheritdoc cref="Suspend" />
     public void Resume(string tenantId) => _suspended.TryRemove(tenantId, out _);
@@ -150,13 +191,27 @@ public sealed class InMemoryTenantSource : ITenantSource
         if (_tenants.TryGetValue(tenantId, out var existing))
         {
             _tenants[tenantId] = existing with { IsActive = isActive };
+
+            if (!isActive)
+            {
+                OnTenantRevoked?.Invoke(tenantId);
+            }
         }
     }
 
     /// <summary>
     ///     Stop resolving a tenant. Its file is not deleted — see <see cref="ITenantSource" />.
     /// </summary>
-    public void Remove(string tenantId) => _tenants.TryRemove(tenantId, out _);
+    public void Remove(string tenantId)
+    {
+        if (_tenants.TryRemove(tenantId, out _))
+        {
+            OnTenantRevoked?.Invoke(tenantId);
+        }
+    }
+
+    /// <inheritdoc />
+    public Action<string>? OnTenantRevoked { get; set; }
 
     public bool TryFind(string tenantId, out TenantRegistration registration)
         => _tenants.TryGetValue(tenantId, out registration!);

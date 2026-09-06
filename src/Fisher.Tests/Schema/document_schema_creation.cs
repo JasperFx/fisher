@@ -210,22 +210,56 @@ public class document_schema_creation : IAsyncLifetime
         tables.ShouldNotContain("fi_doc_docuser");
     }
 
+    /// <summary>
+    ///     Refused at configuration time, which since fisher#218 means when the store is built rather
+    ///     than the instant the mapping is created.
+    /// </summary>
+    /// <remarks>
+    ///     <b>The move is deliberate and the property is unchanged.</b> A mapping cannot refuse while
+    ///     it is being constructed without making <c>Schema.For&lt;T&gt;().Identity(x =&gt; x.Member)</c>
+    ///     unreachable for exactly the types that need it — the refusal would fire before the line that
+    ///     fixes it could run. <c>DocumentStore</c>'s constructor asserts it instead, so what a caller
+    ///     sees is still a configuration-time error naming the type, and never an
+    ///     <c>InvalidOperationException</c> on somebody's first save.
+    /// </remarks>
     [Fact]
     public void a_document_type_with_no_identity_member_is_rejected()
     {
-        var options = new StoreOptions { ConnectionString = _database.ConnectionString };
+        var ex = Should.Throw<InvalidOperationException>(() => DocumentStore.For(options =>
+        {
+            options.ConnectionString = _database.ConnectionString;
+            options.Schema.For<DocWithoutId>();
+        }));
 
-        var ex = Should.Throw<InvalidOperationException>(() => options.Schema.For<DocWithoutId>());
         ex.Message.ShouldContain("no identity member");
     }
 
+    /// <inheritdoc cref="a_document_type_with_no_identity_member_is_rejected" />
     [Fact]
     public void an_unsupported_identity_type_is_rejected()
     {
-        var options = new StoreOptions { ConnectionString = _database.ConnectionString };
+        var ex = Should.Throw<InvalidOperationException>(() => DocumentStore.For(options =>
+        {
+            options.ConnectionString = _database.ConnectionString;
+            options.Schema.For<DocWithDateId>();
+        }));
 
-        var ex = Should.Throw<InvalidOperationException>(() => options.Schema.For<DocWithDateId>());
         ex.Message.ShouldContain("cannot store");
+    }
+
+    /// <summary>
+    ///     And the rescue the deferral exists for: naming the member makes the same type storable.
+    /// </summary>
+    [Fact]
+    public void naming_the_identity_member_rescues_a_type_the_conventions_refuse()
+    {
+        using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = _database.ConnectionString;
+            options.Schema.For<DocWithDateId>().Identity(x => x.Reference);
+        });
+
+        store.Options.Schema.For<DocWithDateId>().Mapping.IdType.ShouldBe(typeof(string));
     }
 }
 
@@ -249,4 +283,7 @@ public class DocWithoutId
 public class DocWithDateId
 {
     public DateTime Id { get; set; }
+
+    /// <summary>What <c>Identity(x =&gt; x.Reference)</c> redirects to.</summary>
+    public string Reference { get; set; } = string.Empty;
 }

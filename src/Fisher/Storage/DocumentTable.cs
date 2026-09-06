@@ -88,6 +88,7 @@ internal class DocumentTable : Table
         AddOptionalMetadata(mapping);
         AddDuplicatedFields(mapping);
         AddDeclaredIndexes(mapping);
+        ApplyIgnoredIndexes(mapping);
         AddForeignKeys(mapping);
     }
 
@@ -217,17 +218,50 @@ internal class DocumentTable : Table
 
         foreach (var declared in mapping.Indexes)
         {
-            var expressions = declared.MemberChains
-                .Select(chain => members.ResolveMember(chain).TypedLocator);
-
-            // Several expressions render as one comma-separated list, which Weasel wraps in the
-            // parentheses a composite index needs.
-            Indexes.Add(new Weasel.Sqlite.Tables.IndexDefinition(
+            var definition = new Weasel.Sqlite.Tables.IndexDefinition(
                 declared.Name ?? DefaultIndexName(declared.DefaultNameSuffix()))
             {
-                Expression = string.Join(", ", expressions),
-                IsUnique = declared.IsUnique
-            });
+                IsUnique = declared.IsUnique,
+
+                // A partial index, already rendered: DDL carries no parameters, so the predicate was
+                // written out at configuration time from the same parser a query goes through. That
+                // matching is what makes the index reachable at all -- SQLite uses one only when the
+                // query's WHERE implies the index's, over the terms as written.
+                Predicate = declared.Predicate
+            };
+
+            if (declared.Columns.Length > 0)
+            {
+                // The metadata-column indexes. Real columns, so there is nothing to resolve through
+                // the member factory and no expression to build.
+                definition.Columns = declared.Columns;
+            }
+            else
+            {
+                // Several expressions render as one comma-separated list, which Weasel wraps in the
+                // parentheses a composite index needs.
+                definition.Expression = string.Join(", ",
+                    declared.MemberChains.Select(chain => members.ResolveMember(chain).TypedLocator));
+            }
+
+            Indexes.Add(definition);
+        }
+    }
+
+    /// <summary>
+    ///     Names the schema comparison must leave alone — <c>IgnoreIndex</c> (fisher#218).
+    /// </summary>
+    /// <remarks>
+    ///     After the declared indexes deliberately: Weasel refuses to ignore a name the table itself
+    ///     declares, and that refusal is the point. Ignoring one of Fisher's own indexes is a collision
+    ///     rather than an exemption, and it would otherwise resolve silently in whichever direction the
+    ///     ordering happened to give.
+    /// </remarks>
+    private void ApplyIgnoredIndexes(DocumentMapping mapping)
+    {
+        foreach (var name in mapping.IgnoredIndexes)
+        {
+            IgnoreIndex(name);
         }
     }
 

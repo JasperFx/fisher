@@ -61,11 +61,33 @@ public partial class DocumentStore : IDocumentStore
             flatTable.ResolveTableName(options.DatabaseSchemaName);
         }
 
+        // Every document type configured so far has to have an identity, and this is the first moment
+        // that is settled: Schema.For<T>().Identity(x => x.Member) can name one the conventions did
+        // not find, so the mapping cannot refuse while it is being created (fisher#218) without making
+        // the rescue unreachable for exactly the types it exists for. Refusing here keeps the property
+        // that mattered — a document type Fisher cannot store is a configuration-time error naming the
+        // type, rather than an InvalidOperationException on somebody's first save.
+        options.Schema.AssertEveryMappingHasIdentity();
+
         // Builds the async shard registry and fails fast on duplicate projection names.
         options.Projections.AssertValidity(options);
 
         // Built once here rather than per session: BuildForInline compiles each projection.
         options.Projections.BuildInlineProjections();
+
+        // fisher#208. The change-set counters, if any were asked for. Registered here rather than at
+        // opt-in time because a Track… call may come from an IConfigureFisher contribution long after
+        // the configuration lambda ran, and this is the first moment the set is final — the same
+        // reason the flat-table rename above happens here. Conditional, so a store with no counters
+        // carries no extra listener at all.
+        // Stamped here rather than in StoreOptions' constructor, where the name is not set yet and an
+        // IConfigureFisher contribution has not run.
+        options.OpenTelemetry.StoreName = options.StoreName;
+
+        if (options.OpenTelemetry.Applications.Count > 0)
+        {
+            options.Listeners.Add(new Services.FisherCommitMetrics(options.OpenTelemetry.Applications));
+        }
     }
 
     /// <summary>
