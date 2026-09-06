@@ -1,4 +1,6 @@
 using JasperFx.Events.Aggregation;
+using JasperFx.Events.Projections;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Fisher.Projections;
 
@@ -24,8 +26,22 @@ namespace Fisher.Projections;
 /// <typeparam name="TDoc">The aggregate document type.</typeparam>
 /// <typeparam name="TId">The identity events are grouped by, which need not be the stream identity.</typeparam>
 public abstract class MultiStreamProjection<TDoc, TId>
-    : JasperFxMultiStreamProjectionBase<TDoc, TId, IDocumentSession, IQuerySession>
+    : JasperFxMultiStreamProjectionBase<TDoc, TId, IDocumentSession, IQuerySession>, IFisherRegistrable
     where TDoc : notnull
     where TId : notnull
 {
+    /// <inheritdoc />
+    public static void Register<TConcrete>(IServiceCollection services, ProjectionLifecycle lifecycle,
+        ServiceLifetime lifetime, Action<ProjectionBase>? configure) where TConcrete : class
+        => ContainerScopedRegistration.Register<TConcrete>(services, lifecycle, lifetime, configure,
+            static (s, callback) => s.ConfigureFisher(callback),
+            ContainerScopedRegistration.Aggregation(typeof(TConcrete), typeof(TDoc), typeof(TId)));
+
+    /// <inheritdoc />
+    public static void Register<TConcrete, TStore>(IServiceCollection services, ProjectionLifecycle lifecycle,
+        ServiceLifetime lifetime, Action<ProjectionBase>? configure)
+        where TStore : class, IDocumentStore where TConcrete : class
+        => ContainerScopedRegistration.Register<TConcrete>(services, lifecycle, lifetime, configure,
+            static (s, callback) => s.ConfigureFisher<TStore>(callback),
+            ContainerScopedRegistration.Aggregation(typeof(TConcrete), typeof(TDoc), typeof(TId)));
 }

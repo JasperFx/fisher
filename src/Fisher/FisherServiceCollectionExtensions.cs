@@ -1,8 +1,11 @@
 using System.Diagnostics.CodeAnalysis;
 using Fisher.Internal;
+using Fisher.Projections;
 using JasperFx;
 using JasperFx.Descriptors;
 using JasperFx.Events.Daemon;
+using JasperFx.Events.Projections;
+using JasperFx.Events.Subscriptions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -263,6 +266,155 @@ public static class FisherServiceCollectionExtensions
     }
 
     /// <summary>
+    ///     Register a projection that is built by the application's IoC container, so it can take
+    ///     injected services (fisher#194).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>What <paramref name="lifetime" /> buys, and what it costs.</b>
+    ///         <see cref="ServiceLifetime.Singleton" /> resolves the projection once and registers it
+    ///         directly — the cheapest option, and correct for a projection whose dependencies are all
+    ///         singletons themselves. <see cref="ServiceLifetime.Scoped" /> and
+    ///         <see cref="ServiceLifetime.Transient" /> both wrap it, and the wrapper opens a fresh IoC
+    ///         scope per unit of work — per <c>SaveChangesAsync</c> for an Inline projection, per daemon
+    ///         page for an Async one — resolves the projection inside that scope and lets go of it
+    ///         before the scope closes.
+    ///     </para>
+    ///     <para>
+    ///         <b>That per-batch scope is the whole reason this is not just <c>AddSingleton</c>.</b> An
+    ///         async projection outlives every request scope in the process; it runs from a hosted
+    ///         service where there is no request at all. A projection resolved once from a scope and
+    ///         held would be reaching into a disposed provider by its second batch, and one that opened
+    ///         a scope and kept it would leak that scope for the life of the store. The wrapper does
+    ///         neither, which is also why Transient and Scoped behave identically here.
+    ///     </para>
+    ///     <para>
+    ///         The wrappers themselves are JasperFx's — <c>JasperFx.Events.Projections.ContainerScoped</c>,
+    ///         shared with Marten — so what Fisher supplies is this registration surface and the
+    ///         <see cref="IFisherRegistrable" /> dispatch that picks the right wrapper for the kind of
+    ///         projection being registered.
+    ///     </para>
+    /// </remarks>
+    /// <param name="lifecycle">Fisher's projection lifecycle — Inline, Async or Live.</param>
+    /// <param name="lifetime">The IoC lifetime of the projection instance.</param>
+    /// <param name="configure">Optional configuration of the projection's name, version and filtering.</param>
+    /// <typeparam name="TProjection">
+    ///     The projection class. Deriving from <see cref="SingleStreamProjection{TDoc,TId}" />,
+    ///     <see cref="MultiStreamProjection{TDoc,TId}" /> or <see cref="EventProjection" />, or
+    ///     implementing <see cref="IProjection" />, is what satisfies the constraint.
+    /// </typeparam>
+    public static IServiceCollection AddProjectionWithServices<TProjection>(
+        this IServiceCollection services,
+        ProjectionLifecycle lifecycle,
+        ServiceLifetime lifetime = ServiceLifetime.Scoped,
+        Action<ProjectionBase>? configure = null)
+        where TProjection : class, IFisherRegistrable
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        TProjection.Register<TProjection>(services, lifecycle, lifetime, configure);
+        return services;
+    }
+
+    /// <summary>
+    ///     The same, against the secondary store registered as <typeparamref name="TStore" />.
+    /// </summary>
+    /// <inheritdoc cref="AddProjectionWithServices{TProjection}" />
+    public static IServiceCollection AddProjectionWithServices<TProjection, TStore>(
+        this IServiceCollection services,
+        ProjectionLifecycle lifecycle,
+        ServiceLifetime lifetime = ServiceLifetime.Scoped,
+        Action<ProjectionBase>? configure = null)
+        where TProjection : class, IFisherRegistrable
+        where TStore : class, IDocumentStore
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        TProjection.Register<TProjection, TStore>(services, lifecycle, lifetime, configure);
+        return services;
+    }
+
+    /// <summary>
+    ///     Register a subscription that is built by the application's IoC container (fisher#194).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         A subscription is always asynchronous, so there is no lifecycle argument — only the IoC
+    ///         lifetime, which behaves exactly as it does for a projection: Singleton registers the
+    ///         resolved instance, while Scoped and Transient both go through a wrapper that opens a
+    ///         fresh scope per page of events and disposes it before the daemon commits the page's
+    ///         progress.
+    ///     </para>
+    ///     <para>
+    ///         This one needs a Fisher wrapper where the projection half needed none — see
+    ///         <c>ScopedSubscriptionWrapper</c> for why the shared library's equivalent is unreachable.
+    ///     </para>
+    /// </remarks>
+    public static IServiceCollection AddSubscriptionWithServices<TSubscription>(
+        this IServiceCollection services,
+        ServiceLifetime lifetime = ServiceLifetime.Scoped,
+        Action<ISubscriptionOptions>? configure = null)
+        where TSubscription : class, Subscriptions.ISubscription
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        RegisterSubscription<TSubscription>(services, lifetime,
+            (s, callback) => s.ConfigureFisher(callback), configure);
+
+        return services;
+    }
+
+    /// <summary>
+    ///     The same, against the secondary store registered as <typeparamref name="TStore" />.
+    /// </summary>
+    /// <inheritdoc cref="AddSubscriptionWithServices{TSubscription}" />
+    public static IServiceCollection AddSubscriptionWithServices<TSubscription, TStore>(
+        this IServiceCollection services,
+        ServiceLifetime lifetime = ServiceLifetime.Scoped,
+        Action<ISubscriptionOptions>? configure = null)
+        where TSubscription : class, Subscriptions.ISubscription
+        where TStore : class, IDocumentStore
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        RegisterSubscription<TSubscription>(services, lifetime,
+            (s, callback) => s.ConfigureFisher<TStore>(callback), configure);
+
+        return services;
+    }
+
+    private static void RegisterSubscription<TSubscription>(IServiceCollection services, ServiceLifetime lifetime,
+        Action<IServiceCollection, Action<IServiceProvider, StoreOptions>> configureStore,
+        Action<ISubscriptionOptions>? configure)
+        where TSubscription : class, Subscriptions.ISubscription
+    {
+        switch (lifetime)
+        {
+            case ServiceLifetime.Singleton:
+                services.AddSingleton<TSubscription>();
+                configureStore(services, (s, options) =>
+                    options.Projections.Subscribe(s.GetRequiredService<TSubscription>(), configure));
+                break;
+
+            case ServiceLifetime.Scoped:
+            case ServiceLifetime.Transient:
+                services.AddScoped<TSubscription>();
+                configureStore(services, (s, options) =>
+                {
+                    var wrapper = new Subscriptions.ScopedSubscriptionWrapper<TSubscription>(s);
+                    configure?.Invoke(wrapper);
+
+                    options.Projections.Subscribe(wrapper);
+                });
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(lifetime), lifetime,
+                    "Only Singleton, Scoped and Transient are meaningful for a subscription.");
+        }
+    }
+
+    /// <summary>
     ///     Apply every matching <see cref="IConfigureFisher" /> to a store's options.
     /// </summary>
     /// <remarks>
@@ -513,6 +665,30 @@ public sealed class FisherStoreConfigurationExpression<T> where T : class, IDocu
 
         return this;
     }
+
+    /// <inheritdoc cref="FisherServiceCollectionExtensions.AddProjectionWithServices{TProjection,TStore}" />
+    public FisherStoreConfigurationExpression<T> AddProjectionWithServices<TProjection>(ProjectionLifecycle lifecycle,
+        ServiceLifetime lifetime = ServiceLifetime.Scoped, Action<ProjectionBase>? configure = null)
+        where TProjection : class, IFisherRegistrable
+    {
+        TProjection.Register<TProjection, T>(_services, lifecycle, lifetime, configure);
+        return this;
+    }
+
+    /// <inheritdoc cref="FisherServiceCollectionExtensions.AddProjectionWithServices{TProjection,TStore}" />
+    public FisherStoreConfigurationExpression<T> AddProjectionWithServices<TProjection>(ProjectionLifecycle lifecycle,
+        ServiceLifetime lifetime, string projectionName)
+        where TProjection : class, IFisherRegistrable
+        => AddProjectionWithServices<TProjection>(lifecycle, lifetime, x => x.Name = projectionName);
+
+    /// <inheritdoc cref="FisherServiceCollectionExtensions.AddSubscriptionWithServices{TSubscription,TStore}" />
+    public FisherStoreConfigurationExpression<T> AddSubscriptionWithServices<TSubscription>(
+        ServiceLifetime lifetime = ServiceLifetime.Scoped, Action<ISubscriptionOptions>? configure = null)
+        where TSubscription : class, Subscriptions.ISubscription
+    {
+        _services.AddSubscriptionWithServices<TSubscription, T>(lifetime, configure);
+        return this;
+    }
 }
 
 /// <summary>
@@ -688,6 +864,30 @@ public sealed class FisherConfigurationExpression
                 break;
         }
 
+        return this;
+    }
+
+    /// <inheritdoc cref="FisherServiceCollectionExtensions.AddProjectionWithServices{TProjection}" />
+    public FisherConfigurationExpression AddProjectionWithServices<TProjection>(ProjectionLifecycle lifecycle,
+        ServiceLifetime lifetime = ServiceLifetime.Scoped, Action<ProjectionBase>? configure = null)
+        where TProjection : class, IFisherRegistrable
+    {
+        TProjection.Register<TProjection>(_services, lifecycle, lifetime, configure);
+        return this;
+    }
+
+    /// <inheritdoc cref="FisherServiceCollectionExtensions.AddProjectionWithServices{TProjection}" />
+    public FisherConfigurationExpression AddProjectionWithServices<TProjection>(ProjectionLifecycle lifecycle,
+        ServiceLifetime lifetime, string projectionName)
+        where TProjection : class, IFisherRegistrable
+        => AddProjectionWithServices<TProjection>(lifecycle, lifetime, x => x.Name = projectionName);
+
+    /// <inheritdoc cref="FisherServiceCollectionExtensions.AddSubscriptionWithServices{TSubscription}" />
+    public FisherConfigurationExpression AddSubscriptionWithServices<TSubscription>(
+        ServiceLifetime lifetime = ServiceLifetime.Scoped, Action<ISubscriptionOptions>? configure = null)
+        where TSubscription : class, Subscriptions.ISubscription
+    {
+        _services.AddSubscriptionWithServices<TSubscription>(lifetime, configure);
         return this;
     }
 }
