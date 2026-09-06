@@ -212,7 +212,9 @@ Working, with tests:
 - `EventOperations` implements the full `IEventStoreOperations` — see below for which members throw
 - Document storage over Guid, string, int and long ids; numeric ids via Hi-Lo sequences (`fi_hilo`)
 - `EventProjection.storeEntity` — an `EventProjection`'s `Create`/`Project` results are stored inline
-- `DocumentStore.Advanced` — `Clean`, `ResetAllDataAsync`, `ResetHiloSequenceFloorAsync<T>`
+- `DocumentStore.Advanced` — `Clean`, `ResetAllDataAsync`, `ResetHiloSequenceFloorAsync<T>`, the
+  daemon escape hatches (`AdvanceHighWaterMarkToLatestAsync`, `TryCorrectProgressInDatabaseAsync`),
+  the projection progress reads, `RebuildSingleStreamAsync<T>` and `DeleteAllTenantDataAsync`
 - `DocumentStore : IEventStore` — the explorer reads (`GetRecentStreamsAsync`,
   `GetStreamMetadataAsync`) and `TryCreateUsage`; see below
 - **LINQ** — `session.Query<T>()` over `json_extract`: where, ordering, paging, projections, grouping,
@@ -2731,6 +2733,71 @@ the projection scenario harness (fisher#42). Four independent pieces, none large
   projections own, **not every table**: a scenario is entitled to seed documents its projections do not
   produce, and clearing those would make the harness quietly destructive.
   `the_teardown_leaves_unrelated_documents_alone` pins it.
+
+### `Advanced` — the daemon escape hatches, single-stream rebuild and the tenant wipe
+
+fisher#173 — the `AdvancedOperations` members Marten carries and Fisher did not. Four independent
+pieces; two of them are operational escape hatches whose value is that they exist before you need
+them.
+
+- **`AdvanceHighWaterMarkToLatestAsync`** moves the high-water mark straight to `max(seq_id)`, for
+  retrofitting async projections onto a store that has never had any — otherwise the mark climbs from
+  zero, which on a large store is a long read with nothing to show for it. **It advances the mark and
+  not the shards**, which is the half that decides whether it is the right call: a shard with no
+  progression row still starts at zero, so this is for a store whose projections are new *and* whose
+  history is genuinely not wanted. Spans every database, with a tenant-scoped overload that means
+  something only under database-per-tenant — a conjoined store has one global sequence however many
+  tenants write into it.
+- **`TryCorrectProgressInDatabaseAsync`** pulls a progression row that has advanced past the highest
+  sequence back down to it. **Reachable here through an ordinary supported operation, where Marten
+  carries the same method for a PostgreSQL race it believes it has closed**: `seq_id` is
+  `AUTOINCREMENT`, and stream compacting and event masking both delete rows, so removing events from
+  the top of the table lowers `max(seq_id)` below progress already recorded. A shard stranded above
+  the ceiling never advances again and `QueryForNonStaleData` waits on it forever, with nothing saying
+  why.
+  - **Clamped per row, where Marten resets every row wholesale** the moment the high-water row is
+    ahead. That drags a shard genuinely *behind* the head forward, past events it never applied —
+    silently, and on the very store somebody is already repairing.
+    `correcting_leaves_a_shard_that_is_merely_behind_alone` is the discriminating fact.
+- **`AllProjectionProgress` / `ProjectionProgressFor` / `AllAsyncProjectionShardNames`** were a
+  surfacing job rather than new machinery: the first two have been on `FisherDatabase` since the
+  daemon landed, reachable only by casting the store to `IEventStore` and walking `AllDatabases()`. An
+  omitted tenant id spans every database — concatenating for the first, taking the highest for the
+  second — which under database-per-tenant means one shard name appears once per tenant, deliberately:
+  collapsing them would have to pick a winner, and "at 40 for one tenant and 900 for another" is what
+  an operator came to find out.
+- **`RebuildSingleStreamAsync<T>`** live-aggregates one stream and stores the result, for the repair
+  that does not need the daemon.
+  - **A stream that folds to nothing deletes the document, where Marten's throws from inside
+    `Store(null!)`.** That case is not exotic — a `ShouldDelete` that fired, an archived stream, an id
+    with no events — and "no document" is exactly what a real rebuild leaves for such a stream, since
+    teardown clears the rows and the replay never recreates that one. Throwing would make the method
+    unusable on the streams most likely to have gone wrong.
+  - **Refused by name for a type with no Fisher mapping.** A projection registered through
+    `Projections.StorageProviders` (an EF Core entity) is deliberately never mapped, so `Store` would
+    create a `fi_doc_*` table nothing else ever reads — a rebuild that silently wrote to the wrong
+    place.
+- **`DeleteAllTenantDataAsync`**, and the distinction it rests on. **Fisher refuses tenant
+  *deletion*** — deprovisioning here means deleting a *file*, the cheapest deprovisioning of any
+  Critter Stack store and the most irreversible, and Fisher cannot know whether that file is backed up
+  (see "Runtime tenants"). Wiping a tenant's *rows* is a different operation: it destroys nothing a
+  file restore would be needed to recover, it is the only way to erase a conjoined tenant at all, and
+  nothing covered it.
+  - **Under database-per-tenant it clears the tenant's file and keeps it**, so the tenant goes on
+    working and simply has no data. Removing the file stays the operator's act.
+  - **Tag rows go first, through their events.** `fi_event_tag_*` carries no tenant of its own and has
+    a real foreign key to `fi_events(seq_id)`, so the delete is a subselect and it has to precede the
+    events — fisher#6's ordering met again with a tenant predicate on it.
+  - **Progression rows are left alone**, under either tenancy. They describe how far the daemon read,
+    not what a tenant owns, and clearing them would make every shard replay a store that is now empty.
+    That is also why this needs no daemon pause, unlike `ResetAllDataAsync`.
+  - ⚠️ **"Has a `tenant_id` column" is not the question, and reading it as one makes the refusal
+    unreachable.** `fi_events`, `fi_streams` and `fi_dead_letters` carry the column on *every* store —
+    the event tables get it with a default under non-conjoined tenancy, and a dead letter records the
+    failing event's tenant as ordinary data. What the guard asks is what the store was *configured* to
+    slice by: a database per tenant, conjoined events, or at least one `MultiTenanted()` document type,
+    which is the only thing that puts the column on a `fi_doc_*` table. A store with none of those is
+    refused by name rather than reporting a successful erasure of nothing.
 
 ### `Advanced` and cleaning
 
