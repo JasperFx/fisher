@@ -41,6 +41,24 @@ public interface IQuerySession : IAsyncDisposable, IDisposable, IDocumentReadOpe
     string TenantId { get; }
 
     /// <summary>
+    ///     Where this session records the SQL it runs (fisher#207).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Starts as the one <see cref="StoreOptions.Logger()" /> hands out and is assignable, so
+    ///         one suspect session can be traced without turning logging on for the whole store:
+    ///         <c>session.Logger = new ConsoleFisherLogger()</c>. Matches Marten's
+    ///         <c>IQuerySession.Logger</c>.
+    ///     </para>
+    ///     <para>
+    ///         Assigning <c>NulloFisherLogger.Flyweight</c> is how a session opts back out, and it
+    ///         restores the free path rather than merely silencing the output — see
+    ///         <see cref="IFisherSessionLogger.Enabled" />.
+    ///     </para>
+    /// </remarks>
+    IFisherSessionLogger Logger { get; set; }
+
+    /// <summary>
     ///     The event store surface for this session.
     /// </summary>
     /// <remarks>

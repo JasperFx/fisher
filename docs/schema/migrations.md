@@ -8,6 +8,84 @@ await store.ApplyAllConfiguredChangesToDatabaseAsync();
 
 Applying the same configuration twice is a no-op.
 
+## Previewing a migration
+
+`ApplyAllConfiguredChangesToDatabaseAsync` applies the delta; these compute it and hand it back.
+
+```cs
+var migration = await store.Advanced.CreateMigrationAsync();
+
+if (migration.Difference != SchemaPatchDifference.None)
+{
+    foreach (var delta in migration.Deltas)
+    {
+        Console.WriteLine($"{delta.SchemaObject.Identifier}: {delta.Difference}");
+    }
+}
+```
+
+Three questions this answers that nothing else could:
+
+| Question | How |
+| :--- | :--- |
+| Is there anything outstanding? | `migration.Difference == SchemaPatchDifference.None` |
+| What exactly would change? | `migration.Deltas` |
+| Give me the DDL as a file | `await store.Advanced.WriteMigrationFileAsync("patch.sql")` |
+
+`WriteMigrationFileAsync` is the programmatic form of the `db-patch` command — the **delta** against
+the database as it stands, so a store already up to date writes a file with nothing in it to run.
+That is the difference from `WriteCreationScriptToFileAsync`, which describes the configuration and
+never looks at the database.
+
+::: tip
+"This change adds no migration" is a useful test to have in a suite, and it is the same call:
+assert `Difference` is `None` against a database the previous version's schema was applied to.
+:::
+
+Computing a delta reads the schema and writes nothing, so it works under `AutoCreate.None` — the
+deployment most likely to want it.
+
+To assert rather than inspect, see [Asserting the schema](/schema/), which throws on the first
+mismatch and spans every database.
+
+### Under database-per-tenant
+
+A migration is per database, so a preview is too.
+
+```cs
+// One tenant.
+var one = await store.Advanced.CreateMigrationAsync("tenant-one");
+
+// Every database this store spans, keyed by database identifier.
+var all = await store.Advanced.CreateAllMigrationsAsync();
+```
+
+The no-argument `CreateMigrationAsync()` is the **default** database only. Collapsing N tenants into
+one answer would report about whichever file came first, which is the same reason
+`ApplyAllConfiguredChangesToDatabaseAsync` reports per database rather than as one result.
+
+An unknown tenant throws, rather than quietly previewing the default database.
+
+## Inspecting the configured schema
+
+```cs
+foreach (var o in store.Advanced.AllObjects())
+{
+    Console.WriteLine(o.Identifier);
+}
+```
+
+Every table and index the store's configuration describes, in dependency order, without touching the
+database. The same feature set a migration applies — so a document type nothing has registered is
+absent from both.
+
+::: warning
+`store.Advanced.AllSchemaNames()` is always `["main"]` on Fisher, whatever `DatabaseSchemaName` is
+set to. SQLite has one schema, so Fisher folds the logical schema into the **table prefix**
+(`reporting_fi_events`) instead. The member is carried because Marten has it and store-agnostic code
+calls it; the names in `AllObjects()` are where the isolation actually shows.
+:::
+
 ## What SQLite can and cannot alter
 
 This is the part that differs from both siblings, because SQLite's `ALTER TABLE` is narrow.

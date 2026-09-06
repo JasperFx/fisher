@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using Fisher.Linq.Includes;
 using Fisher.Linq.Joins;
 using Fisher.Linq.Members;
 using Fisher.Linq.SqlGeneration;
@@ -150,6 +151,18 @@ internal class LinqQueryParser
     /// </remarks>
     public List<GroupJoinData> Joins { get; } = [];
 
+    /// <summary>
+    ///     Whether the chain carries an <c>Include()</c> — see fisher#204.
+    /// </summary>
+    /// <remarks>
+    ///     The plans themselves are read straight off the expression tree by
+    ///     <see cref="IncludePlans" />, since they contribute nothing to the SQL. What the parser needs
+    ///     them for is the refusal in <see cref="RefuseIncompatibleIncludes" />: an include is resolved
+    ///     against the query's <em>materialized documents</em>, so it has no meaning over a shape that
+    ///     is not one.
+    /// </remarks>
+    public bool HasIncludes { get; private set; }
+
     /// <summary>The join the chain is currently adding clauses to, or null before the first.</summary>
     private GroupJoinData? CurrentJoin => Joins.Count == 0 ? null : Joins[^1];
 
@@ -171,6 +184,52 @@ internal class LinqQueryParser
         for (var i = calls.Count - 1; i >= 0; i--)
         {
             Apply(calls[i]);
+        }
+
+        RefuseIncompatibleIncludes();
+    }
+
+    /// <summary>
+    ///     An <c>Include()</c> only means something over a query that returns whole documents.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The include's identity values are read out of the query's own materialized rows by
+    ///         running the caller's id source over them — see
+    ///         <see cref="IncludePlan{TParent,TInclude}" /> — so a <c>Select</c>, a <c>GroupBy</c> or a
+    ///         join leaves nothing to run it against: those produce values, group aggregates and
+    ///         projected shapes respectively, none of which is the document the id source was written
+    ///         for.
+    ///     </para>
+    ///     <para>
+    ///         Refused rather than allowed to silently leave the destination list empty, which is the
+    ///         house rule and is doubly right here — an unpopulated <c>IList</c> looks exactly like a
+    ///         query that legitimately matched nothing.
+    ///     </para>
+    /// </remarks>
+    private void RefuseIncompatibleIncludes()
+    {
+        if (!HasIncludes)
+        {
+            return;
+        }
+
+        if (Joins.Count > 0)
+        {
+            throw new BadLinqExpressionException(
+                "Include() cannot be combined with a join. A joined query yields the projected shape "
+                + "rather than documents of one type, so there is nothing for the include's id source "
+                + "to read. Include on the outer query before the join, or on the inner query passed "
+                + "to it.");
+        }
+
+        if (Projection is not null || GroupProjection is not null || GroupByLocator is not null)
+        {
+            throw new BadLinqExpressionException(
+                "Include() cannot follow a Select or a GroupBy. Its related documents are fetched using "
+                + "the identities carried by the rows the query returns, and a projected or grouped row "
+                + "is not the document those identities live on. Include before the projection, or "
+                + "project the results after they come back.");
         }
     }
 
@@ -279,6 +338,14 @@ internal class LinqQueryParser
 
             case "DistinctBy":
                 DistinctByLocator = LocatorFor(call);
+                break;
+
+            // Carries no SQL of its own: the plan hanging off this node is fetched by a second
+            // statement once the query's rows are materialized. Matched on the declaring type for the
+            // same reason the soft-delete markers below are.
+            case nameof(IncludeExtensions.IncludeMarker)
+                when call.Method.DeclaringType == typeof(IncludeExtensions):
+                HasIncludes = true;
                 break;
 
             case nameof(LinqExtensions.AnyTenant)

@@ -98,6 +98,7 @@ const config: UserConfig<DefaultTheme.Config> = {
                 { text: 'Paging', link: '/documents/querying/linq/paging' },
                 { text: 'Grouping and Aggregates', link: '/documents/querying/linq/grouping' },
                 { text: 'Joins', link: '/documents/querying/linq/joins' },
+                { text: 'Including Related Documents', link: '/documents/querying/linq/includes' },
                 { text: 'Querying for Raw JSON', link: '/documents/querying/query-json' },
                 { text: 'Batched Queries', link: '/documents/querying/batched-queries' },
                 { text: 'Raw SQL', link: '/documents/querying/raw-sql' },

@@ -53,7 +53,6 @@ a migrating Marten user hits first.
 
 | Marten | Status on Fisher | Instead |
 | :--- | :--- | :--- |
-| `Include()` / `Include<T>()` | **Absent.** No related-document loading of any kind. | A [join](/documents/querying/linq/joins) — `Join` and `GroupJoin(…).SelectMany(…)` across document tables, chained. Cheaper here than on either sibling, since a join between two document tables needs no `OPENJSON` and no lateral join. Or two queries; there is no round trip to save. |
 | Compiled queries — `ICompiledQuery<T>`, `ICompiledListQuery<T>`, `ICompiledQuery<TDoc,TOut>` | **Absent, and decided** — see [fisher#195](https://github.com/JasperFx/fisher/issues/195) for the measurement. | Nothing. Building the SQL is 4–11% of an ordinary Fisher query and 22.5% of the cheapest one it can run; the work is real but the absolute saving is ~2 µs. A filter-shape query plan cache would collect nearly all of it with no public API, which is the move that comes first. |
 | Full-text search — `Search`, `PlainTextSearch`, `PhraseSearch`, `WebStyleSearch`, `NgramSearch`, and full-text indexes | **Absent.** Nothing is built over SQLite's FTS5. | `Contains` / `StartsWith` / `EndsWith`, which are ordinal and case-sensitive (see below) and can be served by a [declared index](/documents/indexing/indexes). Not a substitute for ranked search. |
 | A session logging seam — `IMartenLogger` / `IMartenSessionLogger`, `StoreOptions.Logger(…)`, `session.Logger` | **Absent.** There is no per-command or per-session logging hook. | An `ActivitySource` named `Fisher` ([tracing](/diagnostics)), with spans for commits, queries and loads and a retry event that says a call waited on the write lock; and `IDocumentSessionListener` for bracketing the unit of work. Neither one gives you the SQL. |
@@ -127,6 +126,34 @@ that relied on *waiting* needs a retry.
 :::
 
 See [Appending Events](/events/appending#the-exclusive-methods-fail-where-the-siblings-wait).
+
+### `Include()` is an extension method, not a builder
+
+Fisher [includes related documents](/documents/querying/linq/includes), and covers the same three
+plan kinds Marten does — a callback or `IList`, a dictionary keyed by the related identity, and a
+dictionary of lists grouped by a mapping member — in both join directions, with an optional filter on
+each. What differs is the call shape, so **a ported line needs editing even though the feature is
+there**:
+
+```cs
+// Marten
+query.Include<Boat>(boats).On(x => x.BoatId);
+query.Include<Catch>(x => x.Id, catches).On(x => x.Id, c => c.AnglerId);
+
+// Fisher
+query.Include(x => x.BoatId, boats);
+query.Include(x => x.Id, (Catch c) => c.AnglerId, catches);
+```
+
+There is no `IMartenQueryable`-equivalent interface to hang members off, so there is no fluent
+`.On(…)` builder; the id source, the optional id mapping and the destination are all arguments of one
+extension method. The filter is a trailing optional argument rather than a separate overload.
+
+Two behavioural differences to plan for. Fisher resolves an include with a **second statement** rather
+than Marten's temp-table join, because an embedded store has no round trip to amortise — so the reads
+are not atomic with each other unless you wrap them in a transaction. And an `Include` combined with a
+`Select`, a `GroupBy`, a join, or a terminal that returns no documents is **refused by name** rather
+than silently leaving the destination empty.
 
 ### String searching is ordinal and case-sensitive
 

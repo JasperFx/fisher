@@ -18,9 +18,16 @@
         <!-- Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
              source. Weasel.Storage: the dialect-neutral closed-shape document + event storage
              runtime extracted from Marten, which Fisher plugs a SQLite dialect into rather than
-             hand-writing storage. -->
-        <PackageVersion Include="Weasel.Sqlite" Version="9.29.0" />
-        <PackageVersion Include="Weasel.Storage" Version="9.29.0" />
+             hand-writing storage.
+
+             9.31.0 is a real floor rather than a preference: it carries the lifts Fisher now
+             consumes instead of its own copies — SystemTextJsonSerializer and the public
+             StorageSerializerAdapter (weasel#555) and the generic ITransactionParticipant
+             (weasel#561). It also carries weasel#574, which brings the shared flat-table
+             DecrementMemberMap into line with fisher#183; Fisher does not use that DSL yet, but the
+             agreement is what makes adopting it later cost nothing. -->
+        <PackageVersion Include="Weasel.Sqlite" Version="9.31.0" />
+        <PackageVersion Include="Weasel.Storage" Version="9.31.0" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,

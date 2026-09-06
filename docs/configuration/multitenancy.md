@@ -111,6 +111,9 @@ public interface ITenantSource
 {
     bool TryFind(string tenantId, out TenantRegistration registration);
     ValueTask<IReadOnlyList<TenantRegistration>> AllAsync(CancellationToken token = default);
+
+    // Optional. Call it when a tenant stops being routable, so the tenancy drops its cached database.
+    Action<string>? OnTenantRevoked { get => null; set { } }
 }
 ```
 
@@ -120,12 +123,60 @@ opening a session — has to answer without I/O, which the directory convention 
 Enumerating every tenant is a startup and daemon concern, where an `await` is available.
 :::
 
-The two supplied sources differ deliberately:
+The three supplied sources differ deliberately:
 
-| Source | Unknown tenant id |
-| :--- | :--- |
-| `DirectoryTenantSource` | **Resolves it**, creating the file on first use. Enumeration reports only files that exist. |
-| `InMemoryTenantSource` | **Refuses it.** For an application pushing its own tenants list. |
+| Source | Unknown tenant id | The set is |
+| :--- | :--- | :--- |
+| `DirectoryTenantSource` | **Resolves it**, creating the file on first use. Enumeration reports only files that exist. | a convention |
+| `InMemoryTenantSource` | **Refuses it.** For an application pushing its own tenants list. | one process's memory |
+| `MasterTableTenantSource` | **Refuses it.** | a record — see below |
+
+### The tenant registry
+
+The durable form: one small SQLite database holding a `fi_tenants` table that names every tenant and
+where its data lives. Marten's master-table tenancy, for a store whose tenants are files.
+
+```cs
+var tenants = opts.MultiTenantedDatabasesInRegistry(x =>
+{
+    x.ConnectionString = "Data Source=/var/lib/app/tenants.db";
+
+    // A registry store has no store-level file, so the default tenant has to be named here — it is
+    // read while the store is being built, before anything could have read the table.
+    x.SeedDatabases.RegisterDefault("Data Source=/var/lib/app/tenants/main.db");
+});
+
+// …and at any time afterwards, from anywhere
+await tenants.AddTenantAsync("acme", "Data Source=/var/lib/app/tenants/acme.db");
+await tenants.SuspendTenantAsync("acme");
+await tenants.ResumeTenantAsync("acme");
+await tenants.ForgetTenantAsync("acme");
+```
+
+Reach it later through `((DynamicTenancy)store.Tenancy).Source`.
+
+Unlike the other two, the set **survives a restart and is shared between processes** — which is the
+whole reason to reach for it. A tenant added through this instance is usable by the very next
+session; one added to the registry by *another* process appears on the next refresh.
+
+::: warning
+**A tenant this process has not read does not resolve.** `ITenancy.DatabaseFor` is reached from the
+synchronous `OpenSession` and has no `await` to offer, so Fisher will not read the control table on
+the session path — Marten answers the same question with `GetAwaiter().GetResult()` and Fisher
+deliberately does not. The async daemon refreshes every minute;
+`ApplyAllConfiguredChangesToDatabaseAsync`, `db-apply` and `source.RefreshAsync()` all refresh on
+demand.
+:::
+
+::: tip
+SQLite has no schemas, so `SchemaName` folds into the table name as it does everywhere else in
+Fisher: `fi_tenants`, or `reporting_fi_tenants` under a logical schema called `reporting`. Two
+logical stores can therefore share one registry file and keep separate tenant lists.
+:::
+
+**Re-adding a suspended tenant does not resume it.** The upsert corrects the connection string and
+leaves the disabled flag alone, matching Marten — resuming as a side effect of correcting a
+connection string would silently undo a deliberate suspension.
 
 ### Migration per tenant
 
@@ -162,7 +213,15 @@ source.Resume("acme");
 ```
 
 `InMemoryTenantSource` spells the same thing `SetActive(id, false)`, and `Remove(id)` drops it
-entirely.
+entirely; `MasterTableTenantSource` spells them `SuspendTenantAsync` / `ResumeTenantAsync` /
+`ForgetTenantAsync`, and those changes are written to the registry rather than held in memory.
+
+::: tip
+Suspending takes effect **immediately**, including for a tenant this store has already opened a
+session for. That is not free — the tenancy caches a database per tenant — so a source tells it
+through `ITenantSource.OnTenantRevoked`, which the tenancy sets and which every supplied source
+raises.
+:::
 
 Forgetting a tenant a process is finished with — which releases its pooled connections and their file
 handles — is on the tenancy:
@@ -176,6 +235,10 @@ await tenancy.ForgetTenantAsync("acme");
 **Fisher suspends; it never deletes.** Deleting a tenant here means deleting a file — the cheapest
 deprovisioning of any Critter Stack store, and the most irreversible — and Fisher cannot know whether
 that file is backed up. Remove the file yourself.
+
+That holds for the registry too: `ForgetTenantAsync` removes the tenant's **row**, and the `.db` file
+stays exactly where it was. Re-registering the tenant finds its data again. To erase a tenant's rows
+and keep the file, use `store.Advanced.DeleteAllTenantDataAsync(id)`.
 :::
 
 `DisabledTenantException` is distinct from `UnknownTenantException` on purpose: "switched off" and

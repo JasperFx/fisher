@@ -87,11 +87,18 @@ public partial class FisherQueryProvider : IQueryProvider
         var (statement, selector) = Build<T>(expression);
 
         var results = new List<T>();
-        await using var reader = await ExecuteReaderAsync(statement, token).ConfigureAwait(false);
-        while (await reader.ReadAsync(token).ConfigureAwait(false))
+
+        // Scoped so the reader is closed before any Include() runs its own statement on this same
+        // connection, rather than leaving two open against one SQLite connection.
+        await using (var reader = await ExecuteReaderAsync(statement, token).ConfigureAwait(false))
         {
-            results.Add(await selector.ResolveAsync(reader, token).ConfigureAwait(false));
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                results.Add(await selector.ResolveAsync(reader, token).ConfigureAwait(false));
+            }
         }
+
+        await ResolveIncludesAsync(expression, results, token).ConfigureAwait(false);
 
         return results;
     }
@@ -269,21 +276,27 @@ public partial class FisherQueryProvider : IQueryProvider
         var (statement, selector) = Build<T>(expression);
         statement.Limit = enforceSingle ? 2 : 1;
 
-        await using var reader = await ExecuteReaderAsync(statement, token).ConfigureAwait(false);
+        T result;
 
-        if (!await reader.ReadAsync(token).ConfigureAwait(false))
+        await using (var reader = await ExecuteReaderAsync(statement, token).ConfigureAwait(false))
         {
-            return required
-                ? throw new InvalidOperationException($"The query returned no {typeof(T).Name}.")
-                : default;
+            if (!await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                return required
+                    ? throw new InvalidOperationException($"The query returned no {typeof(T).Name}.")
+                    : default;
+            }
+
+            result = await selector.ResolveAsync(reader, token).ConfigureAwait(false);
+
+            if (enforceSingle && await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                throw new InvalidOperationException(
+                    $"The query returned more than one {typeof(T).Name}.");
+            }
         }
 
-        var result = await selector.ResolveAsync(reader, token).ConfigureAwait(false);
-
-        if (enforceSingle && await reader.ReadAsync(token).ConfigureAwait(false))
-        {
-            throw new InvalidOperationException($"The query returned more than one {typeof(T).Name}.");
-        }
+        await ResolveIncludesAsync(expression, [result], token).ConfigureAwait(false);
 
         return result;
     }
@@ -308,6 +321,8 @@ public partial class FisherQueryProvider : IQueryProvider
 
     internal async Task<long> CountAsync<T>(Expression expression, CancellationToken token)
     {
+        RefuseIncludesOn(expression, "CountAsync/LongCountAsync");
+
         var (statement, parser, _, _) = BuildStatement(SourceTypeFor(expression), expression);
 
         // A projected count has to count the projected rows, and under Distinct that is the whole
@@ -397,6 +412,8 @@ public partial class FisherQueryProvider : IQueryProvider
             }
         }
 
+        await ResolveIncludesAsync(expression, items, token).ConfigureAwait(false);
+
         return new Pagination.CursorPage<T>(items, prepared.NextCursor(items.Count, lastKeys));
     }
 
@@ -414,6 +431,8 @@ public partial class FisherQueryProvider : IQueryProvider
     internal async Task<Pagination.CursorPage<string>> CursorPageJsonAsync<T>(Expression expression,
         int pageSize, string? cursor, CancellationToken token) where T : notnull
     {
+        RefuseIncludesOn(expression, "a JSON keyset page");
+
         var prepared = PrepareCursorPage<T>(expression, pageSize, cursor, jsonOnly: true);
 
         var items = new List<string>();
@@ -528,6 +547,8 @@ public partial class FisherQueryProvider : IQueryProvider
     internal async Task<IReadOnlyList<string>> JsonRowsAsync<T>(Expression expression, string columns,
         int? limit, CancellationToken token) where T : notnull
     {
+        RefuseIncludesOn(expression, "a JSON read");
+
         var (statement, parser, _, join) = BuildStatement(SourceTypeFor(expression), expression);
 
         if (RowProjection.For(parser) is not null || join is not null)
@@ -583,6 +604,8 @@ public partial class FisherQueryProvider : IQueryProvider
 
     internal async Task<bool> AnyAsync<T>(Expression expression, CancellationToken token)
     {
+        RefuseIncludesOn(expression, "AnyAsync");
+
         // Built non-generically so it answers a projected query too — whether any row exists does not
         // depend on what the rows are shaped into.
         var (statement, _, _, _) = BuildStatement(SourceTypeFor(expression), expression);
@@ -639,16 +662,23 @@ public partial class FisherQueryProvider : IQueryProvider
             ? ReverseOverPage(statement)
             : ReverseInPlace(statement);
 
-        await using var reader = await ExecuteReaderAsync(statement, token).ConfigureAwait(false);
+        T last;
 
-        if (!await reader.ReadAsync(token).ConfigureAwait(false))
+        await using (var reader = await ExecuteReaderAsync(statement, token).ConfigureAwait(false))
         {
-            return required
-                ? throw new InvalidOperationException($"The query returned no {typeof(T).Name}.")
-                : default;
+            if (!await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                return required
+                    ? throw new InvalidOperationException($"The query returned no {typeof(T).Name}.")
+                    : default;
+            }
+
+            last = await selector.ResolveAsync(reader, token).ConfigureAwait(false);
         }
 
-        return await selector.ResolveAsync(reader, token).ConfigureAwait(false);
+        await ResolveIncludesAsync(expression, [last], token).ConfigureAwait(false);
+
+        return last;
     }
 
     private async Task<T?> LastProjectedAsync<T>(
@@ -772,6 +802,8 @@ public partial class FisherQueryProvider : IQueryProvider
     internal async Task<TResult?> AggregateAsync<TResult>(Expression expression,
         AggregateFunction function, LambdaExpression selector, CancellationToken token)
     {
+        RefuseIncludesOn(expression, $"{function}Async");
+
         // Built non-generically, from the chain's own source type rather than from the terminal's
         // element type. A join's element type is the caller's result shape and a projection's is
         // whatever it produced, and neither is a document the schema has a mapping for — asking for one
@@ -1036,6 +1068,75 @@ public partial class FisherQueryProvider : IQueryProvider
         inner.OrderBys.AddRange(statement.OrderBys);
 
         return new Statement { Subquery = inner, SelectColumns = "count(*)" };
+    }
+
+    // ---- Include() ----
+
+    /// <summary>
+    ///     Fetch each <c>Include()</c>'s related documents, now that the query's own rows are in hand.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         One extra <c>SELECT</c> per include (per 500 identities), run on the session's own
+    ///         connection immediately after the parent read. That is the whole of Fisher's include
+    ///         strategy, and <see cref="Includes.IncludePlan{TParent,TInclude}" /> records why the
+    ///         temp-table join Marten uses would be machinery bought for a round trip an embedded store
+    ///         does not make.
+    ///     </para>
+    ///     <para>
+    ///         Sequential rather than concurrent on purpose: a Fisher session owns one SQLite
+    ///         connection, so two include reads in flight at once would contend for it rather than
+    ///         overlap.
+    ///     </para>
+    /// </remarks>
+    private async Task ResolveIncludesAsync<T>(Expression expression, IReadOnlyList<T> documents,
+        CancellationToken token)
+    {
+        var plans = Includes.IncludePlans.From(expression);
+
+        if (plans.Count == 0)
+        {
+            return;
+        }
+
+        var parents = new List<object>(documents.Count);
+
+        foreach (var document in documents)
+        {
+            if (document is not null)
+            {
+                parents.Add(document);
+            }
+        }
+
+        foreach (var plan in plans)
+        {
+            await plan.ResolveAsync(_session, parents, token).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    ///     Refuses an <c>Include()</c> on a terminal that returns no documents to hang it off.
+    /// </summary>
+    /// <remarks>
+    ///     <c>CountAsync</c>, <c>AnyAsync</c>, the scalar aggregates and the JSON reads all answer
+    ///     without materializing a single document, so an include on one of them has nothing to read
+    ///     identities from and would leave its destination empty. Silence there is indistinguishable
+    ///     from a query that matched nothing, which is exactly the shape the house rule refuses.
+    ///     <c>ToPagedListAsync</c> is deliberately not on this list: its count is a second statement,
+    ///     but its items come back through <see cref="ToListAsync{T}" /> and the includes resolve
+    ///     against the page.
+    /// </remarks>
+    private static void RefuseIncludesOn(Expression expression, string terminal)
+    {
+        if (Includes.IncludePlans.Any(expression))
+        {
+            throw new BadLinqExpressionException(
+                $"Include() cannot be used with {terminal}, which answers without materializing any "
+                + "documents — so there would be nothing to read the related identities from and the "
+                + "include would come back empty. Use ToListAsync, the First/Single/Last families, "
+                + "ToPagedListAsync or ToCursorPageAsync.");
+        }
     }
 
     private MemberFactory MemberFactoryFor<T>() where T : notnull
@@ -1432,6 +1533,8 @@ public partial class FisherQueryProvider : IQueryProvider
     ///     returns, so covering materialization would mean a span per terminal — five copies of the
     ///     same three lines, one of which would eventually be forgotten. And the question the span
     ///     exists to answer is where the time went waiting for SQLite, which is entirely inside it.
+    ///     The session logger's success and failure lines (fisher#207) are drawn at the same boundary
+    ///     and converge here for the same reason.
     /// </remarks>
     private async Task<System.Data.Common.DbDataReader> ExecuteReaderAsync(Statement statement,
         CancellationToken token)
@@ -1441,7 +1544,33 @@ public partial class FisherQueryProvider : IQueryProvider
         using var activity = StartQueryActivity(statement);
 
         var command = await CommandFor(statement, token).ConfigureAwait(false);
-        return await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        var logging = _session.IsLogging;
+
+        if (logging)
+        {
+            _session.Logger.OnBeforeExecute(command);
+        }
+
+        try
+        {
+            var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+
+            if (logging)
+            {
+                _session.Logger.LogSuccess(command);
+            }
+
+            return reader;
+        }
+        catch (Exception e)
+        {
+            if (logging)
+            {
+                _session.Logger.LogFailure(command, e);
+            }
+
+            throw;
+        }
     }
 
     /// <inheritdoc cref="ExecuteReaderAsync" />
@@ -1464,7 +1593,33 @@ public partial class FisherQueryProvider : IQueryProvider
         using var activity = StartQueryActivity(statement);
 
         var command = await CommandFor(statement, token).ConfigureAwait(false);
-        return await command.ExecuteScalarAsync(token).ConfigureAwait(false);
+        var logging = _session.IsLogging;
+
+        if (logging)
+        {
+            _session.Logger.OnBeforeExecute(command);
+        }
+
+        try
+        {
+            var result = await command.ExecuteScalarAsync(token).ConfigureAwait(false);
+
+            if (logging)
+            {
+                _session.Logger.LogSuccess(command);
+            }
+
+            return result;
+        }
+        catch (Exception e)
+        {
+            if (logging)
+            {
+                _session.Logger.LogFailure(command, e);
+            }
+
+            throw;
+        }
     }
 
     /// <summary>

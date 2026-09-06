@@ -301,6 +301,71 @@ public class transaction_participants : IAsyncLifetime
     }
 
     /// <summary>
+    ///     weasel#561 — Fisher's <see cref="ITransactionParticipant" /> is the shared generic contract
+    ///     closed over Microsoft.Data.Sqlite's pair, and declares no members of its own.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Two things the alias buys, and both are the point of adopting it. A Fisher participant
+    ///         <em>is</em> the shared contract, so store-agnostic infrastructure holding
+    ///         <c>ITransactionParticipant&lt;,&gt;</c> takes one without knowing about Fisher; and
+    ///         <c>AfterCommitAsync</c>'s default now comes from that contract rather than from a
+    ///         Fisher-local copy. Fisher was the store that <em>had</em> that default, so the lift took
+    ///         Fisher's semantic upstream — adopting the generic shape is a simplification, not a loss.
+    ///     </para>
+    ///     <para>
+    ///         Note what contravariance does and does not give: a participant written against the base
+    ///         <c>DbConnection</c>/<c>DbTransaction</c> pair converts <em>to</em> the closed generic
+    ///         shape, but a class still has to declare Fisher's interface to be handed to
+    ///         <see cref="IDocumentSession.AddTransactionParticipant" /> — porting one between the
+    ///         stores is a change to its base declaration and nothing else, which is the shared
+    ///         contract's own stated expectation.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public void the_participant_contract_is_the_shared_one_closed_over_sqlite()
+    {
+        typeof(Weasel.Storage.ITransactionParticipant<SqliteConnection, SqliteTransaction>)
+            .IsAssignableFrom(typeof(ITransactionParticipant)).ShouldBeTrue();
+
+        // No members of its own: the alias closes the generics and adds nothing.
+        typeof(ITransactionParticipant).GetMembers(
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.DeclaredOnly)
+            .ShouldBeEmpty();
+
+        // AfterCommitAsync is answered by the shared contract's default implementation — a
+        // non-abstract interface method — rather than by a Fisher-local declaration.
+        var afterCommit = typeof(Weasel.Storage.ITransactionParticipant<SqliteConnection, SqliteTransaction>)
+            .GetMethod("AfterCommitAsync")!;
+
+        afterCommit.IsAbstract.ShouldBeFalse();
+    }
+
+    /// <summary>
+    ///     A live Fisher participant satisfies the shared generic contract, which is what makes
+    ///     participant code portable across the three stores.
+    /// </summary>
+    [Fact]
+    public async Task a_fisher_participant_is_the_shared_contract()
+    {
+        var participant = new LedgerWriter("portable");
+
+        Weasel.Storage.ITransactionParticipant<SqliteConnection, SqliteTransaction> shared = participant;
+        shared.ShouldBeSameAs(participant);
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.AddTransactionParticipant(participant);
+            session.Store(new Invoice { Id = Guid.NewGuid(), Reference = "shared" });
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        (await LedgerCountAsync()).ShouldBe(1);
+        participant.Commits.ShouldBe(1);
+    }
+
+    /// <summary>
     ///     A participant that writes on the connection it is handed — which is the whole contract, and
     ///     the thing a participant on a <em>second</em> connection would get wrong by self-deadlocking.
     /// </summary>
