@@ -27,8 +27,18 @@ internal sealed class JoinClause
     /// <summary>The joined table, quoted.</summary>
     public required string Table { get; init; }
 
-    /// <summary>The alias every locator on the inner side is qualified with.</summary>
-    public required string Alias { get; init; }
+    /// <summary>
+    ///     The alias every locator on the inner side is qualified with, or null to join the table
+    ///     under its own name.
+    /// </summary>
+    /// <remarks>
+    ///     Null only for the FTS5 join (fisher#220), and not as a style choice: SQLite refuses an
+    ///     alias on the left of <c>MATCH</c> — <c>… join ftsdoc f … where f match ?</c> fails with
+    ///     "no such column: f", because the expression parser resolves a bare identifier there as a
+    ///     column rather than as a table. The FTS5 table therefore has to appear under its own name,
+    ///     which is also what <c>bm25()</c> has to be handed.
+    /// </remarks>
+    public string? Alias { get; init; }
 
     /// <summary>The outer key locator, already qualified with the outer alias.</summary>
     public required string OuterKeyLocator { get; init; }
@@ -49,8 +59,13 @@ internal sealed class JoinClause
     {
         builder.Append(IsLeftJoin ? " left join " : " join ");
         builder.Append(Table);
-        builder.Append(' ');
-        builder.Append(Alias);
+
+        if (Alias is not null)
+        {
+            builder.Append(' ');
+            builder.Append(Alias);
+        }
+
         builder.Append(" on ");
         builder.Append(OuterKeyLocator);
         builder.Append(" = ");

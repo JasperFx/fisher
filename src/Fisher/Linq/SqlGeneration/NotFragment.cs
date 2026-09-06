@@ -15,6 +15,9 @@ internal class NotFragment : ISqlFragment
         _inner = inner;
     }
 
+    /// <summary>The negated fragment, so a predicate tree can be walked -- fisher#220.</summary>
+    public ISqlFragment Inner => _inner;
+
     public void Apply(ICommandBuilder builder)
     {
         builder.Append("not (");

@@ -25,6 +25,12 @@ internal class CompoundWhereFragment : ISqlFragment
         _right = right;
     }
 
+    /// <summary>The two halves, so a predicate tree can be walked -- fisher#220.</summary>
+    public (ISqlFragment Left, ISqlFragment Right) Children => (_left, _right);
+
+    /// <summary><c>and</c> or <c>or</c>. A walker needs to tell an AND-chain from an OR-chain.</summary>
+    public string Separator => _separator;
+
     public static ISqlFragment And(IReadOnlyList<ISqlFragment> fragments) => Combine("and", fragments);
 
     public static ISqlFragment Or(IReadOnlyList<ISqlFragment> fragments) => Combine("or", fragments);
