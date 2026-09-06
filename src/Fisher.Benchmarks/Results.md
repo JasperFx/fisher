@@ -170,3 +170,38 @@ Notes:
 - Not re-run: `doc-save`, `event-append`, `daemon-rebuild`, `concurrent-writers` and the BDN
   micro-benchmarks. None of them reaches the first-use ensure more than once per type, and the
   scenario that does is the one above.
+
+---
+
+## LINQ config-only caches (2026-09-06, fisher#179)
+
+The rendered select list is cached per storage and the `MemberFactory` per mapping and table alias,
+instead of being rebuilt on every query execution. `QueryBenchmarks` is new in this change, so there
+is no earlier entry to compare against — the before column is the same harness run against `main`.
+
+```
+Fisher.Benchmarks — 2026-09-06 (Apple Silicon, macOS 26.4.1 Arm64, .NET 10.0.1, 18 CPUs, Release)
+BenchmarkDotNet ShortRun, in-process toolchain.
+```
+
+```
+| Method        | Allocated before | Allocated after |        |
+|-------------- |-----------------:|----------------:|-------:|
+| FilteredPage  |         31.65 KB |        31.35 KB | -0.30  |
+| FilteredCount |         13.34 KB |        13.23 KB | -0.11  |
+| FirstByMember |         16.17 KB |        15.84 KB | -0.33  |
+```
+
+Notes:
+
+- **Allocations are the number, and the means are not quoted.** The allocation column is exactly
+  reproducible run to run (13.34 KB and 16.17 KB came back identical across three baseline runs);
+  the ShortRun means moved 70–101 µs for `FilteredPage` across runs of *identical* code, so no
+  timing claim is made from them. `--job medium` reports NA on this harness — the default toolchain
+  cannot build the benchmark out of process — so the in-process ShortRun is what there is.
+- **It is a ~1% change, and that is the honest size of the config-only half.** What was removed is
+  a `string.Join` over a cached array and a `MemberFactory` construction per query. The per-query
+  allocation that remains is the expression visit, one `IQueryableMember` per referenced member with
+  its interpolated locator, the `Statement`, and the SQL render — which is the marten#5013-style
+  filter-shape plan cache, deliberately left to a separate node.
+- Nothing else was re-run: this change touches the read path's construction only.

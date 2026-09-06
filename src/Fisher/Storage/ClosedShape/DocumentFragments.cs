@@ -26,6 +26,19 @@ internal interface IFisherDocumentStorage
 
     /// <summary>Whether the table carries a <c>tenant_id</c> column to scope an operation by.</summary>
     bool IsConjoined { get; }
+
+    /// <summary>
+    ///     <see cref="ISelectClause.SelectFields" /> already rendered as a comma-separated select
+    ///     list, computed once per storage rather than per query.
+    /// </summary>
+    /// <remarks>
+    ///     The read layout is fixed when the storage is built — <c>SelectFields</c> returns the same
+    ///     array every time — so joining it on every query was rebuilding a constant string. Polecat
+    ///     caches the same shape as <c>_selectPrefixSql</c> on its own document storage. It belongs
+    ///     on the storage rather than on the mapping because the flavors disagree about it: the
+    ///     query-only selectors omit <c>id</c> where the writeable ones read it at column 0.
+    /// </remarks>
+    string SelectColumnsSql { get; }
 }
 
 /// <summary>

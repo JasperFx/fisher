@@ -119,6 +119,8 @@ internal sealed class SubClassFisherStorage<TDoc, TBase, TId>
 
     public string[] SelectFields() => _parent.SelectFields();
 
+    public string SelectColumnsSql => ((IFisherDocumentStorage)_parent).SelectColumnsSql;
+
     public void Apply(ICommandBuilder builder) => _parent.Apply(builder);
 
     public bool Contains(string sqlText) => false;
