@@ -41,6 +41,18 @@ public partial class DocumentStore : IDocumentStore
         // only place it can happen, since the point is to know about types nobody mentioned.
         options.Projections.DiscoverGeneratedEvolvers(AppDomain.CurrentDomain.GetAssemblies());
 
+        // Every upcast transformation's TARGET event type is registered here (fisher#191), because
+        // nothing else will. The old type is usually gone from the codebase — dropping it is the
+        // point of an upcast — so no AddEventType, no projection registration and no append ever
+        // mentions the new type either; a store that only READS upcast rows would otherwise have no
+        // mapping for the type its own transformation produces, and hydration would build one per
+        // read rather than once. Done at construction because a transformation may be registered
+        // through the shared JasperFx.Events.Upcasting surface, which Fisher does not own a hook in.
+        foreach (var transformation in options.EventGraph.Upcasters.AllTransformations)
+        {
+            options.EventGraph.AddEventType(transformation.EventType);
+        }
+
         // A flat table's physical name folds in the store's logical schema, and this is the first
         // moment that schema is final — the projection and DatabaseSchemaName are usually set in the
         // same configuration lambda, in whichever order the caller wrote them.

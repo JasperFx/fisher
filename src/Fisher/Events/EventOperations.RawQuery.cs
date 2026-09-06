@@ -84,7 +84,8 @@ public partial class EventOperations
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         while (await reader.ReadAsync(token).ConfigureAwait(false))
         {
-            var @event = FisherEventsRowReader.ReadEventAcrossStreams(reader, ctx, slots, isGuid);
+            var @event = await FisherEventsRowReader.ReadEventAcrossStreams(reader, ctx, slots, isGuid, token)
+                    .ConfigureAwait(false);
 
             if (@event is not null)
             {
@@ -184,7 +185,8 @@ public partial class EventOperations
         {
             while (await reader.ReadAsync(token).ConfigureAwait(false))
             {
-                var @event = FisherEventsRowReader.ReadEventAcrossStreams(reader, ctx, slots, isGuid);
+                var @event = await FisherEventsRowReader.ReadEventAcrossStreams(reader, ctx, slots, isGuid, token)
+                    .ConfigureAwait(false);
 
                 if (@event is not null)
                 {

@@ -40,7 +40,22 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     {
         await DisposeStoreAsync().ConfigureAwait(false);
 
-        _database = TemporaryDatabase.Create(config.SchemaName ?? "compliance");
+        // ⚠️ ONE file per fixture, kept across reconfigurations — not one per ConfigureAsync.
+        //
+        // A suite that reconfigures mid-test and expects to READ WHAT THE PREVIOUS CONFIGURATION
+        // WROTE cannot work otherwise, and UpcastingCompliance is built entirely on that shape: it
+        // writes rows through a "legacy" store that has never heard of the transformation, then hands
+        // the schema to the upcasting store to read back. That is the honest reproduction of the
+        // migration story, and against a fresh file per call it reads an empty database — six facts
+        // failing with "should have single item but had 0", which is what found this (fisher#191).
+        //
+        // Both siblings get this for free: one server, and the schema name is the isolation. Fisher's
+        // isolation is the FIXTURE — xUnit builds one per test — and the schema name folds into the
+        // table prefix, so two configurations naming different schemas still cannot see each other
+        // inside one file. Every suite that changes something structural (stream identity, conjoined
+        // tenancy) already changes SchemaName with it, which is what makes sharing the file safe:
+        // reconfiguring within one schema name only ever adds event types and projections.
+        _database ??= TemporaryDatabase.Create(config.SchemaName ?? "compliance");
 
         _store = DocumentStore.For(options =>
         {
@@ -414,6 +429,24 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         CreateProjectionScenario() => new Fisher.Events.TestSupport.ProjectionScenario(Store);
 
     /// <summary>
+    ///     jasperfx#752 — Fisher routes every read path through <c>EventRegistry.Upcasters</c> and
+    ///     implements <c>IUpcastPayload</c> over its own row reader and serializer (fisher#191).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The one gate that shipped closed, because the contract was defined ahead of any store
+    ///         implementing it. Fisher is the first to flip it.
+    ///     </para>
+    ///     <para>
+    ///         The only part of the contract a store may decline is the raw-JSON accessor, and Fisher
+    ///         cannot need to: its <c>data</c> column holds exactly the text System.Text.Json wrote, so
+    ///         <c>AsJsonDocument</c> is a parse of a string already in hand. Marten's is optional
+    ///         because its serializer is configurable.
+    ///     </para>
+    /// </remarks>
+    public override bool SupportsUpcasting => true;
+
+    /// <summary>
     ///     fisher#37 / polecat#370 — Fisher ships <see cref="Fisher.Batching.FetchStreamStatePlan" /> and
     ///     <see cref="Fisher.Batching.FetchStreamPlan" />, each implementing both the standalone and the
     ///     batched plan interface.
@@ -624,6 +657,8 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override async ValueTask DisposeAsync()
     {
         await DisposeStoreAsync().ConfigureAwait(false);
+
+        DisposeDatabase();
     }
 
     private async Task DisposeStoreAsync()
@@ -642,7 +677,17 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
             await _store.DisposeAsync().ConfigureAwait(false);
             _store = null;
         }
+    }
 
+    /// <summary>
+    ///     Drop the fixture's throwaway file, once, at the end.
+    /// </summary>
+    /// <remarks>
+    ///     Separate from <see cref="DisposeStoreAsync" /> because that one runs on every
+    ///     reconfiguration and the file has to outlive them — see <see cref="BuildStoreAsync" />.
+    /// </remarks>
+    private void DisposeDatabase()
+    {
         _database?.Dispose();
         _database = null;
     }
@@ -810,6 +855,22 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         /// </remarks>
         public void UseMessageOutbox(RecordingMessageOutbox outbox)
             => _options.Events.MessageOutbox = outbox;
+
+        /// <summary>
+        ///     jasperfx#752 — register one event upcast transformation (fisher#191).
+        /// </summary>
+        /// <remarks>
+        ///     One member covers every registration shape, because
+        ///     <see cref="JasperFx.Events.Upcasting.UpcastTransformation" /> is the carrier all of them
+        ///     funnel into — so this is the whole of Fisher's registration seam, and it is exactly the
+        ///     call an application makes through <c>StoreOptions.Events.Upcasters</c>. Registering the
+        ///     transformation's target event type is deliberately <em>not</em> done here:
+        ///     <c>DocumentStore</c>'s constructor sweeps <c>AllTransformations</c> for that, so a store
+        ///     configured through the shared JasperFx surface gets it too rather than only one
+        ///     configured through this seam.
+        /// </remarks>
+        public void Upcast(JasperFx.Events.Upcasting.UpcastTransformation transformation)
+            => _options.Events.Upcasters.Register(transformation);
     }
 }
 

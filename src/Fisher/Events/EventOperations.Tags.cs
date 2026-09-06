@@ -170,7 +170,8 @@ public partial class EventOperations
         await using var reader = await command.ExecuteReaderAsync(cancellation).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellation).ConfigureAwait(false))
         {
-            var @event = FisherEventsRowReader.ReadEventAcrossStreams(reader, ctx, slots, isGuid);
+            var @event = await FisherEventsRowReader
+                .ReadEventAcrossStreams(reader, ctx, slots, isGuid, cancellation).ConfigureAwait(false);
 
             // Null means dotnet_type named a type this process cannot resolve; skip it, as the
             // stream reads do.

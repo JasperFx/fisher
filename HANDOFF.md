@@ -12,31 +12,41 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1761 tests on net9.0 and net10.0**, two of them red — 1706 in
-`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 509 of
-them are shared cross-store compliance tests — 440 event sourcing and 69 document. On JasperFx **2.65.0** / Weasel **9.29.0**.
+**1772 tests on net9.0 and net10.0**, five of them red — 1717 in
+`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 516 of
+them are shared cross-store compliance tests — 447 event sourcing and 69 document. On JasperFx **2.65.0** / Weasel **9.29.0**.
 
-### Red — 2 facts
+### Red — 5 facts
+
+**Every one is upstream, fixed, merged, and waiting on a JasperFx release.** Nothing in `src/Fisher`
+is implicated in any of them. Verified by packing `jasperfx` main to a local feed and running
+Fisher's whole suite against it: all five green, nothing else moved.
 
 - `Fisher.Tests.Compliance.stream_archiving_compliance.capturing_an_archived_event_archives_a_string_identified_stream`
 - `Fisher.Tests.Compliance.stream_archiving_compliance.capturing_an_archived_event_through_an_async_snapshot_archives_the_stream`
+- `Fisher.Tests.Compliance.upcasting_compliance.a_raw_json_transformation_upcasts_without_the_old_clr_type`
+- `Fisher.Tests.Compliance.upcasting_compliance.upcasting_applies_in_live_aggregation`
+- `Fisher.Tests.Compliance.upcasting_compliance.upcasting_applies_in_async_daemon_projections`
 
-**Both are jasperfx#778, a real product bug in `JasperFx.Events` that Fisher found by being the store
-that ran the suite**, and both are fixed and merged upstream — the fix simply missed the 2.65.0 cut
-and lands in the release after it. Verified by packing `jasperfx` main plus jasperfx#784 to a local
-feed and running Fisher's whole suite against it: both green, nothing else moved.
+**The first two are jasperfx#778, a real product bug in `JasperFx.Events` that Fisher found by being
+the store that ran the suite.** An `Archived` event the aggregate applies nothing for did not archive
+its stream, on any store. `Archived` carries no state, so an aggregate has no reason to declare an
+`Apply` for it — which left it out of the projection's `AllEventTypes`, so `AppliesTo` answered
+false, the inline path screened the whole stream out *before reading anything*, and the async shard's
+own filter never delivered the event into a slice at all. Marten's four local archiving tests all
+append a handled event beside the marker, which is why it survived there. jasperfx#780 closed the
+innermost of three gates — and on Fisher changed nothing, which is what sent jasperfx#784 after the
+two outside it.
 
-An `Archived` event the aggregate applies nothing for did not archive its stream, on any store.
-`Archived` carries no state, so an aggregate has no reason to declare an `Apply` for it — which left
-it out of the projection's `AllEventTypes`, so `AppliesTo` answered false, the inline path screened
-the whole stream out *before reading anything*, and the async shard's own filter never delivered the
-event into a slice at all. Marten's four local archiving tests all append a handled event beside the
-marker, which is why it survived there. jasperfx#780 closed the innermost of three gates — and on
-Fisher changed nothing, which is what sent #784 after the two outside it.
+**The last three are jasperfx#787, a suite bug**, and the first two of them are one cause:
+`UpcastingCompliance`'s raw-JSON fact reached the stored body with a case-sensitive
+`GetProperty("CartId")`. Property casing is a store-serializer decision — Marten's default
+`PropertyNamingPolicy` is null, Polecat's and Fisher's is camelCase — so the fact passed on Marten
+and threw `KeyNotFoundException` on the other two. The live-aggregation and daemon facts append a
+coupon event and go down with it; the daemon one surfaces sixty seconds later as a shard that
+recorded no progress. Fixed upstream in jasperfx#788.
 
-**Fisher's own count is unchanged by this.** Nothing in `src/Fisher` is implicated — the wave's
-genuine Fisher findings are the five listed under "Wave 13" below, and all five are fixed here.
-jasperfx#779, the suite bug the same enrollment turned up, is already in 2.65.0.
+jasperfx#779, the other suite bug this wave's enrollment turned up, is already in 2.65.0.
 
 Note that 440 is not quite *every* event suite the shared library has, and three of the shortfall are
 enrolled-and-gated rather than absent:
@@ -492,10 +502,10 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.65.0 ships 52 suites; Fisher enrolls **49 of them, 509 tests**.
-Fisher passes **507 of them, across all
-49 suites**. Every suite compiles; every one is also subclassed and running. The two that do not pass
-are the upstream one declared at the top of this file, not Fisher behaviour.
+`JasperFx.Events.ComplianceTests` 2.65.0 ships 52 suites; Fisher enrolls **50 of them, 516 tests**.
+Fisher passes **511 of them, across all
+50 suites**. Every suite compiles; every one is also subclassed and running. The five that do not pass
+are the upstream ones declared at the top of this file, not Fisher behaviour.
 
 **What that does and does not claim, because the difference is load-bearing** (fisher#124). The suite
 pins **API portability, not behavioural equivalence**: code written against one store compiles and
@@ -528,7 +538,7 @@ shape: `DocumentLoadAndStoreCompliance` gained three tests for `LoadAsync<T>(obj
 fisher#89) and `DocumentComplianceConfig` gained `ValueTypes`. Diffing the suite *list* would have
 reported a clean bump — diff the contents.
 
-The library is now two halves. The **event sourcing** half is 42 enrolled suites and 440 tests, and the
+The library is now two halves. The **event sourcing** half is 43 enrolled suites and 447 tests, and the
 upstream backlog it emptied in 2.45.0 refilled in 2.64.0 — see "Wave 13" below. The
 **document** half arrived in 2.47.0 (jasperfx#647) and is now seven suites, 69 tests, over the
 store-agnostic document contract Fisher implements for fisher#68. Every suite added since 2.49.0 has
@@ -627,12 +637,12 @@ case is what is Fisher's alone — the `ResetAllDataAsync` daemon handling, `Fet
 and `UnknownNaturalKeyException` (which jasperfx#764 excludes on purpose), the subscription wrapper's
 naming.
 
-**Green on all forty-nine is not the same as feature-complete.** The suites cover what is portable
+**Green on all fifty is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 49 suites, 509 tests
+### Green — 50 suites, 516 tests
 
-Event sourcing — 42 suites, 440 tests:
+Event sourcing — 43 suites, 447 tests:
 
 | Suite | Tests |
 |---|---|
@@ -662,6 +672,7 @@ Event sourcing — 42 suites, 440 tests:
 | `ProjectionSideEffectCompliance` | 9 |
 | `SelfAggregatingEvolveCompliance` | 8 |
 | `LiveAggregationCompliance` | 7 |
+| `UpcastingCompliance` | 7 |
 | `AssignTagWhereCompliance` | 6 |
 | `BinaryEventSerializationCompliance` | 6 |
 | `DcbHasTagLinqCompliance` | 6 |

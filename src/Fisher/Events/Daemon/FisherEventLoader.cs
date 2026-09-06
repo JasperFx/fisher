@@ -64,6 +64,24 @@ internal sealed class FisherEventLoader : IEventLoader
                 _allowedEventTypeNames.Add(_events.EventMappingFor(type).EventTypeName);
             }
 
+            // ⚠️ An upcast target's SOURCE names have to be allowed too, or the filter excludes
+            // exactly the rows upcasting exists to read (fisher#191). A projection that folds the new
+            // schema declares the new types, and every row written before the migration carries the
+            // OLD name — so a shard filtered on the declared set alone reads nothing at all from the
+            // history it was pointed at, silently, and reports itself caught up.
+            //
+            // The wrong-looking alternative is to leave the SQL filter alone and rely on the
+            // in-memory check below, which does see the hydrated (upcast) event. It would not help:
+            // the filter is pushed into SQLite precisely so non-matching rows never leave it, and the
+            // old-named rows never would.
+            foreach (var transformation in _events.Upcasters.AllTransformations)
+            {
+                if (included.Contains(transformation.EventType))
+                {
+                    _allowedEventTypeNames.Add(transformation.EventTypeName);
+                }
+            }
+
             // The filter is pushed into SQL so non-matching rows never leave SQLite — a
             // subscription scoped to a few event types in a busy store would otherwise deserialize
             // essentially the whole event log to produce nothing. Marten pushes the same filter
@@ -126,7 +144,8 @@ internal sealed class FisherEventLoader : IEventLoader
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         while (await reader.ReadAsync(token).ConfigureAwait(false))
         {
-            var @event = FisherEventsRowReader.ReadEventAcrossStreams(reader, ctx, slots, isGuid);
+            var @event = await FisherEventsRowReader.ReadEventAcrossStreams(reader, ctx, slots, isGuid, token)
+                .ConfigureAwait(false);
 
             if (@event is null)
             {

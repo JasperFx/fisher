@@ -5,6 +5,7 @@ using Fisher.Storage;
 using JasperFx;
 using JasperFx.MultiTenancy;
 using JasperFx.Events;
+using JasperFx.Events.Upcasting;
 using JasperFx.Events.Daemon;
 using JasperFx.Events.Fetching;
 using JasperFx.Events.Tags;
@@ -513,6 +514,39 @@ public class EventStoreOptions : IEventStoreInstrumentation
         EventGraph!.UseBinarySerializer<TEvent>(serializer);
         return this;
     }
+
+    /// <summary>
+    ///     Event upcasting: how an old stored event schema is reinterpreted as the current CLR event
+    ///     type on every read path (fisher#191).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The registry, the transformation shape and the <c>IEventUpcaster</c> bases are all
+    ///         JasperFx's (<c>JasperFx.Events.Upcasting</c>, jasperfx#752) — Fisher supplies the read
+    ///         path and one <c>IUpcastPayload</c> adapter over its own reader and serializer, the same
+    ///         division as the async daemon. So an upcast registration ports between the three stores
+    ///         unchanged, which is the whole reason the contract was lifted.
+    ///     </para>
+    ///     <para>
+    ///         Forwarded from <see cref="Fisher.Events.EventGraph" /> rather than declared here, the
+    ///         same shape <see cref="DefaultBinarySerializer" /> takes: the graph is the
+    ///         <c>EventRegistry</c> the shared contract hangs off, and this is where a Fisher
+    ///         application configures its event store.
+    ///     </para>
+    ///     <para>
+    ///         <b>Registering a transformation is what makes its source name authoritative on read</b>
+    ///         (marten#4680): a stored <c>dotnet_type</c> hint pointing at the old CLR type does not
+    ///         shadow it, so the old type staying in the codebase — and even being appended typed —
+    ///         does not divide the store's history into rows that upcast and rows that do not.
+    ///     </para>
+    ///     <example>
+    ///         <code>
+    ///         options.Events.Upcasters.Upcast&lt;CartOpenedV1, CartInitialized&gt;(
+    ///             old =&gt; new CartInitialized(old.CartId, old.ClientId, "Opened"));
+    ///         </code>
+    ///     </example>
+    /// </remarks>
+    public UpcastingRegistry Upcasters => EventGraph!.Upcasters;
 
     /// <summary>
     ///     Keep recently fetched snapshots of <typeparamref name="T" /> in a node-local cache, so that a

@@ -294,6 +294,9 @@ Working, with tests:
   and as a document's
 - **Event rewriting** — `OverwriteEvent`, `CompletelyReplaceEvent`, event data masking through
   `Advanced.ApplyEventDataMaskingAsync`, and stream compacting via `CompactStreamAsync<T>`
+- **Event upcasting** — `Events.Upcasters`, over the shared `JasperFx.Events.Upcasting` contract: an
+  old stored event schema is reinterpreted as the current CLR event type on every read path, so the
+  old type can be deleted from the codebase
 - **Sessions and `SessionOptions`** — `QuerySession()` and `OpenSession(SessionOptions)` on the store,
   and enlistment: a session running on a connection or inside a transaction the caller owns
 - **Session tracking** — an identity map, dirty tracking, and `Eject` / `EjectAllOfType` /
@@ -3528,6 +3531,67 @@ Everything that reads the row's *columns* is unaffected — stream reads, the da
 queries, `QueryEventsAsync`'s metadata filters — which is why a stream can mix the two encodings
 freely, and why the daemon needed no change at all.
 
+### Event upcasting
+
+`StoreOptions.Events.Upcasters` (fisher#191) — how an old stored event schema is reinterpreted as the
+current CLR event type on every read path. **The registry, the transformation shape and the
+`IEventUpcaster` bases are all JasperFx's** (`JasperFx.Events.Upcasting`, jasperfx#752); Fisher
+supplies the read path and one `IUpcastPayload` adapter, the same division as the async daemon.
+
+The whole read-side integration is **one call in `FisherEventsRowReader.ReadEventCore`**, which is
+what having a single hydration point buys — every stream read, live aggregation, `FetchForWriting`,
+DCB tag query and daemon page already converges there.
+
+- ⚠️ **The registry is consulted BEFORE `ResolveEventType`, and that ordering is the marten#4680
+  authority rule** rather than an optimisation. A registered transformation is the authoritative
+  interpretation of its source event type name, so the stored `dotnet_type` hint does not get a vote.
+  The case it exists for is a store that still has the old CLR type in its codebase: a typed append
+  of it writes both the source name and a hint pointing at the old type, and letting the hint win
+  would read *those* rows as the old schema while every row the previous deployment wrote upcast
+  correctly — one store, one event type name, two answers.
+- ⚠️ **Hydration became asynchronous for this** (`ValueTask<IEvent?>` throughout). The shared contract
+  lets a transformation be registered async-only, whose synchronous delegate throws by design — so a
+  store hydrating synchronously could not honour one at all. Every Fisher read path was already
+  inside an `await reader.ReadAsync(...)` loop, so the cost is a `ValueTask` per row, and the ordinary
+  path awaits nothing and completes synchronously. `TryUpcast` is guarded on `Upcasters.HasAny`
+  first, so a store with no upcasts pays one boolean field read per row.
+- **`FisherUpcastPayload` is a `readonly struct`**, per-row and never cached, which is what the
+  contract expects — a transformation calls exactly one accessor exactly once. The ordinary path never
+  constructs one.
+- **The raw-`JsonDocument` accessor is unconditional here**, where the contract permits a store to
+  refuse: Fisher is System.Text.Json-only and `data` holds exactly the text it wrote. Marten's is
+  optional because its serializer is configurable. **A binary body (fisher#93) is the one exception** —
+  its `data` column holds only the `{}` placeholder, so a raw-JSON transformation over one is refused
+  by name rather than handed an empty object, which would upcast to an event with every member at its
+  default. A *typed* transformation reads it through the old type's own `IEventBinarySerializer`.
+- ⚠️ **The daemon's server-side type filter is widened with every transformation's SOURCE name**, or a
+  shard filtered on the new types reads nothing at all from the history it was pointed at — silently,
+  reporting itself caught up. The filter is pushed into SQLite precisely so non-matching rows never
+  leave it, which is why the loader's in-memory check (which does see the hydrated, upcast event)
+  cannot rescue it. **`UpcastingCompliance` does not reach this**: its daemon fact registers a
+  snapshot projection, whose `IncludedEventTypes` allow list is empty, so no SQL filter is composed
+  at all. `upcasting.a_subscription_filtered_on_the_new_type_receives_the_upcast_old_rows` is what
+  pins it, and it fails by delivering nothing when the widening is removed.
+- **The target event types are pre-registered in `DocumentStore`'s constructor**, from
+  `Upcasters.AllTransformations`. Nothing else would: dropping the old type is the point of an
+  upcast, so no `AddEventType`, projection registration or append ever mentions the new type either.
+  Done at construction rather than at registration because a transformation may be registered through
+  the shared JasperFx surface, which Fisher owns no hook in.
+- **The envelope keeps the row's stored `type` and `dotnet_type`**, not the transformation's. It is a
+  claim about the row, and nothing dispatches on it — `IEvent.EventType` is `Event<T>`'s `T`, which is
+  the new type.
+- **Upcasting does not reach a projection that has already run.** The high-water mark is a sequence
+  and registering a transformation does not move it, so a document built from the old schema keeps
+  what it derived until that projection is rebuilt. Same caveat as masking, and the same reason.
+
+`UpcastingCompliance` is the definition, and it is **the first suite in the library written ahead of
+any store implementing the behaviour** — its gate ships closed and Fisher is the first to flip it, so
+all seven facts ran for the first time anywhere here. Enrolling it found one suite bug: its
+raw-JSON fact reached the stored body with a case-sensitive `GetProperty("CartId")`, which is
+Marten's default casing and not Polecat's or Fisher's — fixed upstream in jasperfx#787.
+`Events/upcasting.cs` covers the two things the suite structurally cannot see: the server-side filter
+above, and binary bodies, which the shared upcasting fixture knows nothing about.
+
 ### Querying event bodies
 
 `EventOperations.QueryEventDataAsync<T>(predicate)` (fisher#41) — the counterpart to
@@ -3628,7 +3692,7 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher enrolls 49 of the 52 suites `JasperFx.Events.ComplianceTests` 2.65.0 ships — 509 tests.**
+**Fisher enrolls 50 of the 52 suites `JasperFx.Events.ComplianceTests` 2.65.0 ships — 516 tests.**
 `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
 gate is gone. See HANDOFF.md for the live scoreboard, which is machine-checked against a real run by
 `scripts/check_scoreboard.py`; what follows is the history and the mechanics.

@@ -118,8 +118,8 @@ public partial class EventOperations
         while (await reader.ReadAsync(token).ConfigureAwait(false))
         {
             var @event = isGuid
-                ? FisherEventsRowReader.ReadEventAsGuid(reader, ctx, slots)
-                : FisherEventsRowReader.ReadEventAsString(reader, ctx, slots);
+                ? await FisherEventsRowReader.ReadEventAsGuid(reader, ctx, slots, token).ConfigureAwait(false)
+                : await FisherEventsRowReader.ReadEventAsString(reader, ctx, slots, token).ConfigureAwait(false);
 
             // Null means dotnet_type named a type this process cannot resolve. Skipping rather than
             // throwing matches Marten and Polecat: a deployment that has not been told about an
@@ -216,8 +216,8 @@ public partial class EventOperations
         var slots = MetadataSlots.For(options);
 
         return isGuid
-            ? FisherEventsRowReader.ReadEventAsGuid(reader, ctx, slots)
-            : FisherEventsRowReader.ReadEventAsString(reader, ctx, slots);
+            ? await FisherEventsRowReader.ReadEventAsGuid(reader, ctx, slots, token).ConfigureAwait(false)
+            : await FisherEventsRowReader.ReadEventAsString(reader, ctx, slots, token).ConfigureAwait(false);
     }
 
     /// <summary>

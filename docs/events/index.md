@@ -70,6 +70,7 @@ See the [Quick Start](/events/quickstart) for a complete walkthrough.
 | [Natural Keys](/events/natural-keys) | Addressing a stream by a business identifier |
 | [DCB](/events/dcb) | Tags, tagged appends, consistency boundaries |
 | [Rewriting Events](/events/rewriting) | Overwrite, replace, masking, stream compacting |
+| [Upcasting Events](/events/upcasting) | Reading an old event schema as the current CLR type |
 | [Projections](/events/projections/) | Every shape, every lifecycle |
 | [Subscriptions](/events/subscriptions) | Arbitrary code over each range of events |
 
