@@ -550,9 +550,32 @@ Six things that are decisions rather than mechanics:
   IDENTITY hands out numbers outside the transaction — a writer can hold 7 uncommitted while 8
   commits ahead of it. On SQLite one writer per file plus `BEGIN IMMEDIATE` means a transaction's
   sequences fully commit before the next writer allocates any, and a rollback returns the number
-  (`sqlite_sequence` is an ordinary table and rolls back with it). Committed sequences are contiguous,
-  so `DetectInSafeZone` has no separate answer to give. **Do not reintroduce gap-skipping** — it would
-  guard a state that cannot occur.
+  (`sqlite_sequence` is an ordinary table and rolls back with it). So `DetectInSafeZone` has no separate
+  answer to give. **Do not reintroduce gap-skipping** — it would guard a state that cannot occur.
+  **The opt-out was audited rather than left asserted** (fisher#195), and it holds — but say what it
+  buys precisely, because "committed sequences are contiguous" is stronger than what is true and is
+  what sent one agent looking for a bug. The property is narrower and is exactly the one the daemon
+  needs: **a sequence at or below the mark can never later become a committed row the daemon has not
+  read.** Two facts give it — allocation happens only while the writer holds the file's one write lock,
+  and `AUTOINCREMENT` never reissues a number.
+  - **Contiguity itself is not unconditional, and that is not a gap.** Deleting events leaves permanent
+    holes, and deleting the newest events drops `max(seq_id)` below a mark already recorded — which is
+    what fisher#174 found. A hole is a sequence that is *gone*, not one that is *coming*: the loader
+    pages a range rather than counting rows so it steps over one, and the mark cannot follow a fallen
+    ceiling down because `HighWaterStatistics.HasChanged` is `CurrentMark > LastMark`.
+    `DeleteAllEventDataAsync` — the one operation that empties the table outright — clears
+    `fi_event_progression` in the same pass, so the two can never disagree.
+  - ⚠️ **One reachable state would break it, and it is closed one repository away.** SQLite cannot
+    alter most of a table, so any migration beyond `ALTER TABLE ADD COLUMN` rebuilds it, and a bare
+    rebuild resets `sqlite_sequence` to the highest *surviving* row — reissuing, on a table whose newest
+    rows had been deleted, numbers already handed out. Weasel's `TableDelta` emits the carry-over that
+    prevents it. `high_water_contiguity_audit.a_table_rebuild_carries_the_autoincrement_counter_forward`
+    pins the dependency, because nothing in Fisher would otherwise notice it going away and the symptom
+    is a projection permanently missing events with nothing to say why.
+  - **`high_water_contiguity_audit` is the argument as tests** — a crashed writer through WAL recovery
+    (the database and its `-wal` copied out from under a live uncommitted transaction, which is what a
+    machine that lost power would have on disk), WAL checkpointing, `VACUUM`, concurrent writers, two
+    stores over one file, every deletion path, and the migration above.
 - **Non-stale is decided against the shards the store *registers*, not the rows
   `fi_event_progression` holds** (fisher#102). Reading it off the rows makes a shard that has not run
   yet invisible — with no row it has no sequence to be behind — so a store with two async projections

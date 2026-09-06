@@ -12,9 +12,68 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1795 tests green on net9.0 and net10.0** — 1740 in
+**1808 tests green on net9.0 and net10.0** — 1753 in
 `Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 516 of
 them are shared cross-store compliance tests — 447 event sourcing and 69 document. On JasperFx **2.66.0** / Weasel **9.31.0**.
+
+## The high-water opt-out, audited (#199)
+
+**`FisherHighWaterDetector` opted out of Marten's whole high-water/gap-detection cluster** —
+marten#4953, #4964, #5057, #5090, #5091, #5108, #5125, #5239, #5305 and #5327 wontfix, between them
+`GapLivenessProbe`, a durable allocation fence reading `is_called`, and
+`SkipStaleGapsDespiteLiveTransactionsAfter` — on the strength of a comment. #199 asked for the comment
+to be tested rather than accepted.
+
+**Verdict: the opt-out is sound. No machinery ported, because there is no reachable gap to port it
+for.** What changed is how the reason is stated, and that is not cosmetic — the shorthand is what sent
+one agent looking for a bug.
+
+⚠️ **"Committed `seq_id`s are contiguous" is false as written.** Deleting events leaves permanent
+holes. The property that actually holds, and the only one the daemon needs, is narrower:
+
+> A sequence at or below the mark can never later become a committed row the daemon has not read.
+
+Two facts give it. **Allocation happens only while the writer holds the file's one write lock**, so no
+writer can commit past another's pending allocation — which is exactly the hazard a PostgreSQL
+sequence or SQL Server IDENTITY creates by handing out numbers *outside* the transaction, and what
+Marten's safe-zone polling, stale-gap skipping and `SafeStartMark` exist to establish. And
+**`AUTOINCREMENT` never reissues a number**, so a hole can never be filled in afterwards.
+
+**Contiguity is not unconditional and does not need to be.** A hole is a sequence that is *gone*, not
+one that is *coming*. The loader pages a range rather than counting rows, so it steps over one; the
+mark cannot follow a fallen ceiling down, because `HighWaterStatistics.HasChanged` is
+`CurrentMark > LastMark`; and `DeleteAllEventDataAsync` — the one supported operation that empties the
+table outright, and the one the compliance fixture runs before every test — clears
+`fi_event_progression` in the same pass, so the two can never disagree. fisher#174's finding that
+`max(seq_id)` can drop below recorded progress is real and is reproduced here as a test; it is a state
+`Advanced.TryCorrectProgressInDatabaseAsync` exists to repair, not a gap.
+
+⚠️ **One reachable state would genuinely break it, and it is closed one repository away.** SQLite
+cannot alter most of a table, so any migration beyond `ALTER TABLE ADD COLUMN` rebuilds it — create,
+copy, drop, rename — and **a bare rebuild resets `sqlite_sequence` to the highest *surviving* row**. On
+an `fi_events` whose newest rows a tenant wipe or a compaction had removed, that reissues numbers
+already handed out: precisely the reuse `AUTOINCREMENT` is on that column to forbid, and invisible,
+because the reissued events sit below the mark. Weasel's `TableDelta` emits the carry-over that
+prevents it. **Nothing in Fisher checked that it does**;
+`a_table_rebuild_carries_the_autoincrement_counter_forward` now does, and asserts the rebuild really
+happened so it cannot pass vacuously through a no-op migration.
+
+Scenarios tested and cleared, all in `high_water_contiguity_audit`:
+
+| Scenario | Result |
+|---|---|
+| `ROLLBACK` mid-batch | Already pinned by `high_water_detection`; the sequence is returned |
+| Connection abandoned mid-transaction | Sequences returned |
+| **Crash before commit** (database + `-wal` copied out from under a live uncommitted transaction, which is what a machine that lost power has on disk) | Recovery discards the allocation *and* the counter with it |
+| Concurrent writers | Contiguous — allocation needs the write lock |
+| Two stores over one file | Contiguous — the lock is on the file, not the pool |
+| WAL checkpointing | No effect on allocation |
+| `VACUUM` | **Preserves** the counter, including over deleted rows |
+| Deleting from the middle | Permanent hole; the daemon reads across it |
+| Deleting the newest events | `max(seq_id)` drops below the mark; the mark does not follow |
+| Append after a delete | Never reuses a sequence |
+| Full event wipe | Clears the progression rows with the events |
+| **Table rebuild migration** | Counter carried forward by Weasel — the one that would have broken it |
 
 ## Weasel 9.31.0 — the internals Fisher stopped carrying (#198)
 
