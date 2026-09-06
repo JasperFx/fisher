@@ -165,6 +165,79 @@ internal sealed class FisherHighWaterDetector : IHighWaterDetector
         => _database.FetchHighestEventSequenceNumber(token);
 
     /// <summary>
+    ///     Move the high-water mark straight to the highest sequence in the database, without the
+    ///     daemon having read a single event (fisher#173).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>For retrofitting async projections onto a store that has never had any.</b> A daemon
+    ///         starting against a large existing event store begins at zero and replays everything to
+    ///         reach the head; advancing the mark first means it starts in catch-up mode and processes
+    ///         only what arrives afterwards.
+    ///     </para>
+    ///     <para>
+    ///         <b>Nothing is projected by this, and that is the whole point — so it is also the
+    ///         hazard.</b> Every registered shard still starts from its own progression row, so a shard
+    ///         with no row will still replay from zero; what this skips is the *high-water* agent's
+    ///         climb. Use it on a store whose projections are genuinely new and whose history is
+    ///         genuinely not wanted, which is why Marten's own doc comment says "use with caution".
+    ///     </para>
+    ///     <para>
+    ///         Reads <c>max(seq_id)</c> and writes it. On SQLite that is the honest ceiling with no
+    ///         safe-zone reasoning behind it, for the reason this whole class documents: committed
+    ///         sequences are contiguous.
+    ///     </para>
+    /// </remarks>
+    internal async Task AdvanceHighWaterMarkToLatestAsync(CancellationToken token)
+    {
+        var highest = await _database.FetchHighestEventSequenceNumber(token).ConfigureAwait(false);
+
+        await MarkAsync(highest, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Pull any progression row that has somehow advanced past the highest event sequence back down
+    ///     to it (fisher#173).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>This is more reachable on Fisher than the Marten method it mirrors, and for a reason
+    ///         that is Fisher's own.</b> Marten carries it for a PostgreSQL shutdown race it believes it
+    ///         has since closed. Here the state arises from an ordinary, supported operation: stream
+    ///         compacting and <c>DeleteEventsOperation</c> remove rows, and <c>seq_id</c> is
+    ///         <c>AUTOINCREMENT</c>, so deleting from the top of the table lowers <c>max(seq_id)</c>
+    ///         below progress that was already recorded. A shard left above the ceiling never advances
+    ///         again, and <c>QueryForNonStaleData</c> waits on it forever.
+    ///     </para>
+    ///     <para>
+    ///         <b>Every row, not only the high-water one, and clamped per row rather than reset
+    ///         wholesale.</b> Marten's version resets every row to the highest sequence the moment the
+    ///         high-water row is ahead; that drags shards genuinely behind the head *forward*, skipping
+    ///         events they had not applied. Only a row that is impossible is corrected here, and only as
+    ///         far as the ceiling.
+    ///     </para>
+    ///     <para>
+    ///         A corrected shard will replay the range between the new ceiling and where it thought it
+    ///         was — which is the honest outcome, since the events it recorded having processed are no
+    ///         longer there to say otherwise.
+    ///     </para>
+    /// </remarks>
+    internal async Task TryCorrectProgressInDatabaseAsync(CancellationToken token)
+    {
+        await using var connection = await _database.OpenConnectionAsync(token).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+
+        command.CommandText = $"""
+                               update {_events.ProgressionTableName}
+                                  set last_seq_id = (select coalesce(max(seq_id), 0) from {_events.EventsTableName}),
+                                      last_updated = {SqliteTimestamp.NowExpression}
+                                where last_seq_id > (select coalesce(max(seq_id), 0) from {_events.EventsTableName});
+                               """;
+
+        await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+    }
+
+    /// <summary>
     ///     The progression row the mark lives in, sharing <c>fi_event_progression</c> with the shards.
     /// </summary>
     private static ShardName HighWaterShard => new(ShardState.HighWaterMark);

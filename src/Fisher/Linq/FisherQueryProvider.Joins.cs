@@ -116,8 +116,7 @@ public partial class FisherQueryProvider
         var sides = new List<JoinSide>
         {
             new(outerType, OuterAlias, outerClause,
-                new MemberFactory(_session.Options, _session.Options.Schema.MappingFor(outerType),
-                    OuterAlias),
+                _session.Options.Schema.MappingFor(outerType).MembersFor(OuterAlias),
                 Expression.Parameter(outerType, "outer"),
                 Offset: 0,
                 DataOrdinal: Array.IndexOf(outerClause.SelectFields(), "data"))
@@ -205,7 +204,7 @@ public partial class FisherQueryProvider
 
         return new JoinSide(
             join.InnerType, alias, clause,
-            new MemberFactory(_session.Options, mapping, alias),
+            mapping.MembersFor(alias),
             Expression.Parameter(join.InnerType, "inner" + index),
             offset,
             Array.IndexOf(clause.SelectFields(), "data"));

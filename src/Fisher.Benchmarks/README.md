@@ -37,6 +37,7 @@ dotnet run -c Release --project src/Fisher.Benchmarks -- cold-start         --ty
 
 # The BenchmarkDotNet micro-benchmarks (MemoryDiagnoser)
 dotnet run -c Release --project src/Fisher.Benchmarks -- bdn
+dotnet run -c Release --project src/Fisher.Benchmarks -- bdn --filter '*QueryBenchmarks*'
 ```
 
 The checked-in defaults are sized to finish in a few minutes so the harness stays cheap to run on
@@ -72,6 +73,12 @@ every change. For a publishable number, scale up:
    touching T document types, which pays the first-use table-ensure migration once per type (the
    O(types × objects) migration finding). The second, identical commit is the warm contrast, so
    the report can isolate "table-ensure overhead" and "overhead per type".
+6. **`QueryBenchmarks`** (BDN only) — one LINQ query end to end over a deliberately tiny table, so
+   parsing the chain and rendering the SQL rather than materializing rows is what the number is
+   about. The harness for the query-construction work: allocations are the signal, since the SQLite
+   round trip is in-process and the same before and after. The `FilteredCount` and `FirstByMember`
+   shapes read no documents (or one), which makes them the closest thing here to a per-query
+   overhead reading.
 
 ## Results
 

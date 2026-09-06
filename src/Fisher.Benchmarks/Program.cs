@@ -108,7 +108,7 @@ switch (command)
         // Everything after `bdn` is handed to BenchmarkDotNet unaltered, so its own filters and
         // job overrides work: `-- bdn --filter *DocSave*`, `-- bdn --job medium`.
         BenchmarkSwitcher
-            .FromTypes([typeof(DocSaveBenchmarks), typeof(EventAppendBenchmarks)])
+            .FromTypes([typeof(DocSaveBenchmarks), typeof(EventAppendBenchmarks), typeof(QueryBenchmarks)])
             .Run(args.Skip(1).ToArray());
         break;
 
@@ -129,6 +129,7 @@ switch (command)
 
             Micro-benchmarks (BenchmarkDotNet + MemoryDiagnoser):
               bdn [BenchmarkDotNet args...]     e.g. bdn --filter *DocSave*
+                                                DocSave, EventAppend, Query
 
             See src/Fisher.Benchmarks/README.md and Results.md.
             """);

@@ -739,8 +739,7 @@ public partial class FisherQueryProvider : IQueryProvider
         }
 
         var member = join is null
-            ? new MemberFactory(_session.Options, _session.Options.Schema.MappingFor(sourceType))
-                .ResolveMember(memberExpression)
+            ? _session.Options.Schema.MappingFor(sourceType).MembersFor().ResolveMember(memberExpression)
             : join.Member(selector)
               ?? throw new BadLinqExpressionException(
                   $"Fisher cannot {function.Sql()} '{selector.Body}' over a join. An aggregated value has "
@@ -984,6 +983,29 @@ public partial class FisherQueryProvider : IQueryProvider
     }
 
     /// <summary>
+    ///     A storage's select list, rendered once per storage rather than once per query.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The read layout is fixed when the storage is built, so <c>string.Join</c> over
+    ///         <see cref="ISelectClause.SelectFields" /> was rebuilding a constant string on every
+    ///         execution. Polecat has cached the same shape on its own document storage
+    ///         (<c>_selectPrefixSql</c>) for a while; this is Fisher catching up.
+    ///     </para>
+    ///     <para>
+    ///         <b>Cached on the storage, not on the mapping</b> — the flavors disagree about the
+    ///         select list (a query-only selector omits <c>id</c> where the writeable ones read it at
+    ///         column 0), so a mapping-keyed cache would hand a tracking session the query-only
+    ///         layout, or the reverse. The fallback covers any <see cref="ISelectClause" /> that is
+    ///         not one of Fisher's own storages rather than assuming there is none.
+    ///     </para>
+    /// </remarks>
+    private static string SelectColumnsFor(ISelectClause selectClause)
+        => selectClause is IFisherDocumentStorage fisher
+            ? fisher.SelectColumnsSql
+            : string.Join(", ", selectClause.SelectFields());
+
+    /// <summary>
     ///     Everything about a query that does not depend on the <em>result</em> type — which is
     ///     everything except materialization.
     /// </summary>
@@ -1010,8 +1032,7 @@ public partial class FisherQueryProvider : IQueryProvider
         // doc comment records.
         var joining = ContainsJoin(expression);
 
-        var parser = new LinqQueryParser(
-            new MemberFactory(_session.Options, mapping, joining ? OuterAlias : null));
+        var parser = new LinqQueryParser(mapping.MembersFor(joining ? OuterAlias : null));
         parser.Parse(expression);
 
         var statement = new Statement
@@ -1020,7 +1041,7 @@ public partial class FisherQueryProvider : IQueryProvider
             FromAlias = joining ? OuterAlias : null,
             SelectColumns = RowProjection.For(parser) is { } projection
                 ? string.Join(", ", projection.Columns)
-                : string.Join(", ", selectClause.SelectFields()),
+                : SelectColumnsFor(selectClause),
             GroupBy = parser.GroupByLocator,
             Limit = parser.Limit,
             Offset = parser.Offset,
@@ -1084,7 +1105,7 @@ public partial class FisherQueryProvider : IQueryProvider
             return statement;
         }
 
-        var fields = string.Join(", ", selectClause.SelectFields());
+        var fields = SelectColumnsFor(selectClause);
 
         var inner = new Statement
         {
