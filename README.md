@@ -40,8 +40,7 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > feature-complete against Marten. Several Marten features are genuinely missing, and until recently
 > they were missing from this list too: Fisher's parity baseline was drawn against *Polecat*, so
 > anything Marten has and Polecat does not was invisible to its tracking. Compiled
-> queries and a session logging seam are absent, and child-collection LINQ is only
-> partly landed. The
+> queries are absent and child-collection LINQ is only partly landed. The
 > [migration guide](https://fisher.jasperfx.net/migration-guide#marten-features-fisher-does-not-have)
 > names each one, says what to use instead, and marks which are settled decisions rather than unbuilt
 > work.
