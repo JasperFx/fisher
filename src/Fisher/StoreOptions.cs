@@ -10,6 +10,7 @@ using JasperFx.Events.Daemon;
 using JasperFx.Events.Fetching;
 using JasperFx.Events.Tags;
 using Polly;
+using Weasel.Core.MultiTenancy;
 using Weasel.Core;
 
 namespace Fisher;
@@ -297,6 +298,63 @@ public class StoreOptions
     /// <param name="directory">Where the tenant files live, named <c>&lt;tenantId&gt;.db</c>.</param>
     public void MultiTenantedDatabasesInDirectory(string directory)
         => MultiTenantedDatabasesFrom(new Storage.DirectoryTenantSource(directory));
+
+    /// <summary>
+    ///     A database file per tenant, with the tenant set held in a <b>registry database</b> and
+    ///     editable at runtime (fisher#213). Marten's master-table tenancy, for a store whose tenants
+    ///     are files.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The durable form of <see cref="MultiTenantedDatabasesFrom" />: one small SQLite database
+    ///         holds a <c>fi_tenants</c> table naming every tenant and where its data lives, so the set
+    ///         survives a restart, is shared across processes, and can be added to, suspended, resumed
+    ///         and removed while the store runs. <see cref="Storage.DirectoryTenantSource" /> is the
+    ///         convention form and resolves any tenant id at all;
+    ///         <see cref="Storage.InMemoryTenantSource" /> lives in one process's memory. This is the
+    ///         one that is a record.
+    ///     </para>
+    ///     <para>
+    ///         The returned <see cref="Storage.MasterTableTenantSource" /> is the runtime handle —
+    ///         <c>AddTenantAsync</c>, <c>SuspendTenantAsync</c>, <c>ResumeTenantAsync</c>,
+    ///         <c>ForgetTenantAsync</c>. Keep it, or reach it later through
+    ///         <see cref="Storage.DynamicTenancy.Source" />.
+    ///     </para>
+    ///     <para>
+    ///         <b>Forgetting a tenant removes its registry row and never its file.</b> See
+    ///         <see cref="Storage.MasterTableTenantSource" /> and <see cref="Storage.ITenantSource" />
+    ///         for why Fisher deprovisions and does not delete.
+    ///     </para>
+    /// </remarks>
+    /// <param name="configure">
+    ///     The registry's own <c>ConnectionString</c> or <c>DataSource</c>, plus the shared knobs —
+    ///     <c>SchemaName</c>, <c>AutoCreate</c> and <c>SeedDatabases</c> for tenants that should exist
+    ///     from the first start.
+    /// </param>
+    public Storage.MasterTableTenantSource MultiTenantedDatabasesInRegistry(
+        Action<MasterTableTenancyOptions<Weasel.Sqlite.SqliteDataSource>> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var tenancyOptions =
+            new MasterTableTenancyOptions<Weasel.Sqlite.SqliteDataSource>(Weasel.Sqlite.SqliteProvider
+                .Instance);
+        configure(tenancyOptions);
+
+        var source = new Storage.MasterTableTenantSource(this, tenancyOptions);
+        MultiTenantedDatabasesFrom(source);
+
+        return source;
+    }
+
+    /// <inheritdoc cref="MultiTenantedDatabasesInRegistry(Action{MasterTableTenancyOptions{Weasel.Sqlite.SqliteDataSource}})" />
+    /// <param name="connectionString">The registry database's connection string.</param>
+    public Storage.MasterTableTenantSource MultiTenantedDatabasesInRegistry(string connectionString)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+
+        return MultiTenantedDatabasesInRegistry(x => x.ConnectionString = connectionString);
+    }
 
     internal Storage.ITenantSource? TenantSource { get; private set; }
 

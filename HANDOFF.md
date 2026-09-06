@@ -1564,7 +1564,46 @@ Each of these is a decision with a reason, not an oversight:
   most irreversible, and Fisher cannot know whether that file is backed up. So the API suspends or
   forgets and an operator removes the file themselves. `DisabledTenantException` is distinct from
   `UnknownTenantException` because "switched off" and "never heard of it" are different operational
-  situations.
+  situations. **The tenant registry (#213) did not soften it either** — see below.
+
+## The tenant registry, and what adopting Weasel's lift cost
+
+fisher#213 added the fourth tenant source: `MultiTenantedDatabasesInRegistry(...)`, Marten's
+master-table tenancy over the runtime **Weasel 9.31.0 lifted out of Marten and Polecat** (weasel#567).
+Three things are worth knowing before touching it.
+
+**The lift was adopted, not reimplemented, and the seam fit with nothing adapted.**
+`MasterTableTenancyBase<TDatabase, TDataSource>` requires `TDataSource : DbDataSource` and
+`Weasel.Sqlite.SqliteDataSource` is one, so the control-table contract, the cache, provisioning-once,
+the seed list and the whole `IDynamicTenantSource<string>` lifecycle come from Weasel. What Fisher
+wrote is an `IMasterTenantTableDialect` and one adapter — and the store-agnostic admin surface
+(`IDynamicTenantSource<string>`, `IMasterTableMultiTenancy`), which Fisher had no equivalent of, comes
+free with it.
+
+**The base is closed over `TenantRegistration`, not `FisherDatabase`.** That is the decision the whole
+node turns on. The base's own remarks say all it does with a `TDatabase` is cache it, hand it back and
+dispose it — so closing it over the *row* makes its cache the synchronous snapshot
+`ITenantSource.TryFind` needs, and the source plugs into `DynamicTenancy` unchanged: the first-use
+migration, the daemon's tenant poller, `ForgetTenantAsync`, the cleaner, the CLI database source and
+`DisabledTenantException` all keep working. Closing it over `FisherDatabase` would have put a second
+database cache beside `DynamicTenancy`'s — two data sources and two pools per tenant — and forced
+`DatabaseFor` to resolve asynchronously, which is Marten's `GetAwaiter().GetResult()` and the one
+thing this node must not copy.
+
+**The deletion stance needed no guard, and that is the pleasant finding.** The lifted base's
+`DeleteDatabaseRecordAsync` already says the tenant's own database is left completely alone, so
+Fisher's rule and Weasel's agree: suspend flips a flag, forget deletes the *row*, the `.db` file stays
+where an operator can archive it. `tenant_registry.the_source_offers_no_way_to_delete_a_tenants_database`
+pins the absence by reflection, because "we do not delete" is exactly the rule a later convenience
+method breaks silently.
+
+**What the registry did make sharp is `ITenantSource.OnTenantRevoked`**, and it is a behaviour change
+to the *existing* sources rather than only to the new one. `DynamicTenancy` caches a `FisherDatabase`
+per tenant, so suspending a tenant the store had already resolved used to do nothing — the old
+`runtime_tenants` test said so in a comment and opened a fresh store to observe the refusal. Tolerable
+for a directory convention edited by hand; wrong for a control table, whose point is runtime effect.
+The member is default-implemented so `ITenantSource` stays implementable outside this repo, and it is
+a callback rather than a re-check on `DatabaseFor` because `TryFind` is on the session-open hot path.
 - **No hot-cold daemon coordination**, and `AddAsyncDaemon(DaemonMode.HotCold)` refuses rather than
   quietly running Solo. Failover means several nodes competing for a leadership lease through the
   database, and a Fisher store is a file SQLite does not make safe to share across nodes.

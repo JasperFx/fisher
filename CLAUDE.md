@@ -360,6 +360,10 @@ Working, with tests:
   configured stores live in one container
 - **Database-per-tenant** — `ITenancy` and a SQLite file per tenant, with per-database migration, the
   async daemon routed per database, and tenants that appear, suspend and resume at runtime
+- **A tenant registry** — `MultiTenantedDatabasesInRegistry(...)`, Marten's master-table tenancy over
+  Weasel's lifted `MasterTableTenancyBase`: the tenant set held in a control table in a SQLite
+  registry database, durable across restarts and shared between processes, with tenants added,
+  suspended, resumed and removed at runtime — and never deleted
 - **Transaction participants** — `ITransactionParticipant`, so an application's own writes commit in
   Fisher's transaction rather than contending with it for the file's one write lock
 - **The store-agnostic document contract** — `JasperFx.Events.Documents`, implemented by Fisher's own
@@ -2786,6 +2790,90 @@ populates deliberately.
   nothing for eviction to reclaim. What costs is a tenant that has been *used* — see "Releasing pooled
   connections" below. `ForgetTenantAsync` is the explicit release for a tenant a process is finished
   with.
+
+#### The tenant registry — fisher#213
+
+`Storage/MasterTableTenantSource.cs` and `Storage/SqliteMasterTenantTableDialect.cs`, reached by
+`StoreOptions.MultiTenantedDatabasesInRegistry(...)`. Marten's **master-table** tenancy: tenant →
+connection string in a control table, with tenants added, suspended, resumed and removed at runtime.
+For a store whose tenants are files, the analogue of the master table is a **tenant-registry
+database** — one small SQLite file holding `fi_tenants`.
+
+**The fourth source, and the first where the tenant set is a *record*.** The other three each fail to
+be one for a different reason: `DirectoryTenantSource` resolves any tenant id at all — the point of
+it, and also why it can never say "that is not one of ours"; `InMemoryTenantSource` holds the set in
+one process's memory, so nothing survives a restart and two nodes disagree; a fixed
+`MultiTenantedDatabases` set is configuration.
+
+**Weasel's lifted `MasterTableTenancyBase` is adopted rather than reimplemented** (weasel#567, Weasel
+9.31.0). The control-table contract, the cache, provisioning-once, the seed list and the whole
+`IDynamicTenantSource<string>` lifecycle are its; Fisher supplies `IMasterTenantTableDialect` and one
+adapter. `SqliteDataSource` *is* a `DbDataSource`, so the lift's seam fits with nothing adapted, and
+Fisher gets the store-agnostic admin surface (`IDynamicTenantSource<string>`,
+`IMasterTableMultiTenancy`) for free — a surface it had no equivalent of.
+
+- ⚠️ **The base is closed over `TenantRegistration`, not over `FisherDatabase`, and that is the whole
+  design.** The base's own remarks say everything it does with a `TDatabase` is cache it, hand it back
+  and dispose it — so closing it over the *registration* makes its cache Fisher's synchronous snapshot
+  of the control table, which is exactly what `ITenantSource.TryFind` needs. Closing it over
+  `FisherDatabase` would have put a second database cache beside `DynamicTenancy`'s — two
+  `SqliteDataSource`s and two connection pools per tenant — and forced `DatabaseFor` to resolve
+  asynchronously. Going through `ITenantSource` instead is also what reuses `DynamicTenancy` whole:
+  the first-use migration, the daemon's tenant poller, `ForgetTenantAsync`, the cleaner, the CLI
+  database source and `DisabledTenantException` all work with nothing added.
+- ⚠️ **Marten's `GetTenant(string)` is `tryFindTenantDatabase(...).GetAwaiter().GetResult()`, and that
+  is the one thing not to copy.** `DatabaseFor` is reached from `OpenSession`, which has no `await` to
+  offer — the reason `TryFind` is synchronous and `AllAsync` is not. So the trade is stated rather
+  than hidden: **a tenant this process has not read does not resolve.** One added through
+  `AddTenantAsync` here is cached as it is written; one added by another process appears on the next
+  refresh (the daemon polls every minute, and every `RefreshAsync` caller refreshes on demand).
+- ⚠️ **The seed list is what makes a default tenant possible at all.** `DynamicTenancy.Default` is read
+  while the store is being *built*, before anything could have read the control table — so a registry
+  naming its tenants only in the table cannot answer for `*DEFAULT*` and the store refuses to
+  construct. `TryFind` therefore falls back to `SeedDatabases`, which is configuration rather than
+  data: known synchronously, and upserted into the table on the first refresh so the two agree. The
+  fallback is checked *after* the disabled set, so suspending a seeded tenant still suspends it.
+- **`tenant_id` is declared `collate nocase`.** The base compares cache keys with the comparer it is
+  handed and Fisher hands it `OrdinalIgnoreCase`, matching its other two tenancies; SQLite's default
+  collation is case-sensitive, so without the collation the cache and the table disagree about whether
+  `Acme` and `acme` are one tenant — a tenant that resolves through one and not the other, which reads
+  as an intermittent.
+- **The upsert does not clear the disabled flag.** The dialect contract explicitly leaves this to the
+  dialect and says the two shipped stores disagree — Polecat's `MERGE` re-enables, Marten's
+  `on conflict` does not. Fisher follows Marten: resuming a suspended tenant as a side effect of
+  correcting its connection string would silently undo a deliberate suspension.
+- **Control-plane reads and writes go through `StoreOptions.ResiliencePipeline`**, via the base's
+  `ExecuteAsync` hook. The registry is a SQLite file and takes one writer, so an operator adding a
+  tenant while a node reads the table is exactly the `SQLITE_BUSY` the pipeline exists for. Polecat
+  overrides the same hook; Marten leaves it on the default.
+- **The table name folds the logical schema in**, like every other Fisher table, so two logical stores
+  sharing one registry file keep separate tenant lists.
+
+**The deletion stance held with no guard, which is the useful finding.** Fisher deprovisions and never
+deletes — deleting a tenant here means deleting a *file*, and Fisher cannot know it is backed up — and
+the lifted base already draws the line in the same place: its `DeleteDatabaseRecordAsync` says the
+tenant's own database is left completely alone. So `SuspendTenantAsync` flips a flag,
+`ForgetTenantAsync` deletes the *row*, and neither touches the `.db`. There is deliberately no member
+on the source that removes one, and `the_source_offers_no_way_to_delete_a_tenants_database` pins that
+by reflection rather than by prose, because "we do not delete" is exactly the rule a later convenience
+method breaks without anybody noticing.
+
+**`ITenantSource.OnTenantRevoked` closes a gap the registry made sharp** — and it applies to all three
+sources. `DynamicTenancy` caches a `FisherDatabase` per tenant and `DatabaseFor` answers from that
+cache, so **suspending a tenant the store had already resolved used to do nothing**; the old
+`runtime_tenants` test said so in a comment and opened a *fresh store* to observe the refusal. That is
+tolerable for a directory convention an operator edits by hand and wrong for a control table, whose
+whole point is runtime effect. The tenancy now sets a revocation callback the source raises, and the
+cached database is evicted and disposed.
+
+- **A callback rather than a check on the resolution path**, because `TryFind` is on the session-open
+  hot path and `DirectoryTenantSource` builds a `SqliteConnectionStringBuilder` on every call —
+  consulting it per session would be a real per-session cost to make a rare event immediate.
+- **Default-implemented on the interface** (`get => null; set { }`), so it is additive: `ITenantSource`
+  is public and implementable outside this repo, and a source that never revokes needs no change.
+- Disposal is synchronous, because a source revokes from a synchronous method. The difference from
+  `ForgetTenantAsync`'s async path is only that a pooled connection's close is not awaited, and
+  clearing the pool leaves a checked-out connection working either way (fisher#59).
 
 ### Releasing pooled connections
 

@@ -180,8 +180,14 @@ public class runtime_tenants : IAsyncLifetime
 
         source.Suspend("seasonal");
 
-        // Already-resolved databases are cached, so a fresh store is what proves the refusal rather
-        // than a stale cache hiding it.
+        // On THIS store, whose cache already holds the tenant's database. That used to need a fresh
+        // store — a suspension only reached a tenant nothing had resolved yet, which is the opposite
+        // of what switching a tenant off means and made "restart the process" part of the procedure.
+        // fisher#213's ITenantSource.OnTenantRevoked is what evicts it.
+        Should.Throw<DisabledTenantException>(() => store.LightweightSession("seasonal"))
+            .TenantId.ShouldBe("seasonal");
+
+        // And on a fresh store too, since the suspension is the source's rather than the cache's.
         await using var reopened = StoreFor(source);
 
         Should.Throw<DisabledTenantException>(() => reopened.LightweightSession("seasonal"))
@@ -189,8 +195,7 @@ public class runtime_tenants : IAsyncLifetime
 
         source.Resume("seasonal");
 
-        await using var resumed = StoreFor(source);
-        await using var query = resumed.LightweightSession("seasonal");
+        await using var query = store.LightweightSession("seasonal");
 
         (await query.LoadAsync<Sighting>(id, Token)).ShouldNotBeNull();
     }
