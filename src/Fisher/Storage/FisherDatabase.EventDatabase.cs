@@ -269,6 +269,34 @@ public partial class FisherDatabase : IEventDatabase
     ///         elapse while a query was in flight — the same condition reported as two different
     ///         exception types depending on timing alone (fisher#7).
     ///     </para>
+    ///     <para>
+    ///         <b>The correlation is <see cref="ProjectionLagCalculator" />'s, not a fourth hand-rolled
+    ///         one</b> (jasperfx#619). Its xmldoc names Marten's <c>WaitForNonStaleDataAsync</c> as one
+    ///         of the three independent implementations the lift exists to collapse, and this is
+    ///         Fisher's copy of the same semantic — anchor on the shards the store <em>registers</em>,
+    ///         treat a missing row as fully behind rather than caught up, and never let a bookkeeping
+    ///         row masquerade as a projection. Adopting it also buys two rules Fisher's own version did
+    ///         not have: a progression row is matched at the shard's <em>current version</em>, so a
+    ///         version bump reads as "no progress yet" rather than silently borrowing the previous
+    ///         version's row; and a row whose name does not parse as a shard identity is dropped
+    ///         rather than compared by string (marten#5161).
+    ///     </para>
+    ///     <para>
+    ///         <b>The bar stays <c>max(seq_id)</c> rather than
+    ///         <see cref="ProjectionLag.HighWaterMark" />, and that is deliberate.</b> The calculator
+    ///         measures each cell against the persisted high-water row, which is the right bar for a
+    ///         status endpoint — a shard cannot advance past a mark the agent has not published. It is
+    ///         the wrong bar for <em>this</em> caller: a session that just committed and then asked for
+    ///         non-stale data is asking about its own events, which are at <c>max(seq_id)</c> and may
+    ///         sit above a mark the agent has not reached yet, so measuring against the mark would
+    ///         return early on exactly the question the call exists to answer. On SQLite that ceiling
+    ///         is honest with no safe-zone reasoning behind it — committed sequences are contiguous,
+    ///         the same fact <c>FisherHighWaterDetector</c> rests on — so it is strictly stricter than
+    ///         the mark. <see cref="ProjectionLag.HasProgressionRow" /> and
+    ///         <see cref="ProjectionLag.Sequence" /> are what is read here;
+    ///         <see cref="ProjectionLag.Lag" /> and <see cref="ProjectionLag.IsCaughtUp" /> are
+    ///         measured against the mark and deliberately are not.
+    ///     </para>
     /// </remarks>
     public async Task WaitForNonStaleProjectionDataAsync(TimeSpan timeout)
     {
@@ -276,10 +304,10 @@ public partial class FisherDatabase : IEventDatabase
 
         // Resolved once: the registration is fixed for the store's lifetime, and the whole point is
         // that this set does not shrink to whatever has managed to write a row yet.
-        var expected = _options.Projections.AllShards().Select(x => x.Name.Identity).ToArray();
+        var registered = _options.Projections.AllShards().Select(x => x.Name).ToArray();
 
         var highWater = 0L;
-        var shards = Array.Empty<ShardState>();
+        var lags = Array.Empty<ProjectionLag>();
 
         try
         {
@@ -288,10 +316,7 @@ public partial class FisherDatabase : IEventDatabase
                 highWater = await FetchHighestEventSequenceNumber(cancellation.Token).ConfigureAwait(false);
                 var progress = await AllProjectionProgress(cancellation.Token).ConfigureAwait(false);
 
-                shards = progress
-                    .Where(x => !string.Equals(x.ShardName, ShardState.HighWaterMark,
-                        StringComparison.OrdinalIgnoreCase))
-                    .ToArray();
+                lags = ProjectionLagCalculator.Calculate(registered, progress, Identifier).ToArray();
 
                 // No events means nothing can be stale, whatever any shard has recorded.
                 if (highWater == 0)
@@ -299,11 +324,9 @@ public partial class FisherDatabase : IEventDatabase
                     return;
                 }
 
-                // Every registered shard, present and at the head. A shard with no row is behind by
+                // Every registered cell, present and at the head. A cell with no row is behind by
                 // definition, which is exactly the case the row-derived version could not see.
-                if (expected.All(identity =>
-                        shards.FirstOrDefault(x => string.Equals(x.ShardName, identity,
-                            StringComparison.OrdinalIgnoreCase)) is { } state && state.Sequence >= highWater))
+                if (lags.All(x => x.HasProgressionRow && x.Sequence >= highWater))
                 {
                     return;
                 }
@@ -316,19 +339,19 @@ public partial class FisherDatabase : IEventDatabase
         {
             // Filtered on this method's own token so that if an overload ever accepts the caller's,
             // their cancellation still surfaces as a cancellation rather than as a timeout.
-            var missing = expected
-                .Where(identity => shards.All(x => !string.Equals(x.ShardName, identity,
-                    StringComparison.OrdinalIgnoreCase)))
-                .ToArray();
+            var missing = lags.Where(x => !x.HasProgressionRow).Select(x => x.Shard.Identity).ToArray();
 
             var detail = missing.Length > 0
                 ? $" Registered shards that have not recorded any progress: [{string.Join(", ", missing)}]"
                   + " — the daemon may not be running."
                 : string.Empty;
 
+            var recorded = lags.Where(x => x.HasProgressionRow)
+                .Select(x => $"{x.Shard.Identity}:{x.Sequence}");
+
             throw new TimeoutException(
                 $"Projection data was still stale after {timeout}. High water is at {highWater}; "
-                + $"shards are at [{string.Join(", ", shards.Select(x => $"{x.ShardName}:{x.Sequence}"))}]."
+                + $"shards are at [{string.Join(", ", recorded)}]."
                 + detail);
         }
     }

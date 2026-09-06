@@ -12,9 +12,72 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1784 tests green on net9.0 and net10.0** — 1729 in
+**1795 tests green on net9.0 and net10.0** — 1740 in
 `Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 516 of
-them are shared cross-store compliance tests — 447 event sourcing and 69 document. On JasperFx **2.66.0** / Weasel **9.29.0**.
+them are shared cross-store compliance tests — 447 event sourcing and 69 document. On JasperFx **2.66.0** / Weasel **9.31.0**.
+
+## Weasel 9.31.0 — the internals Fisher stopped carrying (#198)
+
+**Three of the five candidates landed, one was already done, and one is deferred with a reason.** The
+bump is what surfaced the duplication rather than merely permitting the adoption: pinning 9.31.0
+alone fails the build with `CS0104: 'StorageSerializerAdapter' is an ambiguous reference between
+'Fisher.Serialization.StorageSerializerAdapter' and 'Weasel.Storage.StorageSerializerAdapter'`, at two
+call sites, before a line of Fisher changed.
+
+| Lift | Outcome |
+|---|---|
+| `ProjectionLagCalculator` / `ProjectionLag` (jasperfx#619) | **Adopted** in `WaitForNonStaleProjectionDataAsync` |
+| `Weasel.Core.SqlGeneration.ISqlFragment` | **Already adopted** — no Fisher copy exists (commit b520cb3) |
+| `SystemTextJsonSerializer` + `StorageSerializerAdapter` (weasel#555) | **Adopted** — one file deleted, one reduced to a subclass with an empty body |
+| Generic `ITransactionParticipant<,>` (weasel#561) | **Adopted** — Fisher's is a one-line derived alias |
+| Flat-table DSL (weasel#568) and `EventLoaderBase` (weasel#566) | **Deferred**, reasons below |
+
+**The lag calculator went somewhere the issue did not predict, and that is worth recording.** #198
+placed Fisher's hand-rolled lag correlation in the AspNetCore high-water health check. It is not
+there: that check correlates the *high-water agent's own* liveness — a poll-cycle age, with a
+mark-versus-`max(seq_id)` gap as the secondary — which is a different question from per-shard
+projection lag, and putting the calculator into it would have been the wrong shape. Fisher's actual
+third copy of the upstream semantic is `FisherDatabase.WaitForNonStaleProjectionDataAsync`, which is
+fisher#102's rule written out longhand and which the upstream xmldoc names by its Marten spelling.
+
+⚠️ **The adoption is behaviour-preserving except in one deliberate respect, and the exception is the
+thing to know.** `ProjectionLagCalculator` measures every cell against the **persisted high-water
+row**; the wait keeps measuring against **`max(seq_id)`**, so it reads `HasProgressionRow` and
+`Sequence` and pointedly does not read `IsCaughtUp` or `Lag`. The mark is the right bar for a status
+endpoint and the wrong one here: a session that has just committed and then asks for non-stale data is
+asking about *its own* events, which are at `max(seq_id)` and may sit above a mark the agent has not
+polled up to yet — so the shared bar would return early on exactly the question the call exists to
+answer. `a_mark_that_trails_the_committed_events_does_not_make_the_store_current` is the
+discriminating fact: it asserts every cell reports `IsCaughtUp` and still requires the wait to time
+out, so switching the check to `IsCaughtUp` fails it by returning.
+
+What the adoption *buys* beyond collapsing the copy: a progression row is only ever consulted at the
+shard's current **version**, and a row whose name does not parse as a shard identity is dropped rather
+than string-compared (marten#5161). And `IEventDatabase.FetchProjectionLagAsync` — a default interface
+method Fisher inherits with no implementation — is now exercised, so the shared read is known to work
+here rather than assumed to.
+
+**Why the last two are deferred, since "defer" is a claim that needs one.**
+
+- **The flat-table DSL.** The blocker #198 named is gone: weasel#574 shipped the fisher#183 decrement
+  negation in 9.31.0, so the shared `DecrementMemberMap` and Fisher's now agree and adopting would no
+  longer cost the fix. What is left is that almost nothing about Fisher's copy is a swap. Its column
+  maps are `internal` and render through `SchemaUtils.QuoteName` directly rather than through a
+  dialect's quote/existing-row context, so each is a rewrite; `FlatTable : Table` exists to fold the
+  store's logical schema into the physical name, which is Fisher's only isolation boundary between two
+  stores in one file and has no counterpart in `FlatTableStatementBuilder`; and
+  `FlatTableFeatureSchema` puts the table in the store's migration rather than creating it lazily,
+  which is a deliberate divergence from Polecat. Churn through a projection type the compliance suite
+  covers, for no behaviour change, is a node of its own with the fisher#183 semantics pinned first.
+- **`EventLoaderBase`.** The base is well shaped and Fisher would gain something real —
+  `ReportLastObservedSequence` (jasperfx#667), which closes a page whose every row was skipped taking
+  a ceiling from no surviving event. What it costs is a SQLite `IEventPagingDialect` including a
+  skip-ahead probe Fisher has no caller for, a mapping of the loader's constructor-time allow-list work
+  onto `EventTypeAllowList` — **including fisher#191's expansion of a transformation's *source* event
+  type names, which is the half that fails silently if it is lost, and which no compliance suite
+  reaches** — and a home for `DaemonTrace.Record`, for which the base offers no hook. Two regressions
+  the shared suites structurally cannot catch (fisher#153, fisher#191) is the wrong thing to carry as a
+  rider.
 
 ### Cleared by JasperFx 2.66.0 — the five that were red
 
