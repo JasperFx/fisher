@@ -133,11 +133,22 @@ internal partial class FisherSession
     ///     Start a LINQ query over a document type.
     /// </summary>
     /// <remarks>
-    ///     The provider is cached per session because it holds the session, and the session's single
-    ///     connection is what lets a query inside a unit of work see that unit of work's own writes.
+    ///     <para>
+    ///         The provider is cached per session because it holds the session, and the session's
+    ///         single connection is what lets a query inside a unit of work see that unit of work's
+    ///         own writes.
+    ///     </para>
+    ///     <para>
+    ///         Built through <c>LazilyCreate</c> rather than by <c>??=</c>, because the async daemon
+    ///         drives one session from several threads and a projection slice that reads before it
+    ///         writes — marten#4667's shape — comes through here. Two providers is not merely
+    ///         wasteful: since fisher#179 a provider holds the cached config-only halves of query
+    ///         construction, so a discarded one silently halves that cache.
+    ///     </para>
     /// </remarks>
     public IQueryable<T> Query<T>() where T : notnull
-        => new Linq.FisherQueryable<T>(_queryProvider ??= new Linq.FisherQueryProvider(this));
+        => new Linq.FisherQueryable<T>(
+            LazilyCreate(ref _queryProvider, () => new Linq.FisherQueryProvider(this)));
 
     /// <inheritdoc cref="Store{T}" />
     public void Store<T>(params T[] documents) where T : notnull
