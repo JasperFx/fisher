@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1845 tests green on net9.0 and net10.0** — 1790 in
+**1870 tests green on net9.0 and net10.0** — 1815 in
 `Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 516 of
 them are shared cross-store compliance tests — 447 event sourcing and 69 document. On JasperFx **2.66.0** / Weasel **9.31.0**.
 
@@ -1501,7 +1501,7 @@ Each of these is a decision with a reason, not an oversight:
 
 > ⚠️ **This section is not the whole gap list, and the README no longer claims it is.** Everything
 > below is a *decision*; there is a separate set of Marten features that are simply **absent** —
-> `Include()`, full-text search, a session logging seam, `MatchesSql`, `Stats(out QueryStatistics)`,
+> full-text search, a session logging seam, `MatchesSql`, `Stats(out QueryStatistics)`,
 > `ToAsyncEnumerable()`, and child-collection LINQ only partly. They were missing from this section for
 > a structural reason worth knowing: **Fisher's parity baseline was drawn against Polecat**
 > (`polecat-gaps.md`), so a feature Marten has and Polecat does not never entered the tracking at all.
@@ -1520,9 +1520,10 @@ Each of these is a decision with a reason, not an oversight:
 - **The LINQ surface refuses rather than falling back to client-side evaluation**, which is the
   invariant, not the size of the surface — that has grown a long way past filtering, ordering and
   paging (`Select` and `Distinct` in #23, `GroupBy` and `HAVING` in #24, joins in #25, the aggregates
-  in #22 and #54, both pagings in #27, chained joins in #55). What is still refused is refused *by
-  name*, with the alternative: `Include`, and everything listed under the join and projection sections
-  above.
+  in #22 and #54, both pagings in #27, chained joins in #55, `Include` in #204). What is still refused
+  is refused *by name*, with the alternative: everything listed under the join and projection sections
+  above, and the combinations `Include` cannot answer — a projected, grouped or joined row is not a
+  document, and neither is a count.
 - **No ordering or range comparison on a string-stored enum.** See the LINQ section — the stored form
   is the member's name, so it sorts alphabetically rather than by declared order. Timestamps used to
   be on this list and no longer are (fisher#1).
