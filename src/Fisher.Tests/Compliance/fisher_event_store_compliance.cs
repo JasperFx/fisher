@@ -9,7 +9,7 @@ namespace Fisher.Tests.Compliance;
  * these tests cannot drift between the products.
  *
  * Suites were added one at a time as Fisher grew into them, and fifty are enrolled from
- * JasperFx.Events.ComplianceTests 2.65.0, which itself ships fifty-two. One is not enrolled:
+ * JasperFx.Events.ComplianceTests 2.66.0, which itself ships fifty-two. One is not enrolled:
  * SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
