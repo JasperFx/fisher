@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <!-- Single-targeted, overriding the repo-wide net9.0;net10.0 pair: a perf harness is run,
+             not shipped, and one TFM keeps `dotnet run` unambiguous. -->
+        <TargetFrameworks></TargetFrameworks>
+        <TargetFramework>net10.0</TargetFramework>
+        <IsPackable>false</IsPackable>
+        <!-- BenchmarkDotNet insists on optimized code, and the timed harness is meaningless
+             without it either. -->
+        <Optimize Condition="'$(Configuration)' == 'Release'">true</Optimize>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="BenchmarkDotNet" />
+        <!-- Conventional Apply/Create dispatch on BenchTally is compile-time only; the generator
+             must run in the assembly that defines the aggregate, exactly as Fisher.Tests does. -->
+        <PackageReference Include="JasperFx.Events.SourceGenerator" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Fisher\Fisher.csproj" />
+        <!-- For TemporaryDatabase: the same throwaway-file-per-run isolation the tests use. -->
+        <ProjectReference Include="..\Fisher.TestUtils\Fisher.TestUtils.csproj" />
+    </ItemGroup>
+
+</Project>

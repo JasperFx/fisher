@@ -8,6 +8,7 @@
   <Folder Name="/src/">
     <Project Path="src/Fisher/Fisher.csproj" />
     <Project Path="src/Fisher.AspNetCore/Fisher.AspNetCore.csproj" />
+    <Project Path="src/Fisher.Benchmarks/Fisher.Benchmarks.csproj" />
     <Project Path="src/Fisher.AspNetCore.Tests/Fisher.AspNetCore.Tests.csproj" />
     <Project Path="src/Fisher.EntityFrameworkCore/Fisher.EntityFrameworkCore.csproj" />
     <Project Path="src/Fisher.EntityFrameworkCore.Tests/Fisher.EntityFrameworkCore.Tests.csproj" />
