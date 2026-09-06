@@ -1,3 +1,5 @@
+using JasperFx.Events.Daemon;
+using JasperFx.Events.Projections;
 using JasperFx.Events.Protected;
 using Weasel.Core.Sequences;
 
@@ -77,6 +79,48 @@ public class AdvancedOperations
                 await daemons.ResumeAsync().ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>
+    ///     Delete every row belonging to one tenant, keeping the schema — and, under
+    ///     database-per-tenant, the tenant's file (fisher#173).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>This is not the tenant deletion Fisher refuses, and the difference is the point.</b>
+    ///         Deprovisioning a tenant here means deleting a <em>file</em>: the cheapest deprovisioning
+    ///         of any Critter Stack store and the most irreversible, and Fisher cannot know whether that
+    ///         file is backed up — so <see cref="Storage.ITenantSource" /> suspends or forgets and an
+    ///         operator removes the file themselves. Wiping a tenant's <em>rows</em> is a different
+    ///         operation: it destroys nothing a file restore would be needed to recover, it is the only
+    ///         way to erase a conjoined tenant at all, and nothing covered it.
+    ///     </para>
+    ///     <para>
+    ///         Under conjoined tenancy every table carrying a <c>tenant_id</c> is filtered on it — the
+    ///         event store, the tenanted document types, the natural key lookups and the dead letters —
+    ///         and the DCB tag rows go through their events, since a tag has no tenant of its own.
+    ///         Under database-per-tenant the tenant's whole file is cleared, progression rows excepted:
+    ///         they describe how far the daemon read, not what a tenant owns, and resetting them would
+    ///         make every shard replay a store that is now empty.
+    ///     </para>
+    ///     <para>
+    ///         <b>One transaction per database, and nothing else is paused.</b> Unlike
+    ///         <see cref="ResetAllDataAsync" /> this leaves <c>fi_event_progression</c> alone, so a
+    ///         running daemon is not stranded and does not need pausing.
+    ///     </para>
+    /// </remarks>
+    /// <exception cref="NotSupportedException">
+    ///     The store keeps no tenant-scoped data at all, so there is nothing that could be this tenant's
+    ///     to delete. Refused rather than reporting a successful erasure of nothing.
+    /// </exception>
+    /// <exception cref="Storage.UnknownTenantException">
+    ///     Database-per-tenant, and this store has no database for that tenant.
+    /// </exception>
+    public Task DeleteAllTenantDataAsync(string tenantId, CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+
+        return new Internal.TenantDataCleaner(tenantId, _store).ExecuteAsync(token);
     }
 
     /// <summary>
@@ -341,6 +385,267 @@ public class AdvancedOperations
     /// <inheritdoc cref="ToDatabaseScript" />
     public Task WriteCreationScriptToFileAsync(string path, CancellationToken token = default)
         => _store.Database.WriteCreationScriptToFileAsync(path, token);
+
+    // ---- the daemon's progression: reading it, and the two ways of unsticking it (fisher#173) ----
+
+    /// <summary>
+    ///     Move the high-water mark straight to the highest sequence present, so a daemon starts in
+    ///     catch-up mode instead of replaying a store's whole history. <b>Use with caution.</b>
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>For retrofitting async projections onto a large event store that has never had
+    ///         any.</b> Without this the high-water agent climbs from zero, which on a store with
+    ///         millions of events is a long, entirely pointless read.
+    ///     </para>
+    ///     <para>
+    ///         What it skips is the <em>mark's</em> climb, not the shards'. A registered shard still
+    ///         starts from its own progression row, and a shard with no row still starts at zero — so
+    ///         this is the right call when the projections are new and their history is genuinely not
+    ///         wanted, and the wrong one otherwise.
+    ///     </para>
+    ///     <para>
+    ///         Spans every database the store has, because under database-per-tenant a mark advanced on
+    ///         one file says nothing about the rest. Name a tenant to advance one.
+    ///     </para>
+    /// </remarks>
+    public async Task AdvanceHighWaterMarkToLatestAsync(CancellationToken token = default)
+    {
+        await _store.RefreshTenantsAsync(token).ConfigureAwait(false);
+
+        foreach (var database in _store.Tenancy.AllDatabases())
+        {
+            await DetectorFor(database).AdvanceHighWaterMarkToLatestAsync(token).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc cref="AdvanceHighWaterMarkToLatestAsync(CancellationToken)" />
+    /// <remarks>
+    ///     <b>Under conjoined tenancy every tenant resolves to the one file</b>, which is the honest
+    ///     answer rather than a limitation: the high-water mark is a position in a global sequence, and
+    ///     a conjoined store has exactly one of those however many tenants write into it. The overload
+    ///     is meaningful under database-per-tenant, where a tenant genuinely is a database.
+    /// </remarks>
+    public Task AdvanceHighWaterMarkToLatestAsync(string tenantId, CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+
+        return DetectorFor(_store.Tenancy.DatabaseFor(tenantId)).AdvanceHighWaterMarkToLatestAsync(token);
+    }
+
+    /// <summary>
+    ///     Pull any progression row that has advanced past the highest event sequence back down to it.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Reachable on Fisher through an ordinary supported operation, where Marten carries the
+    ///         same method for a database race it believes it has closed.</b> <c>fi_events.seq_id</c> is
+    ///         <c>AUTOINCREMENT</c>, and stream compacting and event masking both delete rows — so
+    ///         removing events from the top of the table lowers <c>max(seq_id)</c> below progress that
+    ///         was already recorded. A shard stranded above the ceiling never advances again and
+    ///         <c>QueryForNonStaleData</c> waits on it forever, with nothing anywhere saying why.
+    ///     </para>
+    ///     <para>
+    ///         <b>Clamped per row, where Marten resets every row wholesale</b> the moment the high-water
+    ///         row is ahead. That would drag a shard genuinely behind the head <em>forward</em>, past
+    ///         events it had not applied — silently, and exactly on the store somebody is already
+    ///         repairing. Only an impossible row is corrected, and only as far as the ceiling.
+    ///     </para>
+    ///     <para>
+    ///         A corrected shard replays from the new ceiling to wherever it thought it was. That is the
+    ///         honest outcome: the events it recorded having processed are no longer there to say
+    ///         otherwise.
+    ///     </para>
+    /// </remarks>
+    public async Task TryCorrectProgressInDatabaseAsync(CancellationToken token = default)
+    {
+        await _store.RefreshTenantsAsync(token).ConfigureAwait(false);
+
+        foreach (var database in _store.Tenancy.AllDatabases())
+        {
+            await DetectorFor(database).TryCorrectProgressInDatabaseAsync(token).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc cref="TryCorrectProgressInDatabaseAsync(CancellationToken)" />
+    public Task TryCorrectProgressInDatabaseAsync(string tenantId, CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+
+        return DetectorFor(_store.Tenancy.DatabaseFor(tenantId)).TryCorrectProgressInDatabaseAsync(token);
+    }
+
+    /// <summary>
+    ///     Where every shard has reached, including the high-water mark's own row.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The read has existed on <c>FisherDatabase</c> since the daemon landed; what was missing
+    ///         was any way to reach it that did not involve casting the store to <c>IEventStore</c> and
+    ///         walking <c>AllDatabases()</c>. Marten and Polecat both surface it here.
+    ///     </para>
+    ///     <para>
+    ///         <b>An omitted tenant id spans every database and concatenates</b>, which under
+    ///         database-per-tenant means the same shard name appears once per tenant — deliberately, and
+    ///         the same shape Marten settled on: collapsing them would have to pick a winner, and
+    ///         "projection X is at 40 for one tenant and 900 for another" is the thing an operator came
+    ///         to find out. Name a tenant for one database's rows.
+    ///     </para>
+    /// </remarks>
+    public async Task<IReadOnlyList<ShardState>> AllProjectionProgress(string? tenantId = null,
+        CancellationToken token = default)
+    {
+        if (tenantId is not null)
+        {
+            return await _store.Tenancy.DatabaseFor(tenantId).AllProjectionProgress(token).ConfigureAwait(false);
+        }
+
+        await _store.RefreshTenantsAsync(token).ConfigureAwait(false);
+
+        var databases = _store.Tenancy.AllDatabases();
+
+        if (databases.Count == 1)
+        {
+            return await databases[0].AllProjectionProgress(token).ConfigureAwait(false);
+        }
+
+        var states = new List<ShardState>();
+
+        foreach (var database in databases)
+        {
+            states.AddRange(await database.AllProjectionProgress(token).ConfigureAwait(false));
+        }
+
+        return states;
+    }
+
+    /// <summary>
+    ///     How far one shard has processed.
+    /// </summary>
+    /// <remarks>
+    ///     An omitted tenant id returns the <em>highest</em> position that shard has reached in any of
+    ///     the store's databases, mirroring Marten. Zero for a shard with no row, which is what the
+    ///     daemon itself reads as "start from the beginning" — a missing row and a row at zero mean the
+    ///     same thing and neither is an error.
+    /// </remarks>
+    public async Task<long> ProjectionProgressFor(ShardName name, string? tenantId = null,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+
+        if (tenantId is not null)
+        {
+            return await _store.Tenancy.DatabaseFor(tenantId).ProjectionProgressFor(name, token)
+                .ConfigureAwait(false);
+        }
+
+        await _store.RefreshTenantsAsync(token).ConfigureAwait(false);
+
+        var highest = 0L;
+
+        foreach (var database in _store.Tenancy.AllDatabases())
+        {
+            var sequence = await database.ProjectionProgressFor(name, token).ConfigureAwait(false);
+
+            if (sequence > highest)
+            {
+                highest = sequence;
+            }
+        }
+
+        return highest;
+    }
+
+    /// <summary>
+    ///     Every shard name the store's asynchronous projections and subscriptions run under.
+    /// </summary>
+    /// <remarks>
+    ///     The names <see cref="ProjectionProgressFor" /> and the daemon's rebuild overloads are
+    ///     addressed by, so an operator does not have to reconstruct <c>{Name}:{ShardKey}</c> by hand.
+    ///     Asynchronous only — an inline projection has no shard, because it has no progress to record.
+    /// </remarks>
+    public IReadOnlyList<ShardName> AllAsyncProjectionShardNames()
+        => _store.Options.Projections.AllShards().Select(x => x.Name).ToList();
+
+    private Events.Daemon.FisherHighWaterDetector DetectorFor(Storage.FisherDatabase database)
+        => new(database, _store.Options.EventGraph);
+
+    // ---- rebuilding one stream (fisher#173) ----
+
+    /// <summary>
+    ///     Rebuild the projected document of type <typeparamref name="T" /> for a single stream, by
+    ///     live-aggregating it and storing the result.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The repair that does not need the daemon: one stream's read model is wrong, and a full
+    ///         <c>RebuildProjectionAsync</c> would replay every stream the projection owns to fix it.
+    ///     </para>
+    ///     <para>
+    ///         <b>A stream that folds to nothing deletes the document, where Marten's equivalent throws
+    ///         an <see cref="ArgumentNullException" /> from inside <c>Store(null!)</c>.</b> That is not
+    ///         an exotic case — an aggregate whose <c>ShouldDelete</c> fired, or an archived stream, both
+    ///         land there — and "no document" is exactly what a real rebuild leaves behind for such a
+    ///         stream, since teardown clears the rows and the replay never recreates that one. Throwing
+    ///         would make the method unusable on the streams most likely to have gone wrong.
+    ///     </para>
+    ///     <para>
+    ///         <b>Refused by name for a type whose storage is not Fisher's</b> — an EF Core-backed
+    ///         projection registered through <c>Projections.StorageProviders</c> is deliberately never
+    ///         mapped, so <c>Store</c> would create a <c>fi_doc_*</c> table nothing else ever reads.
+    ///         Rebuild those through the daemon.
+    ///     </para>
+    /// </remarks>
+    public Task RebuildSingleStreamAsync<T>(Guid id, string? tenantId = null,
+        CancellationToken token = default) where T : class
+        => RebuildSingleStreamAsync<T>(
+            (session, ct) => session.Events.AggregateStreamAsync<T>(id, token: ct),
+            session => session.Delete<T>(id), tenantId, token);
+
+    /// <inheritdoc cref="RebuildSingleStreamAsync{T}(Guid, string, CancellationToken)" />
+    public Task RebuildSingleStreamAsync<T>(string streamKey, string? tenantId = null,
+        CancellationToken token = default) where T : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamKey);
+
+        return RebuildSingleStreamAsync<T>(
+            (session, ct) => session.Events.AggregateStreamAsync<T>(streamKey, token: ct),
+            session => session.Delete<T>(streamKey), tenantId, token);
+    }
+
+    private async Task RebuildSingleStreamAsync<T>(
+        Func<IDocumentSession, CancellationToken, Task<T?>> aggregate, Action<IDocumentSession> deleteById,
+        string? tenantId, CancellationToken token) where T : class
+    {
+        if (!_store.Options.Schema.HasMappingFor(typeof(T)))
+        {
+            throw new NotSupportedException(
+                $"'{typeof(T).Name}' has no Fisher document mapping, so there is no fi_doc_* table for this "
+                + "to write into. A projection registered through Projections.StorageProviders (an EF Core "
+                + "entity, say) deliberately keeps its rows elsewhere — rebuild it through the daemon's "
+                + "RebuildProjectionAsync instead, which routes through the registered storage.");
+        }
+
+        await using var session = _store.LightweightSession(tenantId);
+
+        var document = await aggregate(session, token).ConfigureAwait(false);
+
+        if (document is null)
+        {
+            // Deleted rather than skipped: a real rebuild tears the rows down and replays, so a stream
+            // that folds to nothing leaves no document behind. Skipping would keep whatever the
+            // previous, wrong run wrote — which is the state this method is being called to repair.
+            // Deleted by the stream's own identity, on the same assumption Store makes of the
+            // aggregate it just built: a single-stream aggregate's id is its stream's.
+            deleteById(session);
+        }
+        else
+        {
+            session.Store(document);
+        }
+
+        await session.SaveChangesAsync(token).ConfigureAwait(false);
+    }
 
     /// <summary>
     ///     Run a projection scenario — a given/when/then harness for asserting projected state after a

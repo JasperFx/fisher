@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1571 tests green on net9.0 and net10.0**, with no known intermittent failures — 1516 in
+**1593 tests green on net9.0 and net10.0**, with no known intermittent failures — 1538 in
 `Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 391 of
 them are shared cross-store compliance tests — 322 event sourcing and 69 document. On JasperFx **2.63.0** / Weasel **9.29.0**.
 
@@ -1263,7 +1263,10 @@ Each of these is a decision with a reason, not an oversight:
   `MetadataForAsync` reads the column regardless, so the value is reachable even though no member can
   hold it.
 - **Tenants can be deprovisioned but never deleted**, which is the one deliberate limit left in the
-  tenancy story rather than a stage it stops at. Both styles ship: conjoined (one file sliced by a
+  tenancy story rather than a stage it stops at. **`Advanced.DeleteAllTenantDataAsync` is not a
+  softening of that** (fisher#173): wiping a tenant's *rows* destroys nothing a file restore would be
+  needed to recover, and under database-per-tenant it clears the tenant's file and keeps it. Removing
+  the file stays the operator's act. Both styles ship: conjoined (one file sliced by a
   tenant id column, pinned cross-store by `ConjoinedEventTenancyCompliance`), database-per-tenant
   (#47), and tenants that appear, suspend and resume at runtime (#58) — with the daemon routed per
   database, which is what fisher#57 made those `IEventDatabase` parameters carry. Deleting a tenant
