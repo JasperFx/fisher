@@ -150,6 +150,12 @@ internal class MemberFactory : IMemberResolver
     ///     the JSON path or to a member type's wrapping would silently make the column hold something
     ///     the query no longer looks for — and the query would simply return nothing.
     /// </remarks>
+    /// <inheritdoc />
+    public DocumentMapping? Mapping => _mapping;
+
+    /// <inheritdoc />
+    public string TableQualifier => _qualifier;
+
     public IQueryableMember ResolveMember(MemberInfo[] chain)
     {
         var member = CreateMember(BuildJsonPath(chain), GetMemberType(chain[^1]));

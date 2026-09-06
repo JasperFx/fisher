@@ -54,7 +54,6 @@ a migrating Marten user hits first.
 | Marten | Status on Fisher | Instead |
 | :--- | :--- | :--- |
 | Compiled queries — `ICompiledQuery<T>`, `ICompiledListQuery<T>`, `ICompiledQuery<TDoc,TOut>` | **Absent, and decided** — see [fisher#195](https://github.com/JasperFx/fisher/issues/195) for the measurement. | Nothing. Building the SQL is 4–11% of an ordinary Fisher query and 22.5% of the cheapest one it can run; the work is real but the absolute saving is ~2 µs. A filter-shape query plan cache would collect nearly all of it with no public API, which is the move that comes first. |
-| Full-text search — `Search`, `PlainTextSearch`, `PhraseSearch`, `WebStyleSearch`, `NgramSearch`, and full-text indexes | **Absent.** Nothing is built over SQLite's FTS5. | `Contains` / `StartsWith` / `EndsWith`, which are ordinal and case-sensitive (see below) and can be served by a [declared index](/documents/indexing/indexes). Not a substitute for ranked search. |
 | Child-collection LINQ | **Partly landed** ([fisher#166](https://github.com/JasperFx/fisher/issues/166)). | See the [operators page](/documents/querying/linq/operators) — the shipped and missing halves are below. |
 
 ### Child collections: what ships and what does not
@@ -153,6 +152,33 @@ than Marten's temp-table join, because an embedded store has no round trip to am
 are not atomic with each other unless you wrap them in a transaction. And an `Include` combined with a
 `Select`, a `GroupBy`, a join, or a terminal that returns no documents is **refused by name** rather
 than silently leaving the destination empty.
+
+### Full-text search is FTS5, and there is no relevance ordering
+
+Fisher has [full-text search](/documents/querying/linq/full-text) over SQLite's FTS5, with all six of
+Marten's operators — `Search`, `PlainTextSearch`, `PhraseSearch`, `WebStyleSearch`, `PrefixSearch`
+and `NgramSearch` — plus `[FullTextIndex]` and `Schema.For<T>().FullTextIndex(...)`. Four things
+differ from Marten, and the first two are what a ported line needs edited for:
+
+- **No `regConfig` argument.** Marten's overloads take a PostgreSQL text-search configuration name;
+  FTS5 has no equivalent, and its nearest relative — the tokenizer — is fixed on the *index* rather
+  than chosen per query. So the second argument is gone and
+  `FullTextIndex(FullTextTokenizer.Porter, …)` is where the choice is made.
+- **One index per document type.** Marten permits several and carries
+  `AmbiguousFullTextIndexException` for a search that cannot tell which one it meant; here a search
+  operator names no index, so with one there is nothing to disambiguate. A second declaration is
+  refused — put every searchable member in the one.
+- **`NgramSearch` needs a `Trigram` index and the word operators refuse one.** Marten reaches ngram
+  search through a separate index type and has the same requirement; what is different is that Fisher
+  refuses the mismatch by name in both directions rather than returning nothing.
+- **No relevance ordering, snippets or highlights.** FTS5 has `bm25()`, `snippet()` and
+  `highlight()`, and none of them is exposed yet — a search is a predicate, so a document either
+  matches or does not. Marten's `TextRankOrdering` and `OrderByNgramRank` have no counterpart
+  ([fisher#220](https://github.com/JasperFx/fisher/issues/220)).
+
+The index itself is an external-content FTS5 table kept in step by database triggers, so it survives
+writes that never went through Fisher — and it is created and populated by the ordinary schema
+migration, including on a store that already holds documents.
 
 ### String searching is ordinal and case-sensitive
 
