@@ -2,14 +2,18 @@
 
 `Include()` fetches the documents a query's rows point at, in the same call:
 
+<!-- snippet: sample_include_a_related_document -->
+<a id='snippet-sample_include_a_related_document'></a>
 ```cs
 var boats = new List<Boat>();
 
-var anglers = await session.Query<Angler>()
+var anglers = await session.Query<IncludedAngler>()
     .Where(x => x.Region == "Shire")
     .Include(x => x.BoatId, boats)
     .ToListAsync();
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/include_samples.cs#L48-L55' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_include_a_related_document' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 `anglers` comes back as usual, and `boats` holds each distinct boat those anglers reference. An
 `Include` may sit anywhere in the chain — before or after the `Where` — and means the same thing
@@ -71,22 +75,54 @@ one becomes SQL, so it has to be a member Fisher can resolve to a column.
 ```cs
 // every catch belonging to the anglers the query returned, flat
 .Include(x => x.Id, (Catch c) => c.AnglerId, catches)
-
-// or grouped by the angler they belong to
-var byAngler = new Dictionary<Guid, List<Catch>>();
-.Include(x => x.Id, (Catch c) => c.AnglerId, byAngler)
 ```
+
+Or grouped by the angler they belong to:
+
+<!-- snippet: sample_include_grouped_by_the_mapping_member -->
+<a id='snippet-sample_include_grouped_by_the_mapping_member'></a>
+```cs
+var byAngler = new Dictionary<Guid, List<AnglersCatch>>();
+
+var anglers = await session.Query<IncludedAngler>()
+    .Include(x => x.Id, (AnglersCatch c) => c.AnglerId, byAngler)
+    .ToListAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/include_samples.cs#L62-L68' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_include_grouped_by_the_mapping_member' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 A key with no related documents is **absent** from the dictionary rather than present with an empty
 list.
+
+The same shape reads the other way round — the query returns the parents and the include fetches the
+children that point at them:
+
+<!-- snippet: sample_include_the_documents_pointing_back -->
+<a id='snippet-sample_include_the_documents_pointing_back'></a>
+```cs
+var crew = new List<Crew>();
+
+await session.Query<Boat>()
+    .Where(x => x.Name == "Brandywine Belle")
+    .Include(x => x.Id, (Crew c) => c.BoatId, crew)
+    .ToListAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/include_samples.cs#L99-L106' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_include_the_documents_pointing_back' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ## Filters
 
 Every overload takes an optional trailing predicate over the included type:
 
+<!-- snippet: sample_include_with_a_filter -->
+<a id='snippet-sample_include_with_a_filter'></a>
 ```cs
-.Include(x => x.BoatId, boats, b => b.Berth == "Hobbiton")
+await session.Query<IncludedAngler>()
+    .Include(x => x.BoatId, boats, b => b.Berth == "Hobbiton")
+    .ToListAsync();
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/include_samples.cs#L90-L94' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_include_with_a_filter' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 The related documents are read through `session.Query<T>()`, so the tenancy, soft-delete and
 hierarchy filters apply to them exactly as they apply to any other query. A soft-deleted related
@@ -96,12 +132,16 @@ document is not included.
 
 Includes compose; each resolves as its own statement.
 
+<!-- snippet: sample_include_several_at_once -->
+<a id='snippet-sample_include_several_at_once'></a>
 ```cs
-await session.Query<Angler>()
+await session.Query<IncludedAngler>()
     .Include(x => x.BoatId, boats)
-    .Include(x => x.Id, (Catch c) => c.AnglerId, catches)
+    .Include(x => x.Id, (AnglersCatch c) => c.AnglerId, catches)
     .ToListAsync();
 ```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/include_samples.cs#L78-L83' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_include_several_at_once' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
 
 ## Which terminals resolve includes
 
