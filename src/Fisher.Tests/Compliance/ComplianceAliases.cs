@@ -18,3 +18,17 @@ global using ComplianceStringPartyProjectionBase =
 // though the events it slices arrive on Guid-identified streams. Same closed-generic reason as above.
 global using ComplianceMultiStreamProjectionBase =
     Fisher.Projections.MultiStreamProjection<JasperFx.Events.ComplianceTests.ComplianceDepartment, string>;
+
+// Wave 13 (2.64.0) adds three more closed-generic aliases. The side effect suite's projection is
+// single stream over the aggregate's own Guid; the two aggregate-to-many projections are multi
+// stream, one identity-routed and one grouped through a session lookup.
+//
+// Only the first is in the shared README's alias block — the two below are undocumented there,
+// which is a doc gap rather than a design one: a consumer meets them as three CS0246s on the bump
+// with nothing saying what to write. Reported upstream alongside this wave.
+global using ComplianceWatchtowerProjectionBase =
+    Fisher.Projections.SingleStreamProjection<JasperFx.Events.ComplianceTests.ComplianceWatchtower, System.Guid>;
+global using ComplianceBalanceProjectionBase =
+    Fisher.Projections.MultiStreamProjection<JasperFx.Events.ComplianceTests.ComplianceBalance, System.Guid>;
+global using ComplianceMemberLoyaltyProjectionBase =
+    Fisher.Projections.MultiStreamProjection<JasperFx.Events.ComplianceTests.ComplianceMemberLoyalty, System.Guid>;

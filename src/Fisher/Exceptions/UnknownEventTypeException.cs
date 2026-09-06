@@ -1,5 +1,3 @@
-using JasperFx.Events.Daemon;
-
 namespace Fisher.Exceptions;
 
 /// <summary>
@@ -7,11 +5,19 @@ namespace Fisher.Exceptions;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         Implements <see cref="IEventFailureContext" />, which is how the daemon classifies a shard
-///         failure and names the offending event without knowing Fisher's concrete exception types.
-///         JasperFx owns only <c>ApplyEventException</c>; the read-side failures belong to the store,
-///         because that is where rows are read and deserialized. Marten and Polecat each carry their
-///         own equivalent.
+///         <b>Subclasses the shared <see cref="JasperFx.Events.UnknownEventTypeException" /></b>
+///         (jasperfx#751 / #756, in JasperFx.Events 2.64.0), which was lifted from the three stores'
+///         copies once jasperfx#565 had given all three the same
+///         <see cref="JasperFx.Events.Daemon.IEventFailureContext" /> contract. Everything this type
+///         used to declare — the <c>UnknownSequence</c> sentinel, the <c>Sequence</c> and
+///         <c>EventTypeName</c> properties, the failure-context implementation and the
+///         <c>UnknownEventType</c> category — is now the base's; only Fisher's message wording is
+///         left, and it goes through the base's message-overriding constructor.
+///     </para>
+///     <para>
+///         Subclassing rather than deleting is the compatible choice — see
+///         <see cref="ExistingStreamIdCollisionException" /> for the reasoning, which is the same for
+///         all three of the lifted types.
 ///     </para>
 ///     <para>
 ///         Deliberately distinct from a deserialization failure. An alias that resolves to nothing is
@@ -25,43 +31,17 @@ namespace Fisher.Exceptions;
 ///         signal, so it throws unless <c>SkipUnknownEvents</c> says otherwise.
 ///     </para>
 /// </remarks>
-public class UnknownEventTypeException : Exception, IEventFailureContext
+public class UnknownEventTypeException : JasperFx.Events.UnknownEventTypeException
 {
-    /// <summary>
-    ///     Reported when the throw site had no <c>fi_events</c> row in hand.
-    ///     <see cref="IEventFailureContext.Sequence" /> is non-nullable by contract, so a sentinel is
-    ///     unavoidable.
-    /// </summary>
-    public const long UnknownSequence = -1;
-
-    public UnknownEventTypeException(string? eventTypeName) : this(eventTypeName, UnknownSequence)
+    public UnknownEventTypeException(string? eventTypeName)
+        : this(eventTypeName, JasperFx.Events.UnknownEventTypeException.UnknownSequence)
     {
     }
 
     public UnknownEventTypeException(string? eventTypeName, long sequence)
         : base($"Unknown event type '{eventTypeName}' at sequence {sequence}. Register it through "
-               + "StoreOptions.Events.AddEventType(type), or configure the projection to skip unknown events.")
+               + "StoreOptions.Events.AddEventType(type), or configure the projection to skip unknown events.",
+            eventTypeName, sequence)
     {
-        EventTypeName = eventTypeName;
-        Sequence = sequence;
     }
-
-    public ShardFailureCategory Category => ShardFailureCategory.UnknownEventType;
-
-    /// <summary>
-    ///     The offending row's <c>seq_id</c>, or <see cref="UnknownSequence" />.
-    /// </summary>
-    public long Sequence { get; }
-
-    /// <summary>
-    ///     The unresolvable type name as stored.
-    /// </summary>
-    public string? EventTypeName { get; }
-
-    // The type never resolved, so no event was materialized to read these from.
-    Guid? IEventFailureContext.EventId => null;
-    Guid? IEventFailureContext.StreamId => null;
-    string? IEventFailureContext.StreamKey => null;
-    string? IEventFailureContext.TenantId => null;
-    long? IEventFailureContext.Version => null;
 }

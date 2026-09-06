@@ -233,7 +233,13 @@ Working, with tests:
 - `StartStream` / `Append`, version assignment, optimistic concurrency, sequence read-back
 - Reads: `FetchStreamAsync` (version / from-version / timestamp bounded), `FetchStreamStateAsync`,
   `LoadAsync`, both stream identity styles
-- `ArchiveStream` / `UnArchiveStream` / `TombstoneStream`
+- `ArchiveStream` / `UnArchiveStream` / `TombstoneStream` — and **an archived stream refuses further
+  appends** (`Exceptions.ArchivedStreamException`, fisher#184), because archiving is not a soft delete
+  you can keep writing through. Checked in `AppendPlanner.PlanStream` before the version guard and
+  deliberately *not* for a `StartStream`, where an archived id is still an id in use and
+  `ExistingStreamIdCollisionException` is the more useful answer. An `Archived` event reaching a
+  single stream projection that owns the stream archives it too, through
+  `FisherProjectionStorage.ArchiveStream`
 - Live aggregation: `AggregateStreamAsync`, `AggregateStreamToLastKnownAsync`, over auto-discovered
   self-aggregating types
 - Inline projections: `Projections.Snapshot<T>` and `Projections.Add`, applied during
@@ -452,6 +458,16 @@ shapes are its, and four things are not.
   rows are not documents — so the mapped-type sweep in `TeardownExistingProjectionStateAsync` cannot see
   it, and `IPublishesTables` is what closes that. Without it a rebuild replays onto the rows the
   previous run left, which the compliance suite catches with a row the replay cannot recreate.
+
+**A member-valued `Decrement` onto a row that does not exist yet inserts the *negated* value**
+(fisher#183, over the jasperfx#773 ruling): the insert branch applies the event to an implicit zero
+row, so a first event carrying 5 lands the column at -5. Put the other way, which is the form worth
+holding onto: a decrement event must never leave a column higher than it found it. Fisher inserted the
+parameter unchanged until this wave, so a stream whose first event was a decrement of 5 landed at +5.
+Marten was the only store that had it right; Fisher, Polecat and the lifted Weasel DSL were the
+majority and the majority was the wrong side. **The by-column form still inserts 0** — that half of
+jasperfx#773 is open, all four stores agree, and it is no longer symmetric with `IncrementMap`, which
+moved to inserting 1 in marten#5341.
 
 The primary key holds a stream id, so it is TEXT and bound through the lowercase-canonical conversion —
 the `SqliteGuidIdentification` trap, in the one place a flat table meets it. Bound any other way, the
@@ -2887,6 +2903,25 @@ set, with four things different and each of them a decision:
   integrity in half the configurations, and a row whose stream is gone resolves to nothing anyway
   because the join is what produces an answer.
 
+Two behaviours the shared suite settled, both of which Fisher had wrong until it ran (fisher#184):
+
+- **Renaming a natural key retires the previous one.** A stream has exactly one *current* key, so the
+  upsert is followed by a delete of every other row naming that stream — after the duplicate guard,
+  never before, so a rename refused because the new key is live elsewhere leaves the existing mapping
+  alone. Fisher used to leave the old row behind, which is not merely untidy: a retired alias that
+  resolves forever also occupies its slot in the lookup's primary key forever, so no other stream can
+  ever claim that identifier. Both siblings had reframed the same behaviour as a defect
+  (polecat#435 / marten#5041) and Fisher was the third.
+- **`FetchLatestByNaturalKey` answers a miss with null, where `FetchForWritingByNaturalKey` throws.**
+  The asymmetry is the contract rather than an oversight: `FetchForWriting` is the read half of a
+  read-modify-write and has to say what it would be writing to, where `FetchLatest(...) is null` is
+  the idiomatic "does this aggregate exist?" probe — the same probe fisher#88 made honest for the
+  by-id overload. Throwing made the key-shaped spelling the one member of the family that could not
+  answer its own question. The `FetchForWriting` miss is deliberately outside shared scope
+  (jasperfx#764), because that is the one place the three stores genuinely disagree: Marten hands back
+  a null aggregate, Polecat throws `InvalidOperationException`, Fisher throws
+  `UnknownNaturalKeyException`.
+
 Two more things:
 
 - **Resolving outside the write transaction is safe, and it is the same argument the optimistic append
@@ -3569,9 +3604,52 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher is enrolled, in full — all 37 suites, 320 tests, as of 2.56.0.**
+**Fisher enrolls 49 of the 52 suites `JasperFx.Events.ComplianceTests` 2.64.0 ships — 509 tests.**
 `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
-gate is gone. The most recently enrolled are `BinaryEventSerializationCompliance` (6, the event half's
+gate is gone. See HANDOFF.md for the live scoreboard, which is machine-checked against a real run by
+`scripts/check_scoreboard.py`; what follows is the history and the mechanics.
+
+### Wave 13 — the first suites to run anywhere (fisher#184)
+
+**2.64.0's eight new event suites had never been executed against a real event store.** The JasperFx
+repository enrols only the document suites, so the whole wave arrived compile-checked and
+design-reasoned. That makes Fisher's enrollment first-contact runtime validation, and it changes how
+a red fact should be read: as likely an over-tight assertion as a store bug. Nineteen were red on the
+first run and every one was classified — five genuine Fisher bugs (all fixed), two upstream bugs
+(jasperfx#778 product, jasperfx#779 suite; both fixed upstream), three suites gated off for a LINQ
+surface Fisher does not have, one suite deferred to the upcasting node.
+
+The five Fisher bugs are worth knowing as a set, because they share a shape — a member that looked
+right, that nothing local had a reason to question:
+
+- **`AlwaysEnforceConsistency` did nothing.** See "Session metadata on appended events" and the
+  append planner: `CollectActionableStreams` kept only streams with at least one event, so the flag's
+  entire subject — a stream fetched, flagged, and then left alone — was dropped along with its guard.
+- **Appending to an archived stream landed.** Now `Exceptions.ArchivedStreamException`, raised from
+  `AppendPlanner.PlanStream` — and deliberately not for a `StartStream`, where an archived id is
+  still an id in use and the collision is the more useful answer.
+- **`FisherProjectionStorage.ArchiveStream` was empty**, with a comment answering a different
+  question. The seam means *archive the stream*, and both siblings queue their archive operation
+  there.
+- **`FetchLatest` by natural key threw on a miss** where the contract is null.
+- **Renaming a natural key left the old row behind**, so a superseded identifier resolved forever
+  and its slot in the lookup's primary key could never be reused.
+
+Two features were built to enrol rather than to gate: `Fisher.Batching.FetchStreamStatePlan` /
+`FetchStreamPlan` (parity with polecat#370), and the compliance registrar's `UseMessageOutbox`.
+
+**The three gated-off suites decline a LINQ surface, not a behaviour.** `DcbHasTagLinqCompliance`,
+`AggregateToLinqOperatorCompliance` and `AggregateToManyCompliance` all terminate a cross-stream
+`QueryAllRawEvents()` returning `IQueryable<IEvent>`. Fisher's LINQ provider is built over *document*
+storage — statements, selectors and member factories all resolve against a `fi_doc_*` table — so an
+event queryable would be a parallel provider serving one caller, which is why
+`EventOperations.QueryEventsAsync` takes a predicate and `AssignTagWhere` reaches the same parser
+through `EventMemberFactory` instead. The capabilities themselves are covered and green through
+`DcbTagQueryAndConsistencyCompliance`, `AssignTagWhereCompliance` and `AggregateByTagsAsync`.
+
+### History
+
+**Fisher was enrolled in full — all 37 suites, 320 tests — as of 2.56.0.** The most recently enrolled are `BinaryEventSerializationCompliance` (6, the event half's
 twenty-ninth) and `DocumentSessionEventsCompliance` (5) from 2.50.0, and 2.51.0's two:
 `PendingStreamActionsCompliance` (9, fisher#96) and `AggregateWriteCacheCompliance` (14, fisher#97).
 All four are **opt-in** — their contract members carry throwing defaults, so enrolling is a deliberate
@@ -3743,6 +3821,17 @@ The mechanics, because they are not what the package's name suggests:
 headers onto each event that does not already carry its own, each gated on its `Enable*` option. The
 session seeds correlation/causation from `Activity.Current` (`RootId` and `ParentId`) at construction,
 so tracing context reaches events with no application code; an explicit assignment afterwards wins.
+
+**A stream carrying no events is dropped from the unit of work — unless it asked not to be.**
+`CollectActionableStreams` keeps only streams with at least one event, and `CollectGuardOnlyStreams`
+beside it keeps the ones flagged `IEventStream.AlwaysEnforceConsistency` with an
+`ExpectedVersionOnServer` set, so their version is re-read and checked under the write lock with no
+append written. Until fisher#184 the flag did nothing at all: it is on the shared `IEventStream`,
+Fisher forwarded it to the `StreamAction` faithfully, and nothing else in the store ever read it.
+That is invisible to any ordinary append test, because appending a single event brings the ordinary
+guard back — the flag's whole subject is the *empty* case, "I read this stream, decided on the
+strength of what I read to write nothing, and that decision is only sound if the stream has not
+moved". `AlwaysEnforceConsistencyCompliance` is what found it.
 
 This duplicates the private `StreamAction.ProcessMetadata`, which is normally reached through
 `StreamAction.PrepareEvents` — and Fisher **cannot** use `PrepareEvents`. In Quick mode it numbers

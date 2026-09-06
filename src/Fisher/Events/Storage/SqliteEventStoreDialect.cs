@@ -173,7 +173,7 @@ internal sealed class SqliteEventStoreDialect : IEventStoreSqlDialect
 
         if (sqlite is { SqliteExtendedErrorCode: FisherQuickAppendEventsOperation.SqliteConstraintPrimaryKey })
         {
-            return new ExistingStreamIdCollisionException(stream.Key is not null ? stream.Key : stream.Id);
+            return new Fisher.Exceptions.ExistingStreamIdCollisionException(stream.Key is not null ? stream.Key : stream.Id);
         }
 
         return null;

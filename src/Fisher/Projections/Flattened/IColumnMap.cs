@@ -77,7 +77,16 @@ internal sealed class DecrementMemberMap : IColumnMap
     public string UpdateExpression(string parameterName)
         => $"{SchemaUtils.QuoteName(ColumnName)} = {SchemaUtils.QuoteName(ColumnName)} - {parameterName}";
 
-    public string InsertExpression(string parameterName) => parameterName;
+    /// <remarks>
+    ///     <b>Negated</b> (fisher#183, over the jasperfx#773 ruling). The insert branch applies the
+    ///     event to an implicit zero row, so a first event carrying <c>5</c> must leave the column at
+    ///     <c>-5</c>: a decrement must never leave a column higher than it found it, and inserting
+    ///     the parameter unchanged made a decrement raise it. Marten was the only store that had this
+    ///     right; Fisher, Polecat and the lifted Weasel DSL were the majority and the majority was
+    ///     wrong. <c>-@p1</c> inside a <c>values (…)</c> list is valid SQLite, which is why the
+    ///     negation lives here rather than behind a dialect hook (weasel#574).
+    /// </remarks>
+    public string InsertExpression(string parameterName) => "-" + parameterName;
 }
 
 /// <summary>Adds one to the column, with nothing read from the event.</summary>
@@ -105,7 +114,10 @@ internal sealed class DecrementMap : IColumnMap
     public string UpdateExpression(string parameterName)
         => $"{SchemaUtils.QuoteName(ColumnName)} = {SchemaUtils.QuoteName(ColumnName)} - 1";
 
-    // Symmetric with IncrementMap: a first sighting starts from zero and takes the one decrement.
+    // A first sighting inserts zero rather than -1, which is deliberate and is NOT symmetric with
+    // IncrementMap any more: that one moved to inserting 1 (marten#5341), and jasperfx#773 left the
+    // by-column decrement's insert value open while settling the member-valued form above. All four
+    // stores insert 0 here, so this stays until the ruling arrives.
     public string InsertExpression(string parameterName) => "0";
 }
 

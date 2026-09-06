@@ -115,6 +115,34 @@ def counters(tree: ET.ElementTree) -> tuple[int, int]:
     return int(node.get("total", 0)), int(node.get("passed", 0))
 
 
+def failed_test_names(tree: ET.ElementTree) -> set[str]:
+    """Fully qualified names of the tests that did not pass.
+
+    Used by the red-declaration check below. Read off UnitTestResult rather than off the counters,
+    because the point is to name them: a scoreboard that says "four are red" without saying WHICH
+    four is a number nobody can act on, and it goes stale silently the moment a different four are.
+    """
+    by_id = {}
+    for unit in tree.getroot().findall(".//t:UnitTest", TRX_NS):
+        method = unit.find("t:TestMethod", TRX_NS)
+        if method is None:
+            continue
+        # MTP's TRX writer already qualifies `name` with the class, where VSTest's did not. Both
+        # shapes have been seen in this repo's reports, so normalise rather than assume.
+        class_name = method.get("className") or ""
+        name = method.get("name") or ""
+        by_id[unit.get("id")] = name if name.startswith(f"{class_name}.") else f"{class_name}.{name}"
+
+    names = set()
+    for result in tree.getroot().findall(".//t:UnitTestResult", TRX_NS):
+        if result.get("outcome") not in ("Passed", "NotExecuted"):
+            name = by_id.get(result.get("testId"))
+            if name:
+                names.add(name)
+
+    return names
+
+
 def class_counts(tree: ET.ElementTree) -> dict[str, int]:
     counts: dict[str, int] = {}
     for unit in tree.getroot().findall(".//t:UnitTest", TRX_NS):
@@ -183,17 +211,14 @@ def main() -> int:
     # ---- what the run actually did -------------------------------------------------------------
     totals: dict[str, int] = {}
     compliance: dict[str, int] = {}
+    red: set[str] = set()
 
     for assembly in ASSEMBLIES:
         tree = read_trx(root, assembly, args.configuration, args.tfm)
         total, passed = counters(tree)
         totals[assembly] = total
 
-        if total != passed:
-            failures.add(
-                f"{assembly}: {total - passed} of {total} tests did not pass, so the scoreboard's "
-                f"'green' claim cannot be checked against this run."
-            )
+        red |= failed_test_names(tree)
 
         if assembly == "Fisher.Tests":
             for name, count in class_counts(tree).items():
@@ -223,9 +248,53 @@ def main() -> int:
             " — the scoreboard would report a suite count nothing executed."
         )
 
+    # ---- what is red, and whether HANDOFF says so -----------------------------------------------
+    # This used to be a hard stop: any failing test and the script refused to check anything, on the
+    # grounds that a red run cannot support a 'green' claim. That is right about the claim and wrong
+    # about the scoreboard, and fisher#184 is the case that showed it -- four facts red against a
+    # merged upstream fix awaiting its release is a real state Fisher can be in for days, and during
+    # it the scoreboard has no machine-checked numbers at all, which is exactly when it rots.
+    #
+    # So a red run is now checkable, on stricter terms than a green one: HANDOFF has to NAME every
+    # failing test. A count alone would go stale silently the moment a different set of four is red.
+    declared = set(re.findall(r"^- `(Fisher\.Tests\.[\w.]+)`", handoff, re.M))
+
+    if red:
+        for name in sorted(red - declared):
+            failures.add(f"red but not declared in HANDOFF's red list: `{name}`.")
+        for name in sorted(declared - red):
+            failures.add(
+                f"HANDOFF's red list names `{name}`, which passed in this run. Remove it -- a stale "
+                f"red declaration is a suppressed failure."
+            )
+
+        red_heading = find(r"### Red — (\d+) facts", handoff)
+        failures.expect("HANDOFF '### Red — N facts'", red_heading, len(red))
+
+        failures.expect(
+            "HANDOFF header, total tests (red wording)",
+            find(r"\*\*(\d+) tests on net9\.0 and net10\.0\*\*", handoff),
+            grand_total,
+        )
+        failures.expect(
+            "HANDOFF header, red count",
+            find(r"\*\*\d+ tests on net9\.0 and net10\.0\*\*, (\w+) of them red", handoff),
+            number_word(len(red)),
+        )
+    else:
+        if declared:
+            failures.add(
+                "HANDOFF declares red tests but the run is green. Remove the '### Red' section and "
+                "restore the 'N tests green on net9.0 and net10.0' header."
+            )
+
+        failures.expect(
+            "HANDOFF header, total tests",
+            find(r"\*\*(\d+) tests green on net9\.0 and net10\.0\*\*", handoff),
+            grand_total,
+        )
+
     # ---- what HANDOFF.md claims ----------------------------------------------------------------
-    header = find(r"\*\*(\d+) tests green on net9\.0 and net10\.0\*\*", handoff)
-    failures.expect("HANDOFF header, total tests", header, grand_total)
 
     per_project = re.search(
         r"(\d+)\s+in\s*\n?`Fisher\.Tests`,\s*(\d+)\s+in\s+`Fisher\.AspNetCore\.Tests`\s+and\s+(\d+)\s+in\s+"
@@ -271,12 +340,14 @@ def main() -> int:
         failures.expect("compliance section, suites", ships.group(2), len(compliance))
         failures.expect("compliance section, tests", ships.group(3), compliance_total)
 
-    passes = re.search(r"Fisher passes \*\*all (\d+), all\s*\n?(\d+) suites\*\*", handoff)
+    passes = re.search(r"Fisher passes \*\*(\d+) of them, across all\s*\n?(\d+) suites\*\*", handoff)
     if passes is None:
-        failures.expect("HANDOFF compliance section, 'Fisher passes all N, all M suites'", None,
-                        f"{compliance_total}, {len(compliance)}")
+        failures.expect("HANDOFF compliance section, 'Fisher passes N of them, across all M suites'",
+                        None, f"{compliance_total - len(red)}, {len(compliance)}")
     else:
-        failures.expect("compliance section, passes tests", passes.group(1), compliance_total)
+        # Deliberately the passing count rather than the enrolled one, so the sentence stays true
+        # through a red window instead of having to be rewritten at both ends of it.
+        failures.expect("compliance section, passes tests", passes.group(1), compliance_total - len(red))
         failures.expect("compliance section, passes suites", passes.group(2), len(compliance))
 
     green = re.search(r"### Green — (\d+) suites, (\d+) tests", handoff)

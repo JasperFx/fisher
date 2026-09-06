@@ -189,7 +189,7 @@ public class writing_to_aggregates : IAsyncLifetime
     {
         await using var session = _store.LightweightSession();
 
-        await Should.ThrowAsync<NonExistentStreamException>(
+        await Should.ThrowAsync<Fisher.Exceptions.NonExistentStreamException>(
             () => session.Events.AppendOptimistic(Guid.NewGuid(), TestContext.Current.CancellationToken,
                 new MemberJoined("Nobody")));
     }

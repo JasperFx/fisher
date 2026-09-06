@@ -43,6 +43,22 @@ the stream.
 | `map.Decrement("column")` | Subtract |
 | `Delete<TEvent>()` | Delete the row |
 
+::: warning Behaviour change
+**A member-valued `Decrement(x => x.Quantity)` landing on a row that does not exist yet now inserts
+the *negated* value.** The insert branch applies the event to an implicit zero row, so a first event
+carrying `5` leaves the column at `-5`. Fisher used to insert the parameter unchanged, so the same
+event landed at `+5` — a decrement that incremented.
+
+This is a correction rather than a feature: it settles a disagreement between the stores in Marten's
+favour ([jasperfx#773](https://github.com/JasperFx/jasperfx/issues/773),
+[fisher#183](https://github.com/JasperFx/fisher/issues/183)), and the rule worth remembering is that
+**a decrement must never leave a column higher than it found it**.
+
+Existing rows are not rewritten, so a table that already received a decrement as the first event for
+some key can end up holding both conventions across the upgrade. The by-column
+`Decrement("column")` form is unaffected: it still inserts `0`.
+:::
+
 ## One upsert, not a MERGE
 
 SQLite has had upsert syntax since 3.24, so the matched and not-matched branches are two clauses of

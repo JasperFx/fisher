@@ -12,15 +12,55 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1609 tests green on net9.0 and net10.0**, with no known intermittent failures — 1554 in
-`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 391 of
-them are shared cross-store compliance tests — 322 event sourcing and 69 document. On JasperFx **2.63.0** / Weasel **9.29.0**.
+**1715 tests on net9.0 and net10.0**, four of them red — 1660 in
+`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 509 of
+them are shared cross-store compliance tests — 440 event sourcing and 69 document. On JasperFx **2.64.0** / Weasel **9.29.0**.
 
-Note that 322 is not quite *every* event suite the shared library has: 2.59.0's opt-in
-`SingleTenantedEventSlicingCompliance` (jasperfx#724) is not enrolled, because its mixed-tenancy
-precondition cannot be constructed on Fisher at all — see jasperfx#727 — and its own guard would make
-every fact skip itself. Its 2.59.0 sibling `CompositeProjectionCompliance` (jasperfx#725) *is*
-enrolled since fisher#154 closed the `AddCompositeProjection` seam on the fixture.
+### Red — 4 facts
+
+**All four are fixed upstream and merged, and all four go green on the JasperFx 2.65.0 release.**
+Verified by packing `jasperfx` main plus jasperfx#784 to a local feed and running Fisher's whole
+suite against it: 1655 green, nothing else moved. They are red here only because 2.64.0 is the
+newest published package and Fisher pins a published one.
+
+- `Fisher.Tests.Compliance.stream_archiving_compliance.capturing_an_archived_event_archives_a_string_identified_stream`
+- `Fisher.Tests.Compliance.stream_archiving_compliance.capturing_an_archived_event_through_an_async_snapshot_archives_the_stream`
+- `Fisher.Tests.Compliance.projection_side_effect_compliance.side_effects_are_suppressed_during_a_rebuild`
+- `Fisher.Tests.Compliance.projection_side_effect_compliance.no_messages_are_published_during_a_rebuild`
+
+The first two are jasperfx#778, a real product bug in `JasperFx.Events` that Fisher found by being
+the store that ran the suite: an `Archived` event the aggregate applies nothing for did not archive
+its stream, on any store. `Archived` carries no state, so an aggregate has no reason to declare an
+`Apply` for it — which left it out of the projection's `AllEventTypes`, so the inline path screened
+the whole stream out before reading anything and the async shard's filter never delivered it.
+jasperfx#780 fixed one gate and #784 the two outside it.
+
+The last two are jasperfx#779, a suite bug: both rebuild facts asked the daemon for
+`nameof(ComplianceWatchtowerProjection)`, and a single stream projection's daemon name is the
+*document* type's on every store. Fixed upstream by pinning the projection's own `Name`.
+
+**Fisher's own count is unchanged by any of this.** Nothing in `src/Fisher` is implicated in the four
+— the wave's genuine Fisher findings are the five listed under "Wave 13" below, and all five are
+fixed here.
+
+Note that 440 is not quite *every* event suite the shared library has, and three of the shortfall are
+enrolled-and-gated rather than absent:
+
+- `SingleTenantedEventSlicingCompliance` (jasperfx#724, 2.59.0) is **not enrolled**, because its
+  mixed-tenancy precondition cannot be constructed on Fisher at all — see jasperfx#727 — and its own
+  guard would make every fact skip itself.
+- `UpcastingCompliance` (jasperfx#752, 2.64.0) is **not enrolled** because Fisher has no upcasting
+  yet; enrolling it today would be a suite that skips itself wholesale.
+- `DcbHasTagLinqCompliance`, `AggregateToLinqOperatorCompliance` and `AggregateToManyCompliance`
+  (2.64.0) **are enrolled and gated off**. All three terminate a cross-stream `QueryAllRawEvents()`
+  returning `IQueryable<IEvent>`, which Fisher does not have and would need a second LINQ provider to
+  grow: Fisher's is built over *document* storage, which is why `EventOperations.QueryEventsAsync`
+  takes a predicate rather than returning a queryable. Nothing behavioural is declined — DCB tag
+  querying is green through `DcbTagQueryAndConsistencyCompliance` and `AssignTagWhereCompliance`, and
+  cross-stream aggregation is `AggregateByTagsAsync`.
+
+`CompositeProjectionCompliance` (jasperfx#725) *is* enrolled since fisher#154 closed the
+`AddCompositeProjection` seam on the fixture.
 
 ## Closed since the comparison
 
@@ -457,8 +497,10 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.63.0 ships 41 suites; Fisher enrolls **40 of them, 391 tests**.
-Fisher passes **all 391, all 40 suites**. Every suite compiles; every one is also subclassed and running.
+`JasperFx.Events.ComplianceTests` 2.64.0 ships 52 suites; Fisher enrolls **49 of them, 509 tests**.
+Fisher passes **505 of them, across all
+49 suites**. Every suite compiles; every one is also subclassed and running. The four that do not pass
+are the upstream ones declared at the top of this file, not Fisher behaviour.
 
 **What that does and does not claim, because the difference is load-bearing** (fisher#124). The suite
 pins **API portability, not behavioural equivalence**: code written against one store compiles and
@@ -491,8 +533,8 @@ shape: `DocumentLoadAndStoreCompliance` gained three tests for `LoadAsync<T>(obj
 fisher#89) and `DocumentComplianceConfig` gained `ValueTypes`. Diffing the suite *list* would have
 reported a clean bump — diff the contents.
 
-The library is now two halves. The **event sourcing** half is 33 enrolled suites and 322 tests, and its
-upstream backlog has been empty since 2.45.0 — that is the whole of it rather than a snapshot. The
+The library is now two halves. The **event sourcing** half is 42 enrolled suites and 440 tests, and the
+upstream backlog it emptied in 2.45.0 refilled in 2.64.0 — see "Wave 13" below. The
 **document** half arrived in 2.47.0 (jasperfx#647) and is now seven suites, 69 tests, over the
 store-agnostic document contract Fisher implements for fisher#68. Every suite added since 2.49.0 has
 landed in that half rather than the event one. It exists because the document side had no shared
@@ -528,46 +570,117 @@ by-identity document read surface was `where T : class` where the contract is `w
 Widening it removed an inconsistency rather than creating one, since `Store`, `Delete`, `DeleteWhere`
 and `Query<T>` were already `notnull`. See "The store-agnostic document contract" in CLAUDE.md.
 
-**Green on all forty is not the same as feature-complete.** The suites cover what is portable
+### Wave 13 — the first suites to run anywhere (fisher#184)
+
+**2.64.0 added eight event sourcing suites, deepened `SubscriptionCompliance`, and widened four more —
+and not one of them had ever been executed against a real event store.** The JasperFx repository
+enrols only the document suites, so the whole wave arrived compile-checked and design-reasoned.
+Fisher enrolling them is first-contact runtime validation, and that changes what a failure means: a
+red fact here is as likely to be an over-tight assertion as a store bug, so every one was classified
+rather than assumed. Nineteen were red on the first run, in six groups.
+
+**Five were genuine Fisher bugs, all fixed here.** Each had the same shape — a correct-looking
+implementation nothing local had reason to question:
+
+- **`AlwaysEnforceConsistency` did nothing** (jasperfx#762). `AppendPlanner.CollectActionableStreams`
+  kept only streams with at least one event, so a stream fetched for writing, flagged, and then left
+  alone was dropped from the unit of work along with its version guard. The flag is on the shared
+  `IEventStream`, Fisher forwarded it to the `StreamAction` faithfully, and nothing else ever read
+  it. Invisible to any ordinary append test, because appending one event brings the ordinary guard
+  back — the empty case is the whole subject of the flag.
+- **Appending to an archived stream landed** rather than being rejected. Every one of Fisher's own
+  archiving tests checks the flag and the reads; none of them tried to write afterwards.
+  `Exceptions.ArchivedStreamException` is the refusal, raised from the planner — and deliberately
+  *not* for a `StartStream`, where an archived id is still an id in use and the collision is the more
+  useful answer.
+- **`FisherProjectionStorage.ArchiveStream` was an empty method**, with a comment reasoning about the
+  wrong question: it said archiving leaves the snapshot alone and a projection wanting its document
+  removed says so with `ShouldDelete` — both true, and neither what the seam asks for. It means
+  *archive the stream*, and both siblings queue their archive operation there.
+- **`FetchLatest` by natural key threw on a miss** where the contract is null, which made the
+  key-shaped spelling the one member of the family that could not answer "does this aggregate
+  exist?". `FetchForWriting` still throws, and jasperfx#764 deliberately leaves that miss out of
+  shared scope because the three stores genuinely disagree about it.
+- **Renaming a natural key left the old row behind**, so the superseded identifier resolved forever
+  and its slot in the lookup's primary key could never be claimed by another stream. Both siblings
+  reframed the same behaviour as a defect (polecat#435 / marten#5041); Fisher was the third.
+
+**Two were upstream bugs**, filed and fixed in `jasperfx` — see "Red" at the top of this file for
+what they are and why they are still red here.
+
+**Three suites are enrolled and gated off** for a LINQ surface Fisher does not have, listed with the
+header above. **One is not enrolled**: `UpcastingCompliance`, which is the next node's work.
+
+**The rest were green on the bump**, which is the part worth stating plainly, since it is the larger
+number: `ProjectionScenarioCompliance` (20) and `ProjectionCoordinatorCompliance` (6) both passed
+first run. The second is the one to notice — it exists *because of* fisher#138, where Fisher
+registered only an `IHostedService` over a class implementing nothing else and both documented routes
+to the running daemon failed while all 37 suites passed. Its pause/resume fact targets exactly the
+`StartAsync` bug that had, and it is green, which is the shared confirmation fisher#138's local tests
+could not be.
+
+Two features were built to enrol rather than to gate: `Fisher.Batching.FetchStreamStatePlan` and
+`FetchStreamPlan` (parity with polecat#370), two small classes that make `StreamQueryPlanCompliance`'s
+13 facts real; and the registrar's `UseMessageOutbox` plus the `RecordingMessageOutbox` partial, which
+is what lets `ProjectionSideEffectCompliance` assert a *nonzero* publish count rather than facts that
+are all vacuously true of a store that dropped every message.
+
+**Four local test files gave facts up to the shared suites**, each noted at the site rather than
+deleted silently: `projection_scenarios.cs` entirely (4 facts), four of `projection_coordinator.cs`'s
+seven, two of `natural_keys.cs`'s twelve and two of `subscriptions.cs`'s eight. What stayed in each
+case is what is Fisher's alone — the `ResetAllDataAsync` daemon handling, `FetchForWritingByNaturalKey`
+and `UnknownNaturalKeyException` (which jasperfx#764 excludes on purpose), the subscription wrapper's
+naming.
+
+**Green on all forty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 40 suites, 391 tests
+### Green — 49 suites, 509 tests
 
-Event sourcing — 33 suites, 322 tests:
+Event sourcing — 42 suites, 440 tests:
 
 | Suite | Tests |
 |---|---|
 | `EventQueryCompliance` | 41 |
 | `DcbTagQueryAndConsistencyCompliance` | 28 |
+| `ProjectionScenarioCompliance` | 20 |
 | `StringStreamIdentityCompliance` | 19 |
+| `NaturalKeyCompliance` | 17 |
+| `StreamArchivingCompliance` | 16 |
 | `StreamStateQueryCompliance` | 15 |
 | `AggregateWriteCacheCompliance` | 14 |
-| `FetchForWritingCompliance` | 13 |
-| `StreamReadCompliance` | 11 |
-| `StrongTypedIdentityCompliance` | 11 |
-| `StreamCompactingCompliance` | 11 |
-| `RebuildAndCatchUpCompliance` | 11 |
-| `MultiStreamProjectionCompliance` | 10 |
-| `EventDataMaskingCompliance` | 10 |
-| `EventMetadataCompliance` | 9 |
-| `SelfAggregatingEvolveCompliance` | 8 |
-| `FlatTableProjectionCompliance` | 8 |
-| `ConjoinedEventTenancyCompliance` | 11 |
-| `FetchLatestCompliance` | 7 |
-| `LiveAggregationCompliance` | 7 |
 | `EventStoreExplorerCompliance` | 14 |
-| `StringIdentitySingleStreamCompliance` | 6 |
-| `StreamArchivingCompliance` | 6 |
-| `SnapshotLifecycleCompliance` | 6 |
+| `StrongTypedIdentityCompliance` | 14 |
+| `FetchForWritingCompliance` | 13 |
+| `StreamQueryPlanCompliance` | 13 |
+| `FetchLatestCompliance` | 12 |
+| `AlwaysEnforceConsistencyCompliance` | 11 |
+| `ConjoinedEventTenancyCompliance` | 11 |
+| `EventDataMaskingCompliance` | 11 |
+| `RebuildAndCatchUpCompliance` | 11 |
+| `StreamCompactingCompliance` | 11 |
+| `StreamReadCompliance` | 11 |
+| `SubscriptionCompliance` | 11 |
+| `FlatTableProjectionCompliance` | 10 |
+| `MultiStreamProjectionCompliance` | 10 |
+| `EventMetadataCompliance` | 9 |
+| `ProjectionSideEffectCompliance` | 9 |
+| `SelfAggregatingEvolveCompliance` | 8 |
+| `LiveAggregationCompliance` | 7 |
 | `AssignTagWhereCompliance` | 6 |
 | `BinaryEventSerializationCompliance` | 6 |
+| `DcbHasTagLinqCompliance` | 6 |
 | `DeadLetterCompliance` | 6 |
-| `SubscriptionCompliance` | 6 |
+| `ProjectionCoordinatorCompliance` | 6 |
+| `SnapshotLifecycleCompliance` | 6 |
+| `StringIdentitySingleStreamCompliance` | 6 |
+| `AggregateToLinqOperatorCompliance` | 5 |
+| `AggregateToManyCompliance` | 5 |
 | `RebuildConcurrencyCapCompliance` | 5 |
 | `ActivityCorrelationCompliance` | 4 |
 | `CompositeProjectionCompliance` | 3 |
-| `EventProjectionRegistrationCompliance` | 3 |
 | `EventProjectionEnrichmentCompliance` | 3 |
+| `EventProjectionRegistrationCompliance` | 3 |
 | `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
@@ -577,8 +690,8 @@ Documents — 7 suites, 69 tests, through `FisherDocumentComplianceFixture`:
 |---|---|
 | `DocumentQueryCompliance` | 17 |
 | `DocumentLoadAndStoreCompliance` | 11 |
-| `DocumentDeleteCompliance` | 10 |
 | `DocumentCommitListenerCompliance` | 10 |
+| `DocumentDeleteCompliance` | 10 |
 | `PendingStreamActionsCompliance` | 9 |
 | `DocumentSessionCompliance` | 7 |
 | `DocumentSessionEventsCompliance` | 5 |
