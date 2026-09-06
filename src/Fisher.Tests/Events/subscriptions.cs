@@ -129,6 +129,40 @@ public class subscriptions : IAsyncLifetime
         progress.ShouldBeGreaterThan(0);
     }
 
+    /// <summary>
+    ///     fisher#153 — the loader pushes a subscription's event-type allow-list into SQL, so rows
+    ///     of other types never leave SQLite. Two facts a daemon-level test can pin: events of
+    ///     non-allowed types do not reach the subscription, and the shard's recorded progress still
+    ///     advances past a long run of filtered-out events all the way to the head — get the
+    ///     ceiling accounting wrong under a server-side filter and this either stalls short of the
+    ///     head or skips the matching event entirely.
+    /// </summary>
+    [Fact]
+    public async Task a_filtered_subscription_sees_only_its_types_and_still_reaches_the_head()
+    {
+        var recorder = new FilteredRecordingSubscription();
+        await StartWithAsync(recorder);
+
+        await AppendAsync(new QuestStarted("Find the ring"));
+
+        // A run of events the subscription filters out, appended after the one it wants —
+        // progress has to advance past all of them.
+        for (var i = 0; i < 25; i++)
+        {
+            await AppendAsync(new MemberJoined($"member-{i}"));
+        }
+
+        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+
+        recorder.Seen.Count.ShouldBe(1);
+        recorder.Seen.Single().Data.ShouldBeOfType<QuestStarted>();
+
+        var progress = await _store.Database
+            .ProjectionProgressFor(new ShardName(recorder.Name), TestContext.Current.CancellationToken);
+
+        progress.ShouldBe(26);
+    }
+
     // ---- the transactional guarantee ----
 
     /// <summary>
@@ -222,6 +256,28 @@ public class subscriptions : IAsyncLifetime
     {
         // A queue, not a ConcurrentBag: the bag is explicitly unordered, so asserting sequence
         // order against one tests nothing and fails at random.
+        public ConcurrentQueue<IEvent> Seen { get; } = new();
+
+        public override Task<IDaemonChangeListener> ProcessEventsAsync(EventRange page,
+            ISubscriptionController controller, IDocumentSession operations,
+            CancellationToken cancellationToken)
+        {
+            foreach (var @event in page.Events)
+            {
+                Seen.Enqueue(@event);
+            }
+
+            return Task.FromResult<IDaemonChangeListener>(NullDaemonChangeListener.Instance);
+        }
+    }
+
+    private sealed class FilteredRecordingSubscription : SubscriptionBase
+    {
+        public FilteredRecordingSubscription()
+        {
+            IncludeType<QuestStarted>();
+        }
+
         public ConcurrentQueue<IEvent> Seen { get; } = new();
 
         public override Task<IDaemonChangeListener> ProcessEventsAsync(EventRange page,

@@ -27,6 +27,12 @@ namespace Fisher.Events.Daemon;
 ///         same reader the DCB tag queries use: a page spans streams, so each event's identity has to
 ///         come off its own row rather than from the hydration context.
 ///     </para>
+///     <para>
+///         A subscription or projection that names its event types gets that filter pushed into the
+///         SQL (<c>and type in (...)</c>), so non-matching rows are never read off disk, hydrated or
+///         deserialized — the same strategy as Marten's <c>EventTypeFilter</c>. See the constructor
+///         for why the page's ceiling accounting stays correct with the filter server-side.
+///     </para>
 /// </remarks>
 [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
     Justification = "Class-level: hydrates IEvent batches through the row reader, which routes to ISerializer.FromJson. Event types are preserved by EventGraph registration on the caller side per the AOT publishing guide.")]
@@ -38,6 +44,8 @@ internal sealed class FisherEventLoader : IEventLoader
     private readonly StoreOptions _options;
     private readonly EventGraph _events;
     private readonly HashSet<string>? _allowedEventTypeNames;
+    private readonly string[]? _allowedTypeNameParameters;
+    private readonly string _typeFilterSql = string.Empty;
 
     internal FisherEventLoader(FisherDatabase database, StoreOptions options, EventFilterable? filtering = null)
     {
@@ -55,6 +63,29 @@ internal sealed class FisherEventLoader : IEventLoader
             {
                 _allowedEventTypeNames.Add(_events.EventMappingFor(type).EventTypeName);
             }
+
+            // The filter is pushed into SQL so non-matching rows never leave SQLite — a
+            // subscription scoped to a few event types in a busy store would otherwise deserialize
+            // essentially the whole event log to produce nothing. Marten pushes the same filter
+            // down as its EventTypeFilter fragment.
+            //
+            // The page's ceiling accounting stays correct with the filter server-side, and it is
+            // worth spelling out why. EventPage.CalculateCeiling's contract is "a page that did not
+            // fill the batch exhausted everything up to the bound it was given": a filtered query
+            // returning fewer than batch_size MATCHING rows really has scanned the whole
+            // (floor, high-water] range, so taking the high-water mark as the ceiling steps the
+            // floor past every non-matching sequence in it — that is what keeps a shard from
+            // stalling on a run of filtered-out events. A full page takes the last matched
+            // sequence, and the non-matching rows above it are re-scanned by the next request,
+            // which never re-delivers anything (they still do not match).
+            //
+            // The set is materialized into a stable array because a HashSet's enumeration order is
+            // unspecified — the parameter names in the SQL and the values bound each LoadAsync
+            // must line up.
+            _allowedTypeNameParameters = _allowedEventTypeNames.ToArray();
+            var markers = string.Join(", ",
+                Enumerable.Range(0, _allowedTypeNameParameters.Length).Select(i => $"@t{i}"));
+            _typeFilterSql = $" and type in ({markers})";
         }
     }
 
@@ -66,7 +97,7 @@ internal sealed class FisherEventLoader : IEventLoader
         var sql = $"""
                    select {FisherEventsRowReader.ComposeSelectColumns(_options.Events)}
                    from {_events.EventsTableName}
-                   where seq_id > @floor and seq_id <= @ceiling and is_archived = 0
+                   where seq_id > @floor and seq_id <= @ceiling and is_archived = 0{_typeFilterSql}
                    order by seq_id
                    limit @batch_size
                    """;
@@ -78,6 +109,14 @@ internal sealed class FisherEventLoader : IEventLoader
         command.Parameters.AddWithValue("@floor", request.Floor);
         command.Parameters.AddWithValue("@ceiling", request.HighWater);
         command.Parameters.AddWithValue("@batch_size", request.BatchSize);
+
+        if (_allowedTypeNameParameters is not null)
+        {
+            for (var i = 0; i < _allowedTypeNameParameters.Length; i++)
+            {
+                command.Parameters.AddWithValue($"@t{i}", _allowedTypeNameParameters[i]);
+            }
+        }
 
         var ctx = new EventHydrationContext(_events, _options.Serializer, string.Empty,
             JasperFx.StorageConstants.DefaultTenantId);
@@ -107,9 +146,10 @@ internal sealed class FisherEventLoader : IEventLoader
 
             if (_allowedEventTypeNames != null && !_allowedEventTypeNames.Contains(@event.EventTypeName))
             {
-                // Filtered out by the subscription rather than skipped in error: it is not counted,
-                // because the ceiling calculation treats skips as "we consumed this slot" and a
-                // filtered event genuinely was consumed from the page's range.
+                // Belt and braces: the SQL type filter above already excludes these rows, so this
+                // only fires if the rendered filter and the set ever disagree. Counting it as
+                // skipped keeps the ceiling honest either way — the row consumed a slot of the
+                // page's range.
                 skipped++;
                 continue;
             }
