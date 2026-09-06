@@ -166,7 +166,7 @@ public class DocumentMapping
         var indexed = members
             .Select(member => (Member: member, Attribute: member.GetCustomAttribute<IndexAttribute>()))
             .Where(x => x.Attribute is not null)
-            .GroupBy(x => x.Attribute!.IndexName ?? $" {x.Member.Name}");
+            .GroupBy(x => x.Attribute!.IndexName ?? $"\0{x.Member.Name}");
 
         foreach (var group in indexed)
         {
