@@ -13,6 +13,7 @@
 | `Join` / `GroupJoin` + `SelectMany` | yes — see [joins](/documents/querying/linq/joins) |
 | `Count` / `Any` / `First` / `Single` / `Last` | yes, with predicate overloads |
 | `Sum` / `Min` / `Max` / `Average` | yes — see [aggregates](/documents/querying/linq/grouping#aggregates) |
+| `Include` | yes — see [including related documents](/documents/querying/linq/includes) |
 
 ## Comparisons
 
@@ -199,11 +200,13 @@ rather than through a slow query:
 - Inside a collection predicate: outer-scope references, member access on scalar elements, and bare
   element comparisons — see [Collections](#collections)
 - A soft-delete or tenancy operator against a type that has no such column
+- `Include()` combined with `Select`, `GroupBy`, a join, or any terminal that returns no documents —
+  see [including related documents](/documents/querying/linq/includes#what-is-refused)
 
 ## Marten operators that are absent
 
 Not refused by name — these simply do not exist, so a ported file naming one will not compile:
-`Include()`, `MatchesSql(…)`, `Stats(out QueryStatistics)`, `ToAsyncEnumerable()`, and the full-text
+`MatchesSql(…)`, `Stats(out QueryStatistics)`, `ToAsyncEnumerable()`, and the full-text
 operators (`Search`, `PlainTextSearch`, `PhraseSearch`, `WebStyleSearch`, `NgramSearch`). Compiled
 queries (`ICompiledQuery<T>`) are absent too, on a
 [measurement](https://github.com/JasperFx/fisher/issues/195) rather than by omission.
