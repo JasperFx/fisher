@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**1947 tests green on net9.0 and net10.0** — 1892 in
+**1982 tests green on net9.0 and net10.0** — 1927 in
 `Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 516 of
 them are shared cross-store compliance tests — 447 event sourcing and 69 document. On JasperFx **2.66.0** / Weasel **9.31.0**.
 
@@ -1501,7 +1501,7 @@ Each of these is a decision with a reason, not an oversight:
 
 > ⚠️ **This section is not the whole gap list, and the README no longer claims it is.** Everything
 > below is a *decision*; there is a separate set of Marten features that are simply **absent** —
-> full-text search, a session logging seam, `MatchesSql`, `Stats(out QueryStatistics)`,
+> a session logging seam, `MatchesSql`, `Stats(out QueryStatistics)`,
 > `ToAsyncEnumerable()`, and child-collection LINQ only partly. They were missing from this section for
 > a structural reason worth knowing: **Fisher's parity baseline was drawn against Polecat**
 > (`polecat-gaps.md`), so a feature Marten has and Polecat does not never entered the tracking at all.

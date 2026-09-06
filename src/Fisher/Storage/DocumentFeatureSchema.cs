@@ -23,8 +23,21 @@ internal class DocumentFeatureSchema : FeatureSchemaBase
 
     public override Type StorageType => _mapping.DocumentType;
 
+    /// <remarks>
+    ///     The table first, then anything that depends on it. A full-text index adds a content view,
+    ///     the FTS5 virtual table and three triggers — all of which name the document table, so the
+    ///     order is load-bearing rather than tidy. See <see cref="FullText.FullTextSchema" />.
+    /// </remarks>
     protected override IEnumerable<ISchemaObject> schemaObjects()
     {
         yield return _mapping.BuildTable();
+
+        if (_mapping.FullTextIndex is not null)
+        {
+            foreach (var schemaObject in FullText.FullTextSchema.ObjectsFor(_mapping))
+            {
+                yield return schemaObject;
+            }
+        }
     }
 }

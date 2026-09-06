@@ -106,10 +106,28 @@ internal sealed class FisherDocumentCleaner : IDocumentCleaner
         return ExecuteAgainstOrderedTablesAsync(ordered, table => $"delete from \"{table}\"", token);
     }
 
+    /// <remarks>
+    ///     <para>
+    ///         Views go too, and they are not merely tidiness: a full-text index's content view
+    ///         (fisher#215) is what its virtual table names as its content source, so a removal that
+    ///         left the view behind would leave a view over a table that no longer exists. It is
+    ///         harmless — the next migration drops and recreates it — but "completely remove all" that
+    ///         visibly does not is worse than the work of removing it.
+    ///     </para>
+    ///     <para>
+    ///         An FTS5 table's four shadow tables carry the same prefix and are swept up with it. No
+    ///         ordering is needed between them and the virtual table: verified against SQLite 3.50.4,
+    ///         dropping the shadows first and the virtual table last succeeds and leaves nothing, and
+    ///         so does the other order.
+    ///     </para>
+    /// </remarks>
     public async Task CompletelyRemoveAllAsync(CancellationToken token = default)
     {
         await ExecuteAgainstTablesAsync(name => name.StartsWith(Prefix, StringComparison.Ordinal),
             table => $"drop table if exists \"{table}\"", token).ConfigureAwait(false);
+
+        await ExecuteAgainstViewsAsync(name => name.StartsWith(Prefix, StringComparison.Ordinal),
+            view => $"drop view if exists \"{view}\"", token).ConfigureAwait(false);
 
         // The tables are gone, so the database's "already created this one" bookkeeping is now a lie —
         // the next Store would otherwise skip the migration and write to a table that no longer exists.
@@ -254,11 +272,36 @@ internal sealed class FisherDocumentCleaner : IDocumentCleaner
         return ordered;
     }
 
-    private static async Task<List<string>> ReadTableNamesAsync(SqliteConnection connection,
+    private async Task ExecuteAgainstViewsAsync(Func<string, bool> matches, Func<string, string> sqlFor,
+        CancellationToken token)
+    {
+        foreach (var database in _store.Tenancy.AllDatabases())
+        {
+            await _store.Options.ResiliencePipeline.ExecuteAsync(async ct =>
+            {
+                await using var connection = await database.OpenConnectionAsync(ct).ConfigureAwait(false);
+
+                foreach (var view in (await ReadNamesAsync(connection, "view", ct).ConfigureAwait(false))
+                         .Where(matches))
+                {
+                    await using var command = connection.CreateCommand();
+                    command.CommandText = sqlFor(view);
+                    await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                }
+            }, token).ConfigureAwait(false);
+        }
+    }
+
+    private static Task<List<string>> ReadTableNamesAsync(SqliteConnection connection,
+        CancellationToken token)
+        => ReadNamesAsync(connection, "table", token);
+
+    private static async Task<List<string>> ReadNamesAsync(SqliteConnection connection, string type,
         CancellationToken token)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = "select name from sqlite_master where type = 'table'";
+        command.CommandText = "select name from sqlite_master where type = $type";
+        command.Parameters.AddWithValue("$type", type);
 
         var names = new List<string>();
 
