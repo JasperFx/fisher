@@ -6,6 +6,8 @@ using JasperFx.Events.ComplianceTests;
 using JasperFx.Events.Daemon;
 using JasperFx.Events.Projections;
 using JasperFx.Events.Tags;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Fisher.Tests.Compliance;
 
@@ -297,6 +299,328 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
             ? guid
             : raw;
 
+    // ------------------------------------------------------------------
+    // 2.64.0 (wave 13) — fisher#184
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    ///     jasperfx#764 — Fisher maintains the natural key lookup and resolves the shared
+    ///     <c>FetchForWriting</c> / <c>FetchForExclusiveWriting</c> / <c>FetchLatest</c> triple through
+    ///     it (fisher#40).
+    /// </summary>
+    /// <remarks>
+    ///     The gate guards no seam member: the whole natural key surface is already shared, and what
+    ///     varies between stores is only whether the storage half exists. Fisher's does, so this is
+    ///     true and the suite is a check on it rather than a specification to build against.
+    /// </remarks>
+    public override bool SupportsNaturalKeys => true;
+
+    /// <summary>
+    ///     Fisher has <c>UnArchiveStream</c> on its own event operations, so the archiving suite's
+    ///     unarchive facts run rather than skipping.
+    /// </summary>
+    /// <remarks>
+    ///     The operation is not on the shared <see cref="IEventStoreOperations" /> and cannot be:
+    ///     Polecat declares it on its own surface and Marten has no equivalent at all, which is why
+    ///     the suite reaches it through this pair rather than through the contract.
+    /// </remarks>
+    public override bool SupportsUnarchiveStream => true;
+
+    /// <inheritdoc cref="SupportsUnarchiveStream" />
+    public override void UnArchiveStream(IDocumentSession session, object streamIdentity)
+    {
+        switch (streamIdentity)
+        {
+            case Guid streamId:
+                session.Events.UnArchiveStream(streamId);
+                break;
+            case string streamKey:
+                session.Events.UnArchiveStream(streamKey);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(streamIdentity),
+                    $"Fisher has no stream identity of type {streamIdentity.GetType().FullName}");
+        }
+    }
+
+    /// <summary>
+    ///     jasperfx#763 — Fisher routes a projection's published side effects through
+    ///     <c>StoreOptions.Events.MessageOutbox</c>, whose default drops every message.
+    /// </summary>
+    /// <remarks>
+    ///     <c>NulloMessageOutbox</c> being the intended end state rather than a placeholder (fisher#8,
+    ///     closed wontfix) is exactly why the suite has to supply its own recorder: every behavioural
+    ///     fact about side effects is vacuously true of a store that dropped them on the floor.
+    /// </remarks>
+    public override bool SupportsMessageOutbox => true;
+
+    /// <summary>
+    ///     The before-commit probe reads committed state over a second connection while the first
+    ///     session's write transaction is still open, which on SQLite in WAL mode answers immediately
+    ///     rather than blocking.
+    /// </summary>
+    /// <remarks>
+    ///     Safe rather than merely believed safe: this is the same probe fisher#4 settled the commit
+    ///     hooks' visibility semantics with, and Fisher's own outbox tests have run it over a separate
+    ///     connection since. WAL is on by default through <c>SqlitePragmaSettings.Default</c>, which is
+    ///     what lets a reader see the last committed snapshot while a writer holds the file's one write
+    ///     lock. Without it a probe that blocked until the commit would deadlock against the hook
+    ///     holding the commit open — the hazard the flag exists to let a store decline.
+    /// </remarks>
+    public override bool SupportsCommitVisibilityProbe => true;
+
+    /// <summary>
+    ///     jasperfx#768 — the registrar replays <c>ComplianceSubscription.IncludedEventTypes</c> onto
+    ///     Fisher's own subscription options, so a declared allow list reaches the daemon.
+    /// </summary>
+    /// <remarks>
+    ///     The filter has to survive a hop nothing shared can make for it: <c>Projections.Subscribe</c>
+    ///     wraps a bare <c>ISubscription</c> in <c>SubscriptionWrapper</c> and the daemon reads filters
+    ///     off the <em>wrapper</em>. See <see cref="FisherComplianceRegistrar.Subscribe" />.
+    /// </remarks>
+    public override bool SupportsSubscriptionEventFilters => true;
+
+    /// <summary>
+    ///     fisher#42 — Fisher subclasses JasperFx's projection scenario harness and exposes it on
+    ///     <c>Advanced.EventProjectionScenarioAsync</c>.
+    /// </summary>
+    public override bool SupportsProjectionScenario => true;
+
+    /// <summary>
+    ///     Forwards to Fisher's own documented entry point rather than re-implementing the three lines
+    ///     behind it.
+    /// </summary>
+    /// <remarks>
+    ///     The suite's remarks make the reason explicit and it is worth repeating here: inlining
+    ///     construct-configure-execute would pass the whole suite while the store's advertised entry
+    ///     point was missing or wired to the wrong store. The route is under test as much as the
+    ///     harness is.
+    /// </remarks>
+    public override Task RunProjectionScenarioAsync(
+        Action<JasperFx.Events.TestSupport.ProjectionScenario<IDocumentSession, IQuerySession>> configure,
+        CancellationToken token)
+        => Store.Advanced.EventProjectionScenarioAsync(scenario => configure(scenario), token);
+
+    /// <summary>
+    ///     Constructs a scenario without running it, for the one fact the run entry point structurally
+    ///     cannot reach — that a scenario's steps are consumed by its first run.
+    /// </summary>
+    /// <remarks>
+    ///     <see cref="Fisher.Events.TestSupport.ProjectionScenario" />'s constructor is internal, since a
+    ///     scenario only means anything against a store; <c>Fisher.Tests</c> has
+    ///     <c>InternalsVisibleTo</c>, so the fixture can reach it where an application could not.
+    /// </remarks>
+    public override JasperFx.Events.TestSupport.ProjectionScenario<IDocumentSession, IQuerySession>
+        CreateProjectionScenario() => new Fisher.Events.TestSupport.ProjectionScenario(Store);
+
+    /// <summary>
+    ///     fisher#37 / polecat#370 — Fisher ships <see cref="Fisher.Batching.FetchStreamStatePlan" /> and
+    ///     <see cref="Fisher.Batching.FetchStreamPlan" />, each implementing both the standalone and the
+    ///     batched plan interface.
+    /// </summary>
+    public override bool SupportsStreamQueryPlans => true;
+
+    /// <inheritdoc cref="SupportsStreamQueryPlans" />
+    public override Task<StreamState?> FetchStreamStateByPlanAsync(
+        IQuerySession session, object streamIdentity, bool batched, CancellationToken token)
+    {
+        var plan = streamIdentity switch
+        {
+            Guid streamId => new Fisher.Batching.FetchStreamStatePlan(streamId),
+            string streamKey => new Fisher.Batching.FetchStreamStatePlan(streamKey),
+            _ => throw new ArgumentOutOfRangeException(nameof(streamIdentity),
+                $"Fisher has no stream identity of type {streamIdentity.GetType().FullName}")
+        };
+
+        return batched
+            ? RunBatchedAsync(session, plan.Fetch, token)
+            : plan.Fetch(session, token);
+    }
+
+    /// <inheritdoc cref="SupportsStreamQueryPlans" />
+    public override Task<IReadOnlyList<IEvent>> FetchStreamByPlanAsync(
+        IQuerySession session, object streamIdentity, long version, bool batched, CancellationToken token)
+    {
+        var plan = streamIdentity switch
+        {
+            Guid streamId => new Fisher.Batching.FetchStreamPlan(streamId, version),
+            string streamKey => new Fisher.Batching.FetchStreamPlan(streamKey, version),
+            _ => throw new ArgumentOutOfRangeException(nameof(streamIdentity),
+                $"Fisher has no stream identity of type {streamIdentity.GetType().FullName}")
+        };
+
+        return batched
+            ? RunBatchedAsync(session, plan.Fetch, token)
+            : plan.Fetch(session, token);
+    }
+
+    /// <summary>
+    ///     Run one plan through <see cref="Fisher.Batching.IBatchedQuery" /> — enqueue it, execute the
+    ///     batch, then await the item's own task.
+    /// </summary>
+    /// <remarks>
+    ///     The two-step await is the batch's contract rather than ceremony: an item's task is completed
+    ///     or faulted by <c>Execute</c>, so awaiting it before executing would hang.
+    /// </remarks>
+    private static async Task<T> RunBatchedAsync<T>(IQuerySession session,
+        Func<Fisher.Batching.IBatchedQuery, Task<T>> enqueue, CancellationToken token)
+    {
+        var batch = ((IDocumentSession)session).Events.CreateBatchQuery();
+        var item = enqueue(batch);
+
+        await batch.Execute(token).ConfigureAwait(false);
+
+        return await item.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Left false: Fisher has no <c>QueryAllRawEvents()</c> to hang a <c>HasTag</c> predicate off.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>A legitimate divergence rather than a gap waiting to be filled.</b> Marten and Polecat
+    ///         translate the marker by matching the extension method's declaring type inside a LINQ
+    ///         provider that already serves an <c>IQueryable&lt;IEvent&gt;</c>. Fisher's LINQ provider is
+    ///         built over <em>document</em> storage — its statements, selectors and member factories all
+    ///         resolve against a <c>fi_doc_*</c> table — so an event queryable would need a parallel
+    ///         provider built to serve one caller. That is why
+    ///         <c>EventOperations.QueryEventsAsync</c> takes a predicate rather than returning a
+    ///         queryable, and why <c>AssignTagWhere</c> reaches the same parser through
+    ///         <c>EventMemberFactory</c> instead.
+    ///     </para>
+    ///     <para>
+    ///         Nothing is declined behaviourally: DCB tag querying itself is enrolled and green through
+    ///         <c>DcbTagQueryAndConsistencyCompliance</c> and <c>AssignTagWhereCompliance</c>, which is
+    ///         the same capability reached by Fisher's own spelling. What is declined is the LINQ
+    ///         surface, which is the thing the shared library keeps out of scope permanently everywhere
+    ///         else.
+    ///     </para>
+    /// </remarks>
+    public override bool SupportsHasTagLinqPredicates => false;
+
+    /// <summary>
+    ///     Left false for the same structural reason as <see cref="SupportsHasTagLinqPredicates" />:
+    ///     <c>AggregateToAsync</c> and <c>AggregateToManyAsync</c> are terminators over
+    ///     <c>QueryAllRawEvents()</c>, which Fisher does not have.
+    /// </summary>
+    /// <remarks>
+    ///     Fisher answers the same questions through <c>AggregateStreamAsync</c> and
+    ///     <c>AggregateByTagsAsync</c>; what it cannot offer is the cross-stream LINQ query those
+    ///     operators terminate.
+    /// </remarks>
+    public override bool SupportsAggregateToLinqOperators => false;
+
+    /// <summary>
+    ///     Fisher has ancillary store registration (<c>AddFisherStore&lt;T&gt;</c>, fisher#46) and its
+    ///     daemon registration produces an <see cref="IProjectionCoordinator{T}" /> keyed on the marker.
+    /// </summary>
+    public override bool SupportsAncillaryCoordinators => true;
+
+    /// <inheritdoc cref="SupportsAncillaryCoordinators" />
+    public override IProjectionCoordinator AncillaryCoordinatorFrom(IServiceProvider services)
+        => services.GetRequiredService<IProjectionCoordinator<IComplianceAncillaryStore>>();
+
+    /// <summary>
+    ///     jasperfx#732 — build and start a host registering Fisher the documented way, so the suite can
+    ///     observe whether that registration produces a reachable coordinator.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>This is the suite fisher#138 is the reason for</b>, so the registration here has to be
+    ///         exactly what the documentation tells an application to write — <c>AddFisher(...)</c> plus
+    ///         <c>AddAsyncDaemon()</c> — rather than anything the fixture could arrange for itself.
+    ///     </para>
+    ///     <para>
+    ///         The hosted store points at the fixture's own throwaway file and folds in the same
+    ///         <c>DatabaseSchemaName</c>, which on SQLite <em>is</em> the isolation boundary between two
+    ///         logical stores in one file — so the per-test <c>CleanEventDataAsync</c> reaches the hosted
+    ///         store's rows too. The schema is applied already, by the fixture's own store; the
+    ///         registration still asks for it, because the ancillary store below has a file of its own
+    ///         that nothing else has migrated.
+    ///     </para>
+    ///     <para>
+    ///         The ancillary store gets a <em>second</em> file rather than a second schema name in the
+    ///         same one. That is the shape fisher#46 exists for and the one that gets two concurrent
+    ///         writers out of SQLite, and it also keeps the two daemons off one write lock — two daemons
+    ///         over one file is precisely what the same-instance fact next door is guarding against.
+    ///     </para>
+    /// </remarks>
+    protected override async Task<IComplianceCoordinatorHost<IDocumentSession>> StartCoordinatorHostAsync(
+        ComplianceStoreConfig config, bool includeAncillaryStore)
+    {
+        var schemaName = (config.SchemaName ?? "compliance").ToLowerInvariant();
+        var connectionString = _database!.ConnectionString;
+
+        TemporaryDatabase? ancillaryDatabase = includeAncillaryStore
+            ? TemporaryDatabase.Create($"{schemaName}-ancillary")
+            : null;
+
+        var builder = Host.CreateDefaultBuilder()
+            .ConfigureServices(services =>
+            {
+                services.AddFisher(options =>
+                    {
+                        options.ConnectionString = connectionString;
+                        options.AutoCreateSchemaObjects = AutoCreate.All;
+                        options.DatabaseSchemaName = schemaName;
+
+                        config.ApplyTo(new FisherComplianceRegistrar(options));
+                    })
+                    .ApplyAllDatabaseChangesOnStartup()
+                    .AddAsyncDaemon();
+
+                if (ancillaryDatabase is not null)
+                {
+                    services.AddFisherStore<IComplianceAncillaryStore>(options =>
+                        {
+                            options.ConnectionString = ancillaryDatabase.ConnectionString;
+                            options.AutoCreateSchemaObjects = AutoCreate.All;
+
+                            config.ApplyTo(new FisherComplianceRegistrar(options));
+                        })
+                        .ApplyAllDatabaseChangesOnStartup()
+                        .AddAsyncDaemon();
+                }
+            });
+
+        var host = await builder.StartAsync(Cancellation).ConfigureAwait(false);
+
+        return new FisherCoordinatorHost(host, ancillaryDatabase, Cancellation);
+    }
+
+    /// <inheritdoc cref="StartCoordinatorHostAsync" />
+    private sealed class FisherCoordinatorHost : IComplianceCoordinatorHost<IDocumentSession>
+    {
+        private readonly IHost _host;
+        private readonly TemporaryDatabase? _ancillaryDatabase;
+        private readonly CancellationToken _token;
+
+        internal FisherCoordinatorHost(IHost host, TemporaryDatabase? ancillaryDatabase, CancellationToken token)
+        {
+            _host = host;
+            _ancillaryDatabase = ancillaryDatabase;
+            _token = token;
+        }
+
+        public IServiceProvider Services => _host.Services;
+
+        public IDocumentSession OpenSession()
+            => _host.Services.GetRequiredService<IDocumentStore>().LightweightSession();
+
+        /// <remarks>
+        ///     <c>IHost.Dispose</c> alone does not call <c>StopAsync</c>, so an abandoned host would
+        ///     leave its daemon polling the fixture's file into the next test — two writers on one file,
+        ///     which on SQLite is the difference between a passing suite and an intermittent one.
+        /// </remarks>
+        public async ValueTask DisposeAsync()
+        {
+            await _host.StopAsync(_token).ConfigureAwait(false);
+            _host.Dispose();
+
+            _ancillaryDatabase?.Dispose();
+        }
+    }
+
     public override async ValueTask DisposeAsync()
     {
         await DisposeStoreAsync().ConfigureAwait(false);
@@ -460,7 +784,43 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         ///     reasonably change.
         /// </remarks>
         public void Subscribe(ComplianceSubscription subscription)
-            => _options.Projections.Subscribe(subscription,
-                options => options.Name = ComplianceSubscription.SubscriptionName);
+            => _options.Projections.Subscribe(subscription, options =>
+            {
+                options.Name = ComplianceSubscription.SubscriptionName;
+
+                // jasperfx#768 — the allow list has to be replayed onto the wrapper, because that is
+                // what the daemon reads filters from. `Projections.Subscribe` wraps a bare
+                // ISubscription in SubscriptionWrapper and the wrapper copies nothing across, so a
+                // filter declared on the subscription object alone would be silently ignored — the
+                // subscription would be handed every event and the suite's filter fact would fail
+                // rather than the registration failing.
+                foreach (var eventType in subscription.IncludedEventTypes)
+                {
+                    options.IncludeType(eventType);
+                }
+            });
+
+        /// <summary>
+        ///     jasperfx#763 — install the suite's recording outbox as the store's message outbox.
+        /// </summary>
+        /// <remarks>
+        ///     One assignment, because <c>NulloMessageOutbox</c> is a default rather than a branch:
+        ///     nothing in Fisher asks whether an outbox is "real", so replacing it is the whole of what
+        ///     a bus integration does too.
+        /// </remarks>
+        public void UseMessageOutbox(RecordingMessageOutbox outbox)
+            => _options.Events.MessageOutbox = outbox;
     }
 }
+
+/// <summary>
+///     The marker for the ancillary store <c>ProjectionCoordinatorCompliance</c>'s one gated fact
+///     registers (fisher#46).
+/// </summary>
+/// <remarks>
+///     A marker type cannot be shared: <c>AddFisherStore&lt;T&gt;</c> constrains it to
+///     <see cref="IDocumentStore" />, and every product constrains its own to its own store interface —
+///     which is why the suite reaches the ancillary coordinator through
+///     <see cref="FisherComplianceFixture.AncillaryCoordinatorFrom" /> rather than by naming a type.
+/// </remarks>
+public interface IComplianceAncillaryStore : IDocumentStore;

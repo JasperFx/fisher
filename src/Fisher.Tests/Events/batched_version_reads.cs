@@ -146,7 +146,7 @@ public class batched_version_reads : IAsyncLifetime
         session.Events.StartStream(Guid.NewGuid(), new QuestStarted("Fine"));
         session.Events.StartStream(taken, new QuestStarted("Collides"));
 
-        await Should.ThrowAsync<ExistingStreamIdCollisionException>(() => session.SaveChangesAsync(Token));
+        await Should.ThrowAsync<Fisher.Exceptions.ExistingStreamIdCollisionException>(() => session.SaveChangesAsync(Token));
     }
 
     [Fact]
@@ -168,9 +168,26 @@ public class batched_version_reads : IAsyncLifetime
     }
 
     /// <summary>
-    ///     The per-stream version read never filtered on <c>is_archived</c> — an archived stream's
-    ///     version is still its version — and the batched read must not start.
+    ///     The batched read still sees an archived stream — an archived stream's version is still its
+    ///     version, and the read does not filter on <c>is_archived</c>. What the planner does with that
+    ///     answer changed in fisher#184: the append is now refused rather than landing.
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         This test used to append to the archived stream and assert the write succeeded, taking
+    ///         version 3 as the evidence that the batched read had found the row. That was Fisher
+    ///         diverging from both siblings, and <c>StreamArchivingCompliance</c>'s
+    ///         <c>appending_to_an_archived_stream_is_rejected</c> is what said so — archiving is not a
+    ///         soft delete you can keep writing through.
+    ///     </para>
+    ///     <para>
+    ///         The read is still the subject, and the refusal is a better probe of it than the append
+    ///         was: the planner can only refuse a stream whose row the batched read actually returned.
+    ///         The unarchived stream in the same unit of work is what makes it a batch rather than a
+    ///         single read, and it is left unwritten by the refusal, which is the second half of the
+    ///         contract — a rejected append rolls the whole unit of work back.
+    ///     </para>
+    /// </remarks>
     [Fact]
     public async Task an_archived_stream_still_reads_its_version()
     {
@@ -193,17 +210,45 @@ public class batched_version_reads : IAsyncLifetime
         {
             session.Events.Append(archived, new MonsterSlain("Posthumous"));
             session.Events.StartStream(fresh, new QuestStarted("New"));
-            await session.SaveChangesAsync(Token);
+
+            var refusal = await Should.ThrowAsync<Fisher.Exceptions.ArchivedStreamException>(
+                () => session.SaveChangesAsync(Token));
+            refusal.Id.ShouldBe(archived);
         }
 
         await using var query = _store.LightweightSession();
-        (await query.Events.FetchStreamStateAsync(archived, Token))!.Version.ShouldBe(3);
-        (await query.Events.FetchStreamStateAsync(fresh, Token))!.Version.ShouldBe(1);
+        (await query.Events.FetchStreamStateAsync(archived, Token))!.Version.ShouldBe(2);
+        (await query.Events.FetchStreamStateAsync(fresh, Token)).ShouldBeNull();
 
-        // And starting a stream over an archived id still collides — archived is not missing.
+        // Unarchive and the same append lands, which is what makes the refusal a state rather than a
+        // verdict on the events.
+        await using (var reopened = _store.LightweightSession())
+        {
+            reopened.Events.UnArchiveStream(archived);
+            await reopened.SaveChangesAsync(Token);
+        }
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.Append(archived, new MonsterSlain("Posthumous"));
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using var after = _store.LightweightSession();
+        (await after.Events.FetchStreamStateAsync(archived, Token))!.Version.ShouldBe(3);
+
+        // And starting a stream over an archived id still collides — archived is not missing, and the
+        // collision is deliberately the answer there rather than the archive refusal: a caller who
+        // reused an id needs a different one, not an unarchive.
+        await using (var rearchiver = _store.LightweightSession())
+        {
+            rearchiver.Events.ArchiveStream(archived);
+            await rearchiver.SaveChangesAsync(Token);
+        }
+
         await using var collider = _store.LightweightSession();
         collider.Events.StartStream(archived, new QuestStarted("Reused"));
-        await Should.ThrowAsync<ExistingStreamIdCollisionException>(() => collider.SaveChangesAsync(Token));
+        await Should.ThrowAsync<Fisher.Exceptions.ExistingStreamIdCollisionException>(() => collider.SaveChangesAsync(Token));
     }
 
     /// <summary>

@@ -186,7 +186,7 @@ public class appending_events : IAsyncLifetime
         await using var second = _store.LightweightSession();
         second.Events.StartStream(streamId, new QuestStarted("Again"));
 
-        await Should.ThrowAsync<ExistingStreamIdCollisionException>(
+        await Should.ThrowAsync<Fisher.Exceptions.ExistingStreamIdCollisionException>(
             () => second.SaveChangesAsync(TestContext.Current.CancellationToken));
     }
 

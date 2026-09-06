@@ -8,14 +8,26 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and forty are enrolled from
- * JasperFx.Events.ComplianceTests 2.63.0, which itself ships forty-one. The one not enrolled is
- * SingleTenantedEventSlicingCompliance (jasperfx#724, new in 2.59.0), and it is opt-in for a reason
- * that is a precondition rather than a behaviour: the suite plants events whose tenant ids disagree
- * on a single-tenanted store and drives the daemon over them, and Fisher cannot construct that state
- * at all -- see jasperfx#727. The suite's own guard reads the events back and skips when the store
- * normalised the tenant ids away, so enrolling it would be forty-odd facts that skip themselves;
- * the non-enrollment stays documented here instead. It is not a suite Fisher declines on behaviour.
+ * Suites were added one at a time as Fisher grew into them, and forty-nine are enrolled from
+ * JasperFx.Events.ComplianceTests 2.65.0, which itself ships fifty-two. Two are not enrolled:
+ * SingleTenantedEventSlicingCompliance, for the precondition reason set out immediately below, and
+ * UpcastingCompliance, which is the next node's work rather than this one's — Fisher has no
+ * upcasting at all today, so enrolling it would be a suite that skips itself wholesale.
+ *
+ * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
+ * reason recorded at the flag on FisherComplianceFixture rather than here:
+ * DcbHasTagLinqCompliance and AggregateToLinqOperatorCompliance / AggregateToManyCompliance all
+ * terminate a QueryAllRawEvents() IQueryable<IEvent> that Fisher does not have and would need a
+ * second LINQ provider to grow, since Fisher's is built over document storage. Fisher answers the
+ * same questions through QueryEventsAsync, AssignTagWhere and AggregateByTagsAsync, all of which are
+ * covered by suites that are enrolled and green.
+ *
+ * SingleTenantedEventSlicingCompliance's non-enrollment is a precondition rather than a behaviour,
+ * and that distinction is the reason it is recorded here rather than gated: the suite plants events
+ * whose tenant ids disagree on a single-tenanted store and drives the daemon over them, and Fisher
+ * cannot construct that state at all -- see jasperfx#727. Its own guard reads the events back and
+ * skips when the store normalised the tenant ids away, so enrolling it would be forty-odd facts that
+ * skip themselves. It is not a suite Fisher declines on behaviour.
  *
  * Nothing in the fixture throws any more, but the discipline stands for the next seam member that
  * arrives ahead of the feature: a member Fisher cannot honour throws a NotSupportedException naming
@@ -156,6 +168,138 @@ public class stream_state_query_compliance
 
 public class composite_projection_compliance
     : CompositeProjectionCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * Wave 13 — JasperFx.Events.ComplianceTests 2.64.0, fisher#184.
+ *
+ * Eight new suites plus a deepened SubscriptionCompliance, and NONE of them had run against a real
+ * event store before this: the JasperFx repository enrols only the document suites, so every one
+ * arrived compile-checked and design-reasoned. Fisher enrolling them is first-contact runtime
+ * validation, which is worth saying because it changes what a failure here means — a red suite is as
+ * likely to be an over-tight assertion as a store bug, and each one was classified rather than
+ * assumed.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/*
+ * jasperfx#764 — natural keys: addressing a stream by the business identifier it was created with,
+ * across the whole FetchForWriting / FetchForExclusiveWriting / FetchLatest triple, both stream
+ * identity styles, mutation, renaming, archiving, tenancy and rebuild.
+ *
+ * Gated on SupportsNaturalKeys, which uniquely guards no seam member at all: the attributes, the
+ * definition and the discovery are shared (JasperFx.Events.Aggregation), and what varies is whether
+ * a store built the storage half. Fisher's is fisher#40.
+ *
+ * Its uniqueness fact is the one that was ruled in Fisher's favour: a second stream claiming a live
+ * key is REFUSED, where Polecat's MERGE repointed the key and left the original stream unreachable
+ * by the identifier it was created with. That ruling is also why Fisher's
+ * DuplicateNaturalKeyException now subclasses the lifted JasperFx.Events one (fisher#178) — the
+ * canonical type was lifted from Fisher's, message and all, and the suite catches the shared type.
+ */
+
+public class natural_key_compliance
+    : NaturalKeyCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * jasperfx#762 — IEventStream.AlwaysEnforceConsistency: an empty unit of work still asserts the
+ * stream version it was fetched at.
+ *
+ * No capability gate, deliberately — the flag is on the shared IEventStream and a store either
+ * honours it or silently does not. Fisher did not, and this suite is what found it: the append
+ * planner collected only streams with at least one event, so a stream fetched for writing, flagged,
+ * and then left alone was dropped from the unit of work along with its version guard. See
+ * AppendPlanner.CollectActionableStreams.
+ */
+
+public class always_enforce_consistency_compliance
+    : AlwaysEnforceConsistencyCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * jasperfx#763 — projection side effects: a projection's raised events land on their stream inside
+ * the batch's transaction, and its published messages reach the store's message outbox with both
+ * commit hooks bracketing that transaction.
+ *
+ * The outbox facts are gated on SupportsMessageOutbox and the suite brings its own recording outbox,
+ * for the reason RecordingAggregateWriteCache exists: every behavioural fact about side effects is
+ * vacuously true of a store that dropped them on the floor, and two of the three products shipped
+ * the raise seam stubbed empty (fisher#61, polecat#420). The visibility probe is gated separately
+ * because its hazard is the engine's rather than the outbox's — it reads committed state while the
+ * write transaction is open, which WAL answers and a lock-based reader would deadlock on.
+ */
+
+public class projection_side_effect_compliance
+    : ProjectionSideEffectCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * jasperfx#769 — the shared ProjectionScenario harness, reached through Fisher's own documented
+ * entry point (Advanced.EventProjectionScenarioAsync) rather than reconstructed by the fixture.
+ * That distinction is the suite's, and it is the right one: a fixture that inlined
+ * construct-configure-execute would pass every fact while the store's advertised entry point was
+ * missing or wired to the wrong store.
+ */
+
+public class projection_scenario_compliance
+    : ProjectionScenarioCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * jasperfx#732 — the store registers a REACHABLE IProjectionCoordinator over a host built the
+ * documented way.
+ *
+ * ⚠️ This suite exists because of fisher#138, and it is the third instance of one pattern after
+ * jasperfx#700 and jasperfx#718: Fisher registered only an IHostedService over an internal class
+ * implementing nothing else, so both documented routes to the running daemon failed — and all 37
+ * suites passed the whole time, because every other daemon suite drives a daemon the fixture built
+ * by hand. Its pause/resume fact targets exactly the StartAsync bug fisher#138 fixed.
+ *
+ * It carries no capability gate on purpose: a store that enrolls it without implementing
+ * StartCoordinatorHostAsync fails every fact rather than skipping, since a skippable registration
+ * check would recreate the silent gap the suite exists to close. Only the ancillary fact is gated,
+ * and Fisher opts in — AddFisherStore<T> registers IProjectionCoordinator<T> keyed on the marker.
+ */
+
+public class projection_coordinator_compliance
+    : ProjectionCoordinatorCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * jasperfx#770 — the two stream-fetch query plans, standalone and inside a batched query. Fisher
+ * ships them as of this wave (Fisher.Batching.FetchStreamStatePlan / FetchStreamPlan), which is
+ * parity with polecat#370 and cost two small classes.
+ *
+ * The suite's `batched` axis is asserting sameness that Fisher gets structurally rather than by
+ * keeping two implementations honest: Polecat's batched half composes its own SQL fragment, where
+ * Fisher's IBatchedQuery runs each item in turn on one connection — there are no round trips to
+ * collapse in an embedded store, and the batch is carried for API parity. So the version cap, the
+ * parameter the suite calls out as most likely to drift, cannot.
+ */
+
+public class stream_query_plan_compliance
+    : StreamQueryPlanCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * jasperfx#755 and jasperfx#754 — the three suites Fisher enrolls and GATES OFF, each declining a
+ * LINQ surface rather than a behaviour.
+ *
+ * All three terminate a cross-stream `QueryAllRawEvents()` returning IQueryable<IEvent>, which
+ * Fisher does not have: its LINQ provider is built over document storage — statements, selectors and
+ * member factories all resolve against a fi_doc_* table — so an event queryable would be a parallel
+ * provider serving one caller. That is why EventOperations.QueryEventsAsync takes a predicate, and
+ * why AssignTagWhere reaches the same WhereClauseParser through EventMemberFactory instead.
+ *
+ * Nothing behavioural is declined. DCB tag querying is enrolled and green through
+ * DcbTagQueryAndConsistencyCompliance and AssignTagWhereCompliance; cross-stream aggregation is
+ * AggregateByTagsAsync and AggregateStreamAsync. They are enrolled here rather than left out so the
+ * decision is visible in the run and so flipping a flag is all it would take.
+ */
+
+public class dcb_has_tag_linq_compliance
+    : DcbHasTagLinqCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class aggregate_to_linq_operator_compliance
+    : AggregateToLinqOperatorCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class aggregate_to_many_compliance
+    : AggregateToManyCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
 /*
  * fisher#93 — binary event serialization, arriving in JasperFx.Events.ComplianceTests 2.50.0 and

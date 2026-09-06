@@ -218,14 +218,37 @@ public partial class EventOperations
         };
     }
 
-    /// <inheritdoc cref="FetchForWritingByNaturalKey{T,TId}" />
+    /// <summary>
+    ///     Read the current state of the aggregate a natural key names, or null if the key names no
+    ///     live stream.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>A miss is null here, where <see cref="FetchForWritingByNaturalKey{T,TId}" /> throws,
+    ///         and the asymmetry is the contract rather than an oversight</b> (jasperfx#764). The two
+    ///         methods ask different questions: <c>FetchForWriting</c> is the read half of a
+    ///         read-modify-write and has to say what it would be writing to, where <c>FetchLatest</c>
+    ///         reports current state and <c>FetchLatest(...) is null</c> is the idiomatic "does this
+    ///         aggregate exist?" probe — the same probe fisher#88 made honest for the by-id overload.
+    ///         Throwing made the key-shaped spelling the one member of the family that could not answer
+    ///         its own question.
+    ///     </para>
+    ///     <para>
+    ///         The <c>FetchForWriting</c> miss is deliberately <em>not</em> pinned by the shared suite,
+    ///         because that is the one place the three stores genuinely disagree — Marten hands back a
+    ///         null aggregate, Polecat throws <c>InvalidOperationException</c>, Fisher throws
+    ///         <see cref="Exceptions.UnknownNaturalKeyException" />. This one they agree on, and Fisher
+    ///         was the odd one out until the suite ran.
+    ///     </para>
+    /// </remarks>
     public async ValueTask<T?> FetchLatestByNaturalKey<T, TId>(TId key,
         CancellationToken cancellation = default) where T : class where TId : notnull
     {
-        var streamId = await ResolveNaturalKeyAsync<T, TId>(key, cancellation).ConfigureAwait(false);
+        var streamId = await TryResolveNaturalKeyAsync<T, TId>(key, cancellation).ConfigureAwait(false);
 
         return streamId switch
         {
+            null => null,
             Guid guid => await FetchLatest<T>(guid, cancellation).ConfigureAwait(false),
             _ => await FetchLatest<T>((string)streamId, cancellation).ConfigureAwait(false)
         };
@@ -234,7 +257,23 @@ public partial class EventOperations
     private NaturalKeyDefinition? NaturalKeyFor<T>()
         => Graph.Options.Projections.NaturalKeyFor(typeof(T));
 
+    /// <inheritdoc cref="TryResolveNaturalKeyAsync{T,TId}" />
     private async Task<object> ResolveNaturalKeyAsync<T, TId>(TId key, CancellationToken cancellation)
+        where T : class where TId : notnull
+        => await TryResolveNaturalKeyAsync<T, TId>(key, cancellation).ConfigureAwait(false)
+           ?? throw new Exceptions.UnknownNaturalKeyException(typeof(T),
+               NaturalKeyFor<T>()!.Unwrap(key)!);
+
+    /// <summary>
+    ///     Resolve a natural key to the stream identity it names, or null if it names no live stream.
+    /// </summary>
+    /// <remarks>
+    ///     The "or null" half is what lets <see cref="FetchLatestByNaturalKey{T,TId}" /> answer a miss
+    ///     with null while <see cref="FetchForWritingByNaturalKey{T,TId}" /> keeps throwing — see that
+    ///     method's remarks for why the two differ. An aggregate declaring no key at all, and a null
+    ///     key, are configuration errors on both paths and still throw here.
+    /// </remarks>
+    private async Task<object?> TryResolveNaturalKeyAsync<T, TId>(TId key, CancellationToken cancellation)
         where T : class where TId : notnull
     {
         var definition = NaturalKeyFor<T>()
@@ -249,9 +288,8 @@ public partial class EventOperations
         var connection = await _session.ConnectionAsync(cancellation).ConfigureAwait(false);
 
         return await new Storage.NaturalKeyLookup(Graph)
-                   .ResolveAsync(definition, unwrapped, TenantId, connection, cancellation)
-                   .ConfigureAwait(false)
-               ?? throw new Exceptions.UnknownNaturalKeyException(typeof(T), unwrapped);
+            .ResolveAsync(definition, unwrapped, TenantId, connection, cancellation)
+            .ConfigureAwait(false);
     }
 
     /// <inheritdoc cref="FetchForWriting{T,TId}(TId,CancellationToken)" />
@@ -742,7 +780,7 @@ public partial class EventOperations
 
     private async Task<long> RequireStreamVersionAsync(object streamId, CancellationToken token)
         => await ReadStreamVersionAsync(streamId, token).ConfigureAwait(false)
-           ?? throw new NonExistentStreamException(streamId);
+           ?? throw new Fisher.Exceptions.NonExistentStreamException(streamId);
 
     private static string UnsupportedIdentityMessage(Type idType)
         => $"Fisher cannot fetch a stream by an identity of type '{idType.Name}'. Only the configured " +

@@ -5,31 +5,37 @@ namespace Fisher.Exceptions;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         <b>Fisher refuses this where Polecat repoints.</b> Polecat's <c>MERGE</c> updates the stream
-///         id whenever the key already exists, so a second stream claiming <c>ORD-1234</c> silently
-///         takes it and every later lookup resolves to the newcomer — the original stream is still
-///         there and simply becomes unreachable by the identifier it was created with. A natural key
-///         exists to name one stream, so a second claimant is a bug in the caller's key derivation
-///         rather than an instruction.
+///         <b>Refusing is now the shared contract, and it was Fisher's behaviour that became it.</b>
+///         Polecat's <c>MERGE</c>-based lookup write repointed the key at the newcomer, so a second
+///         stream claiming <c>ORD-1234</c> silently took it and the original became unreachable by
+///         the identifier it was created with. jasperfx#764 ruled for refusing — a natural key exists
+///         to name one stream, so a second claimant is a bug in the caller's key derivation rather
+///         than an instruction, and silently losing the original mapping is the worse failure because
+///         nothing reports it. <c>NaturalKeyCompliance</c> pins it for every store, and Polecat is
+///         changing to match (polecat#549).
+///     </para>
+///     <para>
+///         So this <b>subclasses <see cref="JasperFx.Events.DuplicateNaturalKeyException" /></b>
+///         (fisher#178): the canonical type was lifted from this one, with the message adopted
+///         verbatim, so there is nothing to reconcile. Subclassing rather than deleting keeps an
+///         existing <c>catch (Fisher.Exceptions.DuplicateNaturalKeyException)</c> working while a
+///         <c>catch</c> on the shared type starts working — which the compliance suite needs, since
+///         it asserts on the shared type. The base's nullable <c>ExistingStreamId</c> /
+///         <c>ClaimingStreamId</c> pair is for a store that probes the lookup before writing; Fisher
+///         infers the conflict from a guarded upsert that returned no row, so neither id is in hand
+///         and both stay null.
 ///     </para>
 ///     <para>
 ///         Re-asserting the <em>same</em> mapping is not this: every event carrying the key rewrites
 ///         the row, and that is idempotent by design.
 ///     </para>
 /// </remarks>
-public class DuplicateNaturalKeyException : Exception
+public class DuplicateNaturalKeyException : JasperFx.Events.DuplicateNaturalKeyException
 {
     internal DuplicateNaturalKeyException(Type aggregateType, object key)
-        : base($"The natural key '{key}' is already mapped to a different stream for aggregate type "
-               + $"'{aggregateType.Name}'. A natural key identifies one stream; if the mapping is meant "
-               + "to move, delete the existing row first.")
+        : base(aggregateType, key)
     {
-        AggregateType = aggregateType;
-        Key = key;
     }
-
-    public Type AggregateType { get; }
-    public object Key { get; }
 }
 
 /// <summary>

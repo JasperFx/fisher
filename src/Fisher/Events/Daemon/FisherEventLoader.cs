@@ -141,7 +141,7 @@ internal sealed class FisherEventLoader : IEventLoader
                 }
 
                 var (sequence, dotNetTypeName) = FisherEventsRowReader.ReadUnresolvedIdentity(reader);
-                throw new UnknownEventTypeException(dotNetTypeName ?? "(null)", sequence);
+                throw new Fisher.Exceptions.UnknownEventTypeException(dotNetTypeName ?? "(null)", sequence);
             }
 
             if (_allowedEventTypeNames != null && !_allowedEventTypeNames.Contains(@event.EventTypeName))

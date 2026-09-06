@@ -18,17 +18,25 @@ public class WardRoster
 }
 
 /// <summary>
-///     fisher#138 — the running daemon is reachable from application code as an
-///     <see cref="IProjectionCoordinator" />, and <c>Advanced.ResetAllDataAsync</c> no longer strands it.
+///     fisher#138 — what is left of it here after
+///     <c>ProjectionCoordinatorCompliance</c> took the reachability half: the refusal message, and
+///     <c>Advanced.ResetAllDataAsync</c> not stranding a running daemon.
 /// </summary>
 /// <remarks>
 ///     <para>
-///         Before this, <c>AddAsyncDaemon</c> registered only <c>IHostedService</c> over an internal
-///         class that implemented nothing else, so <b>both</b> documented routes failed: the service was
-///         not registered under any reachable interface, and the
+///         Before fisher#138, <c>AddAsyncDaemon</c> registered only <c>IHostedService</c> over an
+///         internal class that implemented nothing else, so <b>both</b> documented routes failed: the
+///         service was not registered under any reachable interface, and the
 ///         <c>GetServices&lt;IHostedService&gt;().OfType&lt;IProjectionCoordinator&gt;()</c> fallback
 ///         found nothing either. Marten and Polecat have registered JasperFx's interface since
 ///         jasperfx#430, so store-agnostic code could do daemon operations against them and not here.
+///     </para>
+///     <para>
+///         <b>That gap is now a shared suite rather than a local test.</b> jasperfx#732 was filed
+///         because of it — no suite could see it, since every other daemon suite drives a daemon the
+///         fixture built by hand, and Fisher passed all 37 while the registration was broken. The four
+///         facts that covered it here are retired in favour of
+///         <c>ProjectionCoordinatorCompliance</c>; see the note below.
 ///     </para>
 ///     <para>
 ///         Fisher registers <em>JasperFx's</em> interface rather than a Fisher-local sub-interface. Both
@@ -74,79 +82,29 @@ public class projection_coordinator : IAsyncLifetime
         return id;
     }
 
-    [Fact]
-    public async Task the_coordinator_is_resolvable_from_the_container()
-    {
-        using var host = await StartedHost();
-
-        host.Services.GetRequiredService<IProjectionCoordinator>().ShouldNotBeNull();
-
-        await host.StopAsync(Token);
-    }
-
-    /// <summary>
-    ///     The documented fallback for a host that does not register the interface — walking the hosted
-    ///     services and casting. It found nothing before, because the class implemented no such
-    ///     interface; now it finds the same instance the container hands out, which is the property that
-    ///     matters. Two registrations of one coordinator would be two daemons over one file, which on
-    ///     SQLite is two writers contending for the single write lock.
-    /// </summary>
-    [Fact]
-    public async Task the_hosted_service_and_the_resolved_coordinator_are_one_instance()
-    {
-        using var host = await StartedHost();
-
-        var resolved = host.Services.GetRequiredService<IProjectionCoordinator>();
-        var walked = host.Services.GetServices<IHostedService>()
-            .OfType<IProjectionCoordinator>()
-            .ShouldHaveSingleItem();
-
-        walked.ShouldBeSameAs(resolved);
-
-        await host.StopAsync(Token);
-    }
-
-    [Fact]
-    public async Task the_coordinator_hands_back_the_running_daemon()
-    {
-        using var host = await StartedHost();
-        var coordinator = host.Services.GetRequiredService<IProjectionCoordinator>();
-
-        var id = await OpenWardAsync(host, "Ward A");
-
-        var daemon = coordinator.DaemonForMainDatabase();
-        await daemon.WaitForNonStaleData(TimeSpan.FromSeconds(30));
-
-        await using var query = host.Services.GetRequiredService<IDocumentStore>().LightweightSession();
-        (await query.LoadAsync<WardRoster>(id, Token)).ShouldNotBeNull().Name.ShouldBe("Ward A");
-
-        (await coordinator.AllDaemonsAsync()).ShouldHaveSingleItem().ShouldBeSameAs(daemon);
-
-        await host.StopAsync(Token);
-    }
-
-    /// <summary>
-    ///     Pause stops the agents without disposing anything, so resume restarts the same daemons rather
-    ///     than needing fresh ones — which is what makes the stop/reset/start sequence below possible.
-    /// </summary>
-    [Fact]
-    public async Task pause_then_resume_leaves_the_daemon_projecting()
-    {
-        using var host = await StartedHost();
-        var coordinator = host.Services.GetRequiredService<IProjectionCoordinator>();
-
-        await coordinator.PauseAsync();
-        await coordinator.ResumeAsync();
-
-        var id = await OpenWardAsync(host, "Ward B");
-
-        await coordinator.DaemonForMainDatabase().WaitForNonStaleData(TimeSpan.FromSeconds(30));
-
-        await using var query = host.Services.GetRequiredService<IDocumentStore>().LightweightSession();
-        (await query.LoadAsync<WardRoster>(id, Token)).ShouldNotBeNull().Name.ShouldBe("Ward B");
-
-        await host.StopAsync(Token);
-    }
+    /*
+     * Four facts retired here in fisher#184, superseded verbatim by ProjectionCoordinatorCompliance
+     * (jasperfx#732) — which exists BECAUSE of fisher#138, and is the shared version of this file:
+     *
+     *   the_coordinator_is_resolvable_from_the_container          -> same name upstream
+     *   the_hosted_service_and_the_resolved_coordinator_are_one_instance -> same name upstream
+     *   the_coordinator_hands_back_the_running_daemon             -> the_main_database_daemon_is_
+     *                                                               reachable_and_projecting, plus
+     *                                                               all_daemons_includes_the_main_
+     *                                                               database_daemon
+     *   pause_then_resume_leaves_the_daemon_projecting            -> same name upstream, and
+     *                                                               STRONGER: it appends and waits
+     *                                                               BEFORE the pause, so a
+     *                                                               post-resume timeout indicts
+     *                                                               resume rather than startup
+     *
+     * The suite drives a host built the documented way (AddFisher + AddAsyncDaemon), which is the
+     * whole point of it and exactly what these four did. Keeping local copies of facts three stores
+     * are now held to would make a divergence look like a Fisher decision.
+     *
+     * What stays below is Fisher's alone: the refusal message, and ResetAllDataAsync's daemon
+     * handling, which is a deliberate divergence from Marten (see CLAUDE.md, "The async daemon").
+     */
 
     [Fact]
     public async Task an_unknown_database_is_refused_by_name()

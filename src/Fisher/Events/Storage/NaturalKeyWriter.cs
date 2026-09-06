@@ -132,5 +132,60 @@ internal sealed class NaturalKeyWriter
         {
             throw new Exceptions.DuplicateNaturalKeyException(definition.AggregateType, key);
         }
+
+        await RetireSupersededKeysAsync(reused, definition, key, stream, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Drop any other key this stream was previously mapped to — a stream has exactly one
+    ///     <em>current</em> natural key, so renaming retires the one it supersedes.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         polecat#435 / marten#5041, and Fisher was the third store to leave the old row behind.
+    ///         Both siblings originally asserted that the superseded key still resolved and both
+    ///         reframed it as a defect: a retired alias that resolves forever also occupies its slot in
+    ///         the lookup's primary key forever, so no other stream can ever claim that identifier —
+    ///         which is exactly the thing the duplicate guard next door exists to make meaningful.
+    ///         <c>NaturalKeyCompliance</c> pins it through <c>FetchLatest</c>, the one miss all three
+    ///         stores spell the same way.
+    ///     </para>
+    ///     <para>
+    ///         <b>After the upsert, never before.</b> A rename that is refused — because the new key is
+    ///         already live on another stream — must leave the stream's existing mapping alone, so the
+    ///         delete has to sit downstream of the guard that throws.
+    ///     </para>
+    ///     <para>
+    ///         Scoped to the stream, so a key belonging to some other stream is untouched; and scoped
+    ///         to the tenant under conjoined tenancy, where a stream id is only unique within one.
+    ///     </para>
+    /// </remarks>
+    private async Task RetireSupersededKeysAsync(Fisher.Internal.ReusedCommand reused,
+        NaturalKeyDefinition definition, object key, StreamAction stream, CancellationToken token)
+    {
+        var conjoined = _graph.TenancyStyle == TenancyStyle.Conjoined;
+        var guids = _graph.StreamIdentity == StreamIdentity.AsGuid;
+        var streamColumn = guids ? "stream_id" : "stream_key";
+        var table = _graph.QuotedNaturalKeyTableName(definition.AggregateType);
+
+        var builder = new CommandBuilder();
+        builder.Append($"delete from {table} where {streamColumn} = ");
+
+        builder.AppendParameter(guids
+            ? SqliteStorageDialect<Guid>.ToDatabaseValue(stream.Id)
+            : stream.Key!);
+
+        builder.Append($" and {Schema.NaturalKeyTable.KeyColumn} <> ");
+        builder.AppendParameter(key);
+
+        if (conjoined)
+        {
+            builder.Append($" and {StorageConstants.TenantIdColumn} = ");
+            builder.AppendParameter(stream.TenantId ?? StorageConstants.DefaultTenantId);
+        }
+
+        var command = reused.Take((SqliteCommand)builder.Compile());
+
+        await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
     }
 }

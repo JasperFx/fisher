@@ -293,7 +293,7 @@ internal sealed class FisherQuickAppendEventsOperation
 
             if (sqlite is { SqliteExtendedErrorCode: SqliteConstraintPrimaryKey })
             {
-                transformed = new ExistingStreamIdCollisionException(Stream.Key is not null
+                transformed = new Fisher.Exceptions.ExistingStreamIdCollisionException(Stream.Key is not null
                     ? Stream.Key
                     : Stream.Id);
                 return true;

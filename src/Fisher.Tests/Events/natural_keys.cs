@@ -151,24 +151,16 @@ public partial class natural_keys : IAsyncLifetime
             check.Events.FetchForWritingByNaturalKey<Order, string>("ORD-ROLLBACK", Token));
     }
 
-    /// <summary>
-    ///     Polecat's <c>MERGE</c> repoints the key at the newcomer, so the original stream silently
-    ///     becomes unreachable by the identifier it was created with. Fisher refuses.
-    /// </summary>
-    [Fact]
-    public async Task a_second_stream_cannot_take_an_existing_key()
-    {
-        await StartOrder("ORD-DUP");
-
-        await using var session = _store.LightweightSession();
-        session.Events.StartStream<Order>(Guid.NewGuid(), new OrderPlaced("ORD-DUP"));
-
-        var exception = await Should.ThrowAsync<DuplicateNaturalKeyException>(() =>
-            session.SaveChangesAsync(Token));
-
-        exception.Key.ShouldBe("ORD-DUP");
-        exception.AggregateType.ShouldBe(typeof(Order));
-    }
+    /*
+     * a_second_stream_cannot_take_an_existing_key retired in fisher#184. jasperfx#764 ruled FISHER'S
+     * WAY — a second claimant is refused, where Polecat's MERGE repointed the key and left the
+     * original stream unreachable by the identifier it was created with — so the behaviour this
+     * pinned is now NaturalKeyCompliance.a_second_stream_cannot_claim_a_live_natural_key, which is
+     * strictly stronger: it also reads the original mapping back afterwards.
+     *
+     * Fisher's DuplicateNaturalKeyException subclasses the lifted JasperFx.Events one (fisher#178),
+     * which the suite catches, so the exception type is pinned by the same fact.
+     */
 
     /// <summary>
     ///     Every event carrying the key rewrites the row, so re-asserting the same mapping has to be
@@ -231,30 +223,11 @@ public partial class natural_keys : IAsyncLifetime
         exception.Message.ShouldContain("declares no natural key");
     }
 
-    /// <summary>
-    ///     A conjoined lookup is keyed on <c>(tenant_id, natural_key_value)</c>, so the same business
-    ///     identifier may exist once per tenant and must resolve to that tenant's stream in both
-    ///     directions.
-    /// </summary>
-    [Fact]
-    public async Task the_lookup_is_isolated_by_tenant()
-    {
-        await using var store = StoreFor(conjoined: true);
-        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
-
-        var shire = await StartOrder("ORD-SHARED", store, "shire");
-        var bree = await StartOrder("ORD-SHARED", store, "bree");
-
-        shire.ShouldNotBe(bree);
-
-        await using var shireSession = store.LightweightSession("shire");
-        await using var breeSession = store.LightweightSession("bree");
-
-        (await shireSession.Events.FetchForWritingByNaturalKey<Order, string>("ORD-SHARED", Token))
-            .Id.ShouldBe(shire);
-        (await breeSession.Events.FetchForWritingByNaturalKey<Order, string>("ORD-SHARED", Token))
-            .Id.ShouldBe(bree);
-    }
+    /*
+     * the_lookup_is_isolated_by_tenant retired in fisher#184, superseded by
+     * NaturalKeyCompliance.the_natural_key_lookup_is_isolated_by_tenant, which checks the same
+     * property through the shared FetchForWriting<T, TId> overload in both directions.
+     */
 
     /// <summary>
     ///     The lookup rows go with the event data they describe. Left behind, they would make the

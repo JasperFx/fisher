@@ -40,12 +40,28 @@ there is nothing to watch — and reading the flag off the join makes `fi_stream
 knows.
 :::
 
+## A miss is null from `FetchLatest` and an exception from `FetchForWriting`
+
+The asymmetry is deliberate. `FetchForWriting` is the read half of a read-modify-write and has to say
+what it would be writing to, so a key naming no live stream throws `UnknownNaturalKeyException`.
+`FetchLatest` reports current state, and `FetchLatestByNaturalKey(...) is null` is the idiomatic
+"does this aggregate exist?" probe — the same question the by-id overload answers that way.
+
+::: tip
+The `FetchForWriting` miss is the one place the three stores genuinely disagree — Marten hands back a
+null aggregate, Polecat throws `InvalidOperationException`, Fisher throws its own — so the shared
+compliance suite deliberately does not pin it. The `FetchLatest` miss it does pin, and all three
+agree on null.
+:::
+
 ## A second stream claiming a key is refused
 
 ::: warning
-**Fisher refuses, where Polecat repoints.** Polecat's `MERGE` updates the stream id on conflict, so the
-newcomer silently takes the key and the original stream becomes unreachable by the identifier it was
-created with.
+**Refusing is the shared contract, and it was Fisher's behaviour that became it.** Polecat's `MERGE`
+updated the stream id on conflict, so the newcomer silently took the key and the original stream
+became unreachable by the identifier it was created with.
+[jasperfx#764](https://github.com/JasperFx/jasperfx/issues/764) ruled for refusing, and Polecat is
+changing to match.
 
 Fisher's conflict clause carries `where stream_id = excluded.stream_id` and returns the row it settled
 on — the same stream returns it, a new key returns it, a conflicting stream matches nothing — and "no
@@ -54,6 +70,18 @@ row" becomes `DuplicateNaturalKeyException`.
 
 Re-asserting the **same** mapping stays idempotent, which it has to be: every event carrying the key
 rewrites the row.
+
+## Renaming retires the previous key
+
+A stream has exactly one *current* natural key, so an event that changes the key deletes the row the
+old one occupied. The superseded identifier stops resolving, and — the half that matters more —
+becomes free for another stream to claim.
+
+::: tip
+A retired alias that resolved forever would also occupy its slot in the lookup's primary key forever,
+which is what makes this a defect rather than a nicety. All three stores had it the other way round
+at some point.
+:::
 
 ## No foreign key to fi_streams
 

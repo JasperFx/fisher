@@ -91,11 +91,62 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
     }
 
     /// <summary>
-    ///     Archiving a stream leaves its snapshot alone — Fisher archives events, and a projection that
-    ///     wants its document removed says so with a <c>ShouldDelete</c>.
+    ///     Archive the stream a single stream projection has just seen an <see cref="Archived" /> event
+    ///     on — a stream-level operation, queued onto the same unit of work as the snapshot.
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         ⚠️ <b>This was an empty method until fisher#184, and the comment on it was reasoning
+    ///         about the wrong question.</b> It said archiving leaves the snapshot alone and a
+    ///         projection wanting its document removed says so with a <c>ShouldDelete</c> — both true,
+    ///         and neither of them what the seam asks for. JasperFx's
+    ///         <c>JasperFxSingleStreamProjectionBase.maybeArchiveStream</c> calls this when the slice
+    ///         carries an <see cref="Archived" /> event, and what it means is <em>archive the stream</em>
+    ///         — the same thing <c>session.Events.ArchiveStream(id)</c> does. Marten and Polecat both
+    ///         queue their archive operation here.
+    ///     </para>
+    ///     <para>
+    ///         So capturing <c>Archived</c> through a snapshot did nothing at all on Fisher: the
+    ///         projection ran, the document was written, and <c>fi_streams.is_archived</c> stayed false.
+    ///         Silent in both directions — no exception anywhere, and the aggregate looks right.
+    ///         <c>StreamArchivingCompliance</c>'s three archived-event facts are what found it; Fisher's
+    ///         own archiving tests all archive through the direct operation, which is the half that
+    ///         always worked.
+    ///     </para>
+    ///     <para>
+    ///         The slice id is the aggregate's identity, which for a single stream projection is the
+    ///         stream's — through a strong-typed wrapper where the aggregate declares one, so the inner
+    ///         value is what reaches the operation. A <see cref="Archived" /> event on an aggregate whose
+    ///         identity is neither the stream identity nor a wrapper around it names no stream to
+    ///         archive, and is left alone rather than guessed at.
+    ///     </para>
+    /// </remarks>
     public void ArchiveStream(TId sliceId, string tenantId)
     {
+        if (StreamIdentityFor(sliceId) is not { } streamIdentity)
+        {
+            return;
+        }
+
+        _session.QueueOperation(_session.EventGraph.ArchiveStreamOperation(streamIdentity, tenantId, true));
+    }
+
+    /// <inheritdoc cref="ArchiveStream" />
+    private object? StreamIdentityFor(TId sliceId)
+    {
+        var expected = _session.EventGraph.StreamIdentity == StreamIdentity.AsGuid
+            ? typeof(Guid)
+            : typeof(string);
+
+        if (sliceId.GetType() == expected)
+        {
+            return sliceId;
+        }
+
+        return Fisher.Storage.StrongTypedId.TryResolve(typeof(TId), out var info)
+               && info.SimpleType == expected
+            ? info.ValueProperty.GetValue(sliceId)
+            : null;
     }
 
     public async Task<TDoc> LoadAsync(TId id, CancellationToken cancellation)
