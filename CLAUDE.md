@@ -170,12 +170,34 @@ Fixed upstream by [weasel#424](https://github.com/JasperFx/weasel/pull/424) and 
 **Weasel.Sqlite 9.23.2**. The shim is gone; `FisherSession` uses `Weasel.Sqlite.CommandBuilder`
 directly. Do not reintroduce it.
 
-### One command per operation, and what that immunizes
+### One execution and one reader per operation, and what that immunizes
 
-`FisherSession.ExecuteBatchAsync` compiles and executes each queued operation as **its own command
-with its own reader**, sharing only the transaction. The reasons are in its remarks — operations bind
-by position, and Fisher's append ends in a SELECT — and the consequence is worth stating separately,
-because it is what a whole class of bug needs (fisher#66).
+`FisherSession.ExecuteBatchAsync` executes each queued operation **on its own, against its own
+reader**, sharing only the transaction. The reasons are in its remarks — operations bind by position,
+and Fisher's append ends in a SELECT — and the consequence is worth stating separately, because it is
+what a whole class of bug needs (fisher#66).
+
+**What is shared is the prepared statement, and only across a consecutive run (fisher#171).**
+`ReusedCommand` holds the command last prepared on the connection and hands it back when the next
+operation compiles to character-identical SQL, moving that operation's parameters onto it;
+Microsoft.Data.Sqlite keeps a command's prepared statements alive while its `CommandText` does not
+change, so a hundred-document save is one `sqlite3_prepare_v2` rather than a hundred — inside the
+exclusive `BEGIN IMMEDIATE` transaction, so it is write-lock time rather than merely CPU. Runs are
+coalesced and nothing is ever reordered: a mixed batch falls back to a command per operation, having
+paid one string comparison per step. **Grouping the batch by statement would coalesce more and is
+refused**, because the queue's order is load-bearing — an event's tag rows are deleted before the
+event itself (fisher#6), and the foreign key enforces it.
+
+**Concatenating the batch into one multi-statement command is the obvious version of this and is
+measurably the wrong fix here.** Measured against Microsoft.Data.Sqlite 10.0.9 before anything was
+built: 1000 single-row upserts in one transaction take 4–6 ms as separate commands and **82–192 ms
+concatenated**. The cost is parameter binding, not statements — the same 1000 statements with their
+values inlined and no parameters run in 7.5 ms, and chunking traces the quadratic in the open (10 per
+command 10 ms, 50 per command 22 ms, 250 per command 59 ms), because `SqliteParameterCollection` is
+rebound per prepared statement against the whole collection. **Every chunk size measured is worse than
+a command per operation**, so there is no sweet spot to tune to; the ceilings are not the constraint
+either (50,000 parameters and 50,000 statements in one command both execute). Do not reach for it
+again without re-measuring.
 
 Marten concatenates a unit of work into one command and walks the result sets with `NextResultAsync`,
 skipping the advance for an operation marked `Weasel.Storage.NoDataReturnedCall`. marten#5210 was an
@@ -184,7 +206,17 @@ behind and **every operation after it in the batch postprocessed against somebod
 silently, with the symptom surfacing nowhere near the cause. Fisher has no `NextResult` walk to fall
 behind, so a mislabelled operation costs nothing;
 `no_data_returned_operations.a_mislabelled_operation_cannot_misalign_the_batch` plants exactly that
-shape rather than leaving the immunity to be inferred.
+shape rather than leaving the immunity to be inferred. **fisher#171 did not weaken this** — sharing a
+prepared statement is not sharing a reader, and that test still passes unchanged.
+
+**Microsoft.Data.Sqlite makes the concatenated shape sharper than Marten's, not softer**, which is the
+second and more important reason not to reach for it. It surfaces a result set only for statements
+that return *columns*: a four-statement command whose second and fourth statements select yields
+exactly **two** result sets, so a `NextResult` walk's alignment would rest entirely on
+`NoDataReturnedCall` being truthful — the thing marten#5210 proves cannot be assumed. Worth knowing
+precisely, because the near-miss is the other way round: a guarded upsert matching no row **does**
+surface its own empty result set (the provider skips zero-*column* statements, not zero-*row* ones),
+so the optimistic-concurrency read is not what would break first. The marker is.
 
 The marker is still audited — it is a claim a reader would trust, and the execution strategy could
 change — by *executing* each marked operation's compiled SQL and asserting it returns no columns. The
