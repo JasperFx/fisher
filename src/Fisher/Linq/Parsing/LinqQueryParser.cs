@@ -587,6 +587,13 @@ internal class LinqQueryParser
         }
 
         Projection = SelectProjection.For(UnwrapLambda(call), _memberFactory);
+
+        // fisher#220: a projected snippet or highlight reads a value the match computes, which needs
+        // the FTS5 table joined for the same reason bm25 does.
+        if (Projection.RequiresFullTextJoin)
+        {
+            RequiresFullTextJoin = true;
+        }
     }
 
     private void MarkSoftDelete(SoftDeleteScope scope)
