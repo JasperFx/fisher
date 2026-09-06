@@ -1,8 +1,10 @@
+using System.Collections.Concurrent;
 using System.Data.Common;
 using Fisher.Events;
 using Fisher.Events.Schema;
 using Fisher.Storage.Sequences;
 using Microsoft.Data.Sqlite;
+using Weasel.Core;
 using Weasel.Core.Migrations;
 using Weasel.Sqlite;
 
@@ -207,7 +209,7 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
         }
     }
 
-    private readonly HashSet<Type> _ensuredDocumentTables = new();
+    private readonly ConcurrentDictionary<Type, Task> _ensuredDocumentTables = new();
     private ClosedShape.DocumentProviderRegistry? _providers;
     private SequenceFactory? _sequences;
 
@@ -243,42 +245,138 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
     ///         would make the second call through this path silently succeed, and the failure would then
     ///         surface as <c>no such table</c> from wherever the caller went next.
     ///     </para>
+    ///     <para>
+    ///         <b>Only this type's own schema objects are diffed, not the whole configuration</b>
+    ///         (fisher#174). This used to call <c>ApplyAllConfiguredChangesToDatabaseAsync</c>, which
+    ///         re-introspects every object the store knows about — so warming up T document types ran T
+    ///         whole-database migrations, and migration #k already contained every object from 1..k−1.
+    ///         Measured at ~2.4 ms per type for 20 types and ~3.4 ms for 32, the superlinear shape that
+    ///         O(T × objects) predicts, and paid on the read path as well as the write one since
+    ///         fisher#74 — a cold application that only <em>queries</em> thirty types paid all of it.
+    ///         Polecat's <c>DocumentTableEnsurer</c> already handed one <c>DocumentTable</c> to
+    ///         <c>SchemaMigration.DetermineAsync</c>; this is the same, and still goes through Weasel's
+    ///         migration path rather than emitting DDL beside it.
+    ///     </para>
+    ///     <para>
+    ///         <b>The cache holds the in-flight task, not just the type</b>, so a second caller for the
+    ///         same type waits for the first one's migration instead of returning as though it were
+    ///         done. The old <c>HashSet.Add</c> returning false was read as "already ensured" when it in
+    ///         fact meant "somebody else is ensuring it right now" — so under a parallel cold start the
+    ///         second caller went straight on to write against a table that did not exist yet. That is
+    ///         a narrow race (both callers have to miss within one migration) and it fails as
+    ///         <c>no such table</c>, a long way from here.
+    ///     </para>
     /// </remarks>
-    internal async Task EnsureDocumentTableAsync(Type documentType, CancellationToken token)
+    internal Task EnsureDocumentTableAsync(Type documentType, CancellationToken token)
     {
-        lock (_ensuredDocumentTables)
+        // The overwhelmingly common case, and worth keeping allocation-free: the type was ensured by
+        // an earlier unit of work and there is nothing to await.
+        if (_ensuredDocumentTables.TryGetValue(documentType, out var ensured) && ensured.IsCompletedSuccessfully)
         {
-            if (!_ensuredDocumentTables.Add(documentType))
+            return Task.CompletedTask;
+        }
+
+        return ensureDocumentTableAsync(documentType, token);
+    }
+
+    private async Task ensureDocumentTableAsync(Type documentType, CancellationToken token)
+    {
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+
+            if (_ensuredDocumentTables.TryGetValue(documentType, out var inflight))
             {
+                if (inflight.IsCompletedSuccessfully)
+                {
+                    return;
+                }
+
+                try
+                {
+                    // WaitAsync so that this caller's own cancellation is honoured while it waits on
+                    // somebody else's migration — the migration itself runs on whichever token started
+                    // it, and abandoning the wait must not abandon the work.
+                    await inflight.WaitAsync(token).ConfigureAwait(false);
+                    return;
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    // The caller that owned the migration was cancelled and this one was not, so its
+                    // cancellation is not an answer to our question. Drop the dead entry if it is
+                    // somehow still there and take the work on ourselves.
+                    _ensuredDocumentTables.TryRemove(new KeyValuePair<Type, Task>(documentType, inflight));
+                    continue;
+                }
+            }
+
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_ensuredDocumentTables.TryAdd(documentType, completion.Task))
+            {
+                // Lost the race to another caller; go round and wait on theirs.
+                continue;
+            }
+
+            try
+            {
+                await applyDocumentSchemaAsync(documentType, token).ConfigureAwait(false);
+                completion.SetResult();
                 return;
             }
-        }
-
-        try
-        {
-            // Registering the mapping is what puts the table into BuildFeatureSchemas; applying the
-            // whole configuration then creates it. Heavier than emitting one CREATE TABLE, but it goes
-            // through the same migration path as every other Fisher table instead of beside it.
-            var mapping = _options.Schema.MappingFor(documentType);
-
-            if (AutoCreate == JasperFx.AutoCreate.None)
+            catch (Exception e)
             {
-                await AssertDocumentTableExistsAsync(documentType, mapping.TableName.Name, token)
-                    .ConfigureAwait(false);
-                return;
-            }
+                // Uncached before the waiters are released, so the next caller through here retries
+                // rather than finding a faulted entry to trip over.
+                _ensuredDocumentTables.TryRemove(new KeyValuePair<Type, Task>(documentType, completion.Task));
+                completion.SetException(e);
 
-            await ApplyAllConfiguredChangesToDatabaseAsync(ct: token).ConfigureAwait(false);
+                // Reading Exception marks the fault observed: a migration that nobody happened to be
+                // waiting on must not surface later as an unobserved task exception.
+                _ = completion.Task.Exception;
+
+                throw;
+            }
         }
-        catch
+    }
+
+    /// <summary>
+    ///     Apply the schema objects one document type needs, and only those.
+    /// </summary>
+    private async Task applyDocumentSchemaAsync(Type documentType, CancellationToken token)
+    {
+        // Asking for the mapping is what creates it for a type nothing has registered, which is the
+        // case this whole path exists for.
+        var mapping = _options.Schema.MappingFor(documentType);
+
+        if (AutoCreate == JasperFx.AutoCreate.None)
         {
-            lock (_ensuredDocumentTables)
-            {
-                _ensuredDocumentTables.Remove(documentType);
-            }
-
-            throw;
+            await AssertDocumentTableExistsAsync(documentType, mapping.TableName.Name, token)
+                .ConfigureAwait(false);
+            return;
         }
+
+        var objects = new List<ISchemaObject> { mapping.BuildTable() };
+
+        // The same condition BuildFeatureSchemas uses to include the Hi-Lo feature. HiloSequence
+        // creates the table for itself — an id is assigned at Store, long before any commit-time
+        // schema work — so this is only here to keep the set of objects this path creates the same as
+        // the set the full migration would have created for the type.
+        if (mapping.IdType == typeof(int) || mapping.IdType == typeof(long))
+        {
+            objects.Add(new HiloTable(_options.DatabaseSchemaName));
+        }
+
+        await using var conn = await OpenConnectionAsync(token).ConfigureAwait(false);
+
+        var migration = await SchemaMigration
+            .DetermineAsync(conn, Migrator, token, objects.ToArray()).ConfigureAwait(false);
+
+        if (migration.Difference == SchemaPatchDifference.None)
+        {
+            return;
+        }
+
+        await Migrator.ApplyAllAsync(conn, migration, AutoCreate, ct: token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -316,10 +414,7 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
     /// </remarks>
     internal void ForgetEnsuredTables()
     {
-        lock (_ensuredDocumentTables)
-        {
-            _ensuredDocumentTables.Clear();
-        }
+        _ensuredDocumentTables.Clear();
     }
 
     internal Weasel.Storage.IProviderGraph Providers
