@@ -2,6 +2,7 @@ using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Toolchains.InProcess.Emit;
+using Fisher.Linq;
 using Fisher.TestUtils;
 
 namespace Fisher.Benchmarks;
@@ -138,5 +139,101 @@ public class EventAppendBenchmarks
 
         session.Events.StartStream<BenchTally>(Guid.NewGuid(), events);
         await session.SaveChangesAsync();
+    }
+}
+
+/// <summary>
+///     The read side: one LINQ query, end to end, on a table small enough that parsing the chain and
+///     rendering the SQL — not materializing rows — is what the number is about.
+/// </summary>
+/// <remarks>
+///     <para>
+///         Every execution re-parses from scratch: a visit of the expression tree, a
+///         <c>MemberFactory</c>, an <c>IQueryableMember</c> per referenced member, a
+///         <c>Statement</c> and a full SQL render. This is the harness for the work that removes
+///         the configuration-only part of that, so <c>MemoryDiagnoser</c>'s allocation column is the
+///         signal rather than the mean — the SQLite round trip is in-process and small, and it is
+///         the same before and after.
+///     </para>
+///     <para>
+///         <b>The table is deliberately tiny (200 rows, a page of 10 returned).</b> A large result
+///         set would put document deserialization in front of everything else and hide the very
+///         thing being measured; the count and the <c>Any</c> shapes read no documents at all, so
+///         they are the closest thing here to a pure per-query overhead reading.
+///     </para>
+/// </remarks>
+[Config(typeof(MicroBenchmarkConfig))]
+public class QueryBenchmarks
+{
+    private TemporaryDatabase _database = null!;
+    private DocumentStore _store = null!;
+
+    [GlobalSetup]
+    public async Task Setup()
+    {
+        _database = TemporaryDatabase.Create("bdn-query");
+        _store = Scenarios.Harness.BuildStore(_database);
+        await _store.ApplyAllConfiguredChangesToDatabaseAsync();
+
+        await using var seed = _store.LightweightSession();
+        for (var i = 0; i < 200; i++)
+        {
+            seed.Store(new BenchDoc
+            {
+                Id = Guid.NewGuid(),
+                Name = $"doc-{i}",
+                Number = i,
+                Timestamp = DateTimeOffset.UtcNow
+            });
+        }
+
+        await seed.SaveChangesAsync();
+
+        // The first-use table ensure and every lazily-built mapping are paid here rather than in
+        // the first measured invocation.
+        await using var warm = _store.QuerySession();
+        await warm.Query<BenchDoc>().Where(x => x.Number > 0).Take(10).ToListAsync();
+    }
+
+    [GlobalCleanup]
+    public async Task Cleanup()
+    {
+        await _store.DisposeAsync();
+        _database.Dispose();
+    }
+
+    /// <summary>A filtered, ordered page of documents — the ordinary read shape.</summary>
+    [Benchmark]
+    public async Task<IReadOnlyList<BenchDoc>> FilteredPage()
+    {
+        await using var session = _store.QuerySession();
+
+        return await session.Query<BenchDoc>()
+            .Where(x => x.Number > 100 && x.Name != "missing")
+            .OrderBy(x => x.Number)
+            .Take(10)
+            .ToListAsync();
+    }
+
+    /// <summary>The same predicate counted — parse and render with no document materialized.</summary>
+    [Benchmark]
+    public async Task<long> FilteredCount()
+    {
+        await using var session = _store.QuerySession();
+
+        return await session.Query<BenchDoc>()
+            .Where(x => x.Number > 100 && x.Name != "missing")
+            .CountAsync();
+    }
+
+    /// <summary>One document by a member predicate — the shortest chain there is.</summary>
+    [Benchmark]
+    public async Task<BenchDoc?> FirstByMember()
+    {
+        await using var session = _store.QuerySession();
+
+        return await session.Query<BenchDoc>()
+            .Where(x => x.Name == "doc-42")
+            .FirstOrDefaultAsync();
     }
 }

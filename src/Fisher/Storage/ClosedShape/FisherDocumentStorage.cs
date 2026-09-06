@@ -37,6 +37,7 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
     private readonly string _loaderSql;
     private readonly string _loadManySql;
     private readonly string[] _selectFields;
+    private readonly string _selectColumnsSql;
 
     protected FisherDocumentStorage(DocumentMapping mapping, DocumentStorageDescriptor<TDoc, TId> descriptor)
     {
@@ -53,8 +54,9 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
         readColumns.Add("data");
         readColumns.AddRange(ReadBinders().Select(x => x.ColumnName));
         _selectFields = readColumns.ToArray();
+        _selectColumnsSql = string.Join(", ", _selectFields);
 
-        var select = $"select {string.Join(", ", _selectFields)} from {_mapping.QuotedTableName}";
+        var select = $"select {_selectColumnsSql} from {_mapping.QuotedTableName}";
 
         // Only a conjoined table has a tenant_id column to filter on. The dialect still binds a
         // tenant parameter on the load path; on a single-tenant table the SQL simply never mentions it.
@@ -161,10 +163,12 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
 
     public string[] SelectFields() => _selectFields;
 
+    public string SelectColumnsSql => _selectColumnsSql;
+
     public void Apply(ICommandBuilder builder)
     {
         builder.Append("select ");
-        builder.Append(string.Join(", ", _selectFields));
+        builder.Append(_selectColumnsSql);
         builder.Append(" from ");
         builder.Append(_mapping.QuotedTableName);
     }
