@@ -1,4 +1,5 @@
 using JasperFx.Events.Projections;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Fisher.Projections;
 
@@ -24,7 +25,22 @@ namespace Fisher.Projections;
 ///         their suite's generic parameters.
 ///     </para>
 /// </remarks>
-public abstract class EventProjection : JasperFxEventProjectionBase<IDocumentSession, IQuerySession>
+public abstract class EventProjection : JasperFxEventProjectionBase<IDocumentSession, IQuerySession>, IFisherRegistrable
 {
     protected sealed override void storeEntity<T>(IDocumentSession ops, T entity) => ops.Store(entity);
+
+    /// <inheritdoc />
+    public static void Register<TConcrete>(IServiceCollection services, ProjectionLifecycle lifecycle,
+        ServiceLifetime lifetime, Action<ProjectionBase>? configure) where TConcrete : class
+        => ContainerScopedRegistration.Register<TConcrete>(services, lifecycle, lifetime, configure,
+            static (s, callback) => s.ConfigureFisher(callback),
+            ContainerScopedRegistration.Plain(typeof(TConcrete)));
+
+    /// <inheritdoc />
+    public static void Register<TConcrete, TStore>(IServiceCollection services, ProjectionLifecycle lifecycle,
+        ServiceLifetime lifetime, Action<ProjectionBase>? configure)
+        where TStore : class, IDocumentStore where TConcrete : class
+        => ContainerScopedRegistration.Register<TConcrete>(services, lifecycle, lifetime, configure,
+            static (s, callback) => s.ConfigureFisher<TStore>(callback),
+            ContainerScopedRegistration.Plain(typeof(TConcrete)));
 }

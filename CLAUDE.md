@@ -276,6 +276,9 @@ Working, with tests:
   range of events, its writes committing in the batch's transaction
 - **DI registration** — `AddFisher(...)`, scoped sessions, and hosted services for schema application
   and the async daemon
+- **Container-scoped projections and subscriptions** — `AddProjectionWithServices<T>` and
+  `AddSubscriptionWithServices<T>`, so a projection or subscription takes injected services, resolved
+  from a fresh IoC scope per unit of work
 - **The command line** — `ISystemPart` and `IDatabaseSource` registered from both `AddFisher` and
   `AddFisherStore<T>`, so `db-apply` / `db-assert` / `db-patch` / `db-dump`, the `resources` commands
   and `describe` all see a Fisher store; plus `AssertDatabaseMatchesConfigurationOnStartup()`
@@ -2180,6 +2183,58 @@ hosted services. The store is a singleton, sessions are scoped, and the returned
       assemblies in one process in a fixed order — an intermittent under xUnit's parallel collections
       rather than a test. What is Fisher's to get right is read it, buffer it, log it once; detecting
       it is JasperFx's and is tested there.
+
+#### Container-scoped projections and subscriptions — fisher#194
+
+`AddProjectionWithServices<T>(lifecycle, lifetime)` and `AddSubscriptionWithServices<T>(lifetime)`, on
+`FisherConfigurationExpression`, on `FisherStoreConfigurationExpression<T>`, and as bare
+`IServiceCollection` extensions for a modular monolith registering from a module rather than from the
+composition root. `IFisherRegistrable` is the static-abstract dispatch, mirroring `IMartenRegistrable`
+— which wrapper a projection needs depends on what *kind* of projection it is, and only its base class
+knows.
+
+**Almost none of this is Fisher's, and that is the finding rather than the shortcut.**
+`JasperFx.Events.Projections.ContainerScoped` already carries `ScopedProjectionWrapper<,,>`,
+`ScopedAggregationWrapper<,,,,>` / `ScopedSingleStreamAggregationWrapper<,,,,>` and the non-generic
+`ScopedAggregationWrapper.Build(...)` factory, all public and all generic over the store's session
+pair. So Fisher closes them over `IDocumentSession` / `IQuerySession` and writes no wrapper at all.
+**Polecat has no equivalent surface**, so Fisher is the second store to have this rather than the
+third.
+
+- **Scope lifetime is the design, and the shared wrappers settle it: one `IServiceScope` per unit of
+  work.** An async projection outlives every request scope by construction — it runs from a hosted
+  service where there is no request — so a wrapper that resolves once and holds is reaching into a
+  disposed provider by its second batch, and one that opens a scope and keeps it leaks a scope per
+  registration for the life of the process. The wrappers open, resolve, use and dispose inside each
+  inline `ApplyAsync`, each daemon page and each slicing pass, holding nothing across a boundary.
+  That is also why `Transient` is treated as `Scoped` rather than refused: the wrapper resolves afresh
+  per batch either way, so the two lifetimes describe the same behaviour.
+- **The scopes come from the root provider**, which is what `IConfigureFisher` hands the callback and
+  what the store is built from. A scope created from a scoped provider is a child of something that
+  gets disposed.
+- **Both paths land on Fisher's own `Add(ProjectionBase, lifecycle)`, where Marten's equivalent calls
+  the base graph's `Add(IProjectionSource, ...)`.** That overload is what sweeps `PublishedTypes()`
+  into the schema, so a container-scoped projection's document table is created with the rest of the
+  migration. Through the narrower one the projection would work against a table that was never
+  migrated — the silent half of fisher#111, reached from a new direction.
+- **The subscription wrapper is Fisher's, and that is a gap rather than a choice.**
+  `JasperFx.Events.Subscriptions.ScopedSubscriptionServiceWrapper` exists, is generic over the session
+  pair, and is `internal` with nothing in the library referencing it — so no consumer can reach it, and
+  Marten carries its own copy for the same reason. `Subscriptions/ScopedSubscriptionWrapper.cs` is
+  Fisher's, and its constructor copies the inner subscription's `Name`, `Version`, `Options` and event
+  filtering across, because it is the *wrapper* the daemon reads those from. Dropping them is how a
+  scoped subscription silently loses a batch size or a `SubscribeFromPresent()` its constructor set —
+  marten#4318, found the hard way over there.
+- **A `Singleton` registration is the projection itself, with no wrapper**, which is correct whenever
+  its dependencies are singletons too. A bare `IProjection` is wrapped in `ProjectionWrapper` *here*
+  rather than at the graph, so the caller's `configure` lambda can reach the name and filtering surface
+  a raw `IProjection` does not have.
+- **The load-bearing tests count scopes, not results.** A projection that merely works passes every
+  correctness assertion written against a single commit and then fails on the second daemon batch, so
+  `a_scoped_projection_gets_one_scope_per_unit_of_work` counts creations *and* disposals — a wrapper
+  that opened a scope per batch and kept it passes the first half and leaks — and
+  `a_scoped_projection_runs_under_the_async_daemon` deliberately commits a second batch after the
+  daemon has already run one.
 
 #### The command-line seam — fisher#172
 
