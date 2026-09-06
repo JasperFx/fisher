@@ -75,8 +75,11 @@ internal sealed class FisherHighWaterDetector : IHighWaterDetector
 
     public async Task<HighWaterStatistics> Detect(CancellationToken token)
     {
-        var lastMark = await _database.ProjectionProgressFor(HighWaterShard, token).ConfigureAwait(false);
-        var highest = await _database.FetchHighestEventSequenceNumber(token).ConfigureAwait(false);
+        // One statement on one connection, not ProjectionProgressFor + FetchHighestEventSequenceNumber:
+        // this runs every poll cycle forever, and each of those opens its own pooled connection with
+        // its own per-connection PRAGMA batch.
+        var (lastMark, highest) = await _database.FetchHighWaterInputsAsync(HighWaterShard, token)
+            .ConfigureAwait(false);
 
         var now = _timeProvider.GetUtcNow();
 

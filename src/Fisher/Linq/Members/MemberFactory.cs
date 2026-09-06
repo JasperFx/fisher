@@ -186,6 +186,15 @@ internal class MemberFactory : IMemberResolver
 
     private IQueryableMember CreateMember(string jsonPath, Type memberType)
     {
+        // The path is inlined into a single-quoted SQL literal. A CLR member name cannot carry a
+        // quote, but an explicit [JsonPropertyName] can — so escape embedded single quotes to keep
+        // the path data rather than SQL (the marten#4911 class, where the escaped runtime value was
+        // a dictionary key reaching the same position). Defence in depth here: the name is
+        // compile-time configuration today, and this is what keeps a future runtime-supplied path
+        // segment from inheriting a breakout. Escaped once here, so both the scalar locator and a
+        // collection member's json_extract / json_each pair embed the escaped form.
+        jsonPath = jsonPath.Replace("'", "''");
+
         // A collection member keeps the same json_extract locator every scalar member has — that is
         // what IsEmpty() and a null test read — and additionally knows how to unroll itself through
         // json_each for Contains / Any / All / Count. Detected by CLR shape, because the JSON shape

@@ -31,6 +31,11 @@ namespace Fisher.Tests.Documents;
 ///         them through the contract, which is the surface a store-agnostic consumer sees and the
 ///         one that could drift independently.
 ///     </para>
+///     <para>
+///         Nothing the shared suite already states is restated here — what the listener is handed,
+///         when it fires for real commits, and that the change set is a stable snapshot are all
+///         <c>document_commit_listener_compliance</c>'s to own.
+///     </para>
 /// </remarks>
 public class commit_listener_contract : IAsyncLifetime
 {
@@ -96,24 +101,6 @@ public class commit_listener_contract : IAsyncLifetime
         var fisherListener = new RecordingListener();
 
         ((IDocumentCommitListener)fisherListener).AsSessionListener().ShouldBeSameAs(fisherListener);
-    }
-
-    [Fact]
-    public async Task the_contract_listener_sees_what_the_commit_wrote()
-    {
-        var id = Guid.NewGuid();
-
-        await using (var session = _store.LightweightSession())
-        {
-            session.Store(new ListenerFly { Id = id, Pattern = "Royal Coachman" });
-            await session.SaveChangesAsync(Token);
-        }
-
-        var commit = _listener.Commits.ShouldHaveSingleItem().Commit;
-
-        commit.Updated.ShouldHaveSingleItem().ShouldBeOfType<ListenerFly>().Id.ShouldBe(id);
-        commit.Inserted.ShouldBeEmpty();
-        commit.Deleted.ShouldBeEmpty();
     }
 
     /// <remarks>

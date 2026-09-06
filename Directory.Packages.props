@@ -45,6 +45,9 @@
         <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.14" />
         <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.14" />
 
+        <!-- Benchmarking (Fisher.Benchmarks only) -->
+        <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+
         <!-- Testing -->
         <PackageVersion Include="NSubstitute" Version="5.3.0" />
         <PackageVersion Include="Shouldly" Version="4.3.0" />

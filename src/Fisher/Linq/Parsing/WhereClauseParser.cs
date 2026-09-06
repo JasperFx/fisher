@@ -368,6 +368,17 @@ internal class WhereClauseParser
         return true;
     }
 
+    /// <summary>
+    ///     <c>x.Number % 2 == 0</c> → <c>(locator % @p0) = @p1</c>, both operands bound as
+    ///     parameters.
+    /// </summary>
+    /// <remarks>
+    ///     The divisor and the comparison operand used to be interpolated into the SQL text as
+    ///     <c>ToString()</c> — unparameterised runtime values, the marten#4911/#4954 class. See
+    ///     <see cref="ModuloFilter" /> for why binding is a security invariant here. A null operand
+    ///     declines rather than rendering, so the caller's "cannot translate" refusal names the
+    ///     expression instead of SQLite reporting malformed SQL.
+    /// </remarks>
     private bool TryParseModulo(BinaryExpression binary, string op, out ISqlFragment? fragment)
     {
         fragment = null;
@@ -375,19 +386,26 @@ internal class WhereClauseParser
         if (binary.Left is BinaryExpression { NodeType: ExpressionType.Modulo } modulo
             && StripConvert(modulo.Left) is MemberExpression left && IsDocumentMember(left))
         {
+            if (ExtractValue(modulo.Right) is not { } divisor || ExtractValue(binary.Right) is not { } operand)
+            {
+                return false;
+            }
+
             var member = _memberFactory.ResolveMember(left);
-            fragment = new WhereFragment(
-                $"({member.TypedLocator} % {ExtractValue(modulo.Right)}) {op} {ExtractValue(binary.Right)}");
+            fragment = new ModuloFilter(member.TypedLocator, divisor, op, operand);
             return true;
         }
 
         if (binary.Right is BinaryExpression { NodeType: ExpressionType.Modulo } moduloRight
             && StripConvert(moduloRight.Left) is MemberExpression right && IsDocumentMember(right))
         {
+            if (ExtractValue(moduloRight.Right) is not { } divisor || ExtractValue(binary.Left) is not { } operand)
+            {
+                return false;
+            }
+
             var member = _memberFactory.ResolveMember(right);
-            fragment = new WhereFragment(
-                $"({member.TypedLocator} % {ExtractValue(moduloRight.Right)}) "
-                + $"{ReverseOperator(op)} {ExtractValue(binary.Left)}");
+            fragment = new ModuloFilter(member.TypedLocator, divisor, ReverseOperator(op), operand);
             return true;
         }
 

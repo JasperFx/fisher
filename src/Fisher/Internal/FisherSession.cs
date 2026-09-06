@@ -1067,7 +1067,9 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             var builder = new Weasel.Sqlite.CommandBuilder();
             operation.ConfigureCommand(builder, this);
 
-            var command = builder.Compile();
+            // Disposed per operation: Compile hands back a fresh SqliteCommand, and an undisposed one
+            // keeps its native prepared statement alive until finalization.
+            await using var command = builder.Compile();
             command.Connection = connection;
             command.Transaction = transaction;
             command.CommandTimeout = CommandTimeout;

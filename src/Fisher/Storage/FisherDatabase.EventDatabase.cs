@@ -88,6 +88,39 @@ public partial class FisherDatabase : IEventDatabase
     }
 
     /// <summary>
+    ///     The high-water poll's two inputs — the mark's recorded position and the highest sequence
+    ///     physically present — in one statement on one connection.
+    /// </summary>
+    /// <remarks>
+    ///     The high-water agent asks both questions on every poll cycle, forever. Reading them through
+    ///     <see cref="ProjectionProgressFor" /> and <see cref="FetchHighestEventSequenceNumber" />
+    ///     costs two pooled connections per tick, each paying the per-connection PRAGMA batch
+    ///     <c>SqliteDataSource</c> applies — pure overhead for a loop that idles at
+    ///     <c>SlowPollingTime</c>. Those two methods stay for their other callers; this read exists for
+    ///     the poll loop. The subselects preserve their semantics exactly: a missing progression row
+    ///     reads as zero, and an empty events table reads as zero.
+    /// </remarks>
+    internal async Task<(long LastMark, long HighestSequence)> FetchHighWaterInputsAsync(ShardName name,
+        CancellationToken token)
+    {
+        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"""
+                                   select coalesce((select last_seq_id from {_events.ProgressionTableName} where name = @name), 0),
+                                          (select coalesce(max(seq_id), 0) from {_events.EventsTableName})
+                                   """;
+            command.Parameters.AddWithValue("@name", name.Identity);
+
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            await reader.ReadAsync(ct).ConfigureAwait(false);
+
+            return (reader.GetInt64(0), reader.GetInt64(1));
+        }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
     ///     The high-water row, with the time its poll loop last stamped it — or null when the daemon has
     ///     never run against this database.
     /// </summary>
