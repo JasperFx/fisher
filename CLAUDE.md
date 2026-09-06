@@ -236,6 +236,9 @@ Working, with tests:
   range of events, its writes committing in the batch's transaction
 - **DI registration** — `AddFisher(...)`, scoped sessions, and hosted services for schema application
   and the async daemon
+- **The command line** — `ISystemPart` and `IDatabaseSource` registered from both `AddFisher` and
+  `AddFisherStore<T>`, so `db-apply` / `db-assert` / `db-patch` / `db-dump`, the `resources` commands
+  and `describe` all see a Fisher store; plus `AssertDatabaseMatchesConfigurationOnStartup()`
 - **Flat-table projections** — `FlatTableProjection`, projecting into a plain relational table
   through declarative column mappings rather than into a document
 - **Soft delete** — `is_deleted` / `deleted_at`, `HardDelete`, `DeleteWhere` / `HardDeleteWhere` /
@@ -2100,6 +2103,63 @@ hosted services. The store is a singleton, sessions are scoped, and the returned
       assemblies in one process in a fixed order — an intermittent under xUnit's parallel collections
       rather than a test. What is Fisher's to get right is read it, buffer it, log it once; detecting
       it is JasperFx's and is tested there.
+
+#### The command-line seam — fisher#172
+
+`AddFisher` registered the store, sessions and its hosted services, and **nothing the JasperFx or
+Weasel command line looks for** — so `dotnet run -- db-apply` failed with *"No Weasel databases were
+registered in this application"*, `resources list` reported an application with no resources, and a
+CI step asserting the deployed schema still matches the code was not expressible at all.
+
+**Two registrations, because the two command families resolve different things**, and registering one
+leaves the other reporting an empty application:
+
+| Surface | Resolves | Fisher supplies |
+|---|---|---|
+| `resources setup/list/check`, `AddResourceSetupOnStartup()`, `describe` | `JasperFx.CommandLine.Descriptions.ISystemPart` | `FisherSystemPart` / `FisherSystemPart<T>` |
+| `db-apply` / `db-assert` / `db-patch` / `db-dump` | `Weasel.Core.Migrations.IDatabaseSource` | `FisherDatabaseSource` |
+
+- **An adapter rather than widening `ITenancy`**, following polecat#501's reasoning. Marten satisfies
+  the Weasel half because its own `ITenancy` *is* an `IDatabaseSource`; Fisher's `ITenancy` is public
+  and implementable outside this repo, so extending it is a breaking change — and it would pull a
+  migration contract into a tenancy abstraction for what is purely a CLI concern. Nothing was needed
+  underneath: `FisherDatabase` already extends Weasel's `SqliteDatabase`.
+- **Both take a factory, never the resolved store.** The `IConfigureFisher` chain has to have run
+  before the tenancy means anything, and that happens on first `IDocumentStore` resolution — so
+  injecting the store would build it while the container is still being assembled.
+- **Both refresh a `DynamicTenancy` first.** A tenant nothing has resolved yet still has a file to
+  migrate, and `db-apply` silently skipping it is the exact failure the whole seam closes. Read
+  through `ITenancy` rather than the store's internal `RefreshTenantsAsync`, because an ancillary
+  store arrives as its marker `DispatchProxy` and is not a `DocumentStore`.
+- **An ancillary store gets its own subject uri** (`fisher://iotherstore`), and that matters more here
+  than on either sibling: a second Fisher store is usually a second *file*, so collapsing the two
+  would hide one from `resources list` outright rather than merely mislabelling a schema.
+- **Neither ancillary registration unwraps the proxy**, unlike the `IEventStore` bridge beside them.
+  Correct rather than an oversight: both reach the store through `IDocumentStore` members (`Tenancy`,
+  `Options`), which a marker interface inherits and the proxy therefore implements — where the tooling
+  interfaces are implemented explicitly and are not on `IDocumentStore` at all.
+
+**`AssertDatabaseMatchesConfigurationOnStartup()`** is the third opt-in, beside
+`ApplyAllDatabaseChangesOnStartup()` and `SeedInitialDataOnStartup()`, over a new
+`IDocumentStore.AssertDatabaseMatchesConfigurationAsync` that spans every tenant database.
+
+- **The two schema opt-ins are refused together, in either order.** Applying the changes at startup
+  makes the assertion a check on the schema that same startup just wrote, so a host asking for both is
+  expressing a contradiction rather than being careful — and accepting it silently would leave
+  somebody believing they had a guard they do not have.
+- **`AutoCreate.None` is deliberately not consulted**, where the migration activator honours it. That
+  setting says the schema is not Fisher's to change and this changes nothing — declining to *verify*
+  because the store was told not to write would make the strictest configuration the one with the
+  fewest guarantees.
+- **A seeder may follow either activator.** What `SeedInitialDataOnStartup` needs is that the tables
+  exist by the time it runs, and an assertion that passed is exactly that claim.
+
+**The tests run the commands rather than asserting on the container**, and that is the point: a
+registration test passes against a source that resolves, enumerates nothing and reports success —
+which is `db-assert` answering "everything matches" about a store it never looked at. They needed a
+`ConsoleWritingCollection`, because `Console.SetOut` is process-wide and `CliJsonCapture` was already
+swapping it; two tests printing JSON objects at once made the existing `event_query_command` capture
+parse somebody else's report. Same family as the process-wide `ActivityListener` lesson in tracing.
 
 **Everything Fisher hands a container now implements `IDisposable` as well as `IAsyncDisposable`** —
 `DocumentStore`, `FisherDatabase`, `FisherSession`, and `IQuerySession` with them. That is not a

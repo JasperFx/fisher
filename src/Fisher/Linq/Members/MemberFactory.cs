@@ -39,6 +39,8 @@ internal class MemberFactory : IMemberResolver
     private readonly DocumentMapping? _mapping;
     private readonly bool _hasIdentityColumn;
     private readonly string _qualifier;
+    private readonly string _dataExpression;
+    private readonly int _collectionDepth;
 
     /// <param name="options">The store's options — serializer naming policy and enum storage.</param>
     /// <param name="mapping">The document the members belong to.</param>
@@ -82,6 +84,8 @@ internal class MemberFactory : IMemberResolver
         _mapping = mapping;
         _hasIdentityColumn = hasIdentityColumn;
         _qualifier = tableAlias is null ? "" : tableAlias + ".";
+        _dataExpression = _qualifier + "data";
+        _collectionDepth = 0;
         _enumStorage = options.Serializer.EnumStorage;
 
         if (options.Serializer is Serializer serializer)
@@ -98,6 +102,31 @@ internal class MemberFactory : IMemberResolver
             _namingPolicy = JsonNamingPolicy.CamelCase;
         }
     }
+
+    /// <summary>
+    ///     A factory resolving members of a collection <em>element</em> rather than of the document —
+    ///     the JSON value a <c>json_each</c> row exposes as <c>each_N.value</c>.
+    /// </summary>
+    /// <remarks>
+    ///     No mapping and no identity column, for the same reasons the event-body constructor has
+    ///     neither: an element type has no identity row and no duplicated fields. The depth is what
+    ///     keeps nested <c>json_each</c> aliases distinct — a collection member resolved by this
+    ///     factory aliases itself one level deeper.
+    /// </remarks>
+    private MemberFactory(MemberFactory parent, string dataExpression, int collectionDepth)
+    {
+        _mapping = null;
+        _hasIdentityColumn = false;
+        _qualifier = "";
+        _dataExpression = dataExpression;
+        _collectionDepth = collectionDepth;
+        _enumStorage = parent._enumStorage;
+        _serializerOptions = parent._serializerOptions;
+        _namingPolicy = parent._namingPolicy;
+    }
+
+    internal MemberFactory CreateElementFactory(string dataExpression, int collectionDepth)
+        => new(this, dataExpression, collectionDepth);
 
     public IQueryableMember ResolveMember(MemberExpression expression)
     {
@@ -162,8 +191,30 @@ internal class MemberFactory : IMemberResolver
         // the path data rather than SQL (the marten#4911 class, where the escaped runtime value was
         // a dictionary key reaching the same position). Defence in depth here: the name is
         // compile-time configuration today, and this is what keeps a future runtime-supplied path
-        // segment from inheriting a breakout.
-        var locator = $"json_extract({_qualifier}data, '{jsonPath.Replace("'", "''")}')";
+        // segment from inheriting a breakout. Escaped once here, so both the scalar locator and a
+        // collection member's json_extract / json_each pair embed the escaped form.
+        jsonPath = jsonPath.Replace("'", "''");
+
+        // A collection member keeps the same json_extract locator every scalar member has — that is
+        // what IsEmpty() and a null test read — and additionally knows how to unroll itself through
+        // json_each for Contains / Any / All / Count. Detected by CLR shape, because the JSON shape
+        // (an array) follows from it.
+        if (CollectionMember.TryGetElementType(memberType, out var elementType))
+        {
+            return new CollectionMember(this, _dataExpression, jsonPath, memberType, elementType,
+                _collectionDepth + 1);
+        }
+
+        return CreateScalarMember($"json_extract({_dataExpression}, '{jsonPath}')", memberType);
+    }
+
+    /// <summary>
+    ///     The scalar member switch, factored out of <see cref="CreateMember" /> so a collection's
+    ///     element member — whose locator is <c>each_N.value</c> rather than a <c>json_extract</c> —
+    ///     goes through exactly the same typing rules as a document member of the same CLR type.
+    /// </summary>
+    internal IQueryableMember CreateScalarMember(string locator, Type memberType)
+    {
         var underlying = Nullable.GetUnderlyingType(memberType) ?? memberType;
 
         if (underlying.IsEnum)

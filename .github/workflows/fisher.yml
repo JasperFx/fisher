@@ -36,8 +36,12 @@ jobs:
       - name: Restore
         run: dotnet restore fisher.slnx
 
+      # Built without -f: Fisher.Benchmarks is deliberately net10.0-only (a perf harness is run,
+      # not shipped), and a solution-wide `-f net9.0` fails on it with NETSDK1005. Building every
+      # target framework here costs a little time and keeps the test steps below, which invoke the
+      # per-framework MTP executables out of bin/Release/<tfm>/, working unchanged.
       - name: Build
-        run: dotnet build fisher.slnx -c Release -f ${{ matrix.tfm }} --no-restore
+        run: dotnet build fisher.slnx -c Release --no-restore
 
       # No database service. Fisher is SQLite-backed and the suites create throwaway database files
       # under the runner's temp directory, so there is nothing to spin up or wait for.

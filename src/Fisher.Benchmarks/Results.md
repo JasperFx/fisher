@@ -124,3 +124,49 @@ Notes:
   saved and ~27 KB per single-event append commit — consistent with the per-operation
   command-building the batching work targets. ShortRun error bars are wide by design; use
   `-- bdn --job medium` before quoting a delta.
+
+---
+
+## Per-type table-ensure delta (2026-09-05, fisher#174)
+
+`EnsureDocumentTableAsync` stopped running `ApplyAllConfiguredChangesToDatabaseAsync` per cache miss
+and now diffs only the newly-registered type's own schema objects. Measured on a different machine
+from the baseline block above (a little faster overall), so the baseline was re-run here rather than
+taken from that block — treat the before/after pair, not the absolutes.
+
+```
+Fisher.Benchmarks — 2026-09-05 19:32 -05:00
+  OS:        macOS 26.4.1 (Arm64)
+  .NET:      .NET 10.0.1
+  CPUs:      18
+  Config:    Release
+```
+
+```
+== cold-start (20 document types, 5 rounds) ==
+                                     before      after
+  median first commit (table ensure)  47.9 ms     6.2 ms
+  median second commit (warm)          0.5 ms     0.5 ms
+  table-ensure overhead               47.3 ms     5.7 ms     8.3x
+  overhead per type                    2.4 ms     0.3 ms
+
+== cold-start (32 document types, 5 rounds) ==
+                                     before      after
+  median first commit (table ensure) 110.0 ms     6.1 ms
+  median second commit (warm)          0.8 ms     0.8 ms
+  table-ensure overhead              109.2 ms     5.4 ms    20.2x
+  overhead per type                    3.4 ms     0.2 ms
+```
+
+Notes:
+
+- **The shape changed, not just the constant.** Before, 1.6x the types cost 2.3x the warm-up
+  (47.3 ms → 109.2 ms) — the superlinear curve an O(types × objects) diff predicts, since migration
+  #k re-introspects every object from 1..k−1. After, 32 types cost the same as 20 (5.4 ms vs
+  5.7 ms, inside the run-to-run noise): the remaining cost is per-type and flat, so the number to
+  quote for a larger store is "no worse", not "20x again".
+- **The warm commit is unmoved** in both configurations, which is the control: this changes what the
+  first use of a type pays and nothing about the steady state.
+- Not re-run: `doc-save`, `event-append`, `daemon-rebuild`, `concurrent-writers` and the BDN
+  micro-benchmarks. None of them reaches the first-use ensure more than once per type, and the
+  scenario that does is the one above.
