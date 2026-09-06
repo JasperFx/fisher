@@ -1,8 +1,10 @@
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
+using System.Text.Json;
 using Fisher.Events.Schema;
 using Fisher.Storage;
+using JasperFx.Descriptors;
 using JasperFx.Events;
 
 namespace Fisher.Events.Internal;
@@ -80,6 +82,82 @@ internal static class FisherEventsRowReader
         sb.Append(", data_binary");
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    ///     Read the current row as a wire <see cref="EventRecord" /> for the event store explorer
+    ///     surface — <c>ReadStreamAsync</c> and friends.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Unlike <see cref="ReadEventAsGuid" /> and its siblings this <b>never resolves the CLR
+    ///         event type</b>, and that is the entire point of the shape. The explorer exists to be
+    ///         usable from a process that does not have the consumer's event assemblies — a CLI, a
+    ///         monitoring console — so the body travels as raw JSON and the caller renders it. A row
+    ///         whose <c>dotnet_type</c> this process cannot resolve is returned in full here, where the
+    ///         hydrating readers return null and let the caller skip it.
+    ///     </para>
+    ///     <para>
+    ///         The one case that cannot honour that is a binary body (fisher#93): reconstituting JSON
+    ///         from MessagePack requires the type. When it resolves the body is round-tripped through
+    ///         the serializer; when it does not, the record carries a placeholder rather than being
+    ///         dropped, because a stream that silently loses its binary events is worse for a debugging
+    ///         tool than one that says which events it could not render.
+    ///     </para>
+    /// </remarks>
+    internal static EventRecord ReadEventRecord(DbDataReader reader, in EventHydrationContext ctx,
+        in MetadataSlots slots)
+    {
+        var seqId = reader.GetInt64(0);
+        var eventId = Guid.Parse(reader.GetString(1));
+        var streamId = reader.GetString(2);
+        var eventVersion = reader.GetInt64(3);
+        var typeName = reader.GetString(5);
+        var timestamp = SqliteTimestamp.FromDatabaseValue(reader.GetString(6));
+        var tenantId = reader.IsDBNull(7) ? ctx.DefaultTenantId : reader.GetString(7);
+        var dotNetTypeName = reader.IsDBNull(8) ? null : reader.GetString(8);
+
+        var data = ReadBodyAsJson(reader, ctx, slots, dotNetTypeName);
+
+        return new EventRecord(
+            eventId,
+            seqId,
+            eventVersion,
+            streamId,
+            typeName,
+            data,
+            Metadata: null,
+            timestamp,
+            tenantId,
+            Tags: null);
+    }
+
+    private static JsonElement ReadBodyAsJson(DbDataReader reader, in EventHydrationContext ctx,
+        in MetadataSlots slots, string? dotNetTypeName)
+    {
+        // Per row, not per type — same rule as ReadEventCore. data_binary being null is what decides
+        // which column holds this row's body, so rows written before a type was marked [BinaryEvent]
+        // still read as JSON.
+        if (reader.IsDBNull(slots.BinaryDataIdx))
+        {
+            return JsonDocument.Parse(reader.GetString(4)).RootElement.Clone();
+        }
+
+        var resolvedType = ctx.EventGraph.ResolveEventType(dotNetTypeName);
+
+        if (resolvedType is null)
+        {
+            return JsonDocument
+                .Parse($$"""
+                         {"$fisher":"binary event body; the CLR type {{JsonEncodedText.Encode(dotNetTypeName ?? "(unknown)")}} is not loaded in this process"}
+                         """)
+                .RootElement.Clone();
+        }
+
+        var mapping = ctx.EventGraph.EventMappingFor(resolvedType);
+        var body = DeserializeBinary(reader, slots, mapping, resolvedType);
+
+        return JsonSerializer.SerializeToDocument(body, resolvedType).RootElement.Clone();
     }
 
     /// <summary>

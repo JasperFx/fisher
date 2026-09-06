@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.Metrics;
@@ -111,6 +112,85 @@ public partial class DocumentStore : IEventStore
             command => command.Parameters.AddWithValue("@count", count),
             FisherStreamsRowReader.ReadStreamSummary,
             ct).ConfigureAwait(false);
+    }
+
+    IAsyncEnumerable<EventRecord> IEventStore.ReadStreamAsync(string streamId, CancellationToken ct)
+        => ReadStreamAsync(streamId, null, ct);
+
+    IAsyncEnumerable<EventRecord> IEventStore.ReadStreamAsync(string streamId, string? tenantId,
+        CancellationToken ct)
+        => ReadStreamAsync(streamId, tenantId, ct);
+
+    /// <summary>
+    ///     Every event of one stream, in version order, as wire <see cref="EventRecord" />s.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Materialised inside <see cref="StoreOptions.ResiliencePipeline" /> and then yielded,
+    ///         rather than streamed out of it — the same reason <c>ReadStreamsAsync</c> gives above. A
+    ///         retried <c>SQLITE_BUSY</c> re-executes the whole delegate, so handing a live reader to the
+    ///         caller would let a retry resume against a connection the previous attempt had already
+    ///         disposed. A single stream is a bounded read, so holding it in memory costs little.
+    ///     </para>
+    ///     <para>
+    ///         Rows are returned whether or not this process can resolve their CLR event type — see
+    ///         <see cref="FisherEventsRowReader.ReadEventRecord" />. That is what lets the
+    ///         <c>projection-run</c> CLI and a monitoring console read a stream without the consumer's
+    ///         event assemblies.
+    ///     </para>
+    /// </remarks>
+    private async IAsyncEnumerable<EventRecord> ReadStreamAsync(string streamId, string? tenantId,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(streamId);
+
+        // Same normalisation as GetStreamMetadataAsync: under Guid identity the parse validates the
+        // input and lowercases it to the canonical form fi_events holds, because SQLite's default
+        // collation is case-sensitive and an uppercase Guid would match nothing.
+        var id = EventGraph.StreamIdentity == StreamIdentity.AsGuid
+            ? Guid.Parse(streamId).ToString()
+            : streamId;
+
+        var tenantFilter = tenantId == null ? "" : "and tenant_id = @tenant_id\n                   ";
+
+        var sql = $"""
+                   select {FisherEventsRowReader.ComposeSelectColumns(EventGraph.EventOptions)}
+                   from {EventGraph.EventsTableName}
+                   where stream_id = @stream_id
+                   {tenantFilter}order by version;
+                   """;
+
+        var ctx = new EventHydrationContext(
+            EventGraph,
+            Options.Serializer,
+            id,
+            defaultTenantId: StorageConstants.DefaultTenantId);
+
+        var slots = MetadataSlots.For(EventGraph.EventOptions);
+
+        var records = await Options.ResiliencePipeline.ExecuteAsync(async token =>
+        {
+            await using var connection = await Database.OpenConnectionAsync(token).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.Parameters.AddWithValue("@stream_id", id);
+            if (tenantId != null) command.Parameters.AddWithValue("@tenant_id", tenantId);
+
+            var results = new List<EventRecord>();
+            await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                results.Add(FisherEventsRowReader.ReadEventRecord(reader, ctx, slots));
+            }
+
+            return (IReadOnlyList<EventRecord>)results;
+        }, ct).ConfigureAwait(false);
+
+        foreach (var record in records)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return record;
+        }
     }
 
     Task<StreamMetadata?> IEventStore.GetStreamMetadataAsync(string streamId, CancellationToken ct)
