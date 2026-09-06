@@ -1317,6 +1317,104 @@ stitch.
   families, the scalar aggregates, `CountAsync`, `AnyAsync`, `ToPagedListAsync` and `ToSql` all work,
   over a chain as well as over one join.
 
+### The four Marten operators — fisher#202
+
+`MatchesSql`, `Stats(out QueryStatistics)`, `ToAsyncEnumerable()` and `ExplainAsync`. Small, and three
+of the four are decisions rather than mechanics.
+
+- ⚠️ **`MatchesSql` is the one fragment whose SQL text comes from the caller.** Every other fragment
+  in `Linq/SqlGeneration` is composed by the parser out of locators it resolved, which is what the
+  fisher#161/#162 audit rests on — `LiteralSqlFragment`'s own doc comment says it is never built from
+  a caller-supplied value. That invariant is moved rather than weakened: the *text* is the caller's by
+  contract, every *value* is bound, and values go through `SqliteParameterValue.ToDatabaseValue` for
+  the reason raw SQL does — a Guid, a timestamp and a decimal each bind to something Fisher never
+  wrote and match **nothing**, silently.
+  - **The fragment is parenthesized, where Marten's is not.** A statement's `Wheres` are composed with
+    `and`, so an unbracketed `a or b` swallows every term beside it — including the implicit tenant,
+    soft-delete and hierarchy filters. That is the one way this operator could become fisher#51 again.
+  - **A placeholder/value count mismatch is refused by name**, which marten#5289's follow-up had to
+    add after the fact: too few is an `IndexOutOfRangeException` from inside the provider, too many is
+    silence with the surplus never reaching the query.
+  - Registered in `MethodCallParserRegistry` rather than through `WhereClauseParser`'s unused
+    `additionalParsers` seam, so it reaches the event-side predicates too. A method that compiles
+    everywhere and refuses itself in half the places is the worse surface, and the trust model is
+    identical wherever it lands.
+- **`Stats` rides on the expression tree.** Marten mutates its queryable and its own source carries a
+  `TODO -- make this be an expression here!` beside the slot; `FisherQueryable<T>` holds no per-query
+  state and `System.Linq`'s operators return fresh instances, so a slot would be dropped by the next
+  `Where`. Captured in `ExecuteReaderAsync` rather than at each of the seven row-returning terminals —
+  the argument the query span and fisher#74's table provisioning both make. **A scalar terminal
+  refuses it by name**: it already *is* the number, and a `TotalResults` left at zero is a wrong
+  answer the caller cannot see. `CountIgnoringPagingAsync` clears the request, or the count that
+  computes the total would refuse itself.
+- **`ToAsyncEnumerable` is cheaper here than the raw-SQL twin.** `IAdvancedSql.StreamAsync` sits
+  outside `StoreOptions.ResiliencePipeline` because a retried `SQLITE_BUSY` re-executes the whole
+  delegate; the LINQ path never ran inside it, so this forfeits nothing `ToListAsync` has. Validation
+  runs *before* the iterator, since an `async` iterator defers its body to the first `MoveNextAsync`
+  and a refusal written inline would surface at the `await foreach` rather than at the call. A join is
+  refused (its rows are stitched by the join plan); a `Select` projection streams.
+- **`ExplainAsync` is taken over the exact statement the query would run**, prefix and all, because
+  SQLite reaches an expression index only when the query's expression matches the index's — a plan
+  over a re-derivation reports the wrong answer with a straight face. `QueryPlan` is deliberately
+  nothing like Marten's: PostgreSQL returns a costed JSON tree with an optional execution pass, SQLite
+  four columns of prose with no costs and no `ANALYZE`, so `Steps` is what SQLite said and `UsesIndex`
+  is an honest reading of that prose rather than a structured field.
+
+### The mapping registry gaps — fisher#218
+
+`MartenRegistry` members `DocumentMappingExpression<T>` lacked. What was implemented, and what was not.
+
+- **`Identity(x => x.Member)`** — and it forced a real change. `DocumentMapping`'s constructor used to
+  *throw* for a type with no usable identity member, which made the rescue unreachable for exactly the
+  types it exists for: the refusal fired before the line that fixes it could run. Identity is now
+  resolved without being demanded, and `DocumentStore`'s constructor asserts it through
+  `DocumentSchema.AssertEveryMappingHasIdentity`. **The property that mattered is unchanged** — a
+  document type Fisher cannot store is still a configuration-time error naming the type, never an
+  `InvalidOperationException` on somebody's first save. Three tests moved from
+  `Should.Throw(() => options.Schema.For<T>())` to `Should.Throw(() => DocumentStore.For(...))`.
+- **`IdStrategy(IIdentification<T, TId>)`** — Marten's takes an `IIdGeneration`, a code-generation
+  contract with no counterpart here; Fisher's strategies are ordinary objects from the shared Weasel
+  identity runtime, so the seam is that interface and a caller implements two members.
+  ⚠️ **A Guid strategy is wrapped in `SqliteGuidIdentification`, never taken raw.** The
+  lowercase-canonical conversion lives in the identity strategy precisely so a wrapper cannot lose it —
+  so a *replaced* strategy is exactly where it could be lost, and losing it writes rows that can never
+  be read back. `SqliteGuidIdentification`'s constructor was widened from the concrete
+  `SequentialGuidIdentification<TDoc>` to the interface for this.
+- **Partial indexes**, as `Index(member, predicate: x => …)`. The predicate is an ordinary expression
+  through the same `WhereClauseParser` and `MemberFactory` a query goes through — not a SQL string,
+  and that is the point: SQLite reaches a partial index only when the query's `WHERE` implies the
+  index's, over the terms as written, so a hand-spelled predicate is fisher#16's failure again.
+  ⚠️ **`LiteralRenderingCommandBuilder` is the exception to "values are always bound", and it exists
+  because DDL has nowhere to bind them.** What makes it safe is the reach rather than the escaping:
+  the values are constants in a configuration lambda at startup, the same trust class as a
+  `[JsonPropertyName]`. It escapes anyway, and **refuses by name** anything it cannot render
+  unambiguously rather than reaching for `ToString()` — the marten#4954 class one type over.
+- **`IndexLastModified` / `IndexCreatedAt` / `IndexTenantId` / `SoftDeletedWithIndex`** — plain column
+  indexes, since those are real columns. `IndexCreatedAt` *enables* the opt-in column too: an index
+  over a column that does not exist is not a weaker version of the feature, it fails the migration.
+  `IndexTenantId` is refused for a single-tenant type, and is worth less here than on either sibling —
+  `tenant_id` already leads the conjoined primary key.
+- **`IgnoreIndex`** — `Weasel.Core.TableBase` already had it, and `Table.FetchExisting` drops an
+  ignored name from the table it reads back, so the delta never sees it in either direction. Applied
+  *after* the declared indexes deliberately: Weasel refuses to ignore a name the table declares, and
+  that refusal is right — a collision, not an exemption.
+- **`[DocumentAlias]`, `[MultiTenanted]`, `[UseOptimisticConcurrency]`, `[ForeignKey]`** — read in
+  `ApplySchemaAttributes`, layer three of four. `[ForeignKey]` is applied after `[DuplicateField]` on
+  the same member so an explicit duplicate names the column and the type; `Duplicate` is idempotent, so
+  the key's implicit one finds it.
+- **`HiloSettings(settings)`** — the method form of the settable property, so a configuration block
+  reads the same as Marten's.
+
+**Skipped, and why** (recorded in the migration guide's "will not be" table rather than implemented as
+no-ops): the whole partitioning family, row-level security and GIN indexes — none exist in SQLite;
+`UniqueIndexType`, `TenancyScope`, `IsConcurrent`, index sort order and casing — every one describes a
+*computed column* and a PostgreSQL index, where a Fisher index is an expression index and a duplicated
+field is a `VIRTUAL` generated column that cannot drift, so `Computed` vs `DuplicatedField` has nothing
+to choose between; `PropertySearching`, `DdlTemplate`, `StructuralTyped` and per-type
+`DatabaseSchemaName` — not SQLite concepts, and the schema folds into the table prefix; `UseIdentityKey`
+— a database-assigned identity needs the write path to read the id back rather than assign it
+client-side, which is a different write path rather than a strategy.
+
 ### LINQ paging
 
 Two operators answering different questions, both carried for the reason Polecat and Marten carry both
@@ -3947,7 +4045,15 @@ database *is* the caller's process, so the round trip is the whole cost rather t
 ### Batched queries, query plans, `CheckExistsAsync` and `ToSql`
 
 fisher#37 widened the DCB-only batch into a general one and moved it from `Fisher.Events.Tags` to
-`Fisher.Batching`, since it is no longer tag-specific. **The framing in its doc comment still stands
+`Fisher.Batching`, since it is no longer tag-specific. **fisher#201 finished the move by putting the
+entry point where Marten and Polecat have it** — `IQuerySession.CreateBatchQuery()`, implemented on
+`FisherSession`, with `session.Events.CreateBatchQuery()` kept as a forwarder. It stayed on `Events`
+for a release because that is where it was *born*, naming the narrowest of its uses, and the cost was
+that ported Marten code batching *document* reads did not compile. The compliance fixture's two
+`(IDocumentSession)` casts are gone with it, which is the smoke test that it landed where the shared
+seam needed it. `both_spellings_build_the_same_batch` asserts equivalence rather than existence: a
+forwarder handing back a batch built against a different session would satisfy "the member is still
+there" and then read the wrong tenant's rows. **The framing in its doc comment still stands
 and should not be softened**: a batch elsewhere collapses network round trips, SQLite is embedded, and
 there are none to collapse. It exists so DCB and document code ports between the stores unchanged. The
 one property that does hold is ordering — the reads run back to back on one connection with nothing

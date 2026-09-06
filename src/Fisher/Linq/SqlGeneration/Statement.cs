@@ -97,6 +97,11 @@ internal class Statement
 
     public void Apply(ICommandBuilder builder)
     {
+        if (Explain)
+        {
+            builder.Append("explain query plan ");
+        }
+
         if (IsExistsWrapper)
         {
             builder.Append("select exists (");
@@ -132,6 +137,48 @@ internal class Statement
 
     /// <inheritdoc cref="NonStaleTimeout" />
     public TimeSpan? EffectiveNonStaleTimeout => NonStaleTimeout ?? Subquery?.EffectiveNonStaleTimeout;
+
+    /// <summary>
+    ///     The object a <c>Stats(out QueryStatistics)</c> query wants its unpaged total written into.
+    /// </summary>
+    /// <remarks>
+    ///     Not SQL either, and here for the same reason <see cref="NonStaleTimeout" /> is: a
+    ///     <see cref="Statement" /> is what every execution path is handed. Read through
+    ///     <see cref="EffectiveStatistics" /> so that wrapping — for a count, a page, an aggregate or a
+    ///     reversal — carries it without each wrap site remembering to.
+    /// </remarks>
+    public QueryStatistics? Statistics { get; set; }
+
+    /// <inheritdoc cref="Statistics" />
+    public QueryStatistics? EffectiveStatistics => Statistics ?? Subquery?.EffectiveStatistics;
+
+    /// <summary>
+    ///     Drop the statistics request from wherever in the subquery chain it is held.
+    /// </summary>
+    /// <remarks>
+    ///     Called once the total has been captured, and by the count that captures it — otherwise the
+    ///     count's own wrapper statement inherits the request through <see cref="EffectiveStatistics" />
+    ///     and either recurses or is refused as a scalar terminal.
+    /// </remarks>
+    public void ClearStatistics()
+    {
+        for (var current = this; current is not null; current = current.Subquery)
+        {
+            current.Statistics = null;
+        }
+    }
+
+    /// <summary>
+    ///     Render as <c>explain query plan …</c> rather than executing — <c>ExplainAsync</c>.
+    /// </summary>
+    /// <remarks>
+    ///     A prefix rather than a separate statement type, so the plan is taken over the <em>exact</em>
+    ///     SQL the query would run, parameters and implicit filters included. Explaining a
+    ///     re-derivation would answer about a query nobody was going to execute — and the whole point
+    ///     is that SQLite's planner uses an expression index only when the query's expression matches
+    ///     the index's, so anything but the real text can report the wrong answer confidently.
+    /// </remarks>
+    public bool Explain { get; set; }
 
     /// <summary>The <c>GROUP BY</c> key expression, or null.</summary>
     public string? GroupBy { get; set; }

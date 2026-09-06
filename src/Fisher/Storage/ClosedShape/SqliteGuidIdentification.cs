@@ -32,9 +32,14 @@ namespace Fisher.Storage.ClosedShape;
 internal sealed class SqliteGuidIdentification<TDoc> : IIdentification<TDoc, Guid>
     where TDoc : notnull
 {
-    private readonly SequentialGuidIdentification<TDoc> _inner;
+    private readonly IIdentification<TDoc, Guid> _inner;
 
-    public SqliteGuidIdentification(SequentialGuidIdentification<TDoc> inner)
+    /// <remarks>
+    ///     Typed as the interface rather than as <see cref="SequentialGuidIdentification{TDoc}" />
+    ///     because a caller-supplied strategy is wrapped here too (fisher#218) — the conversion below
+    ///     is the whole reason a Guid strategy can never be taken raw.
+    /// </remarks>
+    public SqliteGuidIdentification(IIdentification<TDoc, Guid> inner)
     {
         _inner = inner;
     }

@@ -80,6 +80,24 @@ public interface IQuerySession : IAsyncDisposable, IDisposable, IDocumentReadOpe
     new EventOperations Events { get; }
 
     /// <summary>
+    ///     Start a batch of reads to be run together.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>On the session, where Marten and Polecat put it.</b> Fisher's batch began as the DCB
+    ///         half and was reached through <c>session.Events</c>; fisher#37 widened it into a general
+    ///         one and the entry point stayed where it was born, so ported Marten code batching
+    ///         <em>document</em> reads did not compile. <c>session.Events.CreateBatchQuery()</c> still
+    ///         works and forwards here.
+    ///     </para>
+    ///     <para>
+    ///         See <see cref="Batching.IBatchedQuery" /> for why this exists on an embedded database,
+    ///         where the round-trip argument the siblings make does not apply.
+    ///     </para>
+    /// </remarks>
+    Batching.IBatchedQuery CreateBatchQuery();
+
+    /// <summary>
     ///     Start a LINQ query over a document type.
     /// </summary>
     /// <remarks>

@@ -1,10 +1,10 @@
 # Batched Queries
 
 ```cs
-var batch = session.Events.CreateBatchQuery();
+var batch = session.CreateBatchQuery();
 
 var user = batch.Load<User>(userId);
-var orders = batch.Query<Order>(q => q.Where(x => x.CustomerId == userId));
+var orders = batch.Query<Order>(s => s.Query<Order>().Where(x => x.CustomerId == userId));
 var exists = batch.CheckExists<Invoice>(invoiceId);
 
 await batch.Execute();
@@ -15,6 +15,16 @@ var theOrders = await orders;
 
 Each method hands back a task that does **not** complete until `Execute` runs, matching the siblings'
 contract.
+
+Note that `Query<T>` takes a **function of the session**, not of a queryable — there is no chainable
+batched queryable here, so ordering, filtering and paging are ordinary Fisher LINQ inside that lambda.
+
+::: tip
+`session.Events.CreateBatchQuery()` is the older spelling and still works, forwarding to this one. It
+is where Fisher's batch was born — as the DCB read surface, before [fisher#37](https://github.com/JasperFx/fisher/issues/37)
+widened it — and it named the narrowest of the batch's uses. New code should say
+`session.CreateBatchQuery()`, which is also where Marten and Polecat put it.
+:::
 
 ## What a batch is for here, said plainly
 

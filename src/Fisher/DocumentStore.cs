@@ -61,6 +61,14 @@ public partial class DocumentStore : IDocumentStore
             flatTable.ResolveTableName(options.DatabaseSchemaName);
         }
 
+        // Every document type configured so far has to have an identity, and this is the first moment
+        // that is settled: Schema.For<T>().Identity(x => x.Member) can name one the conventions did
+        // not find, so the mapping cannot refuse while it is being created (fisher#218) without making
+        // the rescue unreachable for exactly the types it exists for. Refusing here keeps the property
+        // that mattered — a document type Fisher cannot store is a configuration-time error naming the
+        // type, rather than an InvalidOperationException on somebody's first save.
+        options.Schema.AssertEveryMappingHasIdentity();
+
         // Builds the async shard registry and fails fast on duplicate projection names.
         options.Projections.AssertValidity(options);
 

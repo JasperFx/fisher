@@ -103,6 +103,121 @@ public partial class FisherQueryProvider : IQueryProvider
         return results;
     }
 
+    /// <summary>
+    ///     The same rows as <see cref="ToListAsync{T}" />, yielded as the reader produces them
+    ///     (fisher#202).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Cheaper here than the raw-SQL equivalent, and for a reason worth stating.</b>
+    ///         <c>IAdvancedSql.StreamAsync</c> has to sit <em>outside</em>
+    ///         <c>StoreOptions.ResiliencePipeline</c>, because a retried <c>SQLITE_BUSY</c>
+    ///         re-executes the whole delegate and a live reader already handed to a caller would
+    ///         resume against a disposed connection — so it documents that a busy database surfaces
+    ///         where every other read would have retried. The LINQ path never ran inside the pipeline
+    ///         in the first place, so this operator forfeits nothing that <c>ToListAsync</c> has.
+    ///     </para>
+    ///     <para>
+    ///         <b>Validation happens before the iterator, not inside it.</b> An <c>async</c> iterator
+    ///         defers its body to the first <c>MoveNextAsync</c>, so a refusal written inline would
+    ///         reach the caller at the <c>await foreach</c> rather than at the call that caused it —
+    ///         which is the property every other refusal in this provider is careful to have.
+    ///     </para>
+    ///     <para>
+    ///         <b>A join is refused.</b> Its rows are materialized through a plan that reads both
+    ///         sides at fixed offsets and stitches them; streaming it would be a second copy of that
+    ///         walk, and the two would drift. <c>ToListAsync</c> answers a join.
+    ///     </para>
+    /// </remarks>
+    internal IAsyncEnumerable<T> ToAsyncEnumerable<T>(Expression expression, CancellationToken token)
+        where T : notnull
+    {
+        if (JoinFor(expression) is not null)
+        {
+            throw new BadLinqExpressionException(
+                "ToAsyncEnumerable does not stream a joined query. Use ToListAsync, which materializes "
+                + "both sides through the join plan.");
+        }
+
+        return ProjectionFor(expression) is { } projected
+            ? ProjectStreamAsync<T>(projected, token)
+            : DocumentStreamAsync<T>(Build<T>(expression), token);
+    }
+
+    private async IAsyncEnumerable<T> DocumentStreamAsync<T>(
+        (Statement Statement, ISelector<T> Selector) built,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+    {
+        await using var reader = await ExecuteReaderAsync(built.Statement, token).ConfigureAwait(false);
+
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
+        {
+            yield return await built.Selector.ResolveAsync(reader, token).ConfigureAwait(false);
+        }
+    }
+
+    private async IAsyncEnumerable<T> ProjectStreamAsync<T>(
+        (Statement Statement, RowProjection Projection) projected,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+        where T : notnull
+    {
+        await using var reader = await ExecuteReaderAsync(projected.Statement, token).ConfigureAwait(false);
+
+        var values = new object?[projected.Projection.Columns.Length];
+
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
+        {
+            for (var i = 0; i < values.Length; i++)
+            {
+                values[i] = reader.IsDBNull(i)
+                    ? DefaultFor(projected.Projection.ColumnTypes[i])
+                    : CoerceTo(reader.GetValue(i), projected.Projection.ColumnTypes[i]);
+            }
+
+            yield return (T)projected.Projection.Build(values)!;
+        }
+    }
+
+    /// <summary>
+    ///     What SQLite says it would do with this query — <c>EXPLAIN QUERY PLAN</c> (fisher#202).
+    /// </summary>
+    /// <remarks>
+    ///     Explained over the <em>exact</em> statement the query would run, prefix and all, rather
+    ///     than over a re-derivation. SQLite's planner uses an expression index only when the query's
+    ///     expression matches the index's, so a plan taken over anything but the real text can report
+    ///     the wrong answer with a straight face — which is the whole failure this operator exists to
+    ///     expose.
+    /// </remarks>
+    internal async Task<QueryPlan> ExplainAsync<T>(Expression expression, CancellationToken token)
+        where T : notnull
+    {
+        var (statement, _, _, _) = BuildStatement(SourceTypeFor(expression), expression);
+
+        // An EXPLAIN returns the planner's rows, never the query's, so a Stats request has nothing to
+        // count and its extra statement would be a real query issued by a call that promised not to
+        // run one.
+        statement.ClearStatistics();
+        statement.Explain = true;
+
+        var steps = new List<QueryPlanStep>();
+
+        await using var reader = await ExecuteReaderAsync(statement, token).ConfigureAwait(false);
+
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
+        {
+            // id, parent, notused, detail -- the shape SQLite has documented since 3.24. Only detail
+            // carries prose; the two ids are what nests the steps.
+            steps.Add(new QueryPlanStep(reader.GetInt32(0), reader.GetInt32(1), reader.GetString(3)));
+        }
+
+        statement.Explain = false;
+
+        var builder = new Weasel.Sqlite.CommandBuilder();
+        statement.Apply(builder);
+
+        return new QueryPlan(builder.Compile().CommandText, steps);
+    }
+
     private async Task<IReadOnlyList<T>> ProjectListAsync<T>(
         (Statement Statement, RowProjection Projection) projected, CancellationToken token)
         where T : notnull
@@ -250,6 +365,12 @@ public partial class FisherQueryProvider : IQueryProvider
 
         statement.Limit = null;
         statement.Offset = null;
+
+        // A Stats() request rides on the expression, so this statement inherits it — and this method
+        // *is* how the total gets computed, so honouring it here would recurse. ToPagedListAsync is
+        // the caller that meets this: Stats() alongside it is redundant rather than an error, and its
+        // list half fills the statistics as usual.
+        statement.ClearStatistics();
 
         if (RowProjection.For(parser) is not null)
         {
@@ -1146,7 +1267,8 @@ public partial class FisherQueryProvider : IQueryProvider
             GroupBy = parser.GroupByLocator,
             Limit = parser.Limit,
             Offset = parser.Offset,
-            NonStaleTimeout = parser.NonStaleTimeout
+            NonStaleTimeout = parser.NonStaleTimeout,
+            Statistics = parser.Statistics
         };
 
         statement.DocumentTypes.Add(sourceType);
@@ -1417,6 +1539,8 @@ public partial class FisherQueryProvider : IQueryProvider
     private async Task<System.Data.Common.DbDataReader> ExecuteReaderAsync(Statement statement,
         CancellationToken token)
     {
+        await CaptureStatisticsAsync(statement, token).ConfigureAwait(false);
+
         using var activity = StartQueryActivity(statement);
 
         var command = await CommandFor(statement, token).ConfigureAwait(false);
@@ -1452,6 +1576,20 @@ public partial class FisherQueryProvider : IQueryProvider
     /// <inheritdoc cref="ExecuteReaderAsync" />
     private async Task<object?> ExecuteScalarAsync(Statement statement, CancellationToken token)
     {
+        // Refused rather than left at zero. A scalar terminal already is the number, so there is no
+        // second one for Stats to carry -- and TotalResults silently staying 0 is a wrong answer the
+        // caller has no way to see. Here rather than at each scalar terminal for the reason the
+        // statistics capture is in ExecuteReaderAsync: this is where they converge.
+        if (statement.EffectiveStatistics is not null)
+        {
+            throw new BadLinqExpressionException(
+                "Stats(out QueryStatistics) is only honoured by the terminals that return rows -- "
+                + "ToListAsync, ToAsyncEnumerable, First/Single/Last, the JSON reads and the pages. A "
+                + "scalar terminal (CountAsync, AnyAsync, SumAsync and the rest) already is the "
+                + "number, so drop the Stats() call, or use CountIgnoringPagingAsync for the unpaged "
+                + "total on its own.");
+        }
+
         using var activity = StartQueryActivity(statement);
 
         var command = await CommandFor(statement, token).ConfigureAwait(false);
@@ -1481,6 +1619,64 @@ public partial class FisherQueryProvider : IQueryProvider
             }
 
             throw;
+        }
+    }
+
+    /// <summary>
+    ///     Fill a <c>Stats(out QueryStatistics)</c> request's total, before the rows are read.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         In <see cref="ExecuteReaderAsync" /> rather than at each row-returning terminal, which
+    ///         is the same argument the query span and the fisher#74 table provisioning both make:
+    ///         there are seven of those terminals and the one that forgot would be the one nobody
+    ///         exercises with <c>Stats</c>.
+    ///     </para>
+    ///     <para>
+    ///         <b>Paging is cleared for the count and restored afterwards</b>, because the whole point
+    ///         is the total the query would have returned unpaged -- a total that counted the page
+    ///         would say nothing. The statement is wrapped as a subquery rather than having its select
+    ///         list rewritten, so a projected, grouped, distinct or joined query is counted correctly
+    ///         without this method knowing which it is.
+    ///     </para>
+    ///     <para>
+    ///         The request is cleared before the count runs, or the wrapper inherits it through
+    ///         <see cref="Statement.EffectiveStatistics" /> and <see cref="ExecuteScalarAsync" />
+    ///         refuses its own count.
+    ///     </para>
+    /// </remarks>
+    private async Task CaptureStatisticsAsync(Statement statement, CancellationToken token)
+    {
+        if (statement.EffectiveStatistics is not { } statistics)
+        {
+            return;
+        }
+
+        statement.ClearStatistics();
+
+        var holder = statement;
+        while (holder.Subquery is not null && (holder.Limit ?? holder.Offset) is null)
+        {
+            holder = holder.Subquery;
+        }
+
+        var limit = holder.Limit;
+        var offset = holder.Offset;
+        holder.Limit = null;
+        holder.Offset = null;
+
+        try
+        {
+            var total = await ExecuteScalarAsync(
+                new Statement { Subquery = statement, SelectColumns = "count(*)" }, token)
+                .ConfigureAwait(false);
+
+            statistics.TotalResults = Convert.ToInt64(total);
+        }
+        finally
+        {
+            holder.Limit = limit;
+            holder.Offset = offset;
         }
     }
 

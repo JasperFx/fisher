@@ -87,7 +87,27 @@ internal class DocumentProviderRegistry : IProviderGraph
         var buildTyped = typeof(DocumentProviderRegistry)
             .GetMethod(nameof(BuildTypedProvider), BindingFlags.NonPublic | BindingFlags.Instance)!;
 
-        object identification = mapping.IdType switch
+        object identification = mapping.IdStrategy switch
+        {
+            // A caller-supplied strategy (fisher#218). A Guid-keyed one is wrapped, never taken raw:
+            // the lowercase-canonical conversion lives in the identity strategy rather than in the
+            // dialect, so replacing the strategy is exactly where it could be lost -- and losing it
+            // writes rows that can never be read back, silently and only for Guid-identified types.
+            // See SqliteGuidIdentification.
+            not null when mapping.IdType == typeof(Guid) => Activator.CreateInstance(
+                typeof(SqliteGuidIdentification<>).MakeGenericType(mapping.DocumentType),
+                mapping.IdStrategy)!,
+            not null => mapping.IdStrategy,
+            _ => IdentificationFor(mapping)
+        };
+
+        return buildTyped.MakeGenericMethod(mapping.DocumentType, mapping.IdType)
+            .Invoke(this, [mapping, identification])!;
+    }
+
+    /// <inheritdoc cref="BuildProviderFor" />
+    private object IdentificationFor(DocumentMapping mapping)
+        => mapping.IdType switch
         {
             // Wrapped so the id crosses the ADO.NET boundary as Fisher's canonical lowercase text —
             // see SqliteGuidIdentification for what goes wrong without it.
@@ -116,10 +136,6 @@ internal class DocumentProviderRegistry : IProviderGraph
                 "wrapper around one with a single gettable property and a matching constructor or " +
                 "static builder.")
         };
-
-        return buildTyped.MakeGenericMethod(mapping.DocumentType, mapping.IdType)
-            .Invoke(this, [mapping, identification])!;
-    }
 
     /// <summary>
     ///     Close <see cref="StrongTypedIdentification{TDoc,TId,TInner}" /> over the document, the

@@ -86,6 +86,73 @@ is what a Polecat index is built over. A Fisher index has:
 
 Carrying them would be three knobs that silently did nothing.
 
+## Partial indexes
+
+An index over only the rows a predicate admits:
+
+```cs
+opts.Schema.For<Catch>()
+    .Index(x => x.Weight, name: "idx_catch_pike_weight", predicate: x => x.Species == "Pike");
+
+opts.Schema.For<Catch>()
+    .UniqueIndex(x => x.Tag, predicate: x => !x.Released);
+```
+
+Worth more over a document store than over a relational one: the index holds only the subset, so a
+hot slice of a large table is indexed at the size of the slice.
+
+**The predicate is an ordinary expression, translated by the same parser and member factory a query
+goes through** — not a SQL string. That is the point rather than a convenience, and it is the same
+reason the indexed expression is the member's locator: SQLite reaches a partial index only when the
+query's `WHERE` implies the index's, over the terms as written.
+
+::: warning
+**The predicate's values are written into the DDL as literals**, because `CREATE INDEX … WHERE …` is
+a schema definition and carries no parameters. They are escaped, and a value Fisher cannot render
+unambiguously is refused by name rather than reached for with `ToString()`.
+
+That is safe because of *where* they come from — constants in a configuration lambda at startup, the
+same trust class as a `[JsonPropertyName]`. **Do not build an index predicate out of a request
+value.** An index is declared once, when the store is configured.
+:::
+
+`SoftDeletedWithIndex()` is the shape this exists for, pre-built:
+
+```cs
+opts.Schema.For<Catch>().SoftDeletedWithIndex();   // index over is_deleted where is_deleted = 0
+```
+
+Every ordinary read carries `is_deleted = 0`, so an index holding only the live rows is the size of
+the live set rather than of the table's whole history.
+
+## Indexing the metadata columns
+
+```cs
+opts.Schema.For<Catch>().IndexLastModified().IndexCreatedAt();
+opts.Schema.For<Order>().MultiTenanted().IndexTenantId();
+```
+
+Plain column indexes — `last_modified`, `created_at` and `tenant_id` are real columns, so there is no
+expression to build.
+
+- `IndexCreatedAt()` **enables** `created_at` as well as indexing it. The column is
+  [opt-in](/documents/metadata), and an index over a column that does not exist is not a weaker
+  version of this — it fails the migration.
+- `IndexTenantId()` is refused for a type that is not `MultiTenanted()`, because there is no column to
+  index. It is also worth less here than on either sibling and offered for parity: `tenant_id` already
+  *leads* the conjoined primary key, so the implicit tenant filter is served by that index already.
+
+## Leaving an index alone
+
+```cs
+opts.Schema.For<Catch>().IgnoreIndex("idx_added_by_hand");
+```
+
+For an index created outside Fisher. Without it the schema comparison sees an index the configuration
+does not declare, so `db-assert` fails and `db-apply` drops it.
+
+Ignoring a name Fisher itself declares is refused — that is a collision, not an exemption.
+
 ## Naming
 
 `idx_<table>_<members>`, mirroring Weasel's formula. Members sharing an `IndexName` become one
@@ -94,9 +161,10 @@ composite index in declaration order.
 ## Checking that it is used
 
 ```cs
-var plan = await session.AdvancedSql.QueryAsync<string>(
-    "explain query plan select data from fi_doc_catch where json_extract(data, '$.species') = ?",
-    token, "Brook Trout");
+var plan = await session.Query<Catch>().Where(x => x.Species == "Brook Trout").ExplainAsync();
+
+plan.UsesIndex;   // did the planner reach it?
+plan.Steps;       // SQLite's own rows — you are looking for SEARCH … USING INDEX rather than SCAN
 ```
 
-You are looking for `SEARCH … USING INDEX` rather than `SCAN`.
+See [`ExplainAsync`](/documents/querying/linq/operators#explaining-a-query).
