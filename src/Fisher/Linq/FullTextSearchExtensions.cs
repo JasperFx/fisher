@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 namespace Fisher.Linq;
 
 /// <summary>
@@ -103,6 +104,73 @@ public static class FullTextSearchExtensions
     /// </remarks>
     public static bool NgramSearch<T>(this T document, string searchTerm)
         => throw OnlyInAQuery(nameof(NgramSearch));
+
+    /// <summary>
+    ///     Order the results by FTS5 relevance — <c>bm25()</c> over the index the query's full-text
+    ///     predicate searched (<a href="https://github.com/JasperFx/fisher/issues/220">fisher#220</a>).
+    /// </summary>
+    /// <param name="source">A query that already carries a full-text predicate.</param>
+    /// <param name="columnWeights">
+    ///     Optional per-column weights, in the order the index declared its members. Omit them for
+    ///     FTS5's default, which weights every column at 1.0. Supplying a different number of weights
+    ///     than the index has columns is refused rather than padded.
+    /// </param>
+    /// <remarks>
+    ///     <para>
+    ///     <b>Most relevant first.</b> FTS5's <c>bm25()</c> returns a score that is more NEGATIVE the
+    ///     better the match, so a raw ascending sort is already best-first and this reads the way it
+    ///     looks. <see cref="ThenByRelevanceDescending{T}" /> exists for the rare worst-first case
+    ///     rather than leaving callers to discover the sign for themselves.
+    ///     </para>
+    ///     <para>
+    ///     <b>It composes.</b> Relevance is an ordering term like any other, so
+    ///     <c>OrderByRelevance().ThenByDescending(x =&gt; x.Published)</c> breaks ties by date, and
+    ///     <c>OrderBy(x =&gt; x.Category).ThenByRelevance()</c> ranks within each category. It does not
+    ///     replace an ordering already in the chain.
+    ///     </para>
+    ///     <para>
+    ///     <b>It requires a full-text predicate in the same query</b>, and is refused at translation
+    ///     time without one. <c>bm25()</c> is only legal where its table is the subject of a MATCH, so
+    ///     the alternative is a SQLite error a long way from the call site.
+    ///     </para>
+    /// </remarks>
+    public static IOrderedQueryable<T> OrderByRelevance<T>(this IQueryable<T> source,
+        params double[] columnWeights)
+        => Rank(source, nameof(OrderByRelevance), columnWeights);
+
+    /// <inheritdoc cref="OrderByRelevance{T}" />
+    /// <summary>Worst match first. The inverse of <see cref="OrderByRelevance{T}" />.</summary>
+    public static IOrderedQueryable<T> OrderByRelevanceDescending<T>(this IQueryable<T> source,
+        params double[] columnWeights)
+        => Rank(source, nameof(OrderByRelevanceDescending), columnWeights);
+
+    /// <inheritdoc cref="OrderByRelevance{T}" />
+    /// <summary>Break an existing ordering's ties by relevance.</summary>
+    public static IOrderedQueryable<T> ThenByRelevance<T>(this IOrderedQueryable<T> source,
+        params double[] columnWeights)
+        => Rank(source, nameof(ThenByRelevance), columnWeights);
+
+    /// <inheritdoc cref="OrderByRelevance{T}" />
+    /// <summary>Break an existing ordering's ties by relevance, worst match first.</summary>
+    public static IOrderedQueryable<T> ThenByRelevanceDescending<T>(this IOrderedQueryable<T> source,
+        params double[] columnWeights)
+        => Rank(source, nameof(ThenByRelevanceDescending), columnWeights);
+
+    /// <summary>
+    ///     Rebuilds the call as an expression node the provider's parser sees, which is what makes
+    ///     these ordinary members of the ordering chain rather than a terminal that has to be last.
+    /// </summary>
+    private static IOrderedQueryable<T> Rank<T>(IQueryable<T> source, string method, double[] weights)
+    {
+        var call = Expression.Call(
+            typeof(FullTextSearchExtensions),
+            method,
+            [typeof(T)],
+            source.Expression,
+            Expression.Constant(weights ?? []));
+
+        return (IOrderedQueryable<T>)source.Provider.CreateQuery<T>(call);
+    }
 
     private static NotSupportedException OnlyInAQuery(string name)
         => new($"'{name}' is only meaningful inside a Fisher LINQ query — "

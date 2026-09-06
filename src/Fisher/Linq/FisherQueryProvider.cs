@@ -1284,9 +1284,131 @@ public partial class FisherQueryProvider : IQueryProvider
         ApplyHierarchyFilter(statement.Wheres, mapping, sourceType, qualifier);
         ApplySoftDeleteFilters(statement.Wheres, parser, mapping, qualifier);
 
+        if (parser.RequiresFullTextJoin)
+        {
+            ApplyFullTextJoin(statement, mapping, qualifier);
+        }
+
         var join = parser.Joins.Count == 0 ? null : ApplyJoin(statement, parser.Joins, selectClause);
 
         return (ApplyDistinct(statement, parser, selectClause), parser, selectClause, join);
+    }
+
+    /// <summary>
+    ///     Turns the query's full-text predicate from a sub-select into a join, which is what puts the
+    ///     FTS5 table in scope for <c>bm25()</c> — fisher#220.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         #215 deliberately made the predicate a sub-select so it stayed an ordinary
+    ///         <c>ISqlFragment</c>. That is still the shape for every query that only FILTERS on a
+    ///         match. It cannot serve a query that needs a value the match computes, because a
+    ///         sub-select has no way to hand one back — so this rewrites the one predicate in place
+    ///         and joins the table it was searching:
+    ///     </para>
+    ///     <code>
+    ///     select d.data from fi_doc_x d
+    ///     join fi_fts_x fts_t on fts_t.rowid = d.rowid
+    ///     where fts_t match ?
+    ///     order by bm25(fts_t)
+    ///     </code>
+    ///     <para>
+    ///         The document table stays the FROM, so every other locator, filter and wrap site is
+    ///         unaffected. Only the match moves.
+    ///     </para>
+    ///     <para>
+    ///         <b>Exactly one match, and not a negated one.</b> Two predicates would leave bm25
+    ///         ambiguous about which match it scores, and ranking by how well a row FAILED to match is
+    ///         not a thing — both are refused by name rather than silently picking one. Zero is refused
+    ///         too: bm25 is only legal where its table is the subject of a MATCH, so without a
+    ///         predicate SQLite would fail a long way from the call site.
+    ///     </para>
+    /// </remarks>
+    private static void ApplyFullTextJoin(Statement statement, DocumentMapping mapping, string qualifier)
+    {
+        var matches = new List<FullTextMatchFilter>();
+        var negated = false;
+
+        foreach (var where in statement.Wheres)
+        {
+            CollectFullTextMatches(where, matches, ref negated, insideNot: false);
+        }
+
+        if (matches.Count == 0)
+        {
+            throw new BadLinqExpressionException(
+                "OrderByRelevance needs a full-text predicate in the same query — bm25() scores a "
+                + "match, and there is nothing here for it to score. Add a Where(x => x.Search(\"…\")) "
+                + $"over '{mapping.DocumentType.Name}', or order by a member instead.");
+        }
+
+        if (negated)
+        {
+            throw new BadLinqExpressionException(
+                "OrderByRelevance cannot rank a negated full-text predicate: bm25() scores how well a "
+                + "row matched, and these rows are the ones that did not.");
+        }
+
+        if (matches.Count > 1)
+        {
+            throw new BadLinqExpressionException(
+                $"OrderByRelevance found {matches.Count} full-text predicates in this query and cannot "
+                + "tell which one to rank by. Search once, combining the terms into a single FTS5 "
+                + "query if you need more than one.");
+        }
+
+        var match = matches[0];
+
+        // Under its own name, not an alias -- SQLite refuses an alias on the left of MATCH. See
+        // JoinClause.Alias.
+        match.JoinAlias = match.QuotedTable;
+
+        statement.Joins.Add(new Fisher.Linq.Joins.JoinClause
+        {
+            Table = match.QuotedTable,
+            Alias = null,
+            OuterKeyLocator = $"{match.QuotedTable}.rowid",
+
+            // Both tables have a rowid, so the document side has to be qualified or SQLite rejects
+            // the join as ambiguous. When the query is already aliased (a LINQ join) that is the
+            // alias; otherwise it is the table's own name.
+            InnerKeyLocator = qualifier.Length > 0
+                ? $"{qualifier}rowid"
+                : $"{statement.FromTable}.rowid"
+        });
+    }
+
+    /// <summary>
+    ///     Walks a predicate tree for full-text matches, tracking whether any sits under a NOT.
+    /// </summary>
+    /// <remarks>
+    ///     <see cref="CompoundWhereFragment" /> and <see cref="NotFragment" /> are the only composites
+    ///     Fisher builds, so this is the whole tree rather than a best effort.
+    /// </remarks>
+    private static void CollectFullTextMatches(
+        ISqlFragment fragment, List<FullTextMatchFilter> found, ref bool negated, bool insideNot)
+    {
+        switch (fragment)
+        {
+            case FullTextMatchFilter match:
+                found.Add(match);
+                if (insideNot)
+                {
+                    negated = true;
+                }
+
+                break;
+
+            case NotFragment not:
+                CollectFullTextMatches(not.Inner, found, ref negated, insideNot: true);
+                break;
+
+            case CompoundWhereFragment compound:
+                var (left, right) = compound.Children;
+                CollectFullTextMatches(left, found, ref negated, insideNot);
+                CollectFullTextMatches(right, found, ref negated, insideNot);
+                break;
+        }
     }
 
     /// <summary>

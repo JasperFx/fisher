@@ -307,6 +307,21 @@ internal class LinqQueryParser
                 ApplyGroupBy(call);
                 break;
 
+            // fisher#220. Relevance is an ordering term like any other -- the locator is bm25() over
+            // the joined FTS5 table rather than a member's column, and BuildStatement is what turns
+            // the query's full-text predicate into that join. Placed with the rest of the family
+            // because that is exactly what it is: OrderByRelevance().ThenBy(...) and
+            // OrderBy(...).ThenByRelevance() both mean what they look like.
+            case "OrderByRelevance":
+            case "ThenByRelevance":
+                AddRelevanceOrdering(call, descending: false);
+                break;
+
+            case "OrderByRelevanceDescending":
+            case "ThenByRelevanceDescending":
+                AddRelevanceOrdering(call, descending: true);
+                break;
+
             case "OrderBy":
                 AddOrdering(call, descending: false);
                 break;
@@ -624,6 +639,75 @@ internal class LinqQueryParser
         OrderBys.Add((OrderingLocatorFor(call), descending));
         OrderByMembers.Add(_lastOrderingMember);
     }
+
+    /// <summary>
+    ///     <c>OrderByRelevance</c> and its three siblings -- fisher#220.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///     The locator is <c>bm25(&lt;alias&gt;)</c> against the alias <c>BuildStatement</c> joins the
+    ///     FTS5 table under, so it is settled here even though the join is added there: the alias is a
+    ///     constant, and keeping the locator's construction next to the other orderings is what lets
+    ///     relevance travel through paging, reversal and the aggregate wraps without any of them
+    ///     learning it is special.
+    ///     </para>
+    ///     <para>
+    ///     <b>bm25() scores more negative for a better match</b>, so best-first is a plain ascending
+    ///     sort and `descending` here means worst-first. The sign is FTS5's, not a choice.
+    ///     </para>
+    ///     <para>
+    ///     <c>OrderByMembers</c> gets a null, which is what keyset pagination already does for any
+    ///     ordering key that is not a document member -- a rank is not a value a cursor can carry.
+    ///     </para>
+    /// </remarks>
+    private void AddRelevanceOrdering(MethodCallExpression call, bool descending)
+    {
+        RequiresFullTextJoin = true;
+
+        var weights = call.Arguments.Count > 1
+            ? WhereClauseParser.ExtractValue(call.Arguments[1]) as double[] ?? []
+            : [];
+
+        RelevanceWeights = weights;
+
+        var mapping = _memberFactory.Mapping
+                      ?? throw new BadLinqExpressionException(
+                          "OrderByRelevance can only be used against a document type. It reads a "
+                          + "document's FTS5 index, and this query is not over one.");
+
+        var index = mapping.FullTextIndex
+                    ?? throw new BadLinqExpressionException(
+                        $"'{mapping.DocumentType.Name}' declares no full-text index, so there is "
+                        + "nothing for OrderByRelevance to rank by.");
+
+        if (weights.Length > 0 && weights.Length != index.ColumnNames.Length)
+        {
+            throw new BadLinqExpressionException(
+                $"OrderByRelevance was given {weights.Length} column weight(s), but "
+                + $"'{mapping.DocumentType.Name}'s full-text index covers {index.ColumnNames.Length}. "
+                + "bm25() takes one weight per indexed column, in declaration order — pass one for "
+                + "each, or none at all for FTS5's default of 1.0 each.");
+        }
+
+        var table = Weasel.Sqlite.SchemaUtils.QuoteName(
+            Storage.FullText.FullTextSchema.TableNameFor(mapping).Name);
+
+        OrderBys.Add((FullTextRank.Locator(table, weights), descending));
+        OrderByMembers.Add(null);
+    }
+
+    /// <summary>
+    ///     Set when something in the query needs a value the FTS5 match COMPUTES rather than just the
+    ///     rows it matches, which is what makes the predicate a join instead of a sub-select --
+    ///     fisher#220.
+    /// </summary>
+    public bool RequiresFullTextJoin { get; private set; }
+
+    /// <summary>The per-column <c>bm25()</c> weights, empty for FTS5's default of 1.0 each.</summary>
+    public double[] RelevanceWeights { get; private set; } = [];
+
+    // fisher#220: the FTS5 table is joined under its own name rather than an alias, because SQLite
+    // refuses an alias on the left of MATCH. See JoinClause.Alias.
 
     private IQueryableMember? _lastOrderingMember;
 

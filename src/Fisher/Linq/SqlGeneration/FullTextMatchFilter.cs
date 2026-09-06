@@ -41,11 +41,46 @@ internal sealed class FullTextMatchFilter : ISqlFragment
         _query = query;
     }
 
+    /// <summary>The FTS5 query text, so the statement builder can report on it when it refuses.</summary>
+    public string Query => _query;
+
+    /// <summary>The index this predicate searches, quoted.</summary>
+    public string QuotedTable => _quotedTable;
+
+    /// <summary>
+    ///     When set, the predicate renders as <c>&lt;alias&gt; match ?</c> against an FTS5 table the
+    ///     statement has joined under that alias, instead of as the self-contained sub-select —
+    ///     fisher#220.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///     Set only by <c>BuildStatement</c>, and only when something in the query needs a value the
+    ///     match COMPUTES rather than just the rows it matches: a <c>bm25()</c> rank today, a snippet
+    ///     later. The sub-select cannot hand a value back, so those need the virtual table genuinely in
+    ///     scope, and <c>bm25()</c> in particular is only legal in a query where its table is the
+    ///     subject of a MATCH.
+    ///     </para>
+    ///     <para>
+    ///     The two forms are exclusive rather than additive. Emitting the join AND keeping the
+    ///     sub-select would evaluate the same match twice and bind the query text twice, so switching
+    ///     this on is what removes the sub-select.
+    ///     </para>
+    /// </remarks>
+    public string? JoinAlias { get; set; }
+
     public void Apply(ICommandBuilder builder)
     {
         if (string.IsNullOrWhiteSpace(_query))
         {
             builder.Append("1=0");
+            return;
+        }
+
+        if (JoinAlias is not null)
+        {
+            builder.Append(JoinAlias);
+            builder.Append(" match ");
+            builder.AppendParameter(_query);
             return;
         }
 
