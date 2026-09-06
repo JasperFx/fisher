@@ -57,6 +57,11 @@ internal sealed class NaturalKeyWriter
             return;
         }
 
+        // As in EventTagWriter, and for the same reason: this runs inside the append's transaction, so
+        // a prepare per row is write-lock time. Every row for one definition compiles to the same
+        // statement.
+        await using var reused = new Fisher.Internal.ReusedCommand(connection, transaction);
+
         foreach (var stream in streams)
         {
             foreach (var definition in _definitions)
@@ -75,7 +80,7 @@ internal sealed class NaturalKeyWriter
 
                     if (definition.Unwrap(value) is { } unwrapped)
                     {
-                        await WriteOneAsync(definition, unwrapped, stream, connection, transaction, token)
+                        await WriteOneAsync(reused, definition, unwrapped, stream, token)
                             .ConfigureAwait(false);
                     }
                 }
@@ -83,8 +88,8 @@ internal sealed class NaturalKeyWriter
         }
     }
 
-    private async Task WriteOneAsync(NaturalKeyDefinition definition, object key, StreamAction stream,
-        SqliteConnection connection, SqliteTransaction transaction, CancellationToken token)
+    private async Task WriteOneAsync(Fisher.Internal.ReusedCommand reused, NaturalKeyDefinition definition, object key,
+        StreamAction stream, CancellationToken token)
     {
         var conjoined = _graph.TenancyStyle == TenancyStyle.Conjoined;
         var guids = _graph.StreamIdentity == StreamIdentity.AsGuid;
@@ -121,9 +126,7 @@ internal sealed class NaturalKeyWriter
                        + $"where {table}.{streamColumn} = excluded.{streamColumn} "
                        + $"returning {streamColumn}");
 
-        await using var command = (SqliteCommand)builder.Compile();
-        command.Connection = connection;
-        command.Transaction = transaction;
+        var command = reused.Take((SqliteCommand)builder.Compile());
 
         if (await command.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
         {

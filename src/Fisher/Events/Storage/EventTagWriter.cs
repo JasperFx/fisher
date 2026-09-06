@@ -45,6 +45,13 @@ internal sealed class EventTagWriter
             return;
         }
 
+        // One prepared statement per run of rows landing in the same tag table, rather than one per
+        // row — the same coalescing FisherSession.ExecuteBatchAsync applies to the operations, and it
+        // matters here for the same reason: this runs inside the append's transaction, so every
+        // prepare is time the file's one write lock is held. Events carrying several tag types
+        // alternate tables and fall back to a command apiece.
+        await using var reused = new Fisher.Internal.ReusedCommand(connection, transaction);
+
         foreach (var stream in streams)
         {
             foreach (var @event in stream.Events)
@@ -56,28 +63,29 @@ internal sealed class EventTagWriter
 
                 foreach (var tag in @event.Tags)
                 {
-                    await WriteOneAsync(@event, tag, connection, transaction, token).ConfigureAwait(false);
+                    await WriteOneAsync(reused, @event, tag, connection, token).ConfigureAwait(false);
                 }
             }
         }
     }
 
-    private async Task WriteOneAsync(IEvent @event, EventTag tag, SqliteConnection connection,
-        SqliteTransaction transaction, CancellationToken token)
+    private async Task WriteOneAsync(Fisher.Internal.ReusedCommand reused, IEvent @event, EventTag tag,
+        SqliteConnection connection, CancellationToken token)
     {
         var registration = _graph.FindTagType(tag.TagType)
                            ?? throw new InvalidOperationException(
                                $"Tag type '{tag.TagType.Name}' is not registered on this event store. Call "
                                + $"RegisterTagType<{tag.TagType.Name}>() before appending an event tagged with it.");
 
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText =
+        var built = connection.CreateCommand();
+        built.CommandText =
             $"insert into {_graph.TagTableName(registration)} (value, seq_id) values (@value, @seq) "
             + "on conflict do nothing;";
 
-        command.Parameters.AddWithValue("@value", ToDatabaseValue(registration.ExtractValue(tag.Value)));
-        command.Parameters.AddWithValue("@seq", @event.Sequence);
+        built.Parameters.AddWithValue("@value", ToDatabaseValue(registration.ExtractValue(tag.Value)));
+        built.Parameters.AddWithValue("@seq", @event.Sequence);
+
+        var command = reused.Take(built);
 
         await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
     }

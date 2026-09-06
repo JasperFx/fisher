@@ -1057,22 +1057,73 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             ? Task.CompletedTask
             : ExecuteBatchAsync(connection, transaction, operations, token);
 
+    /// <summary>
+    ///     How many commands the last batch actually prepared, against how many operations it ran.
+    ///     Read by the tests that pin the statement coalescing; nothing in production branches on it.
+    /// </summary>
+    internal int LastBatchCommandCount { get; private set; }
+
+    internal int LastBatchOperationCount { get; private set; }
+
+    /// <summary>
+    ///     Execute a unit of work's operations, in order, inside the write transaction.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Each operation executes on its own and postprocesses its own reader.</b> What
+    ///         fisher#171 changed is only that consecutive operations compiling to the *same* SQL share
+    ///         one prepared statement (<see cref="ReusedCommand" />) instead of preparing a fresh
+    ///         command each — a hundred-document save is one prepare rather than a hundred, which is
+    ///         time the exclusive <c>BEGIN IMMEDIATE</c> lock is no longer held for. Nothing about how
+    ///         an operation sees its results moved, so the optimistic-concurrency read is untouched.
+    ///     </para>
+    ///     <para>
+    ///         <b>Concatenating the batch into one multi-statement command was the obvious fix and is
+    ///         the wrong one on this provider.</b> It was measured before this was built, against
+    ///         Microsoft.Data.Sqlite 10.0.9, and it is *slower than the code it replaces* — 1000
+    ///         single-row upserts inside one transaction took 4-6 ms as separate commands and 82-192 ms
+    ///         concatenated. The cost is parameter binding, not statements: the same 1000 statements
+    ///         with their values inlined and no parameters at all run in 7.5 ms, and chunking the
+    ///         concatenation traces the quadratic out in the open (10 per command 10 ms, 50 per command
+    ///         22 ms, 250 per command 59 ms) — <c>SqliteParameterCollection</c> is rebound per prepared
+    ///         statement against the whole collection, so N statements sharing one command's 3N
+    ///         parameters is O(N²). Every chunk size measured is worse than a command per operation, so
+    ///         there is no sweet spot to tune to; the ceilings are not the binding constraint either
+    ///         (50,000 parameters and 50,000 statements in one command both execute).
+    ///     </para>
+    ///     <para>
+    ///         <b>And it could not be made safe here even if it were fast, which is the more important
+    ///         half.</b> Marten walks a concatenated batch with <c>NextResultAsync</c>, skipping the
+    ///         advance for an operation marked <c>Weasel.Storage.NoDataReturnedCall</c>; marten#5210 was
+    ///         an operation carrying that marker whose SQL did return a row, after which every later
+    ///         operation postprocessed against somebody else's rows. Microsoft.Data.Sqlite makes that
+    ///         sharper rather than softer: it surfaces a result set only for statements that return
+    ///         *columns*, so a four-statement command whose second and fourth statements select yields
+    ///         exactly two result sets — the walk's alignment would rest entirely on the marker being
+    ///         truthful, which is the thing marten#5210 proves cannot be assumed.
+    ///         <c>no_data_returned_operations.a_mislabelled_operation_cannot_misalign_the_batch</c>
+    ///         plants that shape and still passes, because there is still no <c>NextResult</c> walk to
+    ///         fall behind. (A guarded upsert matching no row *does* surface its own empty result set —
+    ///         the provider skips zero-<em>column</em> statements, not zero-<em>row</em> ones — so that
+    ///         particular hazard is not what rules concatenation out. The marker is.)
+    ///     </para>
+    /// </remarks>
     private async Task ExecuteBatchAsync(SqliteConnection connection, SqliteTransaction transaction,
         IReadOnlyList<Weasel.Storage.IStorageOperation> operations, CancellationToken token)
     {
         var exceptions = new List<Exception>();
+
+        await using var reused = new ReusedCommand(connection, transaction, CommandTimeout);
 
         foreach (var operation in operations)
         {
             var builder = new Weasel.Sqlite.CommandBuilder();
             operation.ConfigureCommand(builder, this);
 
-            // Disposed per operation: Compile hands back a fresh SqliteCommand, and an undisposed one
-            // keeps its native prepared statement alive until finalization.
-            await using var command = builder.Compile();
-            command.Connection = connection;
-            command.Transaction = transaction;
-            command.CommandTimeout = CommandTimeout;
+            // Take owns the compiled command from here — it is either adopted as the standing one or
+            // disposed after its parameters are moved onto it, so nothing leaks a native prepared
+            // statement to finalization.
+            var command = reused.Take(builder.Compile());
 
             try
             {
@@ -1084,6 +1135,9 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
                 throw TransformOperationException(operation, e);
             }
         }
+
+        LastBatchCommandCount = reused.Prepared;
+        LastBatchOperationCount = operations.Count;
 
         if (exceptions.Count == 1)
         {
