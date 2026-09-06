@@ -134,7 +134,7 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     ///     what <see cref="IComplianceBatch" /> exists to bridge.
     /// </summary>
     public override IComplianceBatch CreateBatch(IQuerySession session)
-        => new FisherComplianceBatch(((IDocumentSession)session).Events.CreateBatchQuery());
+        => new FisherComplianceBatch(session.CreateBatchQuery());
 
     private sealed class FisherComplianceBatch : IComplianceBatch
     {
@@ -498,7 +498,7 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     private static async Task<T> RunBatchedAsync<T>(IQuerySession session,
         Func<Fisher.Batching.IBatchedQuery, Task<T>> enqueue, CancellationToken token)
     {
-        var batch = ((IDocumentSession)session).Events.CreateBatchQuery();
+        var batch = session.CreateBatchQuery();
         var item = enqueue(batch);
 
         await batch.Execute(token).ConfigureAwait(false);

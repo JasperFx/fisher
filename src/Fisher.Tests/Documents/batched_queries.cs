@@ -111,7 +111,7 @@ public class batched_queries : IAsyncLifetime
     public async Task a_batch_of_document_reads()
     {
         await using var session = Session();
-        var batch = session.Events.CreateBatchQuery();
+        var batch = session.CreateBatchQuery();
 
         var frodo = batch.Load<Angler>(_frodo);
         var missing = batch.Load<Angler>(Guid.NewGuid());
@@ -144,7 +144,7 @@ public class batched_queries : IAsyncLifetime
     public async Task a_failing_batch_item_faults_its_task_and_surfaces_from_execute()
     {
         await using var session = Session();
-        var batch = session.Events.CreateBatchQuery();
+        var batch = session.CreateBatchQuery();
 
         var bad = batch.Query<Angler>(s => s.Query<Angler>().Where(x => x.Name.Length.ToString() == "x"));
         var declaredAfterTheFailure = batch.Load<Angler>(_frodo);
@@ -160,7 +160,66 @@ public class batched_queries : IAsyncLifetime
     {
         await using var session = Session();
 
-        await session.Events.CreateBatchQuery().Execute(Token);
+        await session.CreateBatchQuery().Execute(Token);
+    }
+
+    // ---- Where the entry point lives ----
+
+    /// <summary>
+    ///     The batch is reachable from a plain <see cref="IQuerySession" />, which is where Marten and
+    ///     Polecat put it and what makes ported code batching document reads compile.
+    /// </summary>
+    /// <remarks>
+    ///     Typed as <see cref="IQuerySession" /> deliberately rather than left as the concrete session:
+    ///     the whole point of the move is that the narrow interface has it, and a test written against
+    ///     <c>IDocumentSession</c> would pass whether the declaration sat on the read interface or the
+    ///     write one.
+    /// </remarks>
+    [Fact]
+    public async Task the_batch_is_reachable_from_a_query_session()
+    {
+        await using var session = _store.QuerySession();
+        IQuerySession narrowed = session;
+
+        var frodo = narrowed.CreateBatchQuery().Load<Angler>(_frodo);
+        var batch = narrowed.CreateBatchQuery();
+        var sam = batch.Load<Angler>(_sam);
+
+        await batch.Execute(Token);
+
+        (await sam)!.Name.ShouldBe("Sam");
+        frodo.IsCompleted.ShouldBeFalse();
+    }
+
+    /// <summary>
+    ///     <c>session.Events.CreateBatchQuery()</c> — the older spelling, where Fisher's batch was born
+    ///     as the DCB read surface — still works and builds the same batch.
+    /// </summary>
+    /// <remarks>
+    ///     Asserts equivalence rather than existence. A forwarder that returned a batch built against a
+    ///     <em>different</em> session would satisfy "the member is still there" and then silently read
+    ///     the wrong tenant's rows, so the fact worth pinning is that the two batches answer alike —
+    ///     including for a DCB read, which is the half that needs the event operations rather than the
+    ///     session.
+    /// </remarks>
+    [Fact]
+    public async Task both_spellings_build_the_same_batch()
+    {
+        await using var session = Session();
+
+        var viaSession = session.CreateBatchQuery();
+        var viaEvents = session.Events.CreateBatchQuery();
+
+        viaEvents.ShouldBeOfType(viaSession.GetType());
+
+        var fromSession = viaSession.Load<Angler>(_frodo);
+        var fromEvents = viaEvents.Load<Angler>(_frodo);
+
+        await viaSession.Execute(Token);
+        await viaEvents.Execute(Token);
+
+        (await fromSession)!.Name.ShouldBe("Frodo");
+        (await fromEvents)!.Name.ShouldBe("Frodo");
     }
 
     private sealed class BusyAnglers : QueryListPlan<Angler>

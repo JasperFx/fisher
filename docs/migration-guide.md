@@ -61,7 +61,6 @@ a migrating Marten user hits first.
 | `Stats(out QueryStatistics)` | **Absent.** No `QueryStatistics`, no `TotalResults` out-param on an arbitrary query. | `ToPagedListAsync`, whose `IPagedList<T>` carries the total from a second statement, and `CountIgnoringPagingAsync` for the total alone. |
 | `ToAsyncEnumerable()` on a query | **Absent.** | Materialize with `ToListAsync`, or `IAdvancedSql.StreamAsync<T>` for raw SQL. Streaming is scarce here on purpose: a retried `SQLITE_BUSY` re-executes the whole delegate, so a live reader yielded to the caller would resume against a disposed connection. |
 | Child-collection LINQ | **Partly landed** ([fisher#166](https://github.com/JasperFx/fisher/issues/166)). | See the [operators page](/documents/querying/linq/operators) — the shipped and missing halves are below. |
-| `IQuerySession.CreateBatchQuery()` | **Present, on `session.Events`** rather than on the session. | `session.Events.CreateBatchQuery()`. `Fisher.Batching.IBatchedQuery` is wider than its home suggests — `Load`, `LoadMany`, `CheckExists`, `Query`, `QueryByPlan` and the DCB reads — and exists for API parity, not speed: SQLite is embedded, so there are no round trips to collapse. |
 
 ### Child collections: what ships and what does not
 

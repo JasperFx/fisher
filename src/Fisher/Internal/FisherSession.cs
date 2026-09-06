@@ -285,6 +285,16 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     public EventOperations Events { get; }
 
     /// <summary>
+    ///     Start a batch of reads to be run together.
+    /// </summary>
+    /// <remarks>
+    ///     Built here rather than on <see cref="Events" />, which now forwards to this. The batch needs
+    ///     both halves — the event operations for the DCB reads and the session for the document ones —
+    ///     so the two spellings differ only in which one the caller happened to reach it through.
+    /// </remarks>
+    public Batching.IBatchedQuery CreateBatchQuery() => new Batching.FisherBatchedQuery(Events, this);
+
+    /// <summary>
     ///     jasperfx#669 — the store-agnostic route from a session to its event store.
     /// </summary>
     /// <remarks>
