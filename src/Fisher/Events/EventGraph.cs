@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
 using Fisher.Events.Schema;
@@ -435,11 +436,33 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
         return aggregateType.Name;
     }
 
+    private readonly ConcurrentDictionary<string, Type?> _eventTypeByDotNetName = new();
+
     /// <summary>
     ///     Resolve a .NET type from the <c>dotnet_type</c> name stored on an event row.
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Memoized per name (fisher#156), because this runs once per event row hydrated —
+    ///         <c>Type.GetType(string)</c> parses the assembly-qualified name and probes loaded
+    ///         assemblies on every call. Marten does the same in <c>EventGraph.TypeForDotNetName</c>;
+    ///         the cache here is a <see cref="ConcurrentDictionary{TKey,TValue}" /> to match this
+    ///         class's other registries.
+    ///     </para>
+    ///     <para>
+    ///         <b>Misses are cached too</b>, as a stored null entry, and that is the half that pays:
+    ///         Fisher deliberately returns null for a type this deployment does not know (the stream
+    ///         reads skip such rows so a store stays readable by a process without every event
+    ///         assembly), so a stream holding foreign event types would otherwise re-probe
+    ///         <c>Type.GetType</c> per row forever — precisely the path the null policy exists to
+    ///         serve. Sound because the answer cannot change mid-process for Fisher's purposes:
+    ///         event assemblies are loaded by registration before rows naming them are read.
+    ///     </para>
+    /// </remarks>
     internal Type? ResolveEventType(string? dotNetTypeName)
-        => string.IsNullOrEmpty(dotNetTypeName) ? null : Type.GetType(dotNetTypeName);
+        => string.IsNullOrEmpty(dotNetTypeName)
+            ? null
+            : _eventTypeByDotNetName.GetOrAdd(dotNetTypeName, static name => Type.GetType(name));
 
     internal StreamsTable BuildStreamsTable() => new(this);
 
@@ -569,15 +592,44 @@ public class FisherEventType : IEventType
     public string DotNetTypeName { get; set; }
     public string Alias => EventTypeName;
 
+    private Func<object, IEvent>? _wrapper;
+
     /// <summary>
     ///     Wrap raw event data into an <c>Event&lt;T&gt;</c> envelope carrying type metadata.
     /// </summary>
+    /// <remarks>
+    ///     Runs once per event hydrated by <see cref="Internal.FisherEventsRowReader" /> and once per
+    ///     raw event appended through <see cref="EventGraph.BuildEvent" />, so the
+    ///     <c>MakeGenericType</c> + <c>Activator.CreateInstance</c> pair is paid exactly once per
+    ///     event type and the per-call cost is a compiled delegate invocation (fisher#156). JasperFx's
+    ///     own <c>EventTypeData&lt;T&gt;</c> gets the fast shape by being generic; this type cannot
+    ///     close over <c>T</c> without changing how <see cref="EventGraph.EventMappingFor" /> builds
+    ///     mappings, so it caches the constructor as a delegate instead — the same pattern
+    ///     <c>MessagePublishing</c> uses for <c>IMessageSink.PublishAsync&lt;T&gt;</c>, with the same
+    ///     BCL <c>Expression.Compile</c>. The lazy init races benignly: two threads may each compile,
+    ///     both delegates are correct, and one wins the field.
+    /// </remarks>
     public IEvent Wrap(object eventData)
     {
-        var genericType = typeof(Event<>).MakeGenericType(EventType);
-        var @event = (IEvent)Activator.CreateInstance(genericType, eventData)!;
+        var wrapper = _wrapper ??= CompileWrapper(EventType);
+        var @event = wrapper(eventData);
         @event.EventTypeName = EventTypeName;
         @event.DotNetTypeName = DotNetTypeName;
         return @event;
+    }
+
+    private static Func<object, IEvent> CompileWrapper(Type eventType)
+    {
+        var genericType = typeof(Event<>).MakeGenericType(eventType);
+        var constructor = genericType.GetConstructor(new[] { eventType })
+                          ?? throw new InvalidOperationException(
+                              $"Event<{eventType.Name}> has no ({eventType.Name}) constructor.");
+
+        var data = Expression.Parameter(typeof(object), "data");
+        var body = Expression.Convert(
+            Expression.New(constructor, Expression.Convert(data, eventType)),
+            typeof(IEvent));
+
+        return Expression.Lambda<Func<object, IEvent>>(body, data).Compile();
     }
 }
