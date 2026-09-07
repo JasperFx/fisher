@@ -12,9 +12,9 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2007 tests green on net9.0 and net10.0** — 1952 in
-`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 516 of
-them are shared cross-store compliance tests — 447 event sourcing and 69 document. On JasperFx **2.66.0** / Weasel **9.31.0**.
+**2008 tests green on net9.0 and net10.0** — 1953 in
+`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 517 of
+them are shared cross-store compliance tests — 448 event sourcing and 69 document. On JasperFx **2.66.1** / Weasel **9.31.0**.
 
 ## The high-water opt-out, audited (#199)
 
@@ -662,8 +662,8 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.66.0 ships 52 suites; Fisher enrolls **50 of them, 516 tests**.
-Fisher passes **516 of them, across all
+`JasperFx.Events.ComplianceTests` 2.66.1 ships 52 suites; Fisher enrolls **50 of them, 517 tests**.
+Fisher passes **517 of them, across all
 50 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
@@ -699,7 +699,7 @@ shape: `DocumentLoadAndStoreCompliance` gained three tests for `LoadAsync<T>(obj
 fisher#89) and `DocumentComplianceConfig` gained `ValueTypes`. Diffing the suite *list* would have
 reported a clean bump — diff the contents.
 
-The library is now two halves. The **event sourcing** half is 43 enrolled suites and 447 tests, and the
+The library is now two halves. The **event sourcing** half is 43 enrolled suites and 448 tests, and the
 upstream backlog it emptied in 2.45.0 refilled in 2.64.0 — see "Wave 13" below. The
 **document** half arrived in 2.47.0 (jasperfx#647) and is now seven suites, 69 tests, over the
 store-agnostic document contract Fisher implements for fisher#68. Every suite added since 2.49.0 has
@@ -719,7 +719,7 @@ been built to the sibling's shape:
 | `FlatTableProjectionCompliance` | 2.41.0 | A real feature: `Projections/Flattened/`, ~700 lines. See CLAUDE.md. |
 | `StrongTypedIdentityCompliance` | 2.42.0 | A real feature, fisher#14: `Storage/StrongTypedId.cs` and `StrongTypedIdentification`. No new seam was needed — `IIdentification<TDoc,TId>` had already reserved the three members for it. |
 | `EventDataMaskingCompliance` | 2.43.0 | Three seam members, no production change. 10 tests green on the bump. |
-| `StreamCompactingCompliance` | 2.43.0 | Nothing at all. 11 tests green on the bump; the member was already on the shared operations surface. |
+| `StreamCompactingCompliance` | 2.43.0 | Nothing at all. 12 tests green on the bump; the member was already on the shared operations surface. The twelfth arrived with jasperfx#796 in 2.66.1, which is also the fix for fisher#203. |
 | `RebuildAndCatchUpCompliance` | 2.44.0 | Nothing at all. 11 tests green on the bump; the whole rebuild surface is on `IProjectionDaemon`. |
 | `DeadLetterCompliance` | 2.44.0 | Nothing at all. 6 tests green on the bump; `ContinuousErrors` and `QueryDeadLetterEventsAsync` were already there for the daemon. |
 | `ConjoinedEventTenancyCompliance` | 2.45.0 | One seam member, no production change. 8 tests green on the bump — and the first suite to test a Fisher feature nothing cross-store had covered. |
@@ -801,9 +801,9 @@ naming.
 **Green on all fifty is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 50 suites, 516 tests
+### Green — 50 suites, 517 tests
 
-Event sourcing — 43 suites, 447 tests:
+Event sourcing — 43 suites, 448 tests:
 
 | Suite | Tests |
 |---|---|
@@ -824,7 +824,7 @@ Event sourcing — 43 suites, 447 tests:
 | `ConjoinedEventTenancyCompliance` | 11 |
 | `EventDataMaskingCompliance` | 11 |
 | `RebuildAndCatchUpCompliance` | 11 |
-| `StreamCompactingCompliance` | 11 |
+| `StreamCompactingCompliance` | 12 |
 | `StreamReadCompliance` | 11 |
 | `SubscriptionCompliance` | 11 |
 | `FlatTableProjectionCompliance` | 10 |
