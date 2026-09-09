@@ -225,7 +225,13 @@ public class command_line_integration : IAsyncLifetime
         }
         finally
         {
-            if (File.Exists(file)) File.Delete(file);
+            // db-patch writes the rollback beside the patch, so cleaning up only the name we passed
+            // leaves a `.drop.sql` behind on every run -- the whole of what Fisher.Tests still leaked
+            // into the shared temp directory once the daemons were stopped properly.
+            foreach (var written in new[] { file, Path.ChangeExtension(file, null) + ".drop.sql" })
+            {
+                if (File.Exists(written)) File.Delete(written);
+            }
         }
     }
 

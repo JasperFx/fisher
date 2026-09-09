@@ -101,6 +101,7 @@ public class composite_member_teardown : IAsyncLifetime
         {
             await daemon.StartAllAsync();
             await daemon.WaitForNonStaleData(TimeSpan.FromSeconds(20));
+            await daemon.StopAllAsync();
         }
 
         await using (var session = _store.LightweightSession())
@@ -119,6 +120,7 @@ public class composite_member_teardown : IAsyncLifetime
     {
         using var daemon = await _store.BuildProjectionDaemonAsync();
         await daemon.RebuildProjectionAsync("ledger", TimeSpan.FromSeconds(30), Token);
+        await daemon.StopAllAsync();
     }
 
     /// <summary>

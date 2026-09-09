@@ -61,7 +61,9 @@ public sealed class TemporaryDatabase : IAsyncDisposable, IDisposable
             SqliteConnection.ClearPool(pooled);
         }
 
-        foreach (var suffix in new[] { "", "-wal", "-shm" })
+        // -journal as well as the WAL pair: a store whose PragmaSettings turn WAL off uses a rollback
+        // journal instead, and a process killed mid-transaction leaves one behind.
+        foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
         {
             var file = Path + suffix;
 
