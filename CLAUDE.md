@@ -906,6 +906,15 @@ messaging is not dialect-specific and projection code should port between the st
   separate connection: invisible at `BeforeCommit`, visible at `AfterCommit`. Verified by moving the
   call, in both paths.
 
+⚠️ **A daemon test of these hooks must wait on the hook's own signal, never on non-staleness**
+(fisher#232). The progression row is written *inside* the batch's transaction and `AfterCommitAsync`
+runs after it commits, so non-stale becomes true strictly first — a test that waits on it and then
+asserts the after-hook fired is a real intermittent, roughly one full-suite run in several. This is
+the same trap recorded under "Subscriptions" for the post-commit listener, one seam over, and it was
+not revisited there when that was learned. `RecordingOutbox.AfterCommitted` is the signal; making the
+hook take 500 ms turns the race deterministic, which is how the fix was verified rather than by
+re-running and hoping.
+
 `IProjectionBatch.PublishMessageAsync` hands over an `object`, but `IMessageSink.PublishAsync<T>` is
 generic, so `MessagePublishing` closes it over the runtime message type and caches the compiled
 delegate per type. Polecat does the same via polecat#46, with `FastExpressionCompiler` where Fisher
