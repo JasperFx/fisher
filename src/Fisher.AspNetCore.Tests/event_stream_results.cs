@@ -242,7 +242,7 @@ public class event_stream_results : IAsyncLifetime
     public async Task the_health_check_is_healthy_when_the_daemon_keeps_up()
     {
         await using var database = TemporaryDatabase.Create("aspnet-health-ok");
-        await using var store = StoreWithAsyncProjection(database);
+        await using var store = await StoreWithAsyncProjectionAsync(database);
 
         await using (var session = store.LightweightSession())
         {
@@ -283,7 +283,7 @@ public class event_stream_results : IAsyncLifetime
     public async Task the_health_check_is_unhealthy_when_the_mark_is_stuck()
     {
         await using var database = TemporaryDatabase.Create("aspnet-health-stalled");
-        await using var store = StoreWithAsyncProjection(database, TimeSpan.Zero);
+        await using var store = await StoreWithAsyncProjectionAsync(database, TimeSpan.Zero);
 
         // The daemon runs once so a high-water row exists, then stops while events keep arriving.
         using (var daemon = await store.BuildProjectionDaemonAsync())
@@ -325,7 +325,17 @@ public class event_stream_results : IAsyncLifetime
         stalled.Description.ShouldContain("WAL");
     }
 
-    private DocumentStore StoreWithAsyncProjection(TemporaryDatabase database, TimeSpan? livenessInterval = null)
+    /// <summary>
+    ///     A store with one async projection, migrated and ready.
+    /// </summary>
+    /// <remarks>
+    ///     <b>Asynchronous, where this used to end in <c>GetAwaiter().GetResult()</c></b> (fisher#189).
+    ///     Blocking a thread-pool thread on async I/O is the classic way a host under load turns a
+    ///     passing test into a transient failure: the continuation the blocked thread is waiting for
+    ///     needs a pool thread of its own, and on a saturated pool it does not get one promptly. It was
+    ///     the only such call in this project, and three tests reached it.
+    /// </remarks>
+    private async Task<DocumentStore> StoreWithAsyncProjectionAsync(TemporaryDatabase database, TimeSpan? livenessInterval = null)
     {
         var store = DocumentStore.For(options =>
         {
@@ -340,7 +350,7 @@ public class event_stream_results : IAsyncLifetime
             }
         });
 
-        store.ApplyAllConfiguredChangesToDatabaseAsync(Token).GetAwaiter().GetResult();
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
 
         return store;
     }

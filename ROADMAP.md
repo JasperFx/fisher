@@ -3,7 +3,12 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **one open issue, and it is not next-release work.**
+Status: **two open issues, and neither is next-release work.**
+[#189](https://github.com/JasperFx/fisher/issues/189) is an unreproduced `Fisher.AspNetCore.Tests`
+failure — 12 of 36 on one loaded host, green on retry, with the failing test names never captured. Two
+concrete hazards have been removed since (the project's only wall-clock budget and its only
+sync-over-async call) and 35 runs under three- and four-way load have not reproduced it, so it stays
+open on evidence rather than on work outstanding.
 [#109](https://github.com/JasperFx/fisher/issues/109) is the downstream half of
 [jasperfx#684](https://github.com/JasperFx/jasperfx/issues/684), and it got *more* blocked rather than
 less: analysis on that epic found the stage graph does not record enrichment edges, so the

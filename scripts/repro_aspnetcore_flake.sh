@@ -27,9 +27,9 @@ TARGET="src/Fisher.AspNetCore.Tests/bin/Release/$TFM/Fisher.AspNetCore.Tests"
 LOAD="src/Fisher.Tests/bin/Release/$TFM/Fisher.Tests"
 OUT="$ROOT/artifacts/flake-189"
 
-echo "==> Building Release/$TFM"
+# The load project has to exist before anything can generate load with it.
+echo "==> Building the load project (Release/$TFM)"
 dotnet build src/Fisher.Tests/Fisher.Tests.csproj -c Release -f "$TFM" --nologo -v q || exit 2
-dotnet build src/Fisher.AspNetCore.Tests/Fisher.AspNetCore.Tests.csproj -c Release -f "$TFM" --nologo -v q || exit 2
 
 [ -x "$TARGET" ] || { echo "no target executable at $TARGET" >&2; exit 2; }
 [ -x "$LOAD" ]   || { echo "no load executable at $LOAD" >&2; exit 2; }
@@ -54,6 +54,13 @@ done
 # Let the load runners get past startup and into real work before measuring anything -- the report
 # was of the FIRST invocation after a build, with the other suites already in flight.
 sleep 20
+
+# fisher#189: the TARGET is built here, under load, rather than before it. The reported failure was
+# the first invocation after a build while three other agents were mid-suite, and building first (as
+# this script used to) leaves that dimension untested -- a cold assembly load, a cold file cache and a
+# compiler competing for the same CPU are exactly what iteration 1 is supposed to reproduce.
+echo "==> Building the target under load (Release/$TFM)"
+dotnet build src/Fisher.AspNetCore.Tests/Fisher.AspNetCore.Tests.csproj -c Release -f "$TFM" --nologo -v q || exit 2
 
 echo "==> Looping Fisher.AspNetCore.Tests up to $ITERATIONS times under load"
 for i in $(seq 1 "$ITERATIONS"); do
@@ -80,8 +87,19 @@ for i in $(seq 1 "$ITERATIONS"); do
         # nothing installed beyond what a dotnet box already has.
         grep -o 'testName="[^"]*"[^>]*outcome="Failed"' "$trx_path" \
             | sed 's/testName="//; s/"[^>]*outcome="Failed"//' \
-            | sed 's/^/      /' \
-            | sort -u
+            > "$OUT/failed-$i.txt"
+
+        sed 's/^/      /' "$OUT/failed-$i.txt" | sort -u
+
+        # The tally is the discriminating evidence, not a convenience. Every class in this project
+        # builds its store and runs the schema migration in InitializeAsync, so one exception there
+        # fails that whole class at once -- which is what "12 of 36, transiently, green on retry" fits
+        # far better than a dozen independent timing flakes would. A tally that names one class at its
+        # full size says "the fixture died"; one spread thinly across classes says the opposite.
+        echo
+        echo "    Failures per class (a class at its full size means the fixture failed, not the tests):"
+        sed 's/\.[^.]*$//' "$OUT/failed-$i.txt" | sort | uniq -c | sed 's/^/      /'
+
         echo
         echo "    Attach $OUT/$trx to fisher#189."
     else
