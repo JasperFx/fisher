@@ -269,7 +269,14 @@ public partial class EventOperations
     ///     Append the query's <c>where</c> clause, shared by the page read and the count so the two
     ///     cannot disagree about what matches.
     /// </summary>
-    private void AppendEventQueryFilters(Weasel.Sqlite.CommandBuilder builder, EventQuery query)
+    /// <remarks>
+    ///     Internal rather than private so <c>lossy_tag_queries</c> can put the rendered clause through
+    ///     <c>explain query plan</c>. That test is asserting which index SQLite reaches, which is the
+    ///     one thing about <see cref="AppendTagValueFilter" /> no behavioural assertion can see — a
+    ///     blanket <c>collate nocase</c> answers every compliance fact correctly and scans the tag
+    ///     table doing it.
+    /// </remarks>
+    internal void AppendEventQueryFilters(Weasel.Sqlite.CommandBuilder builder, EventQuery query)
     {
         var first = true;
 
@@ -380,6 +387,18 @@ public partial class EventOperations
             AppendTagConditionsFilter(builder, query.TagConditions);
         }
 
+        // The lossy name/value spelling of the tag filter (jasperfx#801). One sub-select per entry,
+        // AND'd — the opposite combinator from TagConditions above, whose conditions are OR'd, which
+        // is why this is a second rendering rather than a fold into that one. Riding the same
+        // Prefix() run is what ANDs it with every other filter as well. Sub-selects rather than a
+        // join for the reason AppendTagConditionsFilter gives: a join multiplies rows when one event
+        // carries several of the named tags, and TotalCount has to count distinct events.
+        foreach (var pair in query.TagValues)
+        {
+            Prefix();
+            AppendTagValueFilter(builder, pair.Key, pair.Value);
+        }
+
         if (IsConjoined)
         {
             // The query's tenant selects the partition when supplied (jasperfx#555 — the read-only
@@ -459,6 +478,90 @@ public partial class EventOperations
         }
 
         builder.Append(')');
+    }
+
+    /// <summary>
+    ///     Render one entry of <see cref="EventQuery.TagValues" /> — the lossy name/value spelling of a
+    ///     tag filter (jasperfx#801) — as a <c>seq_id in (select …)</c> sub-select over that tag's
+    ///     table.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The name is resolved by the shared <see cref="TagTypeRegistrationExtensions.RequireByTagName" />
+    ///         matcher rather than by anything of Fisher's, because the name matching <em>is</em> the
+    ///         contract: a caller holding a store descriptor and a name/value pair cannot discover which
+    ///         spelling a given engine accepts, so the CLR simple name and the registered table suffix
+    ///         both have to work on every store. An unregistered name is an
+    ///         <see cref="ArgumentException" /> listing what <em>is</em> registered — never an empty
+    ///         answer, because "that tag type does not exist here" and "no event carries that tag" must
+    ///         not read alike.
+    ///     </para>
+    ///     <para>
+    ///         <b>The value is matched case-insensitively, and how that is done depends on the tag's
+    ///         primitive.</b> For a <see cref="Guid" /> or a number the stored form is canonical —
+    ///         <see cref="EventTagWriter.ToDatabaseValue" /> renders a Guid as lowercase canonical text
+    ///         and a number as an INTEGER — so the caller's spelling is normalised to that form and
+    ///         compared with a plain <c>=</c>, which the tag table's <c>(value, seq_id)</c> primary key
+    ///         serves as a range scan. A value that does not parse is bound as the caller typed it and
+    ///         therefore matches nothing, which is the right answer rather than an error.
+    ///     </para>
+    ///     <para>
+    ///         Only a <b>string</b> tag needs <c>collate nocase</c>: its stored text is the
+    ///         application's own casing and there is nothing to normalise it to. That one comparison
+    ///         cannot use the primary key index — SQLite reaches an index only under the index's own
+    ///         collation — so a string-tag lookup in this spelling scans the tag table. That is the
+    ///         honest price of the case-insensitivity the contract asks for, and it applies to the tag
+    ///         table alone rather than to <c>fi_events</c>. Note also that SQLite's <c>NOCASE</c> folds
+    ///         ASCII only, where .NET's <c>OrdinalIgnoreCase</c> folds the whole of Unicode, so a
+    ///         non-ASCII string tag matches by exact casing here.
+    ///     </para>
+    /// </remarks>
+    private void AppendTagValueFilter(Weasel.Sqlite.CommandBuilder builder, string tagName, string tagValue)
+    {
+        var registration = Graph.TagTypes
+            .RequireByTagName(tagName, $"{nameof(EventQuery)}.{nameof(EventQuery.TagValues)}");
+
+        var (bound, caseInsensitive) = BindTagValue(registration.SimpleType, tagValue);
+
+        builder.Append("seq_id in (select seq_id from ");
+        builder.Append(Graph.TagTableName(registration));
+        builder.Append(" where value = ");
+        builder.AppendParameter(bound);
+
+        if (caseInsensitive)
+        {
+            builder.Append(" collate nocase");
+        }
+
+        builder.Append(')');
+    }
+
+    /// <summary>
+    ///     The value to bind for a lossy tag comparison, and whether the comparison needs
+    ///     <c>collate nocase</c> to be case-insensitive.
+    /// </summary>
+    /// <remarks>
+    ///     The inverse of <see cref="EventTagWriter.ToDatabaseValue" />, which is why the two belong in
+    ///     each other's reading: a write renders the tag's primitive into the column, and this renders
+    ///     the caller's string back into the same form so the comparison is exact wherever it can be.
+    /// </remarks>
+    private static (object Value, bool CaseInsensitive) BindTagValue(Type simpleType, string tagValue)
+    {
+        if (simpleType == typeof(Guid))
+        {
+            return Guid.TryParse(tagValue, out var guid)
+                ? (guid.ToString(), false)
+                : (tagValue, false);
+        }
+
+        if (simpleType == typeof(int) || simpleType == typeof(long) || simpleType == typeof(short))
+        {
+            return long.TryParse(tagValue, out var number)
+                ? (number, false)
+                : (tagValue, false);
+        }
+
+        return (tagValue, true);
     }
 
     /// <summary>

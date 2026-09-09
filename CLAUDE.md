@@ -3777,6 +3777,41 @@ load-bearing, and both were verified by removing them:
   so an ungated filter is not an empty result but `SQLite Error 1: no such column`. Ignoring the filter
   is what `EventQuery` asks for and what Polecat does.
 
+**The two spellings of the tag filter are two renderings, not one folded into the other** (fisher#230
+/ jasperfx#801). `TagConditions` is the rich CLR-typed form and its conditions are **OR'd**;
+`TagValues` is the lossy name/value dictionary and its entries are **AND'd**, then AND'd with every
+other filter. Same `seq_id in (select seq_id from <tag table> where value = …)` sub-select on both —
+chosen over a join because a join multiplies rows when one event carries several matching tags, which
+is also what keeps `TotalCount` counting distinct events. Supplying both is refused by
+`EventQuery.AssertIsWellFormed`, which `AssertFiltersAreSupported` calls first thing, so the existing
+call site gets it for free.
+
+Three decisions in the lossy form:
+
+- **The name is resolved by the shared `TagTypeRegistrationExtensions.RequireByTagName`**, not by
+  anything of Fisher's: a caller holding only a store descriptor and a name cannot discover which
+  spelling an engine accepts, so the CLR simple name (`ManifestId`) and the registered table suffix
+  (`manifest`) both resolve, case-insensitively, on every store. An unregistered name is an
+  `ArgumentException` **listing what is registered** rather than an empty answer — "that tag type does
+  not exist here" and "no event carries that tag" must not read alike.
+- **Case-insensitive value matching is done by normalising the caller's value where the stored form is
+  canonical, and by `collate nocase` only where it is not.** `EventTagWriter.ToDatabaseValue` renders a
+  Guid as lowercase canonical text and a number as an INTEGER, so for those the caller's spelling is
+  converted and compared with a plain `=`, which the tag table's `(value, seq_id)` primary key serves
+  as a range scan; a value that does not parse binds as typed and therefore matches nothing, which is
+  the right answer rather than an error. Only a **string** tag needs `collate nocase`, its stored text
+  being the application's own casing with nothing to normalise to — and that one comparison cannot
+  reach the primary key index, since SQLite reaches an index only under the index's own collation. A
+  string-tag lookup in this spelling therefore scans the tag table, which is the honest price of the
+  contract and is confined to the tag table rather than to `fi_events`.
+- **SQLite's `NOCASE` folds ASCII only**, where .NET's `OrdinalIgnoreCase` folds the whole of Unicode,
+  so a non-ASCII string tag matches by exact casing here. Recorded rather than worked around: the
+  alternative is a scan with a custom collation, for a difference no shared fact exercises.
+
+Fisher does not implement the dictionary `IEventStore.QueryByTagsAsync` overload at all, so there is no
+second code path to keep in step — `TagValues` is the better home for that capability anyway, being
+composable and paged where the overload is neither.
+
 The count is a second statement rather than `count(*) over ()`, because a window function returns no
 row at all for a page past the end — and "page 9 of a 3-page result" is exactly when a tool most needs
 the real total. `a_page_past_the_end_still_reports_the_total` pins it.
@@ -4301,7 +4336,7 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher enrolls 50 of the 52 suites `JasperFx.Events.ComplianceTests` 2.65.0 ships — 516 tests.**
+**Fisher enrolls 50 of the 52 suites `JasperFx.Events.ComplianceTests` 2.67.0 ships — 530 tests.**
 `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
 gate is gone. See HANDOFF.md for the live scoreboard, which is machine-checked against a real run by
 `scripts/check_scoreboard.py`; what follows is the history and the mechanics.
