@@ -4903,6 +4903,16 @@ factory)`, over `Projections.StorageProviders` in the core.
   really "how you do X against SQLite" rather than "how Fisher stores X" should be written to be moved
   into Weasel.Sqlite later. See "Raw data access goes through Weasel.Sqlite first".
 - Database execution should go through `StoreOptions.ResiliencePipeline`.
+- ⚠️ **A test that builds an async daemon must `await daemon.StopAllAsync()` before disposing it**
+  (fisher#189). `IProjectionDaemon` is `IDisposable` only, so `Dispose()` does not await in-flight
+  shard work — and a shard's next poll **re-creates the database file the fixture has already
+  deleted**. That is how it was found: a full `Fisher.Tests` run left 12 files in the shared temp
+  directory, eleven of them from four classes that disposed a daemon without stopping it (the
+  twelfth was `db-patch`'s `.drop.sql` companion, which the test that wrote it never deleted). The
+  leaked file is the cheap visible symptom; the thing that matters is that a daemon still polling
+  after its test finished is doing unpredictable work while other tests run. `scripts/check_no_leaked_databases.py`
+  runs in CI after a green suite and holds it at zero — a runner starts with an empty temp
+  directory, so the check is exact rather than heuristic.
 - **Never call `SqliteConnection.ClearAllPools()`.** It disposes every pooled connection in the
   process, and xUnit runs test collections in parallel — one test's cleanup will take out another
   with `ObjectDisposedException: SQLitePCL.sqlite3`, intermittently enough to look like a flake.

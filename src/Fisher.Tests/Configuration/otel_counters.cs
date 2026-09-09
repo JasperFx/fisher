@@ -261,6 +261,7 @@ public class otel_counters : IAsyncLifetime
         using var daemon = await store.BuildProjectionDaemonAsync();
         await daemon.StartAllAsync();
         await daemon.WaitForNonStaleData(30.Seconds());
+        await daemon.StopAllAsync();
 
         For("fisher.write_lock.wait")
             .ShouldContain(x => x.Tags["fisher.write_lock.holder"] as string == "daemon");

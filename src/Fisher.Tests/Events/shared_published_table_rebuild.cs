@@ -80,6 +80,7 @@ public class shared_published_table_rebuild : IAsyncLifetime
         using var daemon = await _store.BuildProjectionDaemonAsync(logger: _logger);
         await daemon.StartAllAsync();
         await daemon.WaitForNonStaleData(TimeSpan.FromSeconds(20));
+        await daemon.StopAllAsync();
 
         return (landed, released);
     }
@@ -88,6 +89,7 @@ public class shared_published_table_rebuild : IAsyncLifetime
     {
         using var daemon = await _store.BuildProjectionDaemonAsync(logger: _logger);
         await daemon.RebuildProjectionAsync(projectionName, TimeSpan.FromSeconds(30), Token);
+        await daemon.StopAllAsync();
     }
 
     /// <summary>
@@ -185,6 +187,7 @@ public class shared_published_table_rebuild : IAsyncLifetime
             await daemon.StartAllAsync();
             await daemon.RewindSubscriptionAsync(nameof(ReleasedTally), Token, sequenceFloor: 0);
             await daemon.WaitForNonStaleData(TimeSpan.FromSeconds(20));
+            await daemon.StopAllAsync();
         }
 
         await using var after = _store.LightweightSession();

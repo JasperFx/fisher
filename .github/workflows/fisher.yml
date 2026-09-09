@@ -107,6 +107,19 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/check_source_is_text.py
 
+      # fisher#189. Every test database is a real file in the temp directory, and one surviving the
+      # run means something outlived the test that owned it -- the way it happened was an async
+      # daemon disposed without being stopped, whose next poll re-created the file the fixture had
+      # just deleted. A daemon still polling after its test finished is doing unpredictable work
+      # while other tests run, so the leaked file is the cheap visible symptom of a hazard that is
+      # otherwise invisible until a loaded host turns it into a failure.
+      #
+      # No `if:`, so it inherits "only when the steps before it succeeded", like the scoreboard check
+      # and unlike the NUL-byte one: a failing test may legitimately skip its own cleanup, so a leak
+      # reported over a red suite points at the wrong thing.
+      - name: The suites left no databases behind
+        run: python3 scripts/check_no_leaked_databases.py
+
       - name: Report results
         uses: dorny/test-reporter@v3
         if: ${{ !cancelled() }}
