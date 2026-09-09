@@ -47,8 +47,8 @@ Two different policies, each right for its caller.
 var page = await session.Events.QueryEventsAsync(new EventQuery
 {
     StreamId = streamId.ToString(),
-    EventTypes = ["OrderPlaced"],
-    From = cutoff,
+    EventTypeNames = ["OrderPlaced"],
+    TimestampFrom = cutoff,
     CorrelationId = correlationId,
     PageNumber = 1,
     PageSize = 50
@@ -77,6 +77,43 @@ is what the query shape asks for and what Polecat does.
 The count is a **second statement**, not `count(*) over ()` — a window function returns no row at all
 for a page past the end, and "page 9 of a 3-page result" is exactly when a tool most needs the real
 total.
+
+### Filtering by tags
+
+Two spellings, and they are alternatives rather than a combination — supplying both is an
+`ArgumentException`.
+
+`TagValues` is the lossy name/value form. Entries are **AND'd**: an event matches when it carries
+every named tag at the given value, and that selection is then AND'd with every other filter, so a
+tag query keeps paging and a truthful `TotalCount`.
+
+```cs
+var page = await session.Events.QueryEventsAsync(new EventQuery
+{
+    // Either the registered table suffix or the tag type's CLR name, case-insensitively.
+    TagValues = { ["shipment"] = shipmentId.ToString(), ["CarrierCode"] = "Acme" },
+    EventTypeNames = ["CargoLoaded"],
+    PageSize = 50
+});
+```
+
+`TagConditions` is the rich CLR-typed form, and its conditions are **OR'd**. Reach for it when the
+caller holds the tag types; reach for `TagValues` when it holds only a name — an HTTP query string, a
+CritterWatch console, the `event-query --tags` flag.
+
+::: tip
+**An unregistered tag name is refused, not answered empty.** "That tag type does not exist here" and
+"no event carries that tag" must not read alike, or a caller with a typo concludes the events are
+gone. The message lists what *is* registered.
+:::
+
+::: warning
+**A string-valued tag is matched case-insensitively, and pays a scan of its tag table for it.** A Guid
+or numeric tag has a canonical stored form, so the value you pass is normalised to it and the tag
+table's primary key serves the lookup. A string tag's stored text is your own casing, so the
+comparison carries `collate nocase` — and SQLite reaches an index only under the index's own
+collation. Note also that SQLite's `NOCASE` folds ASCII only.
+:::
 
 ## Querying event bodies
 
