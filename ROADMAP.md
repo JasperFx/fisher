@@ -5,10 +5,12 @@ architecture and the SQLite-specific decisions.
 
 Status: **two open issues, and neither is next-release work.**
 [#189](https://github.com/JasperFx/fisher/issues/189) is an unreproduced `Fisher.AspNetCore.Tests`
-failure — 12 of 36 on one loaded host, green on retry, with the failing test names never captured. Two
-concrete hazards have been removed since (the project's only wall-clock budget and its only
-sync-over-async call) and 35 runs under three- and four-way load have not reproduced it, so it stays
-open on evidence rather than on work outstanding.
+failure — 12 of 36 on one loaded host, green on retry, with the failing test names never captured.
+Three hazards have been removed since — the project's only wall-clock budget, its only
+sync-over-async call, and four `Fisher.Tests` classes that disposed an async daemon without stopping
+it — and **65 runs under three-, four- and twelve-way load have not reproduced it**, so it stays open
+on evidence rather than on work outstanding. The daemon one is the interesting find and it points
+*away* from this issue: the project that flaked was already stopping its daemons.
 [#109](https://github.com/JasperFx/fisher/issues/109) is the downstream half of
 [jasperfx#684](https://github.com/JasperFx/jasperfx/issues/684), and it got *more* blocked rather than
 less: analysis on that epic found the stage graph does not record enrichment edges, so the
