@@ -2164,6 +2164,29 @@ reserved and Fisher was passing null — so this is dialect SQL plus wiring, not
 - **The column is INTEGER, and that is load-bearing.** A TEXT affinity would sort revision 10 below
   revision 9 and turn the "must be greater" guard into nonsense.
 
+- ⚠️ **The expected revision is a parameter, never read back off the document** (fisher#228). It used
+  to be the latter — `Store<T>(T, int)` set `IRevisioned.Version` and the operation then read that
+  member back — which made **both** halves conditional on the document implementing `IRevisioned`. So
+  for a type that opted in through `Schema.For<T>().UseNumericRevisions()` the supplied revision was
+  dropped on the floor and the operation guarded on `0`, which means auto: `UpdateRevision(doc, 7)`
+  stored the next auto-increment value, a backwards write was accepted, and `TryUpdateRevision`
+  dropped nothing — **a silent lost update, in the method whose whole purpose is to prevent one.**
+  The two routes into numeric revisions are documented as equivalent, and only the interface one
+  worked.
+  - **The mode is read off the *operation*, not off the mapping.** Only the numeric operations
+    implement `Weasel.Storage.IRevisionedOperation`, so that is the one source which cannot disagree
+    with the statement actually being built; `DocumentMapping.UseNumericRevisions` would be a second
+    answer to the same question, free to drift from it.
+  - **`Insert` and `Update` keep the fallback and need nothing else**, having no explicit-revision
+    overload — which is why `CaptureExpectedRevision` still exists, with the revision optional.
+  - **No shared suite reaches this.** `NumericRevisionCompliance` is written against `IRevisioned`
+    throughout, because the store-agnostic document contract has no configuration surface for saying
+    "this type uses numeric revisions" any other way. Fisher's own coverage did not reach it either:
+    `a_type_configured_through_the_dsl_gets_the_same_column` asserted the column existed and
+    auto-incremented, and stopped there. The four `a_dsl_configured_type_*` tests are the
+    interface-route guard tests one for one, against a type that opted in the other way, so the
+    property under test is that the two routes agree.
+
 `0` means auto — increment whatever is stored — which is the sentinel the shared operations bind when
 no revision was named, and why every guard starts with `? = 0 or`.
 

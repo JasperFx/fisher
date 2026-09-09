@@ -364,6 +364,125 @@ public class numeric_revisions : IAsyncLifetime
         (await StoredRevisionAsync(licence.Id, "fi_doc_licence")).ShouldBe(1);
     }
 
+    /*
+     * fisher#228. The column was the only half of the DSL route that worked. Both the supplied
+     * revision and the operation's expected revision were read off the document through
+     * `document is IRevisioned`, which a DSL-configured type is not — so UpdateRevision(doc, 7)
+     * stored the next auto-increment value instead of 7, a backwards write was accepted, and
+     * TryUpdateRevision dropped nothing, which is a silent lost update.
+     *
+     * The tests below are the interface-route guard tests one for one, against a type that opted in
+     * the other way. That the two routes agree is the property; `a_type_configured_through_the_dsl_
+     * gets_the_same_column` above asserted only that the column exists, which is why this survived.
+     *
+     * No shared suite reaches it either: NumericRevisionCompliance is written against IRevisioned
+     * throughout, because the store-agnostic document contract has no configuration surface to say
+     * "this type uses numeric revisions" any other way.
+     */
+
+    [Fact]
+    public async Task a_dsl_configured_type_stores_the_revision_it_was_given()
+    {
+        await using var store = await DslStoreAsync();
+
+        var licence = new Licence { Id = Guid.NewGuid(), Holder = "Isaak" };
+
+        await using (var session = store.LightweightSession())
+        {
+            session.UpdateRevision(licence, 7);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        // 7, not the next auto-increment value.
+        (await StoredRevisionAsync(licence.Id, "fi_doc_licence")).ShouldBe(7);
+    }
+
+    [Fact]
+    public async Task a_dsl_configured_type_refuses_a_backwards_revision()
+    {
+        await using var store = await DslStoreAsync();
+
+        var licence = new Licence { Id = Guid.NewGuid(), Holder = "Isaak" };
+
+        await using (var session = store.LightweightSession())
+        {
+            session.UpdateRevision(licence, 7);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using (var session = store.LightweightSession())
+        {
+            session.UpdateRevision(new Licence { Id = licence.Id, Holder = "Stale" }, 3);
+
+            await Should.ThrowAsync<ConcurrencyException>(async () =>
+                await session.SaveChangesAsync(TestContext.Current.CancellationToken));
+        }
+
+        await using var check = store.LightweightSession();
+        (await check.LoadAsync<Licence>(licence.Id, TestContext.Current.CancellationToken))!
+            .Holder.ShouldBe("Isaak");
+    }
+
+    /// <summary>
+    ///     The one that was a silent lost update: <c>TryUpdateRevision</c> dropped nothing for a
+    ///     DSL-configured type, so it was indistinguishable from <c>UpdateRevision</c> and the stale
+    ///     write landed with no exception anywhere.
+    /// </summary>
+    [Fact]
+    public async Task a_dsl_configured_type_drops_a_stale_try_update()
+    {
+        await using var store = await DslStoreAsync();
+
+        var licence = new Licence { Id = Guid.NewGuid(), Holder = "Isaak" };
+
+        await using (var session = store.LightweightSession())
+        {
+            session.UpdateRevision(licence, 7);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using (var session = store.LightweightSession())
+        {
+            session.TryUpdateRevision(new Licence { Id = licence.Id, Holder = "Stale" }, 3);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var check = store.LightweightSession();
+        (await check.LoadAsync<Licence>(licence.Id, TestContext.Current.CancellationToken))!
+            .Holder.ShouldBe("Isaak");
+        (await StoredRevisionAsync(licence.Id, "fi_doc_licence")).ShouldBe(7);
+    }
+
+    /// <summary>
+    ///     A plain <c>Store</c> still means auto. The fix threads an explicit revision through as a
+    ///     parameter, and zero is what "no expectation" has to keep binding — for a type with no
+    ///     member to have read one off in the first place.
+    /// </summary>
+    [Fact]
+    public async Task a_dsl_configured_type_still_auto_increments_on_a_plain_store()
+    {
+        await using var store = await DslStoreAsync();
+
+        var licence = new Licence { Id = Guid.NewGuid(), Holder = "Isaak" };
+
+        for (var i = 0; i < 3; i++)
+        {
+            await using var session = store.LightweightSession();
+            session.Store(licence);
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        (await StoredRevisionAsync(licence.Id, "fi_doc_licence")).ShouldBe(3);
+    }
+
+    private async Task<DocumentStore> DslStoreAsync()
+    {
+        var store = StoreFor(options => options.Schema.For<Licence>().UseNumericRevisions());
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
+
+        return store;
+    }
+
     // ---- helpers ----
 
     private async Task<Permit> StorePermitAsync(string description)

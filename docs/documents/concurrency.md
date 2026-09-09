@@ -81,6 +81,14 @@ session.TryUpdateRevision(doc, 4);     // no exception if it loses
 
 `0` means **auto** — increment whatever is stored.
 
+::: tip
+**The two routes behave identically, but a DSL-configured type has no `Version` member to carry an
+expectation on.** So for one of those a plain `Store(doc)` always means auto, and guarding a write
+means naming the revision: `UpdateRevision(doc, 4)`. For an `IRevisioned` type the member is both the
+expectation and where the new revision is written back, which is what makes `Store(doc)` guard on its
+own — the sharp edge below.
+:::
+
 ### The sharp edge
 
 ::: warning

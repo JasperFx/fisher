@@ -31,41 +31,7 @@ internal partial class FisherSession
     ///     </para>
     /// </remarks>
     public void Store<T>(T document) where T : notnull
-    {
-        ArgumentNullException.ThrowIfNull(document);
-
-        var storage = StorageFor<T>();
-        storage.Store(this, document);
-
-        QueueOperation(CaptureExpectedRevision(storage.Upsert(document, this, TenantId), document));
-    }
-
-    /// <summary>
-    ///     Copy the revision the document carries onto the operation that is about to write it.
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         Under <c>ConcurrencyMode.Numeric</c> the revision is an <em>expectation</em>, and it
-    ///         travels on the document rather than as a parameter — which is why
-    ///         <see cref="Store{T}(T,int)" /> is just "set the member, then store". Zero means auto, so
-    ///         a document that carries no revision (a new one, or a type that does not implement
-    ///         <see cref="JasperFx.IRevisioned" />) is written unguarded.
-    ///     </para>
-    ///     <para>
-    ///         A no-op for every other concurrency mode: only the numeric operations implement
-    ///         <see cref="Weasel.Storage.IRevisionedOperation" />.
-    ///     </para>
-    /// </remarks>
-    private static Weasel.Storage.IStorageOperation CaptureExpectedRevision(
-        Weasel.Storage.IStorageOperation operation, object document)
-    {
-        if (operation is Weasel.Storage.IRevisionedOperation revisioned)
-        {
-            revisioned.Revision = document is JasperFx.IRevisioned carried ? carried.Version : 0;
-        }
-
-        return operation;
-    }
+        => StoreWithRevision(document, revision: null, ignoreConcurrencyViolation: false);
 
     /// <summary>
     ///     Store a document and require the stored row's revision to be below
@@ -76,26 +42,18 @@ internal partial class FisherSession
     ///     that revision or beyond. The document type has to be configured for numeric revisions, by
     ///     implementing <see cref="JasperFx.IRevisioned" /> or through
     ///     <c>Schema.For&lt;T&gt;().UseNumericRevisions()</c>; on any other type the revision is
-    ///     recorded on the document and then ignored, because there is no column to guard against.
+    ///     recorded on the document where there is a member to record it on, and then ignored, because
+    ///     there is no column to guard against.
     /// </remarks>
     public void Store<T>(T document, int revision) where T : notnull
-    {
-        ArgumentNullException.ThrowIfNull(document);
-
-        if (document is JasperFx.IRevisioned revisioned)
-        {
-            revisioned.Version = revision;
-        }
-
-        Store(document);
-    }
+        => StoreWithRevision(document, revision, ignoreConcurrencyViolation: false);
 
     /// <summary>
     ///     Store a document at an explicit revision. Marten spells the same operation this way.
     /// </summary>
     /// <inheritdoc cref="Store{T}(T,int)" path="/remarks" />
     public void UpdateRevision<T>(T document, int revision) where T : notnull
-        => Store(document, revision);
+        => StoreWithRevision(document, revision, ignoreConcurrencyViolation: false);
 
     /// <summary>
     ///     Store a document at an explicit revision, ignoring a revision miss rather than failing the
@@ -106,25 +64,102 @@ internal partial class FisherSession
     ///     unit of work still commits. Marten's <c>TryUpdateRevision</c>.
     /// </remarks>
     public void TryUpdateRevision<T>(T document, int revision) where T : notnull
+        => StoreWithRevision(document, revision, ignoreConcurrencyViolation: true);
+
+    /// <summary>
+    ///     Queue a document write, carrying the expected revision onto the operation that will guard on
+    ///     it.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>The expected revision is a parameter, not something read back off the document</b>
+    ///         (fisher#228). It used to be the latter, which meant both halves of the mechanism were
+    ///         gated on the document implementing <see cref="JasperFx.IRevisioned" /> — so a type that
+    ///         opted in through <c>Schema.For&lt;T&gt;().UseNumericRevisions()</c> had its supplied
+    ///         revision dropped on the floor and its operation guarded on <c>0</c>, which means auto.
+    ///         The two routes into numeric revisions are documented as equivalent and only the
+    ///         interface one worked; <c>TryUpdateRevision</c> for such a type dropped nothing, so a
+    ///         stale write landed silently — the exact lost update the guard exists to prevent.
+    ///     </para>
+    ///     <para>
+    ///         The mode is read off the <em>operation</em> rather than off the mapping, since only the
+    ///         numeric operations implement <see cref="Weasel.Storage.IRevisionedOperation" />. That is
+    ///         the one source that cannot disagree with the statement actually being built — a mapping
+    ///         lookup would be a second answer to the same question.
+    ///     </para>
+    ///     <para>
+    ///         <see cref="Weasel.Storage.IRevisionedOperation.Revision" /> drives both the SET and the
+    ///         guard in the shared numeric operations, so passing it is what makes
+    ///         <c>UpdateRevision(doc, 7)</c> store 7 <em>and</em> refuse a backwards write. Zero means
+    ///         auto — increment whatever is stored — which is what a plain <c>Store</c> passes, and
+    ///         what an <see cref="JasperFx.IRevisioned" /> document that has never been written
+    ///         carries.
+    ///     </para>
+    ///     <para>
+    ///         An explicit revision is still copied onto <see cref="JasperFx.IRevisioned.Version" />
+    ///         where the document has one, so the member and the guard cannot disagree about what this
+    ///         write expects.
+    ///     </para>
+    /// </remarks>
+    private void StoreWithRevision<T>(T document, int? revision, bool ignoreConcurrencyViolation)
+        where T : notnull
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        if (document is JasperFx.IRevisioned revisioned)
+        if (revision.HasValue && document is JasperFx.IRevisioned carried)
         {
-            revisioned.Version = revision;
+            carried.Version = revision.Value;
         }
 
         var storage = StorageFor<T>();
         storage.Store(this, document);
 
-        var operation = CaptureExpectedRevision(storage.Upsert(document, this, TenantId), document);
+        var operation = storage.Upsert(document, this, TenantId);
 
-        if (operation is Weasel.Storage.IRevisionedOperation revisionedOperation)
+        if (operation is Weasel.Storage.IRevisionedOperation revisioned)
         {
-            revisionedOperation.IgnoreConcurrencyViolation = true;
+            revisioned.IgnoreConcurrencyViolation = ignoreConcurrencyViolation;
         }
 
-        QueueOperation(operation);
+        QueueOperation(CaptureExpectedRevision(operation, document, revision));
+    }
+
+    /// <summary>
+    ///     Carry the expected revision onto the operation that is about to write the document.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <paramref name="revision" /> is the caller's explicit expectation where there was one,
+    ///         and null where the caller simply stored. Null falls back to whatever
+    ///         <see cref="JasperFx.IRevisioned.Version" /> the document carries, and to zero — auto,
+    ///         increment whatever is stored — for a document with no such member. That fallback is the
+    ///         whole of what <see cref="Insert{T}" /> and <see cref="Update{T}" /> need, neither having
+    ///         an explicit-revision overload.
+    ///     </para>
+    ///     <para>
+    ///         <b>Reading the caller's value off the document instead was fisher#228</b>: it made both
+    ///         halves of the mechanism conditional on the document implementing
+    ///         <see cref="JasperFx.IRevisioned" />, so a type that opted in through
+    ///         <c>Schema.For&lt;T&gt;().UseNumericRevisions()</c> guarded on zero and a stale write
+    ///         landed silently.
+    ///     </para>
+    ///     <para>
+    ///         A no-op for every other concurrency mode: only the numeric operations implement
+    ///         <see cref="Weasel.Storage.IRevisionedOperation" />, which is also why the mode is read
+    ///         off the operation rather than off the mapping — that is the one source which cannot
+    ///         disagree with the statement being built.
+    ///     </para>
+    /// </remarks>
+    private static Weasel.Storage.IStorageOperation CaptureExpectedRevision(
+        Weasel.Storage.IStorageOperation operation, object document, int? revision = null)
+    {
+        if (operation is Weasel.Storage.IRevisionedOperation revisioned)
+        {
+            revisioned.Revision =
+                revision ?? (document is JasperFx.IRevisioned carried ? carried.Version : 0);
+        }
+
+        return operation;
     }
 
     private Linq.FisherQueryProvider? _queryProvider;
