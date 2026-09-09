@@ -240,7 +240,11 @@ public class projection_side_effects : IAsyncLifetime
 
         try
         {
-            await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+            // fisher#232. Waiting on non-staleness here was a real intermittent: the progression row
+            // is written INSIDE the batch's transaction, so non-stale becomes true strictly before
+            // AfterCommitAsync runs, and the window between them is the flake. Wait on the hook's own
+            // signal — the same rule the subscription listener already follows.
+            await outbox.AfterCommitted.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             outbox.Batch.ShouldNotBeNull();
             outbox.Batch!.Published.ShouldContain(x => x is QuestFinished);
@@ -262,6 +266,8 @@ public class projection_side_effects : IAsyncLifetime
 /// </summary>
 internal sealed class RecordingOutbox : IMessageOutbox
 {
+    private readonly TaskCompletionSource _afterCommit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public RecordingBatch? Batch { get; private set; }
 
     /// <summary>
@@ -270,9 +276,22 @@ internal sealed class RecordingOutbox : IMessageOutbox
     /// </summary>
     public Func<Task<long>>? Probe { get; set; }
 
+    /// <summary>
+    ///     Completes once a batch's <c>AfterCommitAsync</c> has run — what a daemon test has to wait on
+    ///     rather than on non-staleness (fisher#232).
+    /// </summary>
+    /// <remarks>
+    ///     The two are not the same event and the ordering is guaranteed the wrong way round:
+    ///     <c>FisherProjectionBatch.ExecuteAsync</c> writes the progression row inside the batch's
+    ///     transaction and calls <c>AfterCommitAsync</c> after it commits, so non-staleness is true
+    ///     strictly first. It lives on the outbox rather than on the batch because the batch is created
+    ///     lazily, so a test has nothing to await until the daemon has already run.
+    /// </remarks>
+    public Task AfterCommitted => _afterCommit.Task;
+
     public ValueTask<IMessageBatch> CreateBatch(IDocumentSession session)
     {
-        Batch ??= new RecordingBatch(Probe);
+        Batch ??= new RecordingBatch(Probe, () => _afterCommit.TrySetResult());
         return new ValueTask<IMessageBatch>(Batch);
     }
 }
@@ -282,8 +301,13 @@ internal sealed class RecordingBatch : IMessageBatch
     private readonly List<object> _published = [];
     private readonly List<string> _hooks = [];
     private readonly Func<Task<long>>? _probe;
+    private readonly Action? _afterCommit;
 
-    internal RecordingBatch(Func<Task<long>>? probe) => _probe = probe;
+    internal RecordingBatch(Func<Task<long>>? probe, Action? afterCommit = null)
+    {
+        _probe = probe;
+        _afterCommit = afterCommit;
+    }
 
     public long? VisibleAtBeforeCommit { get; private set; }
 
@@ -347,6 +371,9 @@ internal sealed class RecordingBatch : IMessageBatch
         {
             _hooks.Add("after");
         }
+
+        // Signalled last, so a test the signal releases sees every field this hook set.
+        _afterCommit?.Invoke();
     }
 }
 
