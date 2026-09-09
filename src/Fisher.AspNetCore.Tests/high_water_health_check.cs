@@ -159,9 +159,21 @@ public class high_water_health_check : IAsyncLifetime
     ///         <c>last_updated</c> on an idle cycle.
     ///     </para>
     ///     <para>
-    ///         The idle wait is deliberately longer than the staleness threshold: without the liveness
-    ///         touch, <c>last_updated</c> would still hold the time of that one advance and the check
-    ///         would report a healthy daemon as stopped.
+    ///         <b>The discriminating assertion is that <c>last_updated</c> moved with nothing appended</b>
+    ///         — that <em>is</em> the liveness touch, observed directly. The health check's verdict
+    ///         beneath it is a corollary and its threshold is deliberately generous, because a tight one
+    ///         would not add discrimination: at this point in the test the mark itself advanced moments
+    ///         ago, so the check answers Healthy on that alone whether or not the touch ever happened.
+    ///         The unhealthy direction is covered by
+    ///         <see cref="a_stopped_daemon_is_unhealthy" />, which moves the clock instead of waiting.
+    ///     </para>
+    ///     <para>
+    ///         <b>Written as "wait until it moves", never as "sleep, then require it to be recent"</b>
+    ///         (fisher#189). It used to sleep two seconds and then require <c>last_updated</c> to be
+    ///         under one second old — a one-second budget for a 200ms poll cycle, which is the only
+    ///         tight wall-clock assumption anywhere in this project and exactly the shape that turns
+    ///         into an intermittent on a host running several suites at once. Polling for the change
+    ///         has no budget at all: a loaded host makes it slower, not wrong.
     ///     </para>
     /// </remarks>
     [Fact]
@@ -171,12 +183,63 @@ public class high_water_health_check : IAsyncLifetime
         await AppendAsync();
         await RunDaemonAsync();
 
-        // Nothing is appended here: the mark cannot move, only the poll loop can prove itself.
-        await Task.Delay(TimeSpan.FromSeconds(2), Token);
+        var advanced = await LastUpdatedAsync();
+        advanced.ShouldNotBeNull();
 
-        var result = await CheckAsync(TimeSpan.FromSeconds(1));
+        // Nothing is appended from here on: the mark cannot move, so only the idle poll loop can
+        // change this value.
+        var touched = await WaitForLivenessTouchAsync(advanced!);
+
+        touched.ShouldNotBe(advanced);
+
+        var result = await CheckAsync(TimeSpan.FromSeconds(30));
 
         result.Status.ShouldBe(HealthStatus.Healthy);
+    }
+
+    /// <summary>
+    ///     The high-water row's <c>last_updated</c>, read over a connection of the test's own.
+    /// </summary>
+    private async Task<string?> LastUpdatedAsync()
+    {
+        await using var connection = new SqliteConnection(_database.ConnectionString);
+        await connection.OpenAsync(Token);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select last_updated from fi_event_progression where name = 'HighWaterMark'";
+
+        var value = await command.ExecuteScalarAsync(Token);
+
+        return value is null or DBNull ? null : (string)value;
+    }
+
+    /// <summary>
+    ///     Poll until the idle agent re-stamps <c>last_updated</c>, or fail naming what was waited for.
+    /// </summary>
+    /// <remarks>
+    ///     The timeout is a backstop against a hang, not a budget the assertion depends on: a slow host
+    ///     takes longer to get here and still passes, where "sleep N then require an age under M" turns
+    ///     the same slowness into a failure.
+    /// </remarks>
+    private async Task<string> WaitForLivenessTouchAsync(string original)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var current = await LastUpdatedAsync();
+
+            if (current is not null && current != original)
+            {
+                return current;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50), Token);
+        }
+
+        throw new TimeoutException(
+            $"The high-water agent never re-stamped last_updated, which held '{original}' throughout. "
+            + "Nothing was appended, so the idle liveness touch is the only thing that could have moved it.");
     }
 
     /// <summary>

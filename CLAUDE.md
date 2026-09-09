@@ -4774,6 +4774,22 @@ returning it goes from "parse JSON, build an object, serialize an object" to "co
 - Tested against a `DefaultHttpContext` with a `MemoryStream` body rather than through a test host: an
   `IResult`'s whole job is what it writes to a response, and a host would add a pipeline none of the
   assertions are about.
+- ⚠️ **No test in this project may hold a wall-clock budget, and none does** (fisher#189). The suite
+  once failed 12 of 36 on a loaded host and went green on retry, which sent a hunt for timing
+  assumptions; the audit found exactly one — a two-second sleep followed by a demand that
+  `last_updated` be under **one** second old, for a 200 ms poll cycle. It is now "poll until the value
+  moves", which a slow host makes slower rather than wrong. Everything else already waited 30 seconds
+  or moved a `TimeProvider`, and that is the standard to hold new tests to.
+  - **The one `GetAwaiter().GetResult()` went with it.** Blocking a thread-pool thread on async I/O is
+    how a saturated pool turns a passing test into a transient failure — the blocked thread waits for
+    a continuation that needs a pool thread of its own. It was the only such call in the repository.
+  - ⚠️ **Neither is a proven cause, and the shape of the evidence points elsewhere.** 35 runs under
+    three- and four-way load have not reproduced it (`scripts/repro_aspnetcore_flake.sh`). Every class
+    here builds its store and runs the schema migration in `InitializeAsync`, so one exception there
+    fails that whole class at once — and "12 of 36, transiently, green on retry" fits `11 + 1`, one
+    class plus a straggler, far better than a dozen independent flakes do. The harness now tallies
+    failures per class for exactly that reason: a class at its full size means the fixture died, and
+    that is a different investigation from a flaky assertion.
 
 ### `Fisher.EntityFrameworkCore` (fisher#50)
 
