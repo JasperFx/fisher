@@ -206,6 +206,120 @@ search cannot tell which one it meant; Fisher takes the other branch, because a 
 no index and so with one there is nothing to disambiguate. Put every searchable member in the one
 declaration.
 
+## Relevance ordering
+
+A search is a predicate, so on its own it says only whether a document matched. To put the best match
+first, order by relevance:
+
+<!-- snippet: sample_full_text_relevance -->
+<a id='snippet-sample_full_text_relevance'></a>
+```cs
+var best = await session.Query<SearchableArticle>()
+    .Where(x => x.PlainTextSearch("quick brown fox"))
+    .OrderByRelevance()
+    .Take(10)
+    .ToListAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/full_text_samples.cs#L70-L76' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_full_text_relevance' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+`OrderByRelevance` is FTS5's `bm25()` over the index the query's predicate searched. It reads
+best-first because that is what it does: `bm25()` scores a better match more *negative*, so a raw
+ascending sort is already the right way round and `OrderByRelevanceDescending` is the rare worst-first
+case, named so nobody has to discover the sign.
+
+It is an ordering term like any other, so it composes. `OrderByRelevance().ThenByDescending(x =>
+x.Published)` breaks ties by date; `OrderBy(x => x.Category).ThenByRelevance()` ranks within each
+category; paging, `Count()` and an ordinary predicate in the same `Where` all still work. All four
+members of the family are there: `OrderByRelevance`, `OrderByRelevanceDescending`, `ThenByRelevance`
+and `ThenByRelevanceDescending`.
+
+Marten's counterpart is `OrderByTextRank(term, TextSearchFunction)`, which repeats the search term
+and names the query function because PostgreSQL's `ts_rank` needs both again. FTS5's `bm25()` reads
+its match from the `MATCH` it is attached to, so Fisher's takes neither.
+
+### Column weights
+
+`bm25()` weights every indexed column at 1.0 by default. Pass one weight per column, **in the order the
+index declared its members**, to change that:
+
+<!-- snippet: sample_full_text_relevance_weights -->
+<a id='snippet-sample_full_text_relevance_weights'></a>
+```cs
+// The index declared Title then Body, so a Title hit counts for ten Body hits
+var best = await session.Query<SearchableArticle>()
+    .Where(x => x.PlainTextSearch("wombat"))
+    .OrderByRelevance(10.0, 1.0)
+    .ThenByDescending(x => x.Author)
+    .ToListAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/full_text_samples.cs#L83-L90' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_full_text_relevance_weights' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+Marten expresses the same idea at index-declaration time with `WeightedFullTextIndex` and its A–D
+weight classes; FTS5 puts it on the query, so it is an argument here and a query can weight the same
+index differently from another. Supplying a different number of weights than the index has columns
+is refused rather than padded.
+
+## Snippets and highlights
+
+Two projections read text *out of* the match. Both are only meaningful inside a `Select` on a query
+that carries a full-text predicate, because the value is computed by the match and nothing on the
+document holds it.
+
+`Snippet()` is FTS5's `snippet()`: the best-matching fragment, with the matched terms marked and the
+rest elided.
+
+<!-- snippet: sample_full_text_snippet -->
+<a id='snippet-sample_full_text_snippet'></a>
+```cs
+var hits = await session.Query<SearchableArticle>()
+    .Where(x => x.PlainTextSearch("corrosion"))
+    .OrderByRelevance()
+    .Select(x => new { x.Id, x.Title, Extract = x.Snippet() })
+    .ToListAsync();
+
+// Extract: "…the <b>corrosion</b> on the lower hull was…"
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/full_text_samples.cs#L97-L105' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_full_text_snippet' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+It picks whichever indexed column matched best. The defaults are `<b>`/`</b>` around each matched
+term, `…` where text was cut, and a 32-token budget; the second overload takes all four, and FTS5 caps
+the budget at 64 tokens:
+
+<!-- snippet: sample_full_text_snippet_markers -->
+<a id='snippet-sample_full_text_snippet_markers'></a>
+```cs
+var hits = await session.Query<SearchableArticle>()
+    .Where(x => x.PlainTextSearch("corrosion"))
+    .Select(x => new { x.Id, Extract = x.Snippet("[", "]", " … ", 16) })
+    .ToListAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/full_text_samples.cs#L112-L117' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_full_text_snippet_markers' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+`Highlight(column)` is FTS5's `highlight()`: one indexed column **in full**, with the matched terms
+marked. The column is named as the member is, and it is required:
+
+<!-- snippet: sample_full_text_highlight -->
+<a id='snippet-sample_full_text_highlight'></a>
+```cs
+var hits = await session.Query<SearchableArticle>()
+    .Where(x => x.PlainTextSearch("corrosion"))
+    .Select(x => new { x.Id, Title = x.Highlight("Title", "<mark>", "</mark>") })
+    .ToListAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/full_text_samples.cs#L124-L129' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_full_text_highlight' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+It is required because FTS5's own "whichever column matched" sentinel returns an empty string from
+`highlight()` rather than an error, and "the first column" would be silently wrong whenever the match
+was elsewhere. A column the index does not have is refused with the indexed members named.
+
+Both project alongside ordinary members, both compose with relevance ordering, and a marker
+containing a quote is escaped rather than spliced into the SQL.
+
 ## What is refused
 
 | | Why |
@@ -217,24 +331,18 @@ declaration.
 | `WebStyleSearch` with only exclusions | FTS5's `NOT` narrows a result set rather than negating one, so there is nothing to narrow |
 | A second, different index on one type | A search operator names no index |
 | An operator called on anything but the query's own parameter | The search would silently run against the queried type's index instead |
+| `OrderByRelevance` without a full-text predicate, or against a negated one, or with two matches in the query | `bm25()` is only legal where its table is the subject of exactly one `MATCH`; anything else is a SQLite error a long way from the call site, or a rank over the wrong match |
+| Column weights that do not number the index's columns | Padding or truncating would weight the wrong member silently |
+| `Snippet()` or `Highlight()` outside a `Select`, or without a full-text predicate | There is no match to read a value from |
+| `Highlight()` naming a member the index does not cover | FTS5 would answer with an empty string, which reads as "no match" |
 
 Every one of them throws `BadLinqExpressionException` naming the operator. Each replaces an answer
 that would have been an empty result — which for a search is indistinguishable from success.
 
 ## Not supported
 
-- **No relevance ordering, snippets or highlights** —
-  [fisher#220](https://github.com/JasperFx/fisher/issues/220). FTS5 has `bm25()`, `snippet()` and
-  `highlight()`, and all three read a value *out of* the match rather than filtering on it. The
-  predicate here is a sub-select precisely so that it composes with everything without the statement
-  builder learning about full text; a rank has to reach the `ORDER BY` and a snippet the select list,
-  which needs the index genuinely joined. That is a second statement shape and every wrap site taught
-  about it — filed as its own node rather than half-built. Marten's `TextRankOrdering` and
-  `OrderByNgramRank` have no counterpart yet.
-- **No per-column weighting**, for the same reason: `bm25()`'s weights are the thing there is nothing
-  to weight while there is no ranking. Columns are indexed in declaration order, which is the order
-  those weights would apply in.
 - **No full-text index on an event body.** `QueryEventDataAsync` searches event bodies with the
   ordinary string operators; the index is a document-storage feature.
-- **Reads are not ranked or scored at all** — a search is a predicate, so a document either matches or
-  does not.
+- **No `OrderByNgramRank`.** Marten ranks trigram matches with its own similarity function; FTS5's
+  `bm25()` runs over a `Trigram` index like any other, so `OrderByRelevance` after `NgramSearch` is the
+  equivalent and there is no separate operator.
