@@ -158,7 +158,7 @@ than silently leaving the destination empty.
 Fisher has [full-text search](/documents/querying/linq/full-text) over SQLite's FTS5, with all six of
 Marten's operators — `Search`, `PlainTextSearch`, `PhraseSearch`, `WebStyleSearch`, `PrefixSearch`
 and `NgramSearch` — plus `[FullTextIndex]` and `Schema.For<T>().FullTextIndex(...)`. Four things
-differ from Marten, and the first two are what a ported line needs edited for:
+differ from Marten, and all but the third are what a ported line needs edited for:
 
 - **No `regConfig` argument.** Marten's overloads take a PostgreSQL text-search configuration name;
   FTS5 has no equivalent, and its nearest relative — the tokenizer — is fixed on the *index* rather
@@ -171,10 +171,13 @@ differ from Marten, and the first two are what a ported line needs edited for:
 - **`NgramSearch` needs a `Trigram` index and the word operators refuse one.** Marten reaches ngram
   search through a separate index type and has the same requirement; what is different is that Fisher
   refuses the mismatch by name in both directions rather than returning nothing.
-- **No relevance ordering, snippets or highlights.** FTS5 has `bm25()`, `snippet()` and
-  `highlight()`, and none of them is exposed yet — a search is a predicate, so a document either
-  matches or does not. Marten's `TextRankOrdering` and `OrderByNgramRank` have no counterpart
-  ([fisher#220](https://github.com/JasperFx/fisher/issues/220)).
+- **Relevance is `OrderByRelevance()`, not `OrderByTextRank(term, function)`.** FTS5's `bm25()`
+  reads its match from the query's own `MATCH`, so Fisher's ordering repeats neither the term nor the
+  search function. Column weights are a query argument (`OrderByRelevance(10.0, 1.0)`, in index
+  declaration order) rather than Marten's `WeightedFullTextIndex` at declaration time, and
+  `OrderByNgramRank` has no counterpart because `bm25()` ranks a `Trigram` index like any other.
+  `Snippet()` and `Highlight(column)` project FTS5's `snippet()` and `highlight()` inside a `Select`.
+  See [Full-Text Search](/documents/querying/linq/full-text).
 
 The index itself is an external-content FTS5 table kept in step by database triggers, so it survives
 writes that never went through Fisher — and it is created and populated by the ordinary schema
