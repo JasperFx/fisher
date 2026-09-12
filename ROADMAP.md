@@ -3,7 +3,19 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **two open issues, and neither is next-release work.**
+Status: **four open issues. Two are real work and neither is blocked; two are not next-release work.**
+
+The two that are work both came out of 1.4.0 and are recorded there rather than discovered later.
+[#243](https://github.com/JasperFx/fisher/issues/243) is `IEventStore.GetProjectionStatusesAsync`,
+which Fisher answers at no scope — so a store-agnostic console renders a projections page for Marten
+and Polecat and an error for Fisher. It was left out of #240 deliberately: the gap is shard *state*,
+which `fi_event_progression` does not know, and Polecat's answer reports every shard as `"Stopped"`
+(polecat#200). Filling the slot that way is the fisher#120 failure rather than a fix for it.
+[#245](https://github.com/JasperFx/fisher/issues/245) is a question with evidence rather than a
+confirmed bug, and wants a failing test before any code: Weasel 9.32.0's `MappedVersionFor` /
+`MappedRevisionFor` seam comes from marten#5372, and Fisher has the same mapping surface. The four
+cases to compare are in the issue.
+
 [#189](https://github.com/JasperFx/fisher/issues/189) is an unreproduced `Fisher.AspNetCore.Tests`
 failure — 12 of 36 on one loaded host, green on retry, with the failing test names never captured.
 Three hazards have been removed since — the project's only wall-clock budget, its only
