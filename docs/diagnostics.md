@@ -205,10 +205,48 @@ tenant *is* the file, so naming a tenant resolves the database and adds no `wher
 an unknown tenant throws rather than falling back to the default file.
 :::
 
-Two reads on that interface Fisher does not answer at any scope, and the database overload changes
-nothing for either: the dictionary-shaped `QueryByTagsAsync` — [`EventQuery.TagValues`](/events/dcb)
-is the composable, paged home for that capability here — and `GetProjectionStatusesAsync`
-([fisher#243](https://github.com/JasperFx/fisher/issues/243)). Both refuse by name.
+One read on that interface Fisher does not answer at any scope, and the database overload changes
+nothing for it: the dictionary-shaped `QueryByTagsAsync`. [`EventQuery.TagValues`](/events/dcb) is the
+composable, paged home for that capability here, so there is no second code path to keep in step.
+
+### Projection statuses, and what `State` can honestly say
+
+`GetProjectionStatusesAsync` carries the same three scopes, and answers the snapshot a monitoring
+console's projections page renders before it subscribes to `ShardStatesChanged` for live updates.
+
+```cs
+foreach (var projection in await eventStore.GetProjectionStatusesAsync(ct))
+{
+    foreach (var shard in projection.Shards)
+    {
+        Console.WriteLine($"{shard.ShardName}: {shard.State} " +
+                          $"{shard.ProcessedSequence}/{shard.EventStoreSequence}");
+    }
+}
+```
+
+Four of `ShardStatus`'s five fields come off the database. The fifth — `State` — is a fact about the
+**running daemon**, which `fi_event_progression` does not know, and that shapes the whole feature:
+
+- **A shard's state is `Unknown` when no daemon in this process can be asked**, never `Stopped`. A
+  store under `DaemonMode.ExternallyManaged`, a console in another process, and a hand-built store all
+  genuinely cannot see the daemon. `Stopped` there is not a partial answer but a wrong one — it is
+  exactly what a real stopped shard reports, and it is the reading an operator acts on.
+- **With a daemon this process hosts**, the state is its tracker's: `Running`, `Paused`, `Stopped` or
+  `Failed`, with the latched exception's message in `Error`.
+- **`EventStoreSequence` is `max(seq_id)`, not the persisted high-water row.** The two agree on a store
+  whose daemon is current, and differ exactly when it matters — the row is where the daemon *got to*,
+  so reading it would make every shard on a stopped daemon look caught up.
+- **An inline or live projection is reported with an empty `Shards` list rather than omitted**, and its
+  `Lifecycle` is what says why the list is empty.
+
+::: warning
+The store-global overload **refuses** on a database-per-tenant store, where the two single-stream reads
+above also refuse — but for a sharper reason. Progression rows are per database, and `ShardStatus`
+carries no database or tenant field, so N databases' rows would come back as N entries per shard with
+the *same* `ShardName` and different sequences, which a consumer cannot attribute. Name a tenant or a
+database.
+:::
 
 ::: tip
 A [secondary store's](/configuration/multiple-stores) marker proxy is *not* an `IEventStore` —

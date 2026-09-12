@@ -477,7 +477,7 @@ public partial class DocumentStore : IEventStore
         return database.TenantId is null ? rows[0] : rows[0] with { TenantId = database.TenantId };
     }
 
-    // ---- the two reads Fisher answers at no scope ----
+    // ---- the one read Fisher answers at no scope ----
 
     /// <summary>
     ///     Refused at every scope, so the database argument changes nothing — and says so.
@@ -497,22 +497,6 @@ public partial class DocumentStore : IEventStore
         ArgumentNullException.ThrowIfNull(database);
 
         return ((IEventStore)this).QueryByTagsAsync(tags, tenantId, ct);
-    }
-
-    /// <inheritdoc cref="IEventStore.QueryByTagsAsync(IEventDatabase, IReadOnlyDictionary{string, string}, string, CancellationToken)" />
-    /// <remarks>
-    ///     Same reasoning as <c>QueryByTagsAsync</c> above, for a read Fisher has not grown yet rather
-    ///     than one it declines: a per-shard status snapshot wants the running daemon's shard states,
-    ///     not just <c>fi_event_progression</c>'s sequences, and reporting every shard as "Stopped" to
-    ///     fill the slot would be the failure fisher#120 records rather than a fix for it. Tracked as
-    ///     fisher#243; until then the honest answer is the one the interface's own default gives.
-    /// </remarks>
-    Task<IReadOnlyList<ProjectionStatus>> IEventStore.GetProjectionStatusesAsync(IEventDatabase database,
-        string? tenantId, CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(database);
-
-        return ((IEventStore)this).GetProjectionStatusesAsync(tenantId, ct);
     }
 
     private static string WhereTenant(string? tenantPredicate)

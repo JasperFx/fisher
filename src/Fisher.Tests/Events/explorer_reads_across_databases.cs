@@ -52,11 +52,47 @@ public class explorer_reads_across_databases : IAsyncLifetime
             await session.SaveChangesAsync(Token);
         }
 
+        await WaitForTheClockToMoveAsync();
+
         await using (var session = _store.LightweightSession("south"))
         {
             session.Events.StartStream<Quest>(_south, new QuestStarted("Chart the Solent"),
                 new MemberJoined("Darwin"));
             await session.SaveChangesAsync(Token);
+        }
+    }
+
+    /// <summary>
+    ///     Block until SQLite's own clock has left the millisecond north's row was stamped in.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Without this, <c>the_count_bounds_the_merged_listing_and_the_newest_wins</c> is a real
+    ///         intermittent</b>, and it was caught behaving like one: green on its own, red once in the
+    ///         full class. <c>fi_streams.timestamp</c> is millisecond-precision, two back-to-back
+    ///         appends land inside one millisecond on a warm machine, and
+    ///         <c>OrderByDescending(LastUpdatedAt)</c> has no defined tiebreak — so "the newest wins"
+    ///         becomes a coin flip exactly when the test is fastest.
+    ///     </para>
+    ///     <para>
+    ///         <b>Polled against the column's own clock rather than slept for</b>, which is the
+    ///         discipline <c>modified_since_and_before</c> established: a client-sampled bound compares
+    ///         two clocks that are only incidentally the same one, and a fixed delay is a wall-clock
+    ///         assumption that a loaded host can still lose. This asks the database what time it thinks
+    ///         it is, which is the value that will be written, and returns the moment it has changed.
+    ///     </para>
+    /// </remarks>
+    private async Task WaitForTheClockToMoveAsync()
+    {
+        await using var connection = await _store.Tenancy.DatabaseFor("north").OpenConnectionAsync(Token);
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"select {SqliteTimestamp.NowExpression};";
+
+        var start = (string)(await command.ExecuteScalarAsync(Token))!;
+
+        while ((string)(await command.ExecuteScalarAsync(Token))! == start)
+        {
+            await Task.Yield();
         }
     }
 
@@ -262,6 +298,51 @@ public class explorer_reads_across_databases : IAsyncLifetime
     {
         await Should.ThrowAsync<UnknownTenantException>(
             () => TheExplorer.GetRecentStreamsAsync(10, "east", Token));
+    }
+
+    // ---- projection statuses (fisher#243) ----
+
+    /// <summary>
+    ///     A store-global status snapshot is refused once the store spans more than one file.
+    /// </summary>
+    /// <remarks>
+    ///     <b>The refusal here is sharper than the stream lookups', not merely consistent with them.</b>
+    ///     Those return one answer over an id that is unique within a database; this one could in
+    ///     principle concatenate — <c>Advanced.AllProjectionProgress</c> does exactly that and documents
+    ///     why. What stops it is that <c>ShardStatus</c> has no database or tenant field, so N
+    ///     databases' rows come back as N entries per shard with the <em>same</em> ShardName and
+    ///     different sequences, which a consumer cannot attribute. <c>ShardState</c> carries a TenantId,
+    ///     which is what lets the other method get away with it.
+    /// </remarks>
+    [Fact]
+    public async Task store_global_projection_statuses_are_refused_on_a_multi_database_store()
+    {
+        var ex = await Should.ThrowAsync<NotSupportedException>(
+            () => TheExplorer.GetProjectionStatusesAsync(Token));
+
+        ex.Message.ShouldContain("StaticMultiple");
+        ex.Message.ShouldContain("tenantId");
+        ex.Message.ShouldContain("database");
+    }
+
+    /// <remarks>
+    ///     And both scoped forms answer, which is what makes the refusal a signpost rather than a dead
+    ///     end. Each tenant's file has its own <c>fi_event_progression</c>, so these are not filters
+    ///     over a store-global answer — they are the answer, once per database.
+    /// </remarks>
+    [Fact]
+    public async Task the_scoped_status_reads_answer_per_database()
+    {
+        var byTenant = await TheExplorer.GetProjectionStatusesAsync("north", Token);
+        var byDatabase = await TheExplorer.GetProjectionStatusesAsync(await DatabaseFor("north"), null, Token);
+
+        byTenant.Select(x => x.ProjectionName).ShouldBe(byDatabase.Select(x => x.ProjectionName));
+
+        // No daemon is hosted here, so the state is Unknown rather than a guess at Stopped.
+        foreach (var shard in byTenant.SelectMany(x => x.Shards))
+        {
+            shard.State.ShouldBe("Unknown");
+        }
     }
 
     // ---- what a monitoring tool is told about the shape of the store ----
