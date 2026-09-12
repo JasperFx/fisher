@@ -42,6 +42,8 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
     protected FisherDocumentStorage(DocumentMapping mapping, DocumentStorageDescriptor<TDoc, TId> descriptor)
     {
         _mapping = mapping;
+
+        ResolveVersionGetter();
         _descriptor = descriptor;
 
         var readColumns = new List<string>();
@@ -268,6 +270,45 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
 
     public Guid? VersionFor(TDoc document, IStorageSession session)
         => session.Versions.VersionFor<TDoc, TId>(Identity(document));
+
+    /// <summary>
+    ///     The Guid version the document itself carries, or <see langword="null" /> when the mapping has
+    ///     no version member to read (fisher#245, weasel#590).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>This is what lets a guarded write cross a session boundary.</b> Fisher's optimistic
+    ///         guard is fed from <c>IStorageSession.Versions</c> — what <em>this session read</em> — so
+    ///         a document loaded in one session and stored through another had no entry, and every such
+    ///         write failed its guard. Correct about staleness and useless for the workflow optimistic
+    ///         concurrency exists for. See <c>FisherSession.SeedExpectedVersion</c> for the other half.
+    ///     </para>
+    ///     <para>
+    ///         <b>One member covers both ways of declaring a version</b>, because
+    ///         <see cref="Metadata.DocumentMetadata" /> already maps <c>IVersioned.Version</c> onto this
+    ///         column by convention — the same thing Marten's <c>VersionedPolicy</c> does. So the
+    ///         interface route and <c>Metadata(m =&gt; m.Version.MapTo(...))</c> arrive here identically,
+    ///         which is the asymmetry marten#5372 was and the reason this is a mapping read rather than
+    ///         a type test on <c>IVersioned</c>.
+    ///     </para>
+    ///     <para>
+    ///         The getter is compiled once per storage instance and only when a member is mapped, so a
+    ///         type with no version member costs one null check per store.
+    ///     </para>
+    /// </remarks>
+    public Guid? MappedVersionFor(TDoc document) => _versionGetter?.Invoke(document);
+
+    private Func<TDoc, Guid>? _versionGetter;
+
+    private void ResolveVersionGetter()
+    {
+        var member = _mapping.Metadata.Version.Member;
+
+        if (member is not null)
+        {
+            _versionGetter = JasperFx.Core.Reflection.LambdaBuilder.Getter<TDoc, Guid>(member);
+        }
+    }
 
     public abstract void Store(IStorageSession session, TDoc document);
     public abstract void Store(IStorageSession session, TDoc document, Guid? version);

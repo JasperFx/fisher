@@ -100,6 +100,45 @@ nothing. The converse does not hold — `UseOptimisticConcurrency()` alone maps 
 is no member named.
 :::
 
+### The version guard crosses session boundaries
+
+A mapped version member is not only read back — it is what a **guarded write in a later session**
+checks against. Load in one request, save in the next, and the version the document carries is the
+expectation the write is guarded on:
+
+```cs
+// Request 1
+Order order;
+await using (var session = store.LightweightSession())
+{
+    order = await session.LoadAsync<Order>(id);
+}
+
+// Request 2 — a different session, and the guard still applies
+order.Status = "shipped";
+await using (var session = store.LightweightSession())
+{
+    session.Store(order);
+    await session.SaveChangesAsync();   // ConcurrencyException if somebody else moved the row
+}
+```
+
+Both ways of declaring a version behave identically here, because `IVersioned.Version` is mapped onto
+the same column by convention — so a member declared through `Metadata(m => m.Version.MapTo(...))` is
+read exactly as the marker interface is.
+
+::: warning
+**Before Fisher 1.5.0 this threw** ([#245](https://github.com/JasperFx/fisher/issues/245)). The guard
+was fed only from what the *current* session had read, so a document loaded elsewhere had no recorded
+expectation and every cross-session write failed — safe about stale writes, and unusable for the
+workflow optimistic concurrency exists for. If you worked around it by reloading inside the writing
+session, that still works and is now unnecessary.
+:::
+
+A successful write moves the instance's own version member on, so the same instance can be stored
+again without tripping its own guard. `Insert` is deliberately not guarded — it writes a new row, so
+there is no stored version to check against.
+
 The interfaces are resolved through the interface map, not by name, so an explicitly implemented
 `ISoftDeleted.Deleted` is found — and a document is free to have a public `Deleted` of its own
 meaning something else.

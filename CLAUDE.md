@@ -2344,6 +2344,58 @@ upgrade that changes one fails there and names the column instead of presenting 
 quietly stopped being populated. All four hold as of Microsoft.Data.Sqlite 10.0.9, including a Guid in
 either casing.
 
+#### The version guard reads the document, not only the session — fisher#245
+
+⚠️ **Fisher's Guid optimistic concurrency used to work only inside one session, and that is what this
+mapping is now also for.** The guard is fed from `IStorageSession.Versions` — what *this session read*
+— so a document loaded in one session and stored through another had no entry and **failed its guard
+every time**. Correct about staleness and useless for the workflow the feature exists for: load in one
+request, save in the next. `UseOptimisticConcurrency()` was promising something it could not deliver.
+
+`FisherSession.SeedExpectedVersion` is **Marten's `storeEntity`**, deliberately: same dispatch, same
+two call sites — `Store` and `Update`, never `Insert`, which writes a new row and has no stored version
+to be checked against.
+
+- **One seam covers both ways of declaring a version, and that falls out of this section rather than
+  being arranged.** `DocumentMetadata` already maps `IVersioned.Version` onto the version column by
+  convention, exactly as Marten's `VersionedPolicy` does — so the interface route and
+  `Metadata(m => m.Version.MapTo(...))` arrive at storage identically, and
+  `FisherDocumentStorage.MappedVersionFor` (weasel#590's seam) reads one member for both. **The
+  asymmetry between them is what marten#5372 was**; here there was nothing to be asymmetric, because
+  Fisher consulted neither. Both were broken identically, which is why
+  `cross_session_optimistic_concurrency` asserts every fact for both routes — a fix seeding only one
+  would look right against whichever route a test happened to use.
+- ⚠️ **`MappedVersionFor` returns `Guid?`, not `object?`.** Declaring it `object?` compiles, does not
+  implement the interface member, and leaves the throwing-free default returning null — so the whole
+  feature silently does nothing and every test still fails in the way it did before the change. That is
+  how the first cut of this went, and the only signal was the tests staying red.
+- **The `Guid.Empty` condition is carried for parity and is not observable.** Measured, not assumed:
+  removing it changes no outcome in either direction, because an expectation of `Guid.Empty` matches no
+  stored version — a blank version inserts over a missing row and raises `ConcurrencyException` over an
+  existing one either way. It stays because Marten's dispatch has it, and **no test pins it**,
+  deliberately, rather than a test being written that would pass with it gone.
+- **A successful write moves the instance's own version on**, which is what makes seeding safe to do on
+  every store: without it, storing the same instance twice in one process would seed the second write
+  with the version the first superseded. Pinned, because the first draft of the mapped-member test got
+  this wrong and read as a product bug.
+- **The numeric half needed nothing**, and the reason is worth keeping: `CaptureExpectedRevision`
+  already reads the document (fisher#228), which is why revisions crossed sessions while Guid versions
+  did not. There is no mapped-revision route to miss either — `DocumentMetadataExpression<T>` exposes
+  `Version` and **no `Revision`**, so `IRevisioned` is the only way to declare one, and weasel#590's
+  `MappedRevisionFor` has nothing here to adopt it for.
+
+⚠️ **No shared suite reaches any of this, for any store.** The only document-concurrency suite is
+`NumericRevisionCompliance`, which is numeric-only and written against `IRevisioned` throughout; every
+other "optimistic" fact in the shared set is about the *event store* (`AppendOptimistic`,
+`FetchForWritingByTags`). **Fisher passed all fifty enrolled suites with this broken** — the
+jasperfx#700 / #718 / #732 pattern again, a capability all three stores are assumed to share with
+nothing shared holding any of them to it.
+
+**`UpdateExpectedVersion<T>(T, Guid)` is still absent**, where Marten has it as the Guid counterpart of
+`UpdateRevision`. Not needed for the above — seeding off the document covers the ordinary flow — and
+not added here; it is the separate case of guarding against a version the caller knows and the document
+does not carry.
+
 ### Strong-typed identities
 
 `Storage/StrongTypedId.cs` and `Storage/ClosedShape/StrongTypedIdentification.cs` (fisher#14) — a
