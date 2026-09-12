@@ -212,6 +212,26 @@ public class DocumentMappingExpression<T> where T : notnull
     ///         nothing to tell it apart — put every searchable member in the one declaration.
     ///     </para>
     /// </remarks>
+    /// <summary>
+    ///     Declare a member as a vector embedding for <c>VectorSearchAsync</c> (fisher#241).
+    /// </summary>
+    /// <param name="member">The member holding the vector, e.g. <c>x =&gt; x.Embedding</c>.</param>
+    /// <param name="dimensions">The length of every vector it holds; a query of another length is refused.</param>
+    /// <param name="distance">The distance a search uses when the caller names none. Cosine by default.</param>
+    /// <remarks>
+    ///     Metadata rather than a schema object: the search reads the embedding straight out of the
+    ///     stored JSON through a registered distance function, so nothing has to be kept in step and
+    ///     nothing can drift. See the vector search documentation for why there is no side table.
+    /// </remarks>
+    public DocumentMappingExpression<T> VectorIndex(Expression<Func<T, object?>> member, int dimensions,
+        JasperFx.Events.Vectors.DistanceFunction distance = JasperFx.Events.Vectors.DistanceFunction.Cosine)
+    {
+        ArgumentNullException.ThrowIfNull(member);
+
+        Mapping.AddVectorIndex(ChainOf(member), dimensions, distance);
+        return this;
+    }
+
     public DocumentMappingExpression<T> FullTextIndex(params Expression<Func<T, object?>>[] members)
         => FullTextIndex(FullText.FullTextTokenizer.Porter, members);
 

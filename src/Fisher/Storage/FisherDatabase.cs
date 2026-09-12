@@ -45,7 +45,7 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
     {
         _options = options;
         _events = options.EventGraph;
-        _dataSource = new SqliteDataSource(connectionString, options.PragmaSettings);
+        _dataSource = new SqliteDataSource(connectionString, options.PragmaSettings, options.Functions, null);
         TenantId = tenantId;
     }
 

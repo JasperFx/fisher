@@ -327,6 +327,10 @@ Working, with tests:
   generated column, so a predicate against that member is served by an index
 - **User-declared indexes** — `Schema.For<T>().Index(x => x.Name)` / `.UniqueIndex(...)`, as SQLite
   expression indexes that add no column at all
+- **Vector search** — `Schema.For<T>().VectorIndex(x => x.Embedding, dimensions)` or
+  `[VectorIndex(dimensions)]`, `session.VectorSearchAsync<T>(...)` and the scored
+  `VectorSearchWithScoresAsync<T>(...)`, brute force over the stored JSON through a registered
+  `fi_vector_distance` function — no side table, no trigger, no native extension
 - **Document metadata member mapping** — `guid_version`, `last_modified`, `is_deleted` and
   `deleted_at` projected back onto members of the document, by interface, attribute or DSL
 - **Strong-typed identities** — a wrapper around any of the four id types, as an aggregate's identity
@@ -1325,6 +1329,50 @@ stitch.
   `Select`/`GroupBy`/`Distinct`/`DistinctBy` after the join. `ToListAsync`, the `First`/`Single`/`Last`
   families, the scalar aggregates, `CountAsync`, `AnyAsync`, `ToPagedListAsync` and `ToSql` all work,
   over a chain as well as over one join.
+
+### Vector search — fisher#241
+
+`VectorSearchAsync` / `VectorSearchWithScoresAsync` on `IQuerySession`, over a member declared with
+`Schema.For<T>().VectorIndex(x => x.Embedding, dimensions, distance)` or `[VectorIndex(dimensions)]`.
+The API shape is Marten.PgVector's and the types are the store-neutral ones from
+`JasperFx.Events.Vectors` (`IEmbeddingProvider`, `DistanceFunction`, `VectorMatch<T>`), so
+application code reads the same against either store.
+
+- **The search reads the embedding straight out of `data`, and that is the whole design.** One
+  statement through `IAdvancedSql`: the document's columns plus
+  `fi_vector_distance(metric, json_extract(data, '$.embedding'), @query)`, ordered by that distance,
+  limited; the query vector bound as a float32 BLOB. `StoreOptions.Functions` is the new
+  `SqliteFunctionRegistry` the data source registers on every connection (weasel#588), and the
+  distance function is registered in the `StoreOptions` constructor so it is on every tenant's
+  connections for free.
+- ⚠️ **No side table and no trigger, deliberately, and not for lack of trying.** SQLite has no
+  built-in that turns a JSON array into a float32 BLOB, so a trigger keeping a BLOB column in step —
+  the full-text index's shape — would have to call an application-defined function, and then every
+  foreign writer on the file (an EF Core context, the `sqlite3` shell, a restore) fails with *no such
+  function*. A side table maintained on Fisher's own write path would go silently stale under those
+  same writers, which is exactly the failure the full-text design refused. Reading from `data` cannot
+  drift; `a_write_that_bypassed_fisher_still_ranks_by_the_new_vector` pins it.
+- **Brute force, and honest about it.** The JSON is parsed on every row (`Utf8JsonReader`, pooled
+  buffer); a 768-float embedding parses in tens of microseconds, so a search is milliseconds at
+  thousands of rows and under a second at tens of thousands — Fisher's scale. `sqlite-vec` is
+  deliberately not taken on: pre-1.0, no NuGet package, a native binary per platform behind a feature
+  that works without one. `VectorSearchAsync` is the seam it would slot behind.
+- **Every metric is a distance — smaller is closer — including inner product, which is negated**, so
+  one `ORDER BY` serves all three and the promise `DistanceFunction` makes on every store holds here.
+- **`VectorIndex` is metadata, not a schema object**, and what it buys is the refusals: a search on a
+  type with no declared index, on a member that is not the declared one, or with a query vector of
+  another length is refused by name before any SQL runs — the full-text rule, because the alternative
+  is valid SQL that scans nothing. A *stored* vector of the wrong length fails its row loudly inside
+  the function, the one check that cannot happen earlier because the JSON is the record.
+- **The locator comes from `MemberFactory`**, so the serializer's naming policy and
+  `[JsonPropertyName]` decide the path — the Marten.PgVector bug (`member.Name` regardless of casing,
+  zero rows with no error) is not repeated.
+- **The soft-delete filter applies**, as it does to every query; tenancy needs nothing, a tenant being
+  its own database. The identity map is not consulted, the rows coming back through the same selector
+  `Query<T>()` uses — Marten's behaviour too.
+
+The event-sourced `VectorProjection` (content-hash skipping, async) and hybrid search with the
+full-text index are their own pieces.
 
 ### The four Marten operators — fisher#202
 
@@ -4368,7 +4416,7 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher enrolls 50 of the 52 suites `JasperFx.Events.ComplianceTests` 2.67.0 ships — 530 tests.**
+**Fisher enrolls 50 of the 52 suites `JasperFx.Events.ComplianceTests` 2.68.0 ships — 535 tests.**
 `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
 gate is gone. See HANDOFF.md for the live scoreboard, which is machine-checked against a real run by
 `scripts/check_scoreboard.py`; what follows is the history and the mechanics.

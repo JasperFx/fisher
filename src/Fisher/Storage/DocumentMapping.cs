@@ -177,6 +177,22 @@ public class DocumentMapping
         }
 
         ApplyFullTextAttributes(documentType, members);
+        ApplyVectorAttributes(members);
+    }
+
+    /// <summary>
+    ///     <c>[VectorIndex(dimensions)]</c> on a member declares it, exactly as
+    ///     <c>Schema.For&lt;T&gt;().VectorIndex(...)</c> would.
+    /// </summary>
+    private void ApplyVectorAttributes(MemberInfo[] members)
+    {
+        foreach (var member in members)
+        {
+            var attribute = member.GetCustomAttribute<Vectors.VectorIndexAttribute>();
+            if (attribute is null) continue;
+
+            AddVectorIndex([member], attribute.Dimensions, attribute.Distance);
+        }
     }
 
     /// <summary>
@@ -412,6 +428,59 @@ public class DocumentMapping
     ///     second would have nothing to disambiguate it and is refused instead.
     /// </remarks>
     internal FullText.FullTextIndex? FullTextIndex { get; private set; }
+
+    /// <summary>The declared vector members (fisher#241), one entry per member.</summary>
+    internal List<Vectors.VectorIndex> VectorIndexes { get; } = new();
+
+    internal Vectors.VectorIndex? FindVectorIndex(MemberInfo[] chain)
+        => VectorIndexes.FirstOrDefault(v => v.Covers(chain));
+
+    /// <summary>
+    ///     Declare a member as a vector embedding. Refuses a member that cannot hold one, a
+    ///     dimension count under one, and a second declaration of the same member — each by name,
+    ///     at configuration time, rather than as a search that returns nothing.
+    /// </summary>
+    internal Vectors.VectorIndex AddVectorIndex(MemberInfo[] memberChain, int dimensions,
+        JasperFx.Events.Vectors.DistanceFunction distance)
+    {
+        ArgumentNullException.ThrowIfNull(memberChain);
+        if (memberChain.Length == 0)
+        {
+            throw new ArgumentException("A vector index names a member; it cannot cover the whole document.", nameof(memberChain));
+        }
+
+        var name = string.Join(".", memberChain.Select(x => x.Name));
+        var memberType = memberChain[^1] switch
+        {
+            PropertyInfo p => p.PropertyType,
+            FieldInfo f => f.FieldType,
+            var other => throw new ArgumentException($"'{other.Name}' is not a property or field", nameof(memberChain))
+        };
+
+        if (!Vectors.VectorIndex.IsVectorType(memberType))
+        {
+            throw new InvalidOperationException(
+                $"'{DocumentType.Name}.{name}' is a {memberType.Name}, which cannot hold an embedding. Declare the "
+                + "vector index on a float[], ReadOnlyMemory<float>, double[] or List<float> member.");
+        }
+
+        if (dimensions < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(dimensions), dimensions,
+                $"'{DocumentType.Name}.{name}' needs a positive dimension count — the length of every vector it holds.");
+        }
+
+        if (FindVectorIndex(memberChain) is { } existing)
+        {
+            throw new InvalidOperationException(
+                $"'{DocumentType.Name}.{name}' already carries a vector index ({existing.Dimensions} dimensions, "
+                + $"{existing.Distance}). Declare it once.");
+        }
+
+        var index = new Vectors.VectorIndex(memberChain, dimensions, distance);
+        VectorIndexes.Add(index);
+        return index;
+    }
 
     /// <summary>
     ///     Register the full-text index over the named member chains, or over the whole stored
