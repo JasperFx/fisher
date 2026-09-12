@@ -26,8 +26,8 @@
              (weasel#561). It also carries weasel#574, which brings the shared flat-table
              DecrementMemberMap into line with fisher#183; Fisher does not use that DSL yet, but the
              agreement is what makes adopting it later cost nothing. -->
-        <PackageVersion Include="Weasel.Sqlite" Version="9.31.2" />
-        <PackageVersion Include="Weasel.Storage" Version="9.31.2" />
+        <PackageVersion Include="Weasel.Sqlite" Version="9.32.0" />
+        <PackageVersion Include="Weasel.Storage" Version="9.32.0" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,

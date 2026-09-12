@@ -3917,6 +3917,71 @@ Three SQLite-specific points:
 `ReadStreamMetadata` returns an **empty tag dictionary, not null**: the record declares `Tags`
 non-nullable, and returning null there is what polecat#412 was.
 
+#### The explorer reads have a database dimension — fisher#240
+
+jasperfx#810 gave every explorer read a third scope: `GetRecentStreamsAsync`, `ReadStreamAsync`,
+`GetStreamMetadataAsync`, `QueryByTagsAsync` and `GetProjectionStatusesAsync` each take an
+`IEventDatabase` overload beside the tenant-scoped one. The interface's default delegates on a
+single-database store and refuses otherwise — a default interface member, so **nothing breaks at
+compile time and nothing tells you the store is wrong.**
+
+**The question the issue opened with had a stale answer written into this codebase in two places.**
+`DocumentStore.EventStore.cs` claimed in prose that "Fisher has no database-per-tenant tenancy, so the
+cardinality is always `Single`" while the expression beside it deferred to `Tenancy.Cardinality` —
+which has answered `StaticMultiple` since fisher#47 and `DynamicMultiple` since fisher#58. The comment
+predates both and was never revisited; `database_per_tenant.tooling_sees_every_tenants_database` had
+been asserting the opposite for as long.
+
+So Fisher **is** multi-database, and the pre-existing bug jasperfx#810 predicts was real here: every
+one of these reads went to `Database`, the store's *default* file. A database-per-tenant store answered
+from one tenant and the result was indistinguishable from the whole store's — right for whoever owned
+the default file, wrong for everybody else, silent either way.
+
+- **The listing fans out and merges; a single-stream lookup refuses.** That split is the shape of the
+  signatures rather than a preference. "The ten most recently updated streams" has an answer across a
+  hundred files and the ordering key computes it — `fi_streams.timestamp` is `SqliteTimestamp`'s
+  fixed-width UTC text, so it compares across databases exactly as within one, and reading `count` from
+  each file and keeping the newest `count` is exact rather than approximate. `ReadStreamAsync` and
+  `GetStreamMetadataAsync` return **one** answer over an id that is unique *within* a database and not
+  across them, so there is no merge to perform and "whichever file we opened" is the bug itself. They
+  throw, naming both the tenant-scoped and database-scoped overloads.
+- **A fanned-out summary is stamped with its database's tenant, and that is what makes the refusal
+  actionable rather than a dead end.** A console lists, then drills in — so the listing has to hand it
+  the scope the lookup demands. It cannot come off the row: `StreamsTable` gives `tenant_id` a
+  `DEFAULT '*DEFAULT*'` for a store that is not conjoined, so every row in `north.db` reads
+  `*DEFAULT*`. The file is the tenant, so `FisherDatabase.TenantId` is what knows.
+- ⚠️ **A tenant predicate in SQL is correct only under conjoined tenancy, and the old tenant-scoped
+  `ReadStreamAsync` had that backwards.** It composed `and tenant_id = @tenant_id` unconditionally
+  against the default file, so under database-per-tenant it matched nothing at all. `ResolveTenantScope`
+  is the one place that decides: conjoined means a column predicate, everything else means the tenant
+  selects the *database* and adds no `where`. An unknown tenant throws out of `Tenancy.DatabaseFor`
+  rather than falling back to the default file, which is the rule every tenant-scoped member follows.
+- **The tenant-scoped siblings were asymmetric and are not now.** `ReadStreamAsync` had a tenant
+  overload; `GetRecentStreamsAsync` and `GetStreamMetadataAsync` fell through to JasperFx's default,
+  which *throws* for a non-null tenant. One of three implemented is the shape the issue's "audit the
+  siblings" item exists to catch.
+- **`QueryByTagsAsync` and `GetProjectionStatusesAsync` are overridden only to keep the message
+  honest.** Fisher answers neither at any scope — the dictionary `QueryByTagsAsync` deliberately (see
+  "DCB tags"; `EventQuery.TagValues` is the composable, paged home for it), `GetProjectionStatusesAsync`
+  not yet (fisher#243, where the gap is shard *state*, which `fi_event_progression` does not know and
+  which reporting as `"Stopped"` — Polecat's answer, polecat#200 — would fake). Left to the interface
+  default, a multi-database store would meet jasperfx#810's refusal, which blames the database dimension
+  for a read that does not exist at any dimension. Forwarding reaches the accurate "not implemented".
+- **Both usage descriptors hardcoded `Cardinality = Single`**, event and document alike. That is the
+  fisher#120 shape one field over: a console does not read it as "unknown", it renders a hundred tenants'
+  files as a one-file store. `DescribeDatabases()` is the one place both now read, and it fills
+  `DatabaseUsage.Databases` too, because an empty list claims there are no tenants.
+- **`HasMultipleTenants` said `false` unconditionally**, which was wrong in both directions a Fisher
+  store can be multi-tenanted. It now matches Marten's three clauses exactly — non-`Single` cardinality,
+  conjoined event tenancy, or any `MultiTenanted()` document type.
+
+**The shared suite cannot reach any of this**, and says so in its own comments: its fixture is
+single-database, so its four database-scoped facts pin that the database overload *agrees with* the
+store-global read — vacuously true of a store that ignores the argument. `explorer_reads_across_databases`
+is the multi-database arm and `explorer_reads_under_conjoined_tenancy` the column-predicate one;
+16 of their 19 tests fail against the previous behaviour, and the three that pass are the regression
+guards for what a single-database store already did.
+
 #### What `TryCreateUsage` puts on the wire — fisher#120
 
 `projections list` rendered "No projections in this store." for a store with twenty registered, and
