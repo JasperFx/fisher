@@ -4416,7 +4416,7 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher enrolls 50 of the 52 suites `JasperFx.Events.ComplianceTests` 2.67.0 ships — 530 tests.**
+**Fisher enrolls 50 of the 52 suites `JasperFx.Events.ComplianceTests` 2.68.0 ships — 535 tests.**
 `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
 gate is gone. See HANDOFF.md for the live scoreboard, which is machine-checked against a real run by
 `scripts/check_scoreboard.py`; what follows is the history and the mechanics.

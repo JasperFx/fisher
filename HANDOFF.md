@@ -12,9 +12,9 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2030 tests green on net9.0 and net10.0** — 1975 in
-`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 530 of
-them are shared cross-store compliance tests — 461 event sourcing and 69 document. On JasperFx **2.67.0** / Weasel **9.31.0**.
+**2045 tests green on net9.0 and net10.0** — 1990 in
+`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 535 of
+them are shared cross-store compliance tests — 466 event sourcing and 69 document. On JasperFx **2.68.0** / Weasel **9.31.2**.
 
 ## The high-water opt-out, audited (#199)
 
@@ -662,11 +662,22 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.67.0 ships 52 suites; Fisher enrolls **50 of them, 530 tests**.
-Fisher passes **530 of them, across all
+`JasperFx.Events.ComplianceTests` 2.68.0 ships 52 suites; Fisher enrolls **50 of them, 535 tests**.
+Fisher passes **535 of them, across all
 50 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
+
+**2.68.0 added five tests to two existing suites and cost nothing** (fisher#241 took the bump for
+`JasperFx.Events.Vectors`). `EventStoreExplorerCompliance` went from 14 to 18 with the four
+database-scoped explorer reads — recent streams, stream metadata and stream events scoped to one
+`IEventDatabase` agreeing with the store-global read, and a null database refused — and
+`AsyncDaemonCompliance` from 2 to 3 with the registered shard names reachable from the non-generic
+`IEventStore` (jasperfx#815). All five were green on the bump alone, and none of them is Fisher's
+code: the scoped reads are interface defaults that forward to the store-global read when the store
+reports `DatabaseCardinality.Single` — the suite skips itself otherwise — and the shard names are a
+default over the closed generic's `AllShards()`. Worth knowing before assuming the four scoped facts
+say anything about database-per-tenant: they do not run against it.
 
 **What that does and does not claim, because the difference is load-bearing** (fisher#124). The suite
 pins **API portability, not behavioural equivalence**: code written against one store compiles and
@@ -699,7 +710,7 @@ shape: `DocumentLoadAndStoreCompliance` gained three tests for `LoadAsync<T>(obj
 fisher#89) and `DocumentComplianceConfig` gained `ValueTypes`. Diffing the suite *list* would have
 reported a clean bump — diff the contents.
 
-The library is now two halves. The **event sourcing** half is 43 enrolled suites and 461 tests, and the
+The library is now two halves. The **event sourcing** half is 43 enrolled suites and 466 tests, and the
 upstream backlog it emptied in 2.45.0 refilled in 2.64.0 — see "Wave 13" below. The
 **document** half arrived in 2.47.0 (jasperfx#647) and is now seven suites, 69 tests, over the
 store-agnostic document contract Fisher implements for fisher#68. Every suite added since 2.49.0 has
@@ -801,9 +812,9 @@ naming.
 **Green on all fifty is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 50 suites, 530 tests
+### Green — 50 suites, 535 tests
 
-Event sourcing — 43 suites, 461 tests:
+Event sourcing — 43 suites, 466 tests:
 
 | Suite | Tests |
 |---|---|
@@ -811,11 +822,11 @@ Event sourcing — 43 suites, 461 tests:
 | `DcbTagQueryAndConsistencyCompliance` | 28 |
 | `ProjectionScenarioCompliance` | 20 |
 | `StringStreamIdentityCompliance` | 19 |
+| `EventStoreExplorerCompliance` | 18 |
 | `NaturalKeyCompliance` | 17 |
 | `StreamArchivingCompliance` | 16 |
 | `StreamStateQueryCompliance` | 15 |
 | `AggregateWriteCacheCompliance` | 14 |
-| `EventStoreExplorerCompliance` | 14 |
 | `StrongTypedIdentityCompliance` | 14 |
 | `FetchForWritingCompliance` | 13 |
 | `StreamQueryPlanCompliance` | 13 |
@@ -845,10 +856,10 @@ Event sourcing — 43 suites, 461 tests:
 | `AggregateToManyCompliance` | 5 |
 | `RebuildConcurrencyCapCompliance` | 5 |
 | `ActivityCorrelationCompliance` | 4 |
+| `AsyncDaemonCompliance` | 3 |
 | `CompositeProjectionCompliance` | 3 |
 | `EventProjectionEnrichmentCompliance` | 3 |
 | `EventProjectionRegistrationCompliance` | 3 |
-| `AsyncDaemonCompliance` | 2 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
 Documents — 7 suites, 69 tests, through `FisherDocumentComplianceFixture`:
