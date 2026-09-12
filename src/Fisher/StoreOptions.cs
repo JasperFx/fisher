@@ -29,6 +29,7 @@ public class StoreOptions
 
     public StoreOptions()
     {
+        Storage.Vectors.VectorFunctions.Register(Functions);
         EventGraph = new EventGraph(this);
         Events.EventGraph = EventGraph;
         Projections = new Fisher.Projections.FisherProjectionOptions(EventGraph);
@@ -231,6 +232,16 @@ public class StoreOptions
     /// </remarks>
     public Weasel.Sqlite.SqlitePragmaSettings PragmaSettings { get; set; }
         = Weasel.Sqlite.SqlitePragmaSettings.Default;
+
+    /// <summary>
+    ///     Application-defined SQLite functions registered on every connection the store opens
+    ///     (weasel#588). Fisher registers <c>fi_vector_distance</c> here for vector search; add your
+    ///     own and they are on every connection too, tenants included. Functions live on the
+    ///     connection, never in the file, which is why this is a store setting and not a schema
+    ///     object — and why a function registered anywhere else is on some connections and not
+    ///     others.
+    /// </summary>
+    public Weasel.Sqlite.Functions.SqliteFunctionRegistry Functions { get; } = new();
 
     /// <summary>
     ///     Set by <c>ApplyAllDatabaseChangesOnStartup()</c>; consumed by the hosted service.
