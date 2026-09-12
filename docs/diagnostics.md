@@ -160,6 +160,56 @@ var metadata = await eventStore.GetStreamMetadataAsync(streamId);
 Re-exposing one through it would undo the point of implementing them explicitly.
 :::
 
+### The explorer reads have three scopes
+
+`GetRecentStreamsAsync`, `ReadStreamAsync` and `GetStreamMetadataAsync` each come in three overloads,
+and on a [database-per-tenant](/configuration/multitenancy) store the difference is not a
+convenience — it decides whether the answer is the whole store's.
+
+```cs
+// store-global
+await eventStore.GetRecentStreamsAsync(10, ct);
+
+// one tenant, wherever that tenant lives
+await eventStore.GetRecentStreamsAsync(10, "north", ct);
+
+// one database, from AllDatabases()
+foreach (var database in await eventStore.AllDatabases())
+{
+    await eventStore.GetRecentStreamsAsync(database, 10, null, ct);
+}
+```
+
+`DatabaseCardinality` is what tells the three apart, and on Fisher **it is not always `Single`**: one
+SQLite *file* is one database, but a database-per-tenant store is a file per tenant —
+`StaticMultiple` under `MultiTenantedDatabases`, `DynamicMultiple` under
+`MultiTenantedDatabasesInDirectory` and `MultiTenantedDatabasesInRegistry`.
+
+What a store-global read does once there is more than one file depends on whether one answer can
+stand for all of them:
+
+- **The listing fans out and merges.** "The ten most recently updated streams in this store" has an
+  answer across a hundred files, and `fi_streams.timestamp` is fixed-width UTC text, so it compares
+  across databases exactly as it does within one. Each merged summary is stamped with the tenant whose
+  file it came from — which it has to be, because the tenant cannot be read off the row: under
+  database-per-tenant the `tenant_id` column holds `*DEFAULT*` in every file.
+- **A single-stream lookup refuses.** `ReadStreamAsync` and `GetStreamMetadataAsync` return *one*
+  answer, and a stream id is unique within a database rather than across them — so there is no merge
+  to perform, and answering from whichever file the store's default session resolved would be a
+  confident wrong answer rather than a partial one. The refusal names both ways forward, and the
+  listing above is where the tenant id comes from.
+
+::: tip
+A **tenant predicate in SQL is correct only under conjoined tenancy.** Under database-per-tenant the
+tenant *is* the file, so naming a tenant resolves the database and adds no `where` clause. That is why
+an unknown tenant throws rather than falling back to the default file.
+:::
+
+Two reads on that interface Fisher does not answer at any scope, and the database overload changes
+nothing for either: the dictionary-shaped `QueryByTagsAsync` — [`EventQuery.TagValues`](/events/dcb)
+is the composable, paged home for that capability here — and `GetProjectionStatusesAsync`
+([fisher#243](https://github.com/JasperFx/fisher/issues/243)). Both refuse by name.
+
 ::: tip
 A [secondary store's](/configuration/multiple-stores) marker proxy is *not* an `IEventStore` —
 `DispatchProxy` implements only the interfaces it was asked for. The `IEventStore` registration

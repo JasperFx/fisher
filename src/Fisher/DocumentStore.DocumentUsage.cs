@@ -36,11 +36,8 @@ public partial class DocumentStore : IDocumentStoreUsageSource
             Subject = "Fisher.DocumentStore",
             SubjectUri = Database.Describe().DatabaseUri(),
             Version = GetType().Assembly.GetName().Version?.ToString(),
-            Database = new DatabaseUsage
-            {
-                Cardinality = DatabaseCardinality.Single,
-                MainDatabase = Database.Describe()
-            },
+            // fisher#240 — the tenancy's answer, not a hardcoded Single. See DescribeDatabases.
+            Database = DescribeDatabases(),
             StoreName = Options.StoreName,
             DatabaseSchemaName = Options.DatabaseSchemaName,
             AutoCreateSchemaObjects = Options.AutoCreateSchemaObjects.ToString(),
