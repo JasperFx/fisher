@@ -3982,6 +3982,78 @@ is the multi-database arm and `explorer_reads_under_conjoined_tenancy` the colum
 16 of their 19 tests fail against the previous behaviour, and the three that pass are the regression
 guards for what a single-database store already did.
 
+⚠️ **`explorer_reads_across_databases` needs its two streams' timestamps to actually differ, and
+arranging that is not optional.** `fi_streams.timestamp` is millisecond-precision, two back-to-back
+appends land inside one millisecond on a warm machine, and the merge's `OrderByDescending(LastUpdatedAt)`
+has no defined tiebreak — so `the_count_bounds_the_merged_listing_and_the_newest_wins` becomes a coin
+flip exactly when the suite is fastest. It was caught behaving like one: green alone, red once in the
+full class. `WaitForTheClockToMoveAsync` polls **the column's own clock** (`SqliteTimestamp.NowExpression`
+over a connection) until it leaves the millisecond, which is `modified_since_and_before`'s lesson again
+— a client-sampled bound compares two clocks that are only incidentally the same one, and a fixed sleep
+is a wall-clock assumption a loaded host can still lose. Verified by removing it: **three of six runs
+fail.**
+
+#### Projection statuses — fisher#243
+
+`IEventStore.GetProjectionStatusesAsync`, in all three scopes, in `DocumentStore.ProjectionStatus.cs`.
+The snapshot a monitoring console's projections page renders before it subscribes to
+`ShardStatesChanged` for live updates. Fisher answered none of the three until now, and the interface's
+default throws — the honest shape, and what fisher#240 deliberately left in place.
+
+**Why #240 left it, and what changed: four of `ShardStatus`'s five fields come off the database
+cheaply, and the fifth is not a database fact at all.** `State` describes the *running daemon*, which
+`fi_event_progression` does not know. Polecat fills it by reporting every shard as `"Stopped"`
+(polecat#200) — which is not a partial answer but a wrong one, because it is exactly what a real
+stopped shard reports and it is the reading an operator acts on. Filling the slot that way is the
+fisher#120 failure rather than a fix for it, so the read stayed unimplemented until there was somewhere
+honest to get the state from.
+
+- **`Unknown` is a distinct value from `Stopped`, and that distinction is the feature.** The state
+  comes from the daemon this process hosts, reached through `DocumentStore.RunningDaemons` — fisher#173's
+  seam. A store under `DaemonMode.ExternallyManaged`, a console in another process and a hand-built
+  store all genuinely cannot see the daemon, and saying so beats a confident guess.
+  `a_store_with_no_visible_daemon_reports_unknown_rather_than_stopped` is the load-bearing test;
+  replacing `Unknown` with `"Stopped"` fails three.
+- **The tracker is reached through `AllDaemonsAsync()`, never `DaemonForDatabase`.** The latter is
+  contractually allowed to go looking, and Fisher's implementation *starts daemons* for tenants that
+  have appeared since the last poll, then throws when it finds none. Neither belongs in a diagnostics
+  read: asking what is running must not change what is running, and "nothing is running here" is an
+  answer rather than an error. Matched on `FisherDatabase.Identifier`, the same key
+  `FisherDaemonHostedService.TryFindDaemon` uses.
+- **`ShardAction` is collapsed onto `ShardStatus.State`'s own vocabulary.** The enum records what last
+  *happened*; the field is what the shard *is*, so the four actions a live shard publishes — started,
+  updated, restarted, skipped-ahead — become one `Running`. A visible daemon with no state for a shard
+  is `Stopped` rather than `Unknown`, because every agent publishes `Started` as it launches.
+- ⚠️ **`EventStoreSequence` is `max(seq_id)`, not the persisted high-water row.** The two are the same
+  number on a store whose daemon is current — the mark simply *is* `max(seq_id)` here — and they differ
+  exactly when it matters: the row is where the daemon **got to**, so a stopped daemon leaves it behind
+  and reporting it would make every shard look caught up. `the_head_is_the_stores_own_rather_than_the_daemons_record_of_it`
+  arranges that state deliberately, because on a healthy store the two agree and the test would pass
+  either way. Swapping the read fails two tests.
+- **An inline or live projection is reported with an empty `Shards` list rather than omitted**, its
+  `Lifecycle` saying why. Polecat synthesises a fake single shard for these and puts the *lifecycle
+  string* in its `State` slot, which makes that field mean two different things depending on the row.
+- **Subscriptions are included**, since `AllShards()` spans them and a subscription is a daemon shard
+  with progress to report. A shard whose name matches no registered projection is a subscription's, and
+  `Async` is a fact about those rather than a guess — there is deliberately no inline equivalent
+  (fisher#21).
+- **The store-global read refuses on a multi-database store, and for a sharper reason than the stream
+  lookups above.** Those return one answer over an id unique within a database; this one *could*
+  concatenate, and `Advanced.AllProjectionProgress` does exactly that and documents why. What stops it
+  is that `ShardStatus` has no database or tenant field, so N databases' rows arrive as N entries per
+  shard with the same `ShardName` and different sequences — unattributable. `ShardState` carries a
+  `TenantId`, which is what lets the other method get away with it.
+- **A tenant scopes to a database rather than to a predicate**, and here that is what Fisher's shard
+  identity *means*: names are `(projection, shard key)` and never `(projection, tenant)`, because
+  progression lives in each tenant's file (fisher#57). So under conjoined tenancy a tenant-scoped
+  request is the store-global answer — correctly, rather than by accident.
+- **A failed head read is swallowed to zero**, the same judgement `TryCreateUsage` makes about the same
+  read: the likeliest reason it fails is that the schema does not exist yet, which is precisely when a
+  console is most likely to be pointed at the store.
+
+**There is no shared suite for any of this**, so `projection_statuses` is Fisher's own until one
+exists. Every decision above was verified by mutation rather than by inspection.
+
 #### What `TryCreateUsage` puts on the wire — fisher#120
 
 `projections list` rendered "No projections in this store." for a store with twenty registered, and
