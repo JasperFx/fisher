@@ -112,7 +112,7 @@ internal partial class FisherSession
         }
 
         var storage = StorageFor<T>();
-        storage.Store(this, document);
+        SeedExpectedVersion(storage, document);
 
         var operation = storage.Upsert(document, this, TenantId);
 
@@ -150,6 +150,56 @@ internal partial class FisherSession
     ///         disagree with the statement being built.
     ///     </para>
     /// </remarks>
+    /// <summary>
+    ///     Seed the session's expected version for this write from the version the document itself
+    ///     carries, so a guarded write can cross a session boundary (fisher#245).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Without this, Fisher's Guid optimistic concurrency worked only inside one session.</b>
+    ///         The guard is fed from <see cref="IStorageSession.Versions" /> — what <em>this</em> session
+    ///         read — so a document loaded in one session and stored through another had no entry and
+    ///         failed its guard every time. It refused stale writes correctly and refused legitimate ones
+    ///         too, which is the whole workflow the feature exists for: load in one request, save in the
+    ///         next.
+    ///     </para>
+    ///     <para>
+    ///         <b>This is Marten's <c>storeEntity</c>, and deliberately so</b> — same dispatch, same
+    ///         guard on the default value, same two call sites (<c>Store</c> and <c>Update</c>, never
+    ///         <c>Insert</c>, which writes a new row and has no stored version to be checked against).
+    ///     </para>
+    ///     <para>
+    ///         <b>The <see cref="Guid.Empty" /> condition is carried for parity and is not observable —
+    ///         measured, not assumed.</b> It is what a document that has never been stored carries, and
+    ///         the obvious worry is that seeding it would guard a first insert against a version no row
+    ///         has. It does not: removing the condition changes no outcome in either direction. A blank
+    ///         version over a missing row inserts either way, and a blank version over an existing row
+    ///         raises <c>ConcurrencyException</c> either way, because an expectation of
+    ///         <c>Guid.Empty</c> matches no stored version. It stays because Marten's dispatch has it
+    ///         and because recording an expectation that means "none" is worth avoiding — but no test
+    ///         here pins it, deliberately, rather than a test being written that would pass with it
+    ///         gone.
+    ///     </para>
+    ///     <para>
+    ///         The numeric half needs nothing here: <see cref="CaptureExpectedRevision" /> already reads
+    ///         the document, which is why revisions crossed sessions while Guid versions did not. There
+    ///         is no mapped-revision route to miss either — <c>DocumentMetadataExpression&lt;T&gt;</c>
+    ///         exposes no <c>Revision</c>, so <see cref="JasperFx.IRevisioned" /> is the only way to
+    ///         declare one.
+    ///     </para>
+    /// </remarks>
+    private void SeedExpectedVersion<T>(Weasel.Storage.IDocumentStorage<T> storage, T document)
+        where T : notnull
+    {
+        if (storage.MappedVersionFor(document) is Guid version && version != Guid.Empty)
+        {
+            storage.Store(this, document, version);
+            return;
+        }
+
+        storage.Store(this, document);
+    }
+
     private static Weasel.Storage.IStorageOperation CaptureExpectedRevision(
         Weasel.Storage.IStorageOperation operation, object document, int? revision = null)
     {
@@ -217,7 +267,7 @@ internal partial class FisherSession
         ArgumentNullException.ThrowIfNull(document);
 
         var storage = StorageFor<T>();
-        storage.Store(this, document);
+        SeedExpectedVersion(storage, document);
 
         QueueOperation(CaptureExpectedRevision(storage.Update(document, this, TenantId), document));
     }
