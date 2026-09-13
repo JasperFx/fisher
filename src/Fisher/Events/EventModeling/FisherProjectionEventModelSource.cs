@@ -1,12 +1,15 @@
 using Fisher.Internal;
+using JasperFx;
 using JasperFx.Events;
 using JasperFx.Events.EventModeling;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Fisher.Events.EventModeling;
 
 /// <summary>
 ///     The store-derived Event Model rung (fisher#251, jasperfx#825), reading its model NAME off the
-///     store's own <see cref="StoreOptions.EventModelName" /> rather than being told at registration.
+///     store's own <see cref="StoreOptions.EventModelName" /> rather than being told at registration —
+///     and falling back to the service name rather than to a literal (fisher#280).
 /// </summary>
 /// <remarks>
 ///     <para>
@@ -72,7 +75,7 @@ internal sealed class FisherProjectionEventModelSource : IEventModelDefinitionSo
         // the real store's options without unwrapping. The IEventStore cast below cannot: a
         // DispatchProxy implements only the interfaces it was asked for, and Fisher's DocumentStore
         // implements IEventStore EXPLICITLY (fisher#45), so it is not on IDocumentStore at all.
-        var modelName = store.Options.EventModelName ?? ProjectionEventModelSource.DefaultModelName;
+        var modelName = ResolveModelName(store, services);
 
         var inner = new ProjectionEventModelSource((IEventStore)SecondaryStoreProxy.Unwrap(store))
         {
@@ -81,5 +84,47 @@ internal sealed class FisherProjectionEventModelSource : IEventModelDefinitionSo
         };
 
         return inner.TryCreateAsync(services, token);
+    }
+
+    /// <summary>
+    ///     The model this store's slices contribute to: what the store was told, else the service
+    ///     name, else the shared literal (fisher#280).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         ⚠️ <b>The literal <c>"EventModel"</c> is the one default guaranteed to be wrong for
+    ///         every host, and it was the root cause of fisher#271 rather than an incidental
+    ///         choice.</b> Every other contributor to a canvas defaults to something meaningful —
+    ///         Wolverine's chains and HTTP endpoints to <c>JasperFxOptions.ServiceName</c>, a Bobcat
+    ///         spec assembly to its own name, a curated file to its <c>model:</c> value — so the
+    ///         overwhelmingly common host, Wolverine plus one store, assembled <b>two</b> models out
+    ///         of the box. Threading a name through <c>AddFisher</c> (fisher#271) and then onto
+    ///         <see cref="StoreOptions" /> (fisher#276) fixed the symptom twice; this is the default.
+    ///     </para>
+    ///     <para>
+    ///         <b>An explicit <see cref="StoreOptions.EventModelName" /> still wins</b>, which is what
+    ///         a modular monolith needs when each module's store is genuinely its own bounded context.
+    ///         The literal stays as the last resort for a host with no JasperFx options at all — a
+    ///         bare <c>ServiceCollection</c>, which is what most of Fisher's own tests build.
+    ///     </para>
+    ///     <para>
+    ///         Resolved here rather than at registration for the reason the whole class exists: the
+    ///         container is only complete once the model is being assembled, and
+    ///         <c>JasperFxOptions</c> may be registered either side of <c>AddFisher</c>.
+    ///     </para>
+    /// </remarks>
+    private static string ResolveModelName(IDocumentStore store, IServiceProvider services)
+    {
+        if (store.Options.EventModelName is { } named) return named;
+
+        // GetService, never GetRequiredService: a host with no JasperFx registration is an ordinary
+        // shape here rather than a misconfiguration, and the literal is the right answer for it.
+        var serviceName = services.GetService<JasperFxOptions>()?.ServiceName;
+
+        // Whitespace is not a usable model name and would reproduce fisher#271 with a blank where the
+        // name should be -- the same reason StoreOptions.EventModelName refuses one from its setter.
+        return string.IsNullOrWhiteSpace(serviceName)
+            ? ProjectionEventModelSource.DefaultModelName
+            : serviceName;
     }
 }

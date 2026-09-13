@@ -427,6 +427,127 @@ public class event_model_source : IAsyncLifetime
     }
 
     /// <summary>
+    ///     ⚠️ <b>With no name set, the store follows the SERVICE name</b> (fisher#280) — so a
+    ///     Wolverine-shaped host and its store land on one canvas with nothing configured.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The literal <c>"EventModel"</c> is the one default guaranteed to be wrong for every
+    ///         host, and it was the root cause of fisher#271 rather than an incidental choice. Every
+    ///         other contributor defaults to something meaningful — Wolverine's chains to
+    ///         <c>ServiceName</c>, a Bobcat spec assembly to its own name — so a host that named
+    ///         nothing still got two models.
+    ///     </para>
+    ///     <para>
+    ///         Asserted through a real <c>AddEventModel</c> merge rather than on the model's name
+    ///         alone: a store that picked up the service name but contributed its slices somewhere
+    ///         else would satisfy a name check and still leave the canvas empty.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task with_no_name_the_store_follows_the_service_name()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(new JasperFxOptions { ServiceName = "Trawler" });
+
+        services.AddFisher(options =>
+        {
+            options.ConnectionString = _primary.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Projections.Snapshot<ModelLedger>(SnapshotLifecycle.Inline);
+            // Deliberately NOT setting EventModelName.
+        });
+
+        services.AddEventModel("Trawler", model => model.Slice(nameof(ModelLedger)).InDomain("Finance"));
+
+        await using var provider = services.BuildServiceProvider();
+
+        var model = (await EventModelDiscovery.AssembleAsync(provider, Token)).ShouldHaveSingleItem();
+
+        model.Name.ShouldBe("Trawler");
+
+        var slice = model.Slices.Single(x => x.Name == nameof(ModelLedger));
+        slice.Domain.ShouldBe("Finance");
+        slice.ReadModelTypes.Select(x => x.Name).ShouldBe([nameof(ModelLedger)]);
+    }
+
+    /// <summary>
+    ///     An explicit name still wins over the service name.
+    /// </summary>
+    /// <remarks>
+    ///     Which is what a modular monolith needs: each module's store is genuinely its own bounded
+    ///     context and should not be folded onto the service's canvas just because they share a
+    ///     process.
+    /// </remarks>
+    [Fact]
+    public async Task an_explicit_name_outranks_the_service_name()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(new JasperFxOptions { ServiceName = "Trawler" });
+
+        services.AddFisher(options =>
+        {
+            options.ConnectionString = _primary.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Projections.Snapshot<ModelLedger>(SnapshotLifecycle.Inline);
+            options.EventModelName = "Ledgers";
+        });
+
+        await using var provider = services.BuildServiceProvider();
+
+        (await EventModelDiscovery.AssembleAsync(provider, Token)).ShouldHaveSingleItem()
+            .Name.ShouldBe("Ledgers");
+    }
+
+    /// <summary>
+    ///     A host with no JasperFx options at all still gets the shared literal.
+    /// </summary>
+    /// <remarks>
+    ///     A bare <c>ServiceCollection</c> is an ordinary shape rather than a misconfiguration — it is
+    ///     what most of Fisher's own tests build — so the source resolves with <c>GetService</c> and
+    ///     falls through. Pinned because the obvious implementation reaches for
+    ///     <c>GetRequiredService</c> and throws on every one of those hosts.
+    /// </remarks>
+    [Fact]
+    public async Task no_jasperfx_options_falls_back_to_the_shared_literal()
+    {
+        await using var provider = BuildPrimary();
+
+        (await EventModelDiscovery.AssembleAsync(provider, Token)).ShouldHaveSingleItem()
+            .Name.ShouldBe(ProjectionEventModelSource.DefaultModelName);
+    }
+
+    /// <summary>
+    ///     A blank service name is not a usable model name, and falls through to the literal.
+    /// </summary>
+    /// <remarks>
+    ///     Same reason <see cref="StoreOptions.EventModelName" /> refuses one from its setter: it
+    ///     would reproduce fisher#271 with a blank where the name should be. This one cannot be
+    ///     refused — the value is the host's, not Fisher's — so it is ignored instead.
+    /// </remarks>
+    [Fact]
+    public async Task a_blank_service_name_falls_through_rather_than_naming_a_model_nothing()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(new JasperFxOptions { ServiceName = "   " });
+
+        services.AddFisher(options =>
+        {
+            options.ConnectionString = _primary.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Projections.Snapshot<ModelLedger>(SnapshotLifecycle.Inline);
+        });
+
+        await using var provider = services.BuildServiceProvider();
+
+        (await EventModelDiscovery.AssembleAsync(provider, Token)).ShouldHaveSingleItem()
+            .Name.ShouldBe(ProjectionEventModelSource.DefaultModelName);
+    }
+
+    /// <summary>
     ///     An empty or whitespace name is refused by the setter rather than taken at its word.
     /// </summary>
     /// <remarks>

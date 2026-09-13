@@ -322,8 +322,13 @@ read model behind it, so a sticky for one is something a reader cannot click thr
 
 ### Naming the model
 
-Slices are grouped by **model name** before they are merged, so a host that names its own model has
-to set the same name on the store:
+**The default follows the running service**, `JasperFxOptions.ServiceName`, which is what Wolverine's
+own chains and HTTP endpoints contribute under — so a Wolverine application and its Fisher store land
+on one canvas with nothing configured at all.
+
+Set `EventModelName` when a store is genuinely its own bounded context, as each module's store is in a
+modular monolith, or to match a host that passes something other than its service name to
+`AddEventModel`:
 
 <!-- snippet: sample_event_model_name -->
 <a id='snippet-sample_event_model_name'></a>
@@ -359,14 +364,19 @@ Each store is configured separately — `AddFisherStore<T>` can be registered wi
 all, so there is no primary registration for it to read a name off.
 
 ::: warning
-**Leave it unset and a host that named its model gets two models, not one.** The store's slices land
-on `EventModel`, the host's declarations on its own name, and neither canvas has both halves — which
-surfaces as `Expected exactly one assembled model, but got [Storefront, EventModel]` rather than as
-anything pointing at the registration.
+**Set it to a name nothing else uses and you get two models, not one.** Slices merge by model name, so
+the store's slices land on one canvas and the host's declarations on another, with neither carrying
+both halves — which surfaces as `Expected exactly one assembled model, but got [Storefront, EventModel]`
+rather than as anything pointing at the registration.
 
-Leaving it null is still right — and unchanged — for a host that never named a model at all. An empty
-or whitespace name is refused by the setter, because it is a legal model name that reproduces the
-same bug with a blank where the name should be.
+An empty or whitespace name is refused by the setter, because it is a legal model name that reproduces
+the same bug with a blank where the name should be.
+:::
+
+::: tip
+**The fallback chain is `EventModelName` → `JasperFxOptions.ServiceName` → `EventModel`.** The literal
+is the last resort, for a host with no JasperFx options registered at all. A blank service name falls
+through to it rather than naming a model nothing.
 :::
 
 ::: tip

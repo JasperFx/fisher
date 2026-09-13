@@ -2779,6 +2779,23 @@ because the same reader feeds both. What is Fisher's is two registrations.
     `FisherProjectionEventModelSource.TryCreateAsync` resolves the store and reads its options there,
     so `AddEventModel` may be called either side of `AddFisher`. `the_registration_order_does_not_matter`
     pins both orders, because a source that went looking early would pass one and fail the other.
+- ⚠️ **The fallback is the SERVICE name, not the literal `EventModel` (fisher#280), and that is the
+  actual fix for fisher#271 rather than a third iteration of it.** `ProjectionEventModelSource.DefaultModelName`
+  is `"EventModel"`, which is the one default guaranteed to be wrong for every host — every other
+  contributor to a canvas defaults to something meaningful (Wolverine's chains and HTTP endpoints to
+  `JasperFxOptions.ServiceName`, a Bobcat spec assembly to its own name, a curated file to its
+  `model:` value), so the overwhelmingly common host — Wolverine plus one store — assembled **two**
+  models out of the box and every host had to restate a name it had already declared. fisher#271
+  threaded a name through the registration and fisher#276 moved it to `StoreOptions`; both fixed the
+  symptom. The chain is now `EventModelName` → `ServiceName` → the literal.
+  - **`GetService`, never `GetRequiredService`.** A bare `ServiceCollection` with no JasperFx
+    registration is an ordinary shape rather than a misconfiguration — it is what most of Fisher's own
+    tests build — and the literal is the right answer for it.
+  - **A blank service name falls through rather than naming a model nothing**, the same reason
+    `StoreOptions.EventModelName` refuses whitespace from its setter. It cannot be *refused* here,
+    the value being the host's rather than Fisher's, so it is ignored.
+  - **Resolved lazily, like the name itself**, so `JasperFxOptions` may be registered either side of
+    `AddFisher`.
 - **`FisherProjectionEventModelSource` composes rather than subclasses**, `ProjectionEventModelSource`
   being `sealed`. It owns the three things Fisher alone knows: which service the store is registered
   under, where the name came from, and which store the slices came from (the `Subject`). It resolves
@@ -4928,7 +4945,7 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher enrolls 55 of the 56 suites `JasperFx.Events.ComplianceTests` 2.69.1 ships — 572 tests.**
+**Fisher enrolls 55 of the 56 suites `JasperFx.Events.ComplianceTests` 2.69.3 ships — 572 tests.**
 `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
 gate is gone. See HANDOFF.md for the live scoreboard, which is machine-checked against a real run by
 `scripts/check_scoreboard.py`; what follows is the history and the mechanics.
