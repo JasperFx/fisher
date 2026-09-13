@@ -294,6 +294,18 @@ public class StoreOptions
     internal Storage.TenantDatabases? TenantDatabases { get; private set; }
 
     /// <summary>
+    ///     The files more than one tenant shares, stashed here by <see cref="DocumentStore" />'s
+    ///     constructor once the tenancy is built (fisher#257).
+    /// </summary>
+    /// <remarks>
+    ///     Written back onto the options for the same reason <see cref="StorageDatabase" /> is: a
+    ///     session holds the options and the database but not the store, and the guard's per-type
+    ///     checkpoint runs from the session's table provisioning. Empty for every store that is not
+    ///     sharded, which is what keeps that checkpoint a field read and a count.
+    /// </remarks>
+    internal IReadOnlyList<Storage.SharedTenantFile> SharedTenantFiles { get; set; } = [];
+
+    /// <summary>
     ///     A database file per tenant, with the set of tenants asked for rather than declared
     ///     (fisher#58).
     /// </summary>

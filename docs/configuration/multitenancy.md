@@ -109,10 +109,19 @@ are, co-located tenants share one connection pool, and a shared file reports no 
 — a file holding two tenants' data cannot honestly say whose it is.
 
 ::: warning
-**Conjoined tenancy is what makes this safe, and it is not applied for you.** Two tenants sharing a
-file *without* it have no `tenant_id` column to be told apart by, so their data is genuinely the same
-data. Set `TenancyStyle.Conjoined` for the event store and `MultiTenanted()` on any document type the
-tenants share.
+**Conjoined tenancy is what makes this safe, and Fisher refuses the store without it.** Two tenants
+sharing a file with no `tenant_id` column to be told apart by are not two tenants — they are one
+tenant with two names, writing the same rows. So a shared file requires
+`options.Events.TenancyStyle = TenancyStyle.Conjoined` *and* `MultiTenanted()` on every document type,
+and a store that says otherwise fails to build with the tenants and the file named.
+
+The event-store half is required **even for a store that never appends an event**: the event tables
+are created by every migration, and an append does not need its event type registered, so "does this
+store use events" has no honest answer at configuration time. One line and an unused column is the
+price of a rule that cannot guess wrong.
+
+A document type nothing registered at configuration time is caught the first time it is read or
+written, which is the first moment it exists at all.
 :::
 
 ::: tip
