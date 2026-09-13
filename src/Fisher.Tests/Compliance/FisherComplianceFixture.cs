@@ -640,6 +640,27 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         public IDocumentSession OpenSession()
             => _host.Services.GetRequiredService<IDocumentStore>().LightweightSession();
 
+        /// <summary>
+        ///     The hosted store as <see cref="IEventStore" /> — jasperfx#818's seam member, and the one
+        ///     store in the suite set with a genuinely reachable running daemon.
+        /// </summary>
+        /// <remarks>
+        ///     <para>
+        ///         <b>The cast is what makes this worth a member at all.</b> Fisher implements
+        ///         <see cref="IEventStore" /> <em>explicitly</em> (fisher#45), so it is not on
+        ///         <see cref="IDocumentStore" /> and a consumer reaches it by casting — which is also why
+        ///         a generic suite cannot resolve it out of <see cref="Services" />: no store registers
+        ///         itself under the shared interface, each registers its own <c>IDocumentStore</c>.
+        ///     </para>
+        ///     <para>
+        ///         Resolved through the container rather than closed over the fixture's own store on
+        ///         purpose: the fixture's is built by hand and has no coordinator, which is exactly the
+        ///         case <c>ShardStatusState.Unknown</c> describes, so answering with it would make the
+        ///         daemon-visible half of the contract untestable.
+        ///     </para>
+        /// </remarks>
+        public IEventStore EventStore => (IEventStore)_host.Services.GetRequiredService<IDocumentStore>();
+
         /// <remarks>
         ///     <c>IHost.Dispose</c> alone does not call <c>StopAsync</c>, so an abandoned host would
         ///     leave its daemon polling the fixture's file into the next test — two writers on one file,

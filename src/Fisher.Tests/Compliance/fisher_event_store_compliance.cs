@@ -8,9 +8,12 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and fifty are enrolled from
- * JasperFx.Events.ComplianceTests 2.68.0, which itself ships fifty-two. One is not enrolled:
- * SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
+ * Suites were added one at a time as Fisher grew into them, and fifty-one are enrolled from
+ * JasperFx.Events.ComplianceTests 2.69.0, which itself ships fifty-five. Three are not enrolled:
+ * SingleTenantedEventSlicingCompliance, for the precondition reason set out below;
+ * GuidOptimisticConcurrencyCompliance, which is fisher#250; and the two arms of
+ * MultiDatabaseExplorerCompliance, which need a fixture that can build a store over more than one
+ * database (SupportsMultipleDatabases) and is fisher#252.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
  * reason recorded at the flag on FisherComplianceFixture rather than here:
@@ -258,6 +261,31 @@ public class projection_scenario_compliance
 
 public class projection_coordinator_compliance
     : ProjectionCoordinatorCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * jasperfx#818 — what the five fields of a ShardStatus mean. Three stores implemented
+ * GetProjectionStatusesAsync with nothing shared holding any of them to it, so each decided
+ * independently and reasonably and arrived at three different answers.
+ *
+ * Fisher is the closest of the three to the contract and the reason is recorded in
+ * DocumentStore.ProjectionStatus.cs at length: it is the only store that already reported the real
+ * shard state from a reachable daemon, and Unknown-means-no-daemon is the ruling the suite adopted.
+ * Marten answered Unknown unconditionally and Polecat hardcoded Stopped; both change.
+ *
+ * The one fact Fisher failed is the inventory ruling, and it went against Fisher deliberately rather
+ * than by weight of implementations — see fisher#249. A subscription is a daemon shard with progress
+ * worth watching, and it is still not on this page, because this is where an operator asks about read
+ * models. Its progress moved to RegisteredShardNames() against FetchProjectionLagAsync (jasperfx#815),
+ * which is the pairing built for that question.
+ *
+ * ⚠️ The daemon-visible fact is the one that makes the rest non-vacuous: without it a store passes
+ * every other assertion by hardcoding Unknown, which is what Marten did. It runs against
+ * IComplianceCoordinatorHost.EventStore — a default-THROWING seam member, so nothing broke on the
+ * bump and what tells you it is unimplemented is this suite rather than the compiler.
+ */
+
+public class projection_status_compliance
+    : ProjectionStatusCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
 /*
  * jasperfx#770 — the two stream-fetch query plans, standalone and inside a batched query. Fisher

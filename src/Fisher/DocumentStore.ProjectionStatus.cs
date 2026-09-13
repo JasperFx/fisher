@@ -30,25 +30,33 @@ namespace Fisher;
 ///     </para>
 ///     <para>
 ///         So the state comes from the daemon this process hosts, through
-///         <see cref="RunningDaemons" />, and is <see cref="Unknown" /> when there is no daemon here to
-///         ask. <b>"Unknown" and "Stopped" are different operational situations</b> and the vocabulary
-///         keeps them apart: a store under <c>DaemonMode.ExternallyManaged</c>, a console in another
-///         process, or a hand-built store all genuinely cannot see the daemon, and saying so is worth
-///         more than a confident guess.
+///         <see cref="RunningDaemons" />, and is <see cref="ShardStatusState.Unknown" /> when there is
+///         no daemon here to ask. <b>"Unknown" and "Stopped" are different operational situations</b>
+///         and the vocabulary keeps them apart: a store under <c>DaemonMode.ExternallyManaged</c>, a
+///         console in another process, or a hand-built store all genuinely cannot see the daemon, and
+///         saying so is worth more than a confident guess. <b>That reading is now the shared one</b> —
+///         <c>ProjectionStatusCompliance</c> (jasperfx#818) adopted it against both siblings, each of
+///         which changes (marten#5383, polecat#589), and <see cref="ShardStatusState" /> is the closed
+///         four-value vocabulary it holds the field to. Fisher spells those constants rather than
+///         retyping the strings.
+///     </para>
+///     <para>
+///         <b>The inventory is projections, not shards, and that is the one place Fisher was the odd
+///         one out (fisher#249).</b> This answers from <c>Projections.All</c>, so a registered
+///         <em>subscription</em> is not in it — where it used to answer from <c>AllShards()</c>, which
+///         spans both. The argument for the old reading is real, which is why this needed a ruling
+///         rather than a test: a subscription genuinely is a daemon shard with progress worth watching,
+///         and omitting it makes a store with three subscriptions look like a store with none. It went
+///         the other way because this is the page an operator opens to ask about <em>read models</em>,
+///         and a subscription has no document behind it — a row for one is something a reader cannot
+///         click through to. <b>Nothing is lost</b>: subscription progress stays reachable
+///         non-generically through <see cref="IEventStore.RegisteredShardNames" /> correlated against
+///         <c>IEventDatabase.FetchProjectionLagAsync</c>, which is the pairing jasperfx#815 built for
+///         exactly that question.
 ///     </para>
 /// </remarks>
 public partial class DocumentStore
 {
-    /// <summary>
-    ///     No daemon in this process could be asked about this shard, so its runtime state is not
-    ///     something this store can report.
-    /// </summary>
-    /// <remarks>
-    ///     Deliberately not <c>"Stopped"</c>. The two are told apart everywhere else in this file, and
-    ///     the distinction is the whole reason the state is not read off the progression table.
-    /// </remarks>
-    internal const string Unknown = "Unknown";
-
     Task<IReadOnlyList<ProjectionStatus>> IEventStore.GetProjectionStatusesAsync(CancellationToken ct)
         => ProjectionStatusesAsync(null, ct);
 
@@ -139,54 +147,43 @@ public partial class DocumentStore
         var head = await HeadSequenceAsync(database, ct).ConfigureAwait(false);
         var tracker = await TrackerForAsync(database).ConfigureAwait(false);
 
+        // The registry drives the inventory and the shards are attributed TO it, rather than the
+        // shards driving the inventory. AllShards() spans asynchronous projections AND subscriptions;
+        // joining from the registry side is what drops a subscription from both halves of the answer
+        // at once — the top-level list and the shards inside a status — which is the partial fix the
+        // shared suite is shaped to catch.
+        var shardsByProjection = Options.Projections.AllShards()
+            .GroupBy(x => x.Name.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.ToList(), StringComparer.OrdinalIgnoreCase);
+
         var statuses = new List<ProjectionStatus>();
-        var named = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // AllShards() spans asynchronous projections AND subscriptions, which is what a projections
-        // page wants: a subscription is a daemon shard with progress to report, and omitting it would
-        // make a store with three subscriptions look like a store with none.
-        foreach (var group in Options.Projections.AllShards()
-                     .GroupBy(x => x.Name.Name, StringComparer.OrdinalIgnoreCase)
-                     .OrderBy(x => x.Key, StringComparer.Ordinal))
+        foreach (var source in Options.Projections.All.OrderBy(x => x.Name, StringComparer.Ordinal))
         {
-            named.Add(group.Key);
+            // Inline and Live projections run no daemon agent, so they have no shards and are reported
+            // with an empty list rather than omitted. The Lifecycle on the status is what says why it
+            // is empty, so a console can render "Inline — no shards" instead of inferring that the
+            // projection does not exist. Marten instead reports a shard in Unknown, which the suite
+            // deliberately permits as a coherent answer of a different kind; what it refuses is putting
+            // the LIFECYCLE in the State slot, which is Polecat's answer and makes that field mean a
+            // daemon state on some rows and a lifecycle on others.
+            var shards = shardsByProjection.TryGetValue(source.Name, out var group)
+                ? group
+                    .OrderBy(x => x.Name.Identity, StringComparer.Ordinal)
+                    .Select(shard => new ShardStatus(
+                        shard.Name.Identity,
+                        StateFor(tracker, shard.Name, daemonVisible: tracker is not null),
+                        progress.GetValueOrDefault(shard.Name.Identity),
+                        head,
+                        ErrorFor(tracker, shard.Name)))
+                    .ToList()
+                : [];
 
-            var shards = group
-                .OrderBy(x => x.Name.Identity, StringComparer.Ordinal)
-                .Select(shard => new ShardStatus(
-                    shard.Name.Identity,
-                    StateFor(tracker, shard.Name, daemonVisible: tracker is not null),
-                    progress.GetValueOrDefault(shard.Name.Identity),
-                    head,
-                    ErrorFor(tracker, shard.Name)))
-                .ToList();
-
-            statuses.Add(new ProjectionStatus(group.Key, LifecycleFor(group.Key), shards));
-        }
-
-        // Inline and Live projections have no shards, and are reported with an empty list rather than
-        // omitted. The Lifecycle on the status is what says why it is empty, so a console can render
-        // "Inline — no shards" instead of inferring that the projection does not exist. Polecat
-        // synthesises a fake single shard for these and puts the LIFECYCLE in its State slot, which
-        // makes the field mean two different things depending on the row.
-        foreach (var source in Options.Projections.All
-                     .Where(x => !named.Contains(x.Name))
-                     .OrderBy(x => x.Name, StringComparer.Ordinal))
-        {
-            statuses.Add(new ProjectionStatus(source.Name, source.Lifecycle.ToString(), []));
+            statuses.Add(new ProjectionStatus(source.Name, source.Lifecycle.ToString(), shards));
         }
 
         return statuses;
     }
-
-    private string LifecycleFor(string projectionName)
-        => Options.Projections.TryFindProjection(projectionName, out var source)
-            ? source.Lifecycle.ToString()
-
-            // A shard whose name matches no registered projection is a subscription's. Subscriptions
-            // exist only as daemon shards — there is deliberately no inline equivalent (fisher#21) —
-            // so Async is a fact about them rather than a guess.
-            : ProjectionLifecycle.Async.ToString();
 
     /// <summary>
     ///     The head of the event store, from <c>max(seq_id)</c> rather than from the persisted
@@ -272,35 +269,47 @@ public partial class DocumentStore
     ///         documentation names.
     ///     </para>
     ///     <para>
-    ///         <b>A visible daemon with no state for the shard is <c>Stopped</c>, not
-    ///         <see cref="Unknown" />.</b> Every agent publishes <c>Started</c> as it launches, so a
-    ///         registered shard the tracker has never heard of is one this daemon is not running — which
-    ///         is what an operator means by stopped. <see cref="Unknown" /> is reserved for the case
-    ///         where there is no daemon to have an opinion.
+    ///         <b>A visible daemon with no state for the shard is
+    ///         <see cref="ShardStatusState.Stopped" />, not <see cref="ShardStatusState.Unknown" />.</b>
+    ///         Every agent publishes <c>Started</c> as it launches, so a registered shard the tracker has
+    ///         never heard of is one this daemon is not running — which is what an operator means by
+    ///         stopped. <see cref="ShardStatusState.Unknown" /> is reserved for the case where there is
+    ///         no daemon to have an opinion.
+    ///     </para>
+    ///     <para>
+    ///         <b>The vocabulary is closed at four values, and every arm lands inside it (fisher#249).</b>
+    ///         This used to answer <c>"Failed"</c> for a faulted shard and <c>Action.ToString()</c> for
+    ///         anything it did not recognise — both outside <see cref="ShardStatusState.All" />, and a
+    ///         console renders this string and <em>filters</em> on it, so a fifth value is a row that
+    ///         matches no filter rather than a more precise answer. A faulted shard is one a daemon
+    ///         reached and is no longer running, which is <see cref="ShardStatusState.Stopped" />; what it
+    ///         faulted on is <see cref="ShardStatus.Error" />, which is the slot that carries it and the
+    ///         reason nothing is lost by collapsing the state. The default arm is unreachable — every
+    ///         <see cref="ShardAction" /> is covered — and exists so a value added upstream stays inside
+    ///         the vocabulary; <see cref="ShardStatusState.Running" /> is the one answer it must not be,
+    ///         since a shard claimed to be consuming events is one an operator stops looking at.
     ///     </para>
     /// </remarks>
     private static string StateFor(ShardStateTracker? tracker, ShardName name, bool daemonVisible)
     {
         if (!daemonVisible)
         {
-            return Unknown;
+            return ShardStatusState.Unknown;
         }
 
         var state = tracker?.CurrentState(name);
 
         if (state is null)
         {
-            return "Stopped";
+            return ShardStatusState.Stopped;
         }
 
         return state.Action switch
         {
             ShardAction.Started or ShardAction.Updated or ShardAction.Restarted or ShardAction.Skipped
-                => "Running",
-            ShardAction.Paused => "Paused",
-            ShardAction.Stopped => "Stopped",
-            ShardAction.Faulted => "Failed",
-            _ => state.Action.ToString()
+                => ShardStatusState.Running,
+            ShardAction.Paused => ShardStatusState.Paused,
+            _ => ShardStatusState.Stopped
         };
     }
 

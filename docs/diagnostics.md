@@ -232,13 +232,25 @@ Four of `ShardStatus`'s five fields come off the database. The fifth — `State`
   store under `DaemonMode.ExternallyManaged`, a console in another process, and a hand-built store all
   genuinely cannot see the daemon. `Stopped` there is not a partial answer but a wrong one — it is
   exactly what a real stopped shard reports, and it is the reading an operator acts on.
-- **With a daemon this process hosts**, the state is its tracker's: `Running`, `Paused`, `Stopped` or
-  `Failed`, with the latched exception's message in `Error`.
+- **With a daemon this process hosts**, the state is its tracker's. The vocabulary is closed at four
+  values — `Running`, `Paused`, `Stopped`, `Unknown` — and a faulted shard reports `Stopped` with the
+  latched exception's message in `Error`. A console renders this string and filters on it, so a fifth
+  value would be a row that matches no filter rather than a more precise answer.
 - **`EventStoreSequence` is `max(seq_id)`, not the persisted high-water row.** The two agree on a store
   whose daemon is current, and differ exactly when it matters — the row is where the daemon *got to*,
   so reading it would make every shard on a stopped daemon look caught up.
 - **An inline or live projection is reported with an empty `Shards` list rather than omitted**, and its
   `Lifecycle` is what says why the list is empty.
+- **The inventory is the registered projections, so a subscription is not in it.** A subscription
+  genuinely is a daemon shard with progress worth watching, but this is the page you open to ask about
+  read models and a subscription has no document behind it. Its progress is reachable through
+  `IEventStore.RegisteredShardNames()` correlated against `IEventDatabase.FetchProjectionLagAsync` —
+  the pairing built for that question.
+
+::: tip
+This surface is held to a shared definition across Marten, Polecat and Fisher by
+`ProjectionStatusCompliance`, and the `Unknown`-means-no-daemon reading above is the one it adopted.
+:::
 
 ::: warning
 The store-global overload **refuses** on a database-per-tenant store, where the two single-stream reads

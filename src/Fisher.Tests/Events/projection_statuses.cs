@@ -14,12 +14,21 @@ namespace Fisher.Tests.Events;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         <b>There is no shared suite for this, so every fact here is Fisher's own.</b> What the tests
-///         are shaped around is the one field that is not a database read:
+///         <b>There is a shared suite now — <c>ProjectionStatusCompliance</c> (jasperfx#818) — and it
+///         adopted Fisher's reading of the field these tests are shaped around.</b>
 ///         <c>ShardStatus.State</c> is a fact about the running daemon, and the failure this feature
-///         invites is filling it with a plausible constant. Polecat reports every shard as
-///         <c>"Stopped"</c> (polecat#200) — which is not a partial answer but a wrong one, because it
-///         is exactly what a real stopped shard reports and it is the reading an operator acts on.
+///         invites is filling it with a plausible constant. Polecat reported every shard as
+///         <c>"Stopped"</c> (polecat#200) — not a partial answer but a wrong one, because it is exactly
+///         what a real stopped shard reports and it is the reading an operator acts on — and Marten
+///         answered <c>Unknown</c> unconditionally, never reading a daemon at all. Both change
+///         (polecat#589, marten#5383).
+///     </para>
+///     <para>
+///         <b>These stay because the suite cannot see most of what they assert.</b> Its fixture drives
+///         one hand-built store and one hosted one; the planted progression row, the deliberately
+///         stale high-water row, and the subscription's survival on the lag surface below all need a
+///         store arranged into a state a portable fixture has no vocabulary for. The one fact that
+///         moved rather than stayed is the inventory ruling — see below.
 ///     </para>
 ///     <para>
 ///         So the discriminating tests are the ones that tell <c>Unknown</c>, <c>Stopped</c> and
@@ -76,8 +85,8 @@ public class projection_statuses : IAsyncLifetime
         var tally = statuses.Single(x => x.ProjectionName == nameof(StatusTally));
         var shard = tally.Shards.ShouldHaveSingleItem();
 
-        shard.State.ShouldBe("Unknown");
-        shard.State.ShouldNotBe("Stopped");
+        shard.State.ShouldBe(ShardStatusState.Unknown);
+        shard.State.ShouldNotBe(ShardStatusState.Stopped);
     }
 
     /// <remarks>
@@ -98,7 +107,7 @@ public class projection_statuses : IAsyncLifetime
 
         shard.ProcessedSequence.ShouldBe(1);
         shard.EventStoreSequence.ShouldBe(2);
-        shard.State.ShouldBe("Unknown");
+        shard.State.ShouldBe(ShardStatusState.Unknown);
         shard.Error.ShouldBeNull();
     }
 
@@ -148,28 +157,63 @@ public class projection_statuses : IAsyncLifetime
             .Lifecycle.ShouldBe(nameof(ProjectionLifecycle.Async));
     }
 
+    /// <summary>
+    ///     A registered subscription is not a projection and is not in this inventory — and its
+    ///     progress is still reachable, one surface over.
+    /// </summary>
     /// <remarks>
-    ///     A subscription is a daemon shard with progress to report, so a projections page that omitted
-    ///     it would show a store with three subscriptions as a store with none.
+    ///     <para>
+    ///         <b>fisher#249 reversed this test</b>, which used to assert the opposite. The argument it
+    ///         was written on is unchanged and was never wrong: a subscription genuinely is a daemon
+    ///         shard with progress to report. What the shared ruling (jasperfx#818) decided is that this
+    ///         is not the page for it — a projections page is where an operator asks about <em>read
+    ///         models</em>, and a subscription has no document behind it, so a row for one is something
+    ///         a reader cannot click through to.
+    ///     </para>
+    ///     <para>
+    ///         <b>So this asserts the replacement as well as the omission</b>, because "dropped from a
+    ///         list" and "no longer answerable" are different outcomes and only the first was ruled on.
+    ///         <c>RegisteredShardNames()</c> against <c>FetchProjectionLagAsync</c> is the pairing
+    ///         jasperfx#815 built for exactly this question, and it reports the subscription's shard
+    ///         with the progress this page used to carry.
+    ///     </para>
+    ///     <para>
+    ///         Asserted on the shards as well as on the top-level names, because a store that filtered
+    ///         only the outer list would leave the subscription's shard inside somebody else's status —
+    ///         which is the partial fix the shared suite is shaped to catch.
+    ///     </para>
     /// </remarks>
     [Fact]
-    public async Task a_subscription_is_reported_alongside_the_projections()
+    public async Task a_subscription_is_not_in_the_projection_inventory_and_is_still_reachable()
     {
         await using var store = DocumentStore.For(options =>
         {
             options.ConnectionString = _database.ConnectionString;
             options.AutoCreateSchemaObjects = AutoCreate.All;
             options.DatabaseSchemaName = "subs";
+            options.Projections.Snapshot<StatusTally>(SnapshotLifecycle.Async);
             options.Projections.Subscribe(new QuietSubscription());
         });
 
         await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
 
-        var statuses = await ((IEventStore)store).GetProjectionStatusesAsync(Token);
-        var subscription = statuses.Single(x => x.ProjectionName == nameof(QuietSubscription));
+        var explorer = (IEventStore)store;
+        var statuses = await explorer.GetProjectionStatusesAsync(Token);
 
-        subscription.Lifecycle.ShouldBe(nameof(ProjectionLifecycle.Async));
-        subscription.Shards.ShouldHaveSingleItem().State.ShouldBe("Unknown");
+        statuses.Select(x => x.ProjectionName).ShouldNotContain(nameof(QuietSubscription));
+        statuses.SelectMany(x => x.Shards).Select(x => x.ShardName)
+            .ShouldNotContain(x => x.StartsWith(nameof(QuietSubscription), StringComparison.Ordinal));
+
+        // The registered projection beside it is still there, so this is the inventory rule rather
+        // than an empty answer.
+        statuses.Select(x => x.ProjectionName).ShouldContain(nameof(StatusTally));
+
+        // ...and the subscription's progress is reachable through the surface designed for it.
+        var registered = explorer.RegisteredShardNames();
+        registered.Select(x => x.Name).ShouldContain(nameof(QuietSubscription));
+
+        var lag = await ((IEventDatabase)store.Database).FetchProjectionLagAsync(registered, Token);
+        lag.Select(x => x.Shard.Name).ShouldContain(nameof(QuietSubscription));
     }
 
     // ---- with a daemon this process hosts ----
@@ -222,7 +266,7 @@ public class projection_statuses : IAsyncLifetime
             var shard = statuses.Single(x => x.ProjectionName == nameof(StatusTally))
                 .Shards.ShouldHaveSingleItem();
 
-            shard.State.ShouldBe("Running");
+            shard.State.ShouldBe(ShardStatusState.Running);
             shard.ProcessedSequence.ShouldBe(2);
             shard.EventStoreSequence.ShouldBe(2);
             shard.Error.ShouldBeNull();
