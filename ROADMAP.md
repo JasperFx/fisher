@@ -5,7 +5,21 @@ architecture and the SQLite-specific decisions.
 
 Status: **two open issues, and neither is feature work.** 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0
-closed the vector story.
+closed the vector story; 1.8.0 let a host name the Event Model its store contributes to.
+
+[#271](https://github.com/JasperFx/fisher/issues/271) is what 1.8.0 is for, and it is worth reading
+as a reporting story rather than a fix. `AddFisher` registered its store-derived Event Model source
+under the default model name, so a host that called `AddEventModel("Something", …)` assembled **two**
+models — its own and one called `EventModel` — because discovery groups slices by model name before
+merging. Neither canvas then carried both halves. It surfaced as a consuming project's spec suite
+going 18/18 → 15/18 on a version bump alone, with `Expected exactly one assembled model, but got
+[Stoat, EventModel]` — a message naming neither Fisher nor the line that caused it. `AddFisher` and
+`AddFisherStore<T>` now take an optional `eventModelName`, and a null keeps the old behaviour, so a
+host that never named a model is unaffected.
+
+**The same trap is on both siblings**, which is the part worth carrying forward: Marten and Polecat
+register the same source the same way with no name, so any host on any of the three that names its
+Event Model gets a second one. JasperFx/marten#5404 and JasperFx/polecat#614 are the companion fixes.
 
 [#265](https://github.com/JasperFx/fisher/issues/265) is done, and it is why this line can be
 trusted: `scripts/check_roadmap_status.py` holds the region below to the real open-issue set at
