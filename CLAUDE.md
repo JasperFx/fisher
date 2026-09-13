@@ -336,6 +336,8 @@ Working, with tests:
   `fi_vector_distance` function — no side table, no trigger, no native extension
 - **Hybrid search** — `HybridSearchAsync<T>(...)`, reciprocal rank fusion over the full-text and
   vector legs, so each covers the other's recall hole
+- **Vector projections** — `VectorProjection<TDoc, TId>`, embeddings produced from an event stream
+  with SHA-256 content-hash skipping, so an unchanged body costs no embedding call
 - **Document metadata member mapping** — `guid_version`, `last_modified`, `is_deleted` and
   `deleted_at` projected back onto members of the document, by interface, attribute or DSL
 - **Strong-typed identities** — a wrapper around any of the four id types, as an aggregate's identity
@@ -1429,7 +1431,62 @@ application code reads the same against either store.
   tokens, and a middling-in-both document the fusion must lift above them. Verified by dropping the
   vector leg from the fuse — three tests fail.
 
-The event-sourced `VectorProjection` (content-hash skipping, async) is its own piece.
+### The vector projection — fisher#261
+
+`Projections/Vectors/` — `VectorProjection<TDoc, TId>`, the half of vector search that *produces* an
+embedding from a stream where `VectorSearchAsync` (fisher#241) searches one the application already
+put on the document. `Configure(map)` declares `map.Map<TEvent>(content, id)` and
+`map.Delete<TEvent>(id)`; content is SHA-256 hashed, and an unchanged hash costs no provider call.
+
+Ported in shape from `Marten.PgVector.Projection.VectorProjection`. **Four things differ, and all four
+are defects in that template rather than dialect differences** — which is why each is a test here
+rather than a comment:
+
+- ⚠️ **It queues onto the session rather than opening a connection.** Marten's runs its reads and
+  writes on `database.CreateConnection()`, outside the session's transaction, so **an embedding
+  commits even when the events that caused it roll back**. Fisher's `IProjection` is handed the
+  session, so the embedding row and the progression row land in one transaction — and on SQLite a
+  second connection writing while the batch holds the file's write lock would block against itself
+  anyway.
+- ⚠️ **Not Guid-only.** Marten's hardcodes `Guid` at the column, the extraction tuple and the hash
+  dictionary, so a string-identified store cannot use it at all. `TId` is open here, so all four id
+  types and strong-typed wrappers work; `the_document_identity_is_not_restricted_to_guid` states it,
+  and the whole test class being string-keyed is the evidence.
+- ⚠️ **A delete addresses the row the map wrote.** Marten's delete path reads `@event.StreamId`
+  unconditionally and ignores the configured id selector, so a projection keyed on a payload member
+  deletes nothing and the row stays in the index forever. **The fix is that there is no
+  `Delete<TEvent>()` overload without a selector** — making the two structurally incapable of
+  disagreeing beats checking that they agree, and the common case costs `e => e.StreamId`.
+- ⚠️ **A selector that throws is not swallowed.** Marten's catches everything and returns null, which
+  the caller reads as "this event carries no content" — so a bug in a selector drops the document from
+  the index with nothing reported. Here it propagates and faults the shard, which is what the daemon's
+  error handling is for. **Returning null is still "no content"**, which is a real and distinct answer.
+
+Three things that are Fisher's own:
+
+- **It writes an ordinary document, not a table of its own**, which is what makes the result
+  searchable with nothing added: the document declares `VectorIndex(x => x.Embedding, dimensions)` and
+  `VectorSearchAsync` and `HybridSearchAsync` read it like any other. The migration, soft delete,
+  tenancy and identity map all apply without this class knowing about them.
+- **Asynchronous only.** Embedding is a network call per batch, and an inline projection runs inside
+  the caller's `SaveChangesAsync` — holding SQLite's single write lock open across an HTTP round trip
+  to an embedding API would block every other writer in the process for its duration. Marten refuses
+  inline too, for the weaker reason that it needs its own connection.
+- **The declared index is checked against the provider on the first page**, both that it is on
+  `Embedding` and that its dimensions match. Both fail silently otherwise, and the second is the worse
+  one: the rows are written and every *search* then refuses at the caller's end with a message about
+  the query vector, pointing away from the projection that produced them. Checked on first use rather
+  than at construction because the projection is built before the store is.
+
+⚠️ **The existing-hash read uses `IsOneOf`, not `ids.Contains(x.Id)`.** An array receiver binds to
+`MemoryExtensions.Contains(ReadOnlySpan<T>, T)`, and the span operand cannot be unwrapped when `T` is
+an open type parameter — a ref struct cannot be returned as `object`. `IsOneOf` is fisher#26's marker
+operator and reads the same.
+
+**`unchanged_content_is_not_embedded_again` counts provider calls rather than inspecting rows**, and
+that is the only way to state it: the stored document is identical whether it was skipped or
+re-embedded, so nothing but the call count distinguishes them. Verified by removing the skip — one
+test fails.
 
 ### The four Marten operators — fisher#202
 
