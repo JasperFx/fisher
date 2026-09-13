@@ -988,6 +988,13 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
                 continue;
             }
 
+            // fisher#257's second checkpoint. A document type registered at configuration time was
+            // already checked in DocumentStore's constructor; one mapped lazily could not have been,
+            // and this is where it first becomes real. A store that is not sharded reads an empty list
+            // and returns.
+            Storage.SharedFileTenancyGuard.AssertDocumentTypeCanBeToldApart(
+                Options.SharedTenantFiles, Options.Schema.MappingFor(documentType));
+
             if (EnlistedTransaction is not null)
             {
                 await AssertDocumentTableExistsAsync(documentType, token).ConfigureAwait(false);
@@ -1042,6 +1049,11 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         {
             return;
         }
+
+        // fisher#257, the read half — the same rule the commit loop applies, and a read reaches a
+        // lazily-mapped type just as a write does (fisher#74).
+        Storage.SharedFileTenancyGuard.AssertDocumentTypeCanBeToldApart(
+            Options.SharedTenantFiles, Options.Schema.MappingFor(documentType));
 
         if (EnlistedTransaction is not null)
         {

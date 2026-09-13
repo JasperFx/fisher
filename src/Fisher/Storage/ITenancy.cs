@@ -47,6 +47,61 @@ public interface ITenancy : IAsyncDisposable, IDisposable
 
     /// <summary>Every database this store spans.</summary>
     IReadOnlyList<FisherDatabase> AllDatabases();
+
+    /// <summary>
+    ///     The files this tenancy has more than one tenant sharing, if any (fisher#257).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Sharded tenancy is the configuration this answers about</b> — several tenants
+    ///         co-located in one file, which fisher#252 established works and made
+    ///         <see cref="SeparateDatabaseTenancy" /> build one database per <em>file</em> to support.
+    ///         It is safe only while everything stored in that file can be told apart by tenant, and
+    ///         <see cref="SharedFileTenancyGuard" /> is what holds a store to that.
+    ///     </para>
+    ///     <para>
+    ///         <b>A default interface method returning empty, rather than a member every implementation
+    ///         must write.</b> <see cref="ITenancy" /> is public and implementable outside this
+    ///         repository, so adding an abstract member would be a breaking change — the same reason
+    ///         fisher#172 adapted onto <c>IDatabaseSource</c> rather than widening this interface. The
+    ///         empty default is also the safe one: a tenancy Fisher does not know about is read as
+    ///         sharing nothing, so the guard refuses nothing it cannot see rather than guessing.
+    ///     </para>
+    /// </remarks>
+    IReadOnlyList<SharedTenantFile> SharedFiles() => [];
+}
+
+/// <summary>
+///     One database file and the tenants sharing it (fisher#257).
+/// </summary>
+/// <param name="ConnectionString">The connection string the tenants agree on.</param>
+/// <param name="TenantIds">Every tenant resolving to it — always more than one, or it is not shared.</param>
+public sealed record SharedTenantFile(string ConnectionString, IReadOnlyList<string> TenantIds)
+{
+    /// <summary>
+    ///     The file itself, for a message a reader can act on.
+    /// </summary>
+    /// <remarks>
+    ///     The <c>Data Source</c> rather than the whole connection string: the path is the part that
+    ///     identifies the file, and the rest is pragma and pooling noise that makes an error message
+    ///     harder to read rather than more precise.
+    /// </remarks>
+    public string DataSource
+    {
+        get
+        {
+            try
+            {
+                return new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(ConnectionString).DataSource;
+            }
+            catch (Exception)
+            {
+                // A connection string Fisher did not parse is still worth naming; the guard's message
+                // is better with something in it than with nothing.
+                return ConnectionString;
+            }
+        }
+    }
 }
 
 /// <summary>
@@ -172,9 +227,16 @@ public sealed class SeparateDatabaseTenancy : ITenancy
                   + "conjoined tenancy.");
 
         _files = byFile.Values.ToList();
+
+        _sharedFiles = tenantsPerFile
+            .Where(x => x.Value.Count > 1)
+            .Select(x => new SharedTenantFile(x.Key,
+                x.Value.OrderBy(t => t, StringComparer.Ordinal).ToList()))
+            .ToList();
     }
 
     private readonly List<FisherDatabase> _files;
+    private readonly List<SharedTenantFile> _sharedFiles;
 
     public DatabaseCardinality Cardinality => DatabaseCardinality.StaticMultiple;
 
@@ -197,6 +259,12 @@ public sealed class SeparateDatabaseTenancy : ITenancy
     ///     would read each shared file once per tenant co-located in it.
     /// </remarks>
     public IReadOnlyList<FisherDatabase> AllDatabases() => _files;
+
+    /// <remarks>
+    ///     Computed once, from the configured map — the tenant set here is fixed when the store is
+    ///     built, so this is exhaustive rather than a snapshot.
+    /// </remarks>
+    public IReadOnlyList<SharedTenantFile> SharedFiles() => _sharedFiles;
 
     public async ValueTask DisposeAsync()
     {

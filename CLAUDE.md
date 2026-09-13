@@ -3285,12 +3285,33 @@ whole commit.
   - **The explorer needed no change at all.** `GetRecentStreamsAsync`'s `database.TenantId is null`
     branch — keep the row's own `tenant_id` rather than stamping the file's tenant — was correct all
     along and was simply unreachable, because nothing ever built a database with a null tenant.
-  - ⚠️ **Two tenants sharing a file *without* conjoined tenancy is silently the same data**, and is
-    deliberately **not** refused yet — fisher#257. The obvious guard (`Events.TenancyStyle != Conjoined`)
-    is wrong, because document tenancy is per type (`MultiTenanted()`) rather than store-wide, so it
-    would refuse a legitimately document-sharded store; and mappings are created lazily, so the
-    tenancy's constructor is too early to enumerate them honestly. The multi-tenancy docs carry it as
-    a warning until the guard has a home.
+  - ⚠️ **Two tenants sharing a file *without* conjoined tenancy is silently the same data, and is
+    refused** — `SharedFileTenancyGuard` (fisher#257). A shared file requires conjoined event tenancy
+    **and** `MultiTenanted()` on every document type; the trap is silent in the fisher#51 direction,
+    where the tenant owning most of the data sees a correct-looking answer with extras. Same rule as
+    fisher#46's refusal of two stores over one file with one schema name, a layer down.
+    - ⚠️ **Conjoined event tenancy is required even for a store that never appends an event**, and
+      that is a decision. The conditional rule cannot be decided honestly: the event tables are
+      created by every migration whether anything writes to them or not, and an append does not need
+      its event type registered — so "does this store use events" has no reliable answer at
+      configuration time, and a rule that guessed would refuse some safe stores and admit some unsafe
+      ones. `a_documents_only_store_still_has_to_say_conjoined` pins it as a decision rather than
+      leaving it to read as over-reach.
+    - **Two checkpoints, because one cannot be complete.** `DocumentStore`'s constructor covers
+      everything registered at configuration time — beside `AssertEveryMappingHasIdentity`, and for
+      its reason: that is the first moment the configuration is final. A document mapping created
+      lazily is invisible there, so the guard runs again where such a type's table is provisioned, on
+      both the write and the read path (fisher#74's two entry points). Removing either checkpoint
+      fails tests — two for the second, three for the first.
+    - ⚠️ **The check cannot live in `DocumentSchema.MappingFor`**, which is the placement that
+      suggests itself. `Schema.For<T>().MultiTenanted()` creates the mapping and *then* sets the flag,
+      so a refusal at creation fires before the line that satisfies it could run — the trap fisher#218
+      moved `AssertEveryMappingHasIdentity` out of `DocumentMapping`'s constructor for.
+    - **`ITenancy.SharedFiles()` is a default interface method returning empty**, because `ITenancy`
+      is public and implementable outside this repo — an abstract member would be a breaking change,
+      the reason fisher#172 adapted onto `IDatabaseSource` rather than widening it. The empty default
+      is also the safe one: a tenancy Fisher does not know about is read as sharing nothing, so the
+      guard refuses nothing it cannot see.
   - **Neither compliance arm reaches it**, which is why `sharded_tenancy_reads` exists:
     `ShardedTenancyExplorerCompliance` never asks for a *store-global* listing, and
     `DatabasePerTenantExplorerCompliance` has no co-located tenants for a file to misattribute. Five of

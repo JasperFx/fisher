@@ -33,6 +33,7 @@ public partial class DocumentStore : IDocumentStore
 
         Database = Tenancy.Default;
         options.StorageDatabase = Database;
+        options.SharedTenantFiles = Tenancy.SharedFiles();
 
         // Register the self-aggregating types whose evolvers the source generator emitted, so
         // Projections.AllAggregateTypes() reports an aggregate that was never registered by hand.
@@ -68,6 +69,14 @@ public partial class DocumentStore : IDocumentStore
         // that mattered — a document type Fisher cannot store is a configuration-time error naming the
         // type, rather than an InvalidOperationException on somebody's first save.
         options.Schema.AssertEveryMappingHasIdentity();
+
+        // fisher#257. Beside AssertEveryMappingHasIdentity for the same reason: this is the first
+        // moment the configuration is final — an IConfigureFisher contribution may have added a
+        // document type or turned conjoined tenancy on long after the configuration lambda ran — and
+        // a configuration error belongs here rather than on somebody's first save. It covers every
+        // type the schema has mapped by now; a type mapped lazily later is caught where its table is
+        // provisioned, which is the only place it can be.
+        SharedFileTenancyGuard.AssertTenantsSharingAFileCanBeToldApart(options, Tenancy);
 
         // Builds the async shard registry and fails fast on duplicate projection names.
         options.Projections.AssertValidity(options);
