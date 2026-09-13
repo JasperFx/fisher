@@ -55,4 +55,26 @@ public static class configuration_samples
                 serviceProvider.GetRequiredService<SalesProjection>(), ProjectionLifecycle.Async));
         #endregion
     }
+
+    public static void event_model_name(IServiceCollection services, string connectionString)
+    {
+        #region sample_event_model_name
+        // Slices are grouped by MODEL NAME before they are merged, so a host that names its own model
+        // has to name the store's source to match -- otherwise the store's View slices assemble a
+        // second model called "EventModel" beside the host's, and neither canvas carries both halves.
+        services.AddFisher(options =>
+        {
+            options.ConnectionString = connectionString;
+            options.Projections.Snapshot<Report>(SnapshotLifecycle.Inline);
+        }, eventModelName: "Storefront");
+
+        // An ancillary store has to be told separately: it can be registered with no AddFisher at all,
+        // so there is no primary registration for it to read the name off.
+        services.AddFisherStore<IReportingStore>(options =>
+        {
+            options.ConnectionString = connectionString;
+            options.Projections.Snapshot<Report>(SnapshotLifecycle.Inline);
+        }, eventModelName: "Storefront");
+        #endregion
+    }
 }

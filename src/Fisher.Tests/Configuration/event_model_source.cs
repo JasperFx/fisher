@@ -263,6 +263,168 @@ public class event_model_source : IAsyncLifetime
     }
 
     /// <summary>
+    ///     <b>fisher#271.</b> A host that names its Event Model can tell the store the same name, and
+    ///     gets <em>one</em> assembled model rather than two.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The reported symptom was a spec suite going from 18/18 to 15/18 on a version bump alone,
+    ///         with <c>Expected exactly one assembled model, but got [Stoat, EventModel]</c>. Slices are
+    ///         grouped by model name before merging, so a store still answering with the default name
+    ///         does not contribute to the host's canvas at all — it assembles a second one beside it.
+    ///     </para>
+    ///     <para>
+    ///         ⚠️ <b>Both halves are asserted, and the second is the one that makes the first mean
+    ///         something.</b> Asserting only that a named store lands on the named model passes against
+    ///         a store that ignores the parameter and puts everything on whichever name the host used —
+    ///         so <see cref="a_store_left_on_the_default_assembles_a_second_model" /> pins the failure
+    ///         this parameter exists to escape, as the behaviour it still is when nobody passes a name.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_named_model_takes_the_stores_slices_rather_than_assembling_a_second()
+    {
+        await using var provider = BuildNamed("Stoat", eventModelName: "Stoat");
+
+        var model = (await EventModelDiscovery.AssembleAsync(provider, Token)).ShouldHaveSingleItem();
+
+        model.Name.ShouldBe("Stoat");
+
+        // One slice carrying both claims: the host declared the domain, the store derived the read
+        // model. Two models would each have half of this and neither would have both.
+        var slice = model.Slices.Single(x => x.Name == nameof(ModelLedger));
+        slice.Domain.ShouldBe("Finance");
+        slice.ReadModelTypes.Select(x => x.Name).ShouldBe([nameof(ModelLedger)]);
+        slice.ProvenanceFor(EventModelRole.ReadModelTypes).ShouldBe(EventModelProvenance.Derived);
+    }
+
+    /// <summary>
+    ///     The bug, as the behaviour it remains for a store nobody names: the host's model and the
+    ///     store's default are two models, and the store's slices are on neither of the host's.
+    /// </summary>
+    /// <remarks>
+    ///     Kept rather than left implicit because "there is no way to reach the named canvas" and
+    ///     "reaching it needs one argument" are different situations, and only the second one is true
+    ///     now. It is also the guard that would fail if the default ever silently followed the host.
+    /// </remarks>
+    [Fact]
+    public async Task a_store_left_on_the_default_assembles_a_second_model()
+    {
+        await using var provider = BuildNamed("Stoat", eventModelName: null);
+
+        var models = await EventModelDiscovery.AssembleAsync(provider, Token);
+
+        models.Select(x => x.Name).OrderBy(x => x, StringComparer.Ordinal)
+            .ShouldBe([ProjectionEventModelSource.DefaultModelName, "Stoat"]);
+
+        // And the host's own model never sees the read model the store knows about.
+        models.Single(x => x.Name == "Stoat").Slices.Single(x => x.Name == nameof(ModelLedger))
+            .ReadModelTypes.ShouldBeEmpty();
+    }
+
+    /// <summary>
+    ///     An ancillary store takes the name too, and has to be told separately.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The old comment on that registration said the model name stays the default because an
+    ///         ancillary store's read models belong on the same canvas as the primary's. That is right
+    ///         about <em>which store</em> and says nothing about <em>which canvas</em> — so the two
+    ///         calls agree on a name rather than on the default, and nothing in Fisher can check that
+    ///         they do: <c>AddFisherStore&lt;T&gt;</c> can be called with no <c>AddFisher</c> at all.
+    ///     </para>
+    ///     <para>
+    ///         They still differ by <c>Subject</c>, which is what says which store a slice came from —
+    ///         see <see cref="each_store_contributes_a_source_with_its_own_subject" />.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task both_stores_reach_a_named_model_when_both_are_told_its_name()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+
+        services.AddFisher(options =>
+        {
+            options.ConnectionString = _primary.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Projections.Snapshot<ModelLedger>(SnapshotLifecycle.Inline);
+        }, eventModelName: "Stoat");
+
+        services.AddFisherStore<ILedgerArchiveStore>(options =>
+        {
+            options.ConnectionString = _ancillary.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Projections.Snapshot<Manifest>(SnapshotLifecycle.Inline);
+        }, eventModelName: "Stoat");
+
+        await using var provider = services.BuildServiceProvider();
+
+        var model = (await EventModelDiscovery.AssembleAsync(provider, Token)).ShouldHaveSingleItem();
+
+        model.Name.ShouldBe("Stoat");
+        model.Slices.Select(x => x.Name).OrderBy(x => x, StringComparer.Ordinal)
+            .ShouldBe([nameof(Manifest), nameof(ModelLedger)]);
+    }
+
+    /// <summary>
+    ///     Passing no name is what every existing host does, and it still means the shared default.
+    /// </summary>
+    /// <remarks>
+    ///     Asserted on the source's own <c>ModelName</c> rather than on an assembled model, because
+    ///     the assembled name is the same string either way when nothing else names a model — which
+    ///     is exactly the shape that would pass against a regression.
+    /// </remarks>
+    [Fact]
+    public async Task no_name_is_still_the_shared_default()
+    {
+        await using var provider = BuildBothStores();
+
+        provider.GetServices<IEventModelDefinitionSource>()
+            .OfType<ProjectionEventModelSource>()
+            .Select(x => x.ModelName)
+            .ShouldAllBe(x => x == ProjectionEventModelSource.DefaultModelName);
+
+        (await EventModelDiscovery.AssembleAsync(provider, Token)).ShouldHaveSingleItem()
+            .Name.ShouldBe(ProjectionEventModelSource.DefaultModelName);
+    }
+
+    /// <summary>
+    ///     An empty or whitespace name is refused by name rather than taken at its word.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         It is a legal model name, so accepting it would reproduce the very bug the parameter
+    ///         exists to fix — a second assembled model nothing merges into — with a blank where the
+    ///         name should be in the message that reports it.
+    ///     </para>
+    ///     <para>
+    ///         <b>And refused before anything is registered</b>, which is what the emptiness assertion
+    ///         is for: both methods add several singletons before they reach the model source, so
+    ///         validating at the point of use would leave a half-populated collection behind an
+    ///         exception the caller may well catch.
+    ///     </para>
+    /// </remarks>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void an_empty_model_name_is_refused(string name)
+    {
+        var services = new ServiceCollection();
+
+        Should.Throw<ArgumentException>(()
+                => services.AddFisher(options => options.ConnectionString = _primary.ConnectionString, name))
+            .ParamName.ShouldBe("eventModelName");
+
+        Should.Throw<ArgumentException>(()
+                => services.AddFisherStore<ILedgerArchiveStore>(
+                    options => options.ConnectionString = _ancillary.ConnectionString, name))
+            .ParamName.ShouldBe("eventModelName");
+
+        services.ShouldBeEmpty();
+    }
+
+    /// <summary>
     ///     A store with no projections at all contributes nothing, rather than an empty model.
     /// </summary>
     /// <remarks>
@@ -293,6 +455,30 @@ public class event_model_source : IAsyncLifetime
 
             configure?.Invoke(options);
         });
+
+        return services.BuildServiceProvider();
+    }
+
+    /// <summary>
+    ///     A host that names its Event Model, with the store either told that name or left on the
+    ///     default — the two sides of fisher#271.
+    /// </summary>
+    private ServiceProvider BuildNamed(string hostModelName, string? eventModelName)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+
+        services.AddFisher(options =>
+        {
+            options.ConnectionString = _primary.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Projections.Snapshot<ModelLedger>(SnapshotLifecycle.Inline);
+        }, eventModelName);
+
+        // A role the store cannot know, so a merged slice is observably richer than either half and
+        // an unmerged one is observably poorer.
+        services.AddEventModel(hostModelName, model
+            => model.Slice(nameof(ModelLedger)).InDomain("Finance"));
 
         return services.BuildServiceProvider();
     }
