@@ -9,11 +9,12 @@ namespace Fisher.Tests.Compliance;
  * these tests cannot drift between the products.
  *
  * Suites were added one at a time as Fisher grew into them, and fifty-one are enrolled from
- * JasperFx.Events.ComplianceTests 2.69.0, which itself ships fifty-five. Three are not enrolled:
- * SingleTenantedEventSlicingCompliance, for the precondition reason set out below;
- * GuidOptimisticConcurrencyCompliance, which is fisher#250; and the two arms of
- * MultiDatabaseExplorerCompliance, which need a fixture that can build a store over more than one
- * database (SupportsMultipleDatabases) and is fisher#252.
+ * JasperFx.Events.ComplianceTests 2.69.0, which itself ships fifty-six concrete suites across
+ * fifty-five files -- MultiDatabaseExplorerCompliance is one file holding two arms. Five are not
+ * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below;
+ * NumericRevisionCompliance and GuidOptimisticConcurrencyCompliance, which are fisher#250; and the
+ * two arms of MultiDatabaseExplorerCompliance, which need a fixture that can build a store over more
+ * than one database (SupportsMultipleDatabases) and are fisher#252.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
  * reason recorded at the flag on FisherComplianceFixture rather than here:

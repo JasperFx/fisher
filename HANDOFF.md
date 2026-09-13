@@ -662,7 +662,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.69.0 ships 55 suites; Fisher enrolls **51 of them, 544 tests**.
+`JasperFx.Events.ComplianceTests` 2.69.0 ships 56 suites; Fisher enrolls **51 of them, 544 tests**.
 Fisher passes **544 of them, across all
 51 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
