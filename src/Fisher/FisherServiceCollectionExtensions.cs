@@ -35,19 +35,39 @@ public static class FisherServiceCollectionExtensions
     /// <summary>
     ///     Register a Fisher store against a SQLite connection string.
     /// </summary>
+    /// <param name="eventModelName">
+    ///     The Event Model these projections contribute slices to. Defaults to
+    ///     <c>ProjectionEventModelSource.DefaultModelName</c>, which is right when the application
+    ///     never named a model of its own. <b>A host that calls
+    ///     <c>AddEventModel("Something", …)</c> has to pass the same name here</b>, because slices
+    ///     merge by model name — leave it and the host assembles TWO models, its own and this one,
+    ///     which presents as "expected exactly one assembled model" rather than as anything about
+    ///     Fisher. The store cannot infer it: <c>AddEventModel</c> may not have been called yet when
+    ///     this runs (fisher#271).
+    /// </param>
     public static FisherConfigurationExpression AddFisher(this IServiceCollection services,
-        string connectionString)
+        string connectionString, string? eventModelName = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(connectionString);
 
-        return services.AddFisher(options => options.ConnectionString = connectionString);
+        return services.AddFisher(options => options.ConnectionString = connectionString, eventModelName);
     }
 
     /// <summary>
     ///     Register a Fisher store, configuring its <see cref="StoreOptions" />.
     /// </summary>
+    /// <param name="eventModelName">
+    ///     The Event Model these projections contribute slices to. Defaults to
+    ///     <c>ProjectionEventModelSource.DefaultModelName</c>, which is right when the application
+    ///     never named a model of its own. <b>A host that calls
+    ///     <c>AddEventModel("Something", …)</c> has to pass the same name here</b>, because slices
+    ///     merge by model name — leave it and the host assembles TWO models, its own and this one,
+    ///     which presents as "expected exactly one assembled model" rather than as anything about
+    ///     Fisher. The store cannot infer it: <c>AddEventModel</c> may not have been called yet when
+    ///     this runs (fisher#271).
+    /// </param>
     public static FisherConfigurationExpression AddFisher(this IServiceCollection services,
-        Action<StoreOptions> configure)
+        Action<StoreOptions> configure, string? eventModelName = null)
     {
         ArgumentNullException.ThrowIfNull(configure);
 
@@ -56,15 +76,25 @@ public static class FisherServiceCollectionExtensions
             var options = new StoreOptions();
             configure(options);
             return options;
-        });
+        }, eventModelName);
     }
 
     /// <summary>
     ///     Register a Fisher store whose options are built from the container — for a connection string
     ///     out of <c>IConfiguration</c>, or anything else that needs a resolved service.
     /// </summary>
+    /// <param name="eventModelName">
+    ///     The Event Model these projections contribute slices to. Defaults to
+    ///     <c>ProjectionEventModelSource.DefaultModelName</c>, which is right when the application
+    ///     never named a model of its own. <b>A host that calls
+    ///     <c>AddEventModel("Something", …)</c> has to pass the same name here</b>, because slices
+    ///     merge by model name — leave it and the host assembles TWO models, its own and this one,
+    ///     which presents as "expected exactly one assembled model" rather than as anything about
+    ///     Fisher. The store cannot infer it: <c>AddEventModel</c> may not have been called yet when
+    ///     this runs (fisher#271).
+    /// </param>
     public static FisherConfigurationExpression AddFisher(this IServiceCollection services,
-        Func<IServiceProvider, StoreOptions> optionSource)
+        Func<IServiceProvider, StoreOptions> optionSource, string? eventModelName = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(optionSource);
@@ -95,7 +125,7 @@ public static class FisherServiceCollectionExtensions
         // knows which. Fisher's DocumentStore implements IEventStore EXPLICITLY (fisher#45), so the
         // cast is what reaches it — IDocumentStore does not carry the member.
         services.AddProjectionEventModelSource(sp
-            => [(JasperFx.Events.IEventStore)sp.GetRequiredService<DocumentStore>()]);
+            => [(JasperFx.Events.IEventStore)sp.GetRequiredService<DocumentStore>()], eventModelName);
 
         // fisher#172 — the two halves of the command-line seam, and they are genuinely two: the
         // "resources" commands and AddResourceSetupOnStartup() go through ISystemPart, while Weasel's
@@ -167,9 +197,10 @@ public static class FisherServiceCollectionExtensions
         });
     }
 
-    /// <inheritdoc cref="AddFisherStore{T}(IServiceCollection,Action{StoreOptions})" />
+    /// <inheritdoc cref="AddFisherStore{T}(IServiceCollection,Action{StoreOptions},string)" />
     public static FisherStoreConfigurationExpression<T> AddFisherStore<T>(this IServiceCollection services,
-        Func<IServiceProvider, StoreOptions> optionSource) where T : class, IDocumentStore
+        Func<IServiceProvider, StoreOptions> optionSource, string? eventModelName = null)
+        where T : class, IDocumentStore
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(optionSource);
@@ -203,12 +234,15 @@ public static class FisherServiceCollectionExtensions
         // Registered through AddEventModelSource rather than AddProjectionEventModelSource so the
         // Subject can say WHICH store these slices came from. Same distinction FisherSystemPart<T>
         // draws with its own subject uri, and it matters more here than on either sibling because two
-        // Fisher stores are usually two files. The MODEL NAME stays the default: slices merge by model
-        // name, and an ancillary store's read models belong on the same canvas as the primary's.
+        // Fisher stores are usually two files. The model name DEFAULTS to the shared one on purpose:
+        // slices merge by model name, and an ancillary store's read models belong on the same canvas
+        // as the primary's — but a host that named its OWN model has to say so, or it assembles two
+        // (fisher#271), which is why this is a parameter rather than a constant.
         services.AddEventModelSource(new ProjectionEventModelSource(sp
             => [(JasperFx.Events.IEventStore)UnwrapForTooling(sp.GetRequiredService<T>())])
         {
-            Subject = new Uri($"event-model://projections/{typeof(T).Name.ToLowerInvariant()}")
+            Subject = new Uri($"event-model://projections/{typeof(T).Name.ToLowerInvariant()}"),
+            ModelName = eventModelName ?? ProjectionEventModelSource.DefaultModelName
         });
 
         // fisher#172 — an ancillary store contributes its own database(s) to both command-line seams,

@@ -263,6 +263,52 @@ public class event_model_source : IAsyncLifetime
     }
 
     /// <summary>
+    ///     A host that names its own Event Model gets ONE model, not two (fisher#271).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Slices merge by model name, so a store contributing under the default name while the
+    ///         application called its model something else produces two assembled models that never
+    ///         meet. The symptom is not a missing slice — it is "expected exactly one assembled
+    ///         model", which names neither Fisher nor the line that caused it.
+    ///     </para>
+    ///     <para>
+    ///         The store cannot infer the name: <c>AddEventModel</c> may be called after
+    ///         <c>AddFisher</c>, as it is here, so there is nothing to read at registration time. It
+    ///         has to be told.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_named_model_gets_the_stores_slices_rather_than_a_second_model()
+    {
+        var builder = Host.CreateDefaultBuilder().ConfigureServices(services =>
+        {
+            services.AddFisher(options =>
+            {
+                options.ConnectionString = _primary.ConnectionString;
+                options.AutoCreateSchemaObjects = AutoCreate.All;
+                options.Projections.Snapshot<ModelLedger>(SnapshotLifecycle.Inline);
+            }, eventModelName: "Ledgers");
+
+            // Deliberately after AddFisher, which is the ordering that makes inference impossible.
+            services.AddEventModel("Ledgers", model => model.Slice(nameof(ModelLedger)).InDomain("Finance"));
+        });
+
+        using var host = await builder.StartAsync(Token);
+
+        // One model. Without the name this is two — "Ledgers" and "EventModel".
+        var model = (await EventModelDiscovery.AssembleAsync(host.Services, Token)).ShouldHaveSingleItem();
+
+        // And the store's slices are ON it, rather than stranded on a model of their own — which is
+        // the half a bare count would miss if the two models ever merged for some other reason.
+        var slice = model.Slices.Single(x => x.Name == nameof(ModelLedger));
+        slice.Domain.ShouldBe("Finance");
+        slice.ProvenanceFor(EventModelRole.ReadModelTypes).ShouldBe(EventModelProvenance.Derived);
+
+        await host.StopAsync(Token);
+    }
+
+    /// <summary>
     ///     A store with no projections at all contributes nothing, rather than an empty model.
     /// </summary>
     /// <remarks>
