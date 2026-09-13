@@ -3271,6 +3271,25 @@ whole commit.
   high-water mark and its own progress row per shard — two tenants running one projection are two
   daemons writing the same shard name to two different tables. A second key would have drawn a
   distinction the file boundary already draws.
+- ⚠️ **Sharded tenancy — several tenants co-located in one file — works, and `SeparateDatabaseTenancy`
+  builds one `FisherDatabase` per FILE rather than per tenant to make it work** (fisher#252). Two
+  tenants naming one connection string under `TenancyStyle.Conjoined` is a configuration fisher#47
+  never contemplated, because its whole framing is "a tenant is a file". Keying on the tenant fixed
+  three things at once when it was changed to key on the file: `AllDatabases()` reported a shared file
+  once per tenant, so the explorer's fan-out read it that many times; each instance held its own
+  `SqliteDataSource`, so N pools sat over one file; and each claimed the file belonged to *its* tenant.
+  The visible result was **every stream reported once per co-located tenant, each copy attributed to
+  the wrong one**.
+  - **`FisherDatabase.TenantId` is null for a shared file**, which is the honest answer rather than a
+    gap — a file holding two tenants' data cannot say whose it is.
+  - **The explorer needed no change at all.** `GetRecentStreamsAsync`'s `database.TenantId is null`
+    branch — keep the row's own `tenant_id` rather than stamping the file's tenant — was correct all
+    along and was simply unreachable, because nothing ever built a database with a null tenant.
+  - **Neither compliance arm reaches it**, which is why `sharded_tenancy_reads` exists:
+    `ShardedTenancyExplorerCompliance` never asks for a *store-global* listing, and
+    `DatabasePerTenantExplorerCompliance` has no co-located tenants for a file to misattribute. Five of
+    its six tests fail against the old behaviour; the sixth is the tenant-scoped read, which was
+    already right and is the regression guard.
 - **Cleaning spans every database.** `ResetAllDataAsync` and the whole `IDocumentCleaner` surface loop
   `Tenancy.AllDatabases()`; cleaning only the default would leave every other tenant's data behind
   while reporting success, and the caller most likely to hit that is a test fixture.
@@ -4104,9 +4123,16 @@ the default file, wrong for everybody else, silent either way.
   store can be multi-tenanted. It now matches Marten's three clauses exactly — non-`Single` cardinality,
   conjoined event tenancy, or any `MultiTenanted()` document type.
 
-**The shared suite cannot reach any of this**, and says so in its own comments: its fixture is
-single-database, so its four database-scoped facts pin that the database overload *agrees with* the
-store-global read — vacuously true of a store that ignores the argument. `explorer_reads_across_databases`
+**`EventStoreExplorerCompliance` cannot reach any of this**, and says so in its own comments: its
+fixture is single-database, so its four database-scoped facts pin that the database overload *agrees
+with* the store-global read — vacuously true of a store that ignores the argument.
+**`MultiDatabaseExplorerCompliance` (jasperfx#810, 2.69.0) is the shared arm that can**, and Fisher
+enrolls both halves of it (fisher#252): `DatabasePerTenantExplorerCompliance` for the store-global
+reads, and `ShardedTenancyExplorerCompliance` for the `tenant_id` predicate. Fisher is structurally
+well placed for the second — Marten decides whether to apply the predicate from *cardinality*, on the
+premise that every stream in a tenant's database is that tenant's, which is true for
+database-per-tenant and false for sharding; `ResolveTenantScope` decides from *tenancy style*, which
+is the axis that answers the question. `explorer_reads_across_databases`
 is the multi-database arm and `explorer_reads_under_conjoined_tenancy` the column-predicate one;
 16 of their 19 tests fail against the previous behaviour, and the three that pass are the regression
 guards for what a single-database store already did.
@@ -4715,7 +4741,7 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher enrolls 53 of the 56 suites `JasperFx.Events.ComplianceTests` 2.69.0 ships — 558 tests.**
+**Fisher enrolls 55 of the 56 suites `JasperFx.Events.ComplianceTests` 2.69.0 ships — 572 tests.**
 `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
 gate is gone. See HANDOFF.md for the live scoreboard, which is machine-checked against a real run by
 `scripts/check_scoreboard.py`; what follows is the history and the mechanics.

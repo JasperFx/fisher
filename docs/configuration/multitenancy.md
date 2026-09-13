@@ -89,6 +89,38 @@ opts.MultiTenantedDatabases(tenants =>
 store-level file — a store-level connection string would be a database nothing writes to.
 :::
 
+### Sharding: several tenants per file
+
+Two tenants naming the same connection string share a file. Combined with conjoined tenancy, that is
+**sharded** tenancy — a pool of files with tenants co-located in each — and it is the middle ground
+between one file for everyone and one file each.
+
+```cs
+opts.Events.TenancyStyle = TenancyStyle.Conjoined;
+
+opts.MultiTenantedDatabases(tenants => tenants
+    .AddTenant("acme", "Data Source=/var/lib/app/shard-one.db")
+    .AddTenant("globex", "Data Source=/var/lib/app/shard-one.db")
+    .AddTenant("initech", "Data Source=/var/lib/app/shard-two.db"));
+```
+
+Fisher builds **one database per file**, not per tenant, so `AllDatabases()` reports the files there
+are, co-located tenants share one connection pool, and a shared file reports no `TenantId` of its own
+— a file holding two tenants' data cannot honestly say whose it is.
+
+::: warning
+**Conjoined tenancy is what makes this safe, and it is not applied for you.** Two tenants sharing a
+file *without* it have no `tenant_id` column to be told apart by, so their data is genuinely the same
+data. Set `TenancyStyle.Conjoined` for the event store and `MultiTenanted()` on any document type the
+tenants share.
+:::
+
+::: tip
+The trade against one file per tenant is the one SQLite always poses: tenants sharing a file share its
+**write lock**. Sharding buys you fewer files to back up and fewer connection pools, at the cost of
+serialising the writers inside each shard.
+:::
+
 ### Tenants that appear at runtime
 
 Provisioning a tenant is cheap enough to do on first use, which makes "a tenant appears without a

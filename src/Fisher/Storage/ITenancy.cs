@@ -107,9 +107,57 @@ public sealed class SeparateDatabaseTenancy : ITenancy
     {
         _databases = new Dictionary<string, FisherDatabase>(StringComparer.OrdinalIgnoreCase);
 
+        // ⚠️ ONE FisherDatabase PER FILE, not per tenant (fisher#252). Two tenants may name the same
+        // connection string — that is *sharded* tenancy, a pool of files with tenants co-located in
+        // each, and it is a configuration this class did not originally contemplate because
+        // fisher#47's whole framing is "a tenant is a file".
+        //
+        // Keying on the file rather than the tenant is what makes the shared case correct rather than
+        // merely deduplicated, and it fixes three things at once:
+        //
+        //   - AllDatabases() reports the files there are. A fan-out over it — GetRecentStreamsAsync is
+        //     the one that shows — otherwise reads a shared file once per co-located tenant and
+        //     returns every stream in it that many times.
+        //   - One SqliteDataSource and therefore one connection pool per file, where per-tenant
+        //     instances meant N pools over one file. On SQLite a pool is file handles.
+        //   - TenantId is null for a shared file, which is the honest answer and is load-bearing:
+        //     "the file is the tenant" is true for database-per-tenant and false for sharding, and
+        //     every reader that stamps a row with the file's tenant (fisher#240's explorer fan-out)
+        //     is already written to defer to the row's own tenant_id column when it is null.
+        //
+        // So the explorer needed no change for this at all -- see GetRecentStreamsAsync, whose
+        // `database.TenantId is null` branch was correct all along and was simply unreachable.
+        var byFile = new Dictionary<string, FisherDatabase>(StringComparer.Ordinal);
+        var tenantsPerFile = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
         foreach (var (tenantId, connectionString) in configured.Resolve(options))
         {
-            _databases[tenantId] = new FisherDatabase(options, connectionString, tenantId, tenantId);
+            if (!tenantsPerFile.TryGetValue(connectionString, out var tenants))
+            {
+                tenants = [];
+                tenantsPerFile[connectionString] = tenants;
+            }
+
+            tenants.Add(tenantId);
+        }
+
+        foreach (var (connectionString, tenants) in tenantsPerFile)
+        {
+            // A file with exactly one tenant keeps that tenant's id as BOTH its identifier and its
+            // TenantId, which is what fisher#57's daemon routing and fisher#240's stream attribution
+            // read. A shared file cannot honestly answer either, so it takes a name derived from the
+            // tenants that share it and reports no tenant of its own.
+            var database = tenants.Count == 1
+                ? new FisherDatabase(options, connectionString, tenants[0], tenants[0])
+                : new FisherDatabase(options, connectionString,
+                    string.Join("+", tenants.OrderBy(x => x, StringComparer.Ordinal)));
+
+            byFile[connectionString] = database;
+
+            foreach (var tenantId in tenants)
+            {
+                _databases[tenantId] = database;
+            }
         }
 
         // The store still needs a database for operations that name no tenant — applying the schema
@@ -117,12 +165,16 @@ public sealed class SeparateDatabaseTenancy : ITenancy
         // stored yet. The default tenant's file is it, created like any other.
         _default = _databases.TryGetValue(StorageConstants.DefaultTenantId, out var main)
             ? main
-            : _databases.Values.FirstOrDefault()
+            : byFile.Values.FirstOrDefault()
               ?? throw new InvalidOperationException(
                   "MultiTenantedDatabases was configured with no tenants. Add at least one with "
                   + "AddTenant(tenantId, connectionString) or AddTenants(...), or drop the call and use "
                   + "conjoined tenancy.");
+
+        _files = byFile.Values.ToList();
     }
+
+    private readonly List<FisherDatabase> _files;
 
     public DatabaseCardinality Cardinality => DatabaseCardinality.StaticMultiple;
 
@@ -139,11 +191,16 @@ public sealed class SeparateDatabaseTenancy : ITenancy
             ? database
             : throw new UnknownTenantException(tenantId, _databases.Keys);
 
-    public IReadOnlyList<FisherDatabase> AllDatabases() => _databases.Values.ToList();
+    /// <remarks>
+    ///     <b>The files, not the tenants</b> — see the constructor. Under database-per-tenant the two
+    ///     are the same list; under sharding they are not, and a caller fanning out over the tenants
+    ///     would read each shared file once per tenant co-located in it.
+    /// </remarks>
+    public IReadOnlyList<FisherDatabase> AllDatabases() => _files;
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var database in _databases.Values)
+        foreach (var database in _files)
         {
             await database.DisposeAsync().ConfigureAwait(false);
         }
@@ -151,7 +208,7 @@ public sealed class SeparateDatabaseTenancy : ITenancy
 
     public void Dispose()
     {
-        foreach (var database in _databases.Values)
+        foreach (var database in _files)
         {
             database.Dispose();
         }
