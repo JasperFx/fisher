@@ -36,6 +36,13 @@ namespace Fisher.Tests.Configuration;
 ///         wiring can get wrong on a store that implements <c>IEventStore</c> explicitly and hands out
 ///         ancillary stores as <c>DispatchProxy</c> markers.
 ///     </para>
+///     <para>
+///         <b>Wiring it is also what found jasperfx#829</b>, fixed in JasperFx 2.69.1: a View slice's
+///         consumed events carried <c>Archived</c> and <c>Compacted&lt;T&gt;</c>, because
+///         <c>AppliedEvents</c> is what the projection <em>handles</em> rather than what the aggregate
+///         declares an <c>Apply</c> for. Pinning the exact set here rather than asserting around it is
+///         what made the fix visible on the bump.
+///     </para>
 /// </remarks>
 public class event_model_source : IAsyncLifetime
 {
@@ -83,17 +90,22 @@ public class event_model_source : IAsyncLifetime
         slice.ReadModelTypes.Select(x => x.Name).ShouldBe([nameof(ModelLedger)]);
         slice.ProjectionTypes.ShouldNotBeEmpty();
 
-        var consumed = slice.ConsumedEvents.Select(x => x.Name).ToArray();
-        consumed.ShouldContain(nameof(Credited));
-        consumed.ShouldContain(nameof(Debited));
-
-        // ⚠️ JasperFx's own lifecycle events come with them, because AppliedEvents is derived from
-        // IAggregateProjection.AllEventTypes and every aggregation projection handles these two
-        // whether or not the aggregate declares an Apply for them. Pinned rather than filtered:
-        // nothing here is Fisher's to change -- the same reader feeds AggregateDescriptor.AppliedEvents
-        // -- and a canvas showing stickies for events the application never wrote is worth knowing
-        // about rather than quietly asserting around. Reported upstream as jasperfx#829.
-        consumed.ShouldContain("Archived");
+        // Exactly the two the aggregate declares an Apply for -- no more.
+        //
+        // ⚠️ This asserted the OPPOSITE until JasperFx 2.69.1, and the flip is the point rather than
+        // an edit. JasperFxSingleStreamProjectionBase.determineEventTypes() concatenates Archived and
+        // Compacted<T> onto every non-empty apply set whether or not the aggregate declares an Apply
+        // for them, so this slice reported four event types -- correct about what the projection
+        // HANDLES, and not what a canvas means by the events a read model consumes: two orange
+        // stickies for events the application never wrote and no command slice emits, linking to
+        // nothing. Reported as jasperfx#829 and filtered upstream in ProjectionEventModelSource.ToSlice
+        // rather than in the reader that fills AppliedEvents, since a monitoring console asking "what
+        // does this projection handle" wants both and only the CANVAS question is narrow.
+        //
+        // Pinned as an exact set rather than two ShouldContains, which is what made the flip visible
+        // on the bump instead of silently passing either way.
+        slice.ConsumedEvents.Select(x => x.Name).OrderBy(x => x, StringComparer.Ordinal)
+            .ShouldBe([nameof(Credited), nameof(Debited)]);
     }
 
     /// <summary>
@@ -170,7 +182,7 @@ public class event_model_source : IAsyncLifetime
 
         var ancillary = model.Slices.Single(x => x.Name == nameof(Manifest));
         ancillary.Pattern.ShouldBe(SlicePattern.View);
-        ancillary.ConsumedEvents.Select(x => x.Name).ShouldContain(nameof(Filed));
+        ancillary.ConsumedEvents.Select(x => x.Name).ShouldBe([nameof(Filed)]);
         ancillary.ReadModelTypes.Select(x => x.Name).ShouldBe([nameof(Manifest)]);
     }
 
