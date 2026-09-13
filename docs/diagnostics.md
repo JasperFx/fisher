@@ -296,6 +296,36 @@ Several things in that surface are worth knowing:
 - **A console's id is converted through the mapping's identity type before it is bound**, because
   `fi_doc_*.id` holds the lowercase canonical Guid form under a case-sensitive collation.
 
+## The Event Model, derived from the store
+
+`AddFisher` registers a `ProjectionEventModelSource`, so every registered projection appears on an
+Event Model canvas as a **View slice** — event → projection → read model — with nothing written down
+by hand.
+
+| Role | Read from |
+|---|---|
+| Slice name | the **document** type's name |
+| Pattern | `View` |
+| Projection | the projection's implementation type |
+| Read model | the document type |
+| Consumed events | the event types the projection's `Apply` / `Create` / `Evolve` methods take |
+
+Nothing has to be configured. `AddFisherStore<T>` registers a source of its own, so an ancillary
+store's projections reach the same model under a `Subject` that says which store they came from.
+
+::: tip
+**The slice is named after the document, not the projection**, and that is what makes it *merge* with
+a spec-declared slice of the same name into one slice carrying both a `Derived` and a `Declared`
+claim — rather than two stickies that say the same thing. A bare subscription gets no slice: it has no
+read model behind it, so a sticky for one is something a reader cannot click through to.
+:::
+
+::: warning
+A View slice's consumed events include JasperFx's own `Archived` and `Compacted<T>`, because the set
+is derived from what the projection *handles* rather than from what the aggregate declares an `Apply`
+for. Reported upstream as jasperfx#829.
+:::
+
 ## Projection step-through
 
 Replay a stream one event at a time and capture the aggregate at each step:
