@@ -3,18 +3,18 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **four open issues. Two are real work and neither is blocked; two are not next-release work.**
+Status: **two open issues, and neither is next-release work.** Both of 1.4.0's follow-ups closed in
+1.5.0, along with the whole of JasperFx 2.69.x's compliance wave.
 
-The two that are work both came out of 1.4.0 and are recorded there rather than discovered later.
-[#243](https://github.com/JasperFx/fisher/issues/243) is `IEventStore.GetProjectionStatusesAsync`,
-which Fisher answers at no scope — so a store-agnostic console renders a projections page for Marten
-and Polecat and an error for Fisher. It was left out of #240 deliberately: the gap is shard *state*,
-which `fi_event_progression` does not know, and Polecat's answer reports every shard as `"Stopped"`
-(polecat#200). Filling the slot that way is the fisher#120 failure rather than a fix for it.
-[#245](https://github.com/JasperFx/fisher/issues/245) is a question with evidence rather than a
-confirmed bug, and wants a failing test before any code: Weasel 9.32.0's `MappedVersionFor` /
-`MappedRevisionFor` seam comes from marten#5372, and Fisher has the same mapping surface. The four
-cases to compare are in the issue.
+[#243](https://github.com/JasperFx/fisher/issues/243) and
+[#245](https://github.com/JasperFx/fisher/issues/245) are both done — `GetProjectionStatusesAsync` at
+all three scopes with a `State` that can be honest, and the Guid optimistic-concurrency guard seeded
+from the document rather than only from the session that read it. #245 is the one worth remembering:
+it was filed as a question with evidence rather than a confirmed bug, and the evidence was right —
+`UseOptimisticConcurrency()` refused every legitimate cross-session write, which is the workflow the
+feature exists for, and Fisher passed fifty compliance suites throughout. The suite that would have
+caught it, `GuidOptimisticConcurrencyCompliance`, did not exist for **any** store until jasperfx#819;
+it is enrolled now.
 
 [#189](https://github.com/JasperFx/fisher/issues/189) is an unreproduced `Fisher.AspNetCore.Tests`
 failure — 12 of 36 on one loaded host, green on retry, with the failing test names never captured.
@@ -569,6 +569,14 @@ if something is deferred, it is in the list above.
 | Natural keys (fisher#40, reshaped by fisher#206) | `fi_natural_key_<alias>`, resolved through a join to `fi_streams` — which is why there is no `is_archived` column to keep in sync. Maintained by an inline projection on the append path, where the refusal of a live duplicate is enforced in the statement, and replayed from every daemon page, which is what backfills a key declared over history that already exists. Closes the last partial member on `IEventStoreOperations` |
 | Document metadata (fisher#29) | five opt-in columns — `created_at`, `correlation_id`, `causation_id`, `last_modified_by`, `headers` — plus `tenant_id` read back onto a member, and `MetadataForAsync`. Every binder was already in Weasel.Storage, so it was wiring; and `created_at` needed no exception to the `excluded.*` rule after all, because a read-only binder never enters the write list |
 | Sessions and enlistment (fisher#30) | `QuerySession()` and `OpenSession(SessionOptions)` on the store, and a session running inside a connection or transaction the caller owns — the other half of the atomicity problem `QueueSqlCommand` answers from one side |
+| Projection statuses (fisher#243) | `IEventStore.GetProjectionStatusesAsync` at all three scopes. The gap #240 left deliberately was shard *state*, which `fi_event_progression` does not know — so it comes from the daemon this process hosts and is `Unknown` when there is none to ask, which is a different operational situation from `Stopped` and is now the shared ruling (jasperfx#818) that both siblings change to match |
+| Cross-session optimistic concurrency (fisher#245) | the Guid version guard was fed from the session's own tracker, so a document loaded in one session and stored through another failed its guard **every time** — correct about staleness and useless for the request-per-session workflow. Seeded from the document instead, as Marten does. marten#5372 is the same field one route over, found independently |
+| The projection inventory (fisher#249) | answered from `Projections.All` rather than `AllShards()`, so a subscription is no longer on the page an operator opens to ask about read models. Its progress moved to `RegisteredShardNames()` against `FetchProjectionLagAsync` (jasperfx#815), which is the pairing built for that question. The one place Fisher was the odd one out of three |
+| Document concurrency suites (fisher#250) | `GuidOptimisticConcurrencyCompliance` and `NumericRevisionCompliance` enrolled, both green on the bump. The first is the suite fisher#245 would have caught, and it did not exist for **any** store — the whole shared coverage of document concurrency was the numeric one |
+| Store-derived Event Model (fisher#251) | `AddFisher` and `AddFisherStore<T>` each register a `ProjectionEventModelSource` (jasperfx#825), so every registered projection is a View slice on a canvas with nothing written down by hand. Named after the **document**, which is what merges it with a spec-declared slice rather than sitting beside it |
+| Multi-database explorer + sharded tenancy (fisher#252) | both arms of `MultiDatabaseExplorerCompliance` enrolled — and the enrollment found a bug neither arm reaches. Several tenants co-located in one file made `AllDatabases()` report it once per tenant and stamped every row with whichever instance read it; one `FisherDatabase` per **file** fixed all of it, and the explorer needed no change because its `TenantId is null` branch was correct all along and simply unreachable |
+| The shared-file refusal (fisher#257) | a file shared by more than one tenant requires conjoined event tenancy **and** `MultiTenanted()` on every document type. Without them the tenants are not sharing a file — they are one tenant with two names, and it is silent in the fisher#51 direction. Two checkpoints, because a lazily-mapped document type is invisible at configuration time |
+| JasperFx 2.69.0 / 2.69.1 | three new suites enrolled across fisher#249/#250/#252, taking compliance to **55 of 56 shipped suites**. 2.69.1 carries the fix for jasperfx#829, which this repository filed while wiring the Event Model source in — and the test that pinned the old behaviour was the only one to fail on the bump, which is the argument for pinning rather than asserting around |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
