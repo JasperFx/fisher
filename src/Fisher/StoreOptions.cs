@@ -100,10 +100,30 @@ public class StoreOptions
     }
 
     /// <summary>
-    ///     A logical name for this store, used to build a distinct <see cref="IEventStore" /> identity so
-    ///     multiple Fisher stores in one application are distinguishable. Defaults to "Main".
+    ///     The name every store-level surface uses for "not named" — see <see cref="StoreName" />.
     /// </summary>
-    public string StoreName { get; set; } = "Main";
+    public const string DefaultStoreName = "Main";
+
+    /// <summary>
+    ///     A logical name for this store, used to build a distinct <see cref="IEventStore" /> identity and
+    ///     <see cref="IEventStore.Subject" /> so multiple Fisher stores in one application are
+    ///     distinguishable. Defaults to <see cref="DefaultStoreName" />.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>fisher#279 — this now means what it said.</b> The identity was built from
+    ///         <see cref="DatabaseSchemaName" /> and the subject from the database uri, so the one property
+    ///         documented as making stores distinguishable reached neither. Two stores over one file were
+    ///         indistinguishable to any consumer keying on subject, which is what CritterWatch does for
+    ///         every explorer read and for its shard progression ids.
+    ///     </para>
+    ///     <para>
+    ///         An ancillary store defaults to its marker type's name rather than to
+    ///         <see cref="DefaultStoreName" />, whichever <c>AddFisherStore&lt;T&gt;</c> overload registered
+    ///         it. That is what makes the default distinguishable from the primary's.
+    ///     </para>
+    /// </remarks>
+    public string StoreName { get; set; } = DefaultStoreName;
 
     /// <summary>
     ///     Name of the Event Model that this store's projections contribute their derived slices to.

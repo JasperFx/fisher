@@ -489,6 +489,26 @@ public static class FisherServiceCollectionExtensions
     /// </remarks>
     private static StoreOptions Configured(IServiceProvider services, StoreOptions options, Type? forStore)
     {
+        // fisher#279 -- an ancillary store is named after its marker type whichever overload registered
+        // it. AddFisherStore<T>(Action<StoreOptions>) seeds StoreName into the options it hands the
+        // caller's lambda, but the Func<IServiceProvider, StoreOptions> overload takes the options back
+        // fully formed and seeded nothing -- so every store registered that way stayed on the default and
+        // was indistinguishable from the primary in traces, in every OpenTelemetry measurement, and (since
+        // this issue) in IEventStore.Identity and Subject. Fisher tags more telemetry with StoreName than
+        // either sibling, so the gap showed up in more places here.
+        //
+        // Before the IConfigureFisher chain, so a contribution can still override it -- the same ordering
+        // the Action overload's seed already has, and the same reasoning polecat#207 records for setting
+        // it ahead of IConfigurePolecat<T>.
+        //
+        // The default is the sentinel, so a caller who genuinely wants an ancillary store named "Main"
+        // cannot have one. That is the price of having a default at all, and the case it buys -- a store
+        // nobody named being distinguishable from the primary -- is overwhelmingly the common one.
+        if (forStore is not null && options.StoreName == StoreOptions.DefaultStoreName)
+        {
+            options.StoreName = forStore.Name;
+        }
+
         var applied = new HashSet<object>(ReferenceEqualityComparer.Instance);
 
         foreach (var configure in services.GetServices<IConfigureFisher>().Concat(TargetedAt(services, forStore)))
