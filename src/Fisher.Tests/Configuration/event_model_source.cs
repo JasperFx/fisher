@@ -309,6 +309,29 @@ public class event_model_source : IAsyncLifetime
     }
 
     /// <summary>
+    ///     A blank model name is refused by name, at registration, on both entry points.
+    /// </summary>
+    /// <remarks>
+    ///     An empty string is a legal model name, so it reproduces the very bug the parameter exists
+    ///     to prevent — two assembled models — with a blank where the name should be, which is harder
+    ///     to trace than "EventModel". Null stays the documented way to say "the default model".
+    /// </remarks>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void a_blank_event_model_name_is_refused(string blank)
+    {
+        Should.Throw<ArgumentException>(() =>
+                new ServiceCollection().AddFisher((StoreOptions o) => { o.ConnectionString = _primary.ConnectionString; }, blank))
+            .Message.ShouldContain("cannot be empty or whitespace");
+
+        Should.Throw<ArgumentException>(() =>
+                new ServiceCollection()
+                    .AddFisherStore<ILedgerArchiveStore>((StoreOptions o) => { o.ConnectionString = _ancillary.ConnectionString; }, blank))
+            .Message.ShouldContain("cannot be empty or whitespace");
+    }
+
+    /// <summary>
     ///     A store with no projections at all contributes nothing, rather than an empty model.
     /// </summary>
     /// <remarks>

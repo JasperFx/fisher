@@ -98,6 +98,7 @@ public static class FisherServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(optionSource);
+        AssertEventModelName(eventModelName);
 
         services.AddSingleton(sp => Configured(sp, optionSource(sp), forStore: null));
 
@@ -184,8 +185,12 @@ public static class FisherServiceCollectionExtensions
     ///         are distinguishable in a monitoring tool and in a trace without anything being said.
     ///     </para>
     /// </remarks>
+    /// <param name="eventModelName">
+    ///     The Event Model these projections contribute slices to — see the same parameter on
+    ///     <see cref="AddFisher(IServiceCollection,Action{StoreOptions},string)" /> (fisher#271).
+    /// </param>
     public static FisherStoreConfigurationExpression<T> AddFisherStore<T>(this IServiceCollection services,
-        Action<StoreOptions> configure) where T : class, IDocumentStore
+        Action<StoreOptions> configure, string? eventModelName = null) where T : class, IDocumentStore
     {
         ArgumentNullException.ThrowIfNull(configure);
 
@@ -194,7 +199,7 @@ public static class FisherServiceCollectionExtensions
             var options = new StoreOptions { StoreName = typeof(T).Name };
             configure(options);
             return options;
-        });
+        }, eventModelName);
     }
 
     /// <inheritdoc cref="AddFisherStore{T}(IServiceCollection,Action{StoreOptions},string)" />
@@ -204,6 +209,7 @@ public static class FisherServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(optionSource);
+        AssertEventModelName(eventModelName);
 
         services.TryAddSingleton<FisherStoreRegistry>();
 
@@ -641,6 +647,28 @@ public static class FisherServiceCollectionExtensions
     ///     wrapped store is what keeps a secondary store visible to a monitoring console.
     /// </remarks>
     private static object UnwrapForTooling(IDocumentStore store) => SecondaryStoreProxy.Unwrap(store);
+
+    /// <summary>
+    ///     Refuse an empty or whitespace Event Model name by name, before anything is registered
+    ///     (fisher#271, marten#5405).
+    /// </summary>
+    /// <remarks>
+    ///     An empty string is a perfectly legal model name, and it reproduces the exact bug the
+    ///     parameter exists to prevent — two assembled models — with a blank where the name should
+    ///     be, which is harder to trace than "EventModel". Null is the documented way to say "the
+    ///     default model", so only a non-null blank is an error. Both registration methods add
+    ///     several singletons before they reach the model source, so the refusal comes first and
+    ///     leaves the IServiceCollection untouched.
+    /// </remarks>
+    private static void AssertEventModelName(string? eventModelName)
+    {
+        if (eventModelName is not null && string.IsNullOrWhiteSpace(eventModelName))
+        {
+            throw new ArgumentException(
+                "The Event Model name cannot be empty or whitespace. Pass null (or omit the argument) to contribute to the default model.",
+                nameof(eventModelName));
+        }
+    }
 }
 
 /// <summary>
@@ -1358,4 +1386,6 @@ internal sealed class FisherDaemonHostedService<T> : FisherDaemonHostedService, 
         : base(store, logger)
     {
     }
+
+
 }
