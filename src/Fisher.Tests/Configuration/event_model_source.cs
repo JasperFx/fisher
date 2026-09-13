@@ -475,8 +475,14 @@ public class event_model_source : IAsyncLifetime
             options.Projections.Snapshot<ModelLedger>(SnapshotLifecycle.Inline);
         }, eventModelName);
 
-        // A role the store cannot know, so a merged slice is observably richer than either half and
-        // an unmerged one is observably poorer.
+        // ⚠️ DELIBERATELY AFTER AddFisher, and that ordering is the argument for the parameter
+        // existing at all: at the moment AddFisher runs there is no model declared anywhere in the
+        // container, so there is nothing for the store to infer a name from even in principle.
+        // Registering these the other way round would leave the test passing against a store that
+        // went looking instead of being told.
+        //
+        // The declaration carries a role the store cannot know — a Domain — so a merged slice is
+        // observably richer than either half and an unmerged one observably poorer.
         services.AddEventModel(hostModelName, model
             => model.Slice(nameof(ModelLedger)).InDomain("Finance"));
 
