@@ -8,12 +8,10 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and fifty-three are enrolled from
+ * Suites were added one at a time as Fisher grew into them, and fifty-five are enrolled from
  * JasperFx.Events.ComplianceTests 2.69.0, which itself ships fifty-six concrete suites across
- * fifty-five files -- MultiDatabaseExplorerCompliance is one file holding two arms. Three are not
- * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below; and the
- * two arms of MultiDatabaseExplorerCompliance, which need a fixture that can build a store over more
- * than one database (SupportsMultipleDatabases) and are fisher#252.
+ * fifty-five files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
+ * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
  * reason recorded at the flag on FisherComplianceFixture rather than here:
@@ -286,6 +284,46 @@ public class projection_coordinator_compliance
 
 public class projection_status_compliance
     : ProjectionStatusCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * jasperfx#810 — the two arms that run against a store where there genuinely IS more than one
+ * database. The four database-scoped facts in EventStoreExplorerCompliance run against a
+ * single-database fixture, so what they pin is that the database overload AGREES WITH the
+ * store-global read — vacuously true of a store that ignores the argument.
+ *
+ * ⚠️ Fisher matters here more than the suite's own documentation assumes. SupportsMultipleDatabases
+ * says "Fisher is legitimately false -- one file, one database", which has been out of date since
+ * fisher#47 gave Fisher database-per-tenant and fisher#58 gave it runtime tenants. A tenant IS a
+ * file, which makes this the cheapest multi-database story of the three stores rather than an absent
+ * one. Reported as jasperfx#831.
+ *
+ * The two arms split on independent axes and neither can see the other's gap:
+ *
+ *   DatabasePerTenantExplorerCompliance -- no co-located tenants, so it cannot see a dropped
+ *   tenant_id predicate. What it pins is that a store-global read on a multi-database store is not a
+ *   silent partial answer. Fisher fans out and merges for the listing and REFUSES for the two
+ *   single-stream reads (fisher#240); the suite accepts either remedy on the listing and the refusal
+ *   on the stream read, because what it rules out is one database's worth returned as though it were
+ *   everything -- CritterWatch#1231, a console over 512 shard databases.
+ *
+ *   ShardedTenancyExplorerCompliance -- many tenants co-located per database, conjoined. This is the
+ *   arm Fisher is structurally well placed for: Marten decides whether to apply a tenant_id predicate
+ *   from CARDINALITY, on the premise that every stream in a tenant's database is that tenant's --
+ *   true for database-per-tenant and false for sharding. Fisher's ResolveTenantScope decides from
+ *   TENANCY STYLE instead, which is the axis that actually answers the question, so the database and
+ *   the predicate compose rather than competing (fisher#240).
+ *
+ * Neither arm's precondition is free: the fixture builds one throwaway file per LOGICAL database name
+ * and resolves DatabaseForTenantAsync through the shipped ITenancy.DatabaseFor. The suite's own
+ * the_store_is_genuinely_backed_by_more_than_one_database is the guard that a fixture claiming
+ * SupportsMultipleDatabases actually built two -- read it first if either arm goes red.
+ */
+
+public class database_per_tenant_explorer_compliance
+    : DatabasePerTenantExplorerCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class sharded_tenancy_explorer_compliance
+    : ShardedTenancyExplorerCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
 /*
  * jasperfx#770 — the two stream-fetch query plans, standalone and inside a batched query. Fisher

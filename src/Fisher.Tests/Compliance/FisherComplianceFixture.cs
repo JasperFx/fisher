@@ -33,6 +33,19 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     private TemporaryDatabase? _database;
     private DocumentStore? _store;
 
+    /// <summary>
+    ///     One throwaway file per <em>logical</em> database name a suite asked for (jasperfx#810), kept
+    ///     across reconfigurations exactly as <see cref="_database" /> is.
+    /// </summary>
+    /// <remarks>
+    ///     Keyed by the logical name rather than by tenant, which is what makes the sharded arm
+    ///     expressible: two tenants naming one logical database get one file, and the suite's whole
+    ///     gap-2 question — does a tenant-scoped read filter by tenant as well as picking the file —
+    ///     only exists because they do.
+    /// </remarks>
+    private readonly Dictionary<string, TemporaryDatabase> _tenantDatabases =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private DocumentStore Store => _store
         ?? throw new InvalidOperationException("The compliance store has not been configured yet.");
 
@@ -57,11 +70,38 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         // reconfiguring within one schema name only ever adds event types and projections.
         _database ??= TemporaryDatabase.Create(config.SchemaName ?? "compliance");
 
+        foreach (var name in config.TenantDatabases.Values.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!_tenantDatabases.ContainsKey(name))
+            {
+                _tenantDatabases[name] = TemporaryDatabase.Create(name);
+            }
+        }
+
         _store = DocumentStore.For(options =>
         {
             options.ConnectionString = _database.ConnectionString;
             options.AutoCreateSchemaObjects = AutoCreate.All;
             options.DatabaseSchemaName = (config.SchemaName ?? "compliance").ToLowerInvariant();
+
+            // jasperfx#810 — a store backed by more than one database. Fisher's is the cheapest
+            // database-per-tenant of the three stores, because a tenant is a FILE: provisioning one is
+            // a file plus a migration rather than a CREATE DATABASE, which is what makes the arms
+            // runnable here with no infrastructure at all.
+            //
+            // The store-level ConnectionString above stays set and is ignored under this tenancy —
+            // there is no store-level file. Leaving it assigned rather than conditionally skipping it
+            // keeps one construction path.
+            if (config.TenantDatabases.Count > 0)
+            {
+                options.MultiTenantedDatabases(databases =>
+                {
+                    foreach (var (tenantId, name) in config.TenantDatabases)
+                    {
+                        databases.AddTenant(tenantId, _tenantDatabases[name].ConnectionString);
+                    }
+                });
+            }
 
             if (config.StreamIdentity.HasValue)
             {
@@ -223,6 +263,45 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override bool SupportsLiveAggregationRegistration => false;
 
     public override bool SupportsAsyncDaemon => true;
+
+    /// <summary>
+    ///     Fisher builds a store over more than one database, so the two multi-database explorer arms
+    ///     run rather than skip (jasperfx#810 / fisher#252).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         ⚠️ <b>The seam's own documentation says "Fisher is legitimately false — one file, one
+    ///         database", and that is out of date.</b> Fisher has had database-per-tenant since
+    ///         fisher#47 and runtime tenants since fisher#58; a tenant IS a file, which makes this the
+    ///         cheapest multi-database story of the three stores rather than an absent one — a tenant
+    ///         costs a file and a migration, where the siblings need a <c>CREATE DATABASE</c>. That
+    ///         stale claim is the same one fisher#240 found written into
+    ///         <c>DocumentStore.EventStore.cs</c>, one repository over. Reported as jasperfx#831.
+    ///     </para>
+    ///     <para>
+    ///         Saying true commits to both halves — replaying
+    ///         <see cref="ComplianceStoreConfig.TenantDatabases" /> in <see cref="BuildStoreAsync" />
+    ///         <em>and</em> implementing <see cref="DatabaseForTenantAsync" />. A fixture that says true
+    ///         and replays nothing does not skip: every isolation fact passes vacuously against a
+    ///         single-database store, which is the shape these arms exist to stop being tested against.
+    ///         <c>the_store_is_genuinely_backed_by_more_than_one_database</c> is the suite's own guard
+    ///         on that, and it is the fact to read first if this ever goes red.
+    ///     </para>
+    /// </remarks>
+    public override bool SupportsMultipleDatabases => true;
+
+    /// <summary>
+    ///     The <see cref="IEventDatabase" /> a tenant's data lives in.
+    /// </summary>
+    /// <remarks>
+    ///     Straight through <see cref="ITenancy.DatabaseFor" />, which is the shipped resolution rather
+    ///     than a test-only map — and which <b>throws <c>UnknownTenantException</c> for a tenant it does
+    ///     not know</b> rather than falling back to the default file. That refusal is the rule every
+    ///     tenant-scoped member on this store follows, and the seam's own remarks ask for it: on a
+    ///     multi-database store the wrong database is not a degraded answer but a different one.
+    /// </remarks>
+    public override ValueTask<IEventDatabase> DatabaseForTenantAsync(string tenantId)
+        => ValueTask.FromResult<IEventDatabase>(Store.Tenancy.DatabaseFor(tenantId));
 
     private IProjectionDaemon? _daemon;
 
@@ -711,6 +790,13 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     {
         _database?.Dispose();
         _database = null;
+
+        foreach (var database in _tenantDatabases.Values)
+        {
+            database.Dispose();
+        }
+
+        _tenantDatabases.Clear();
     }
 
     private static Fisher.Internal.FisherSession AsFisherSession(IDocumentSession session)
