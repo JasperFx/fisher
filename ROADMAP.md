@@ -3,9 +3,14 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **three open issues, and none of them is feature work.** 1.5.0 closed both of 1.4.0's
+Status: **two open issues, and neither is feature work.** 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0
 closed the vector story.
+
+[#265](https://github.com/JasperFx/fisher/issues/265) is done, and it is why this line can be
+trusted: `scripts/check_roadmap_status.py` holds the region below to the real open-issue set at
+release prep. It caught this very sentence within seconds of landing — merging it closed the issue
+the region still named — which is the failure it exists for, happening immediately.
 
 **The vector trio is complete.** [#241](https://github.com/JasperFx/fisher/issues/241) made a declared
 embedding member searchable, [#262](https://github.com/JasperFx/fisher/issues/262) fused that leg with
@@ -18,12 +23,11 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is one piece of tooling and two long-standing items.
-[#265](https://github.com/JasperFx/fisher/issues/265) holds ROADMAP's own `Status:` line — this one —
-to the real open-issue set, after it was found stale at two consecutive releases.
-[#189](https://github.com/JasperFx/fisher/issues/189) and
-[#109](https://github.com/JasperFx/fisher/issues/109) are unchanged: an unreproduced flake with 65
-clean runs against it, and a half that cannot be specified until jasperfx#684 settles.
+What is left is two long-standing items, neither of them work that is ready to start.
+[#189](https://github.com/JasperFx/fisher/issues/189) is an unreproduced flake with 65 clean runs
+against it, so it stays open on evidence rather than on work outstanding.
+[#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
+an unanswered question about the stage graph.
 <!-- /open-issues -->
 
 [#243](https://github.com/JasperFx/fisher/issues/243) and
