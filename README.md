@@ -27,7 +27,7 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > `Fisher.AspNetCore` and `Fisher.EntityFrameworkCore` companion packages all work and are tested.
 >
 > Fisher passes **all 53 suites and 558 tests** it enrolls from `JasperFx.Events.ComplianceTests`,
-> the shared cross-store suite Marten and Polecat also enroll in, alongside its own 2,047.
+> the shared cross-store suite Marten and Polecat also enroll in, alongside its own 2,054.
 >
 > That suite pins **API portability, not behavioural equivalence** — code written against one store
 > compiles and runs against another. It does not pin that the three behave identically, and they do

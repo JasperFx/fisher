@@ -4,6 +4,7 @@ using Fisher.Projections;
 using JasperFx;
 using JasperFx.Descriptors;
 using JasperFx.Events.Daemon;
+using JasperFx.Events.EventModeling;
 using JasperFx.Events.Projections;
 using JasperFx.Events.Subscriptions;
 using Microsoft.Extensions.DependencyInjection;
@@ -82,6 +83,19 @@ public static class FisherServiceCollectionExtensions
         // though DocumentStore implements the interface, because it does so explicitly.
         services.AddSingleton<JasperFx.Events.IEventStore>(
             sp => sp.GetRequiredService<DocumentStore>());
+
+        // fisher#251 — the store-derived rung of the Event Model (jasperfx#825): one View slice per
+        // registered projection, read straight out of this store's own registry. Bobcat declares
+        // slices and Wolverine derives Command and Automation slices from its chains; nobody derived
+        // from the STORE, so a View slice — event → projection → read model — reached a canvas only
+        // when a human had written one down. The store knows it exactly.
+        //
+        // The resolver overload is the whole reason this is a store's job rather than the library's:
+        // a store registers itself under its own interface, and AddFisher is the only place that
+        // knows which. Fisher's DocumentStore implements IEventStore EXPLICITLY (fisher#45), so the
+        // cast is what reaches it — IDocumentStore does not carry the member.
+        services.AddProjectionEventModelSource(sp
+            => [(JasperFx.Events.IEventStore)sp.GetRequiredService<DocumentStore>()]);
 
         // fisher#172 — the two halves of the command-line seam, and they are genuinely two: the
         // "resources" commands and AddResourceSetupOnStartup() go through ISystemPart, while Weasel's
@@ -176,6 +190,26 @@ public static class FisherServiceCollectionExtensions
         // secondary store carries its own StoreName.
         services.AddSingleton<JasperFx.Events.IEventStore>(sp
             => (JasperFx.Events.IEventStore)UnwrapForTooling(sp.GetRequiredService<T>()));
+
+        // fisher#251 — an ancillary store's projections are View slices too, and it needs its own
+        // source because AddFisherStore<T> can be called without AddFisher at all.
+        //
+        // ⚠️ UNWRAPPED, unlike the two command-line registrations below. The marker proxy is a
+        // DispatchProxy and implements only the interfaces it was asked for, so it is NOT an
+        // IEventStore — the same reason the IEventStore registration above reaches through it. Handing
+        // the proxy over would throw at discovery time rather than silently omitting the store, which
+        // is the better of the two failures but still not one to rely on.
+        //
+        // Registered through AddEventModelSource rather than AddProjectionEventModelSource so the
+        // Subject can say WHICH store these slices came from. Same distinction FisherSystemPart<T>
+        // draws with its own subject uri, and it matters more here than on either sibling because two
+        // Fisher stores are usually two files. The MODEL NAME stays the default: slices merge by model
+        // name, and an ancillary store's read models belong on the same canvas as the primary's.
+        services.AddEventModelSource(new ProjectionEventModelSource(sp
+            => [(JasperFx.Events.IEventStore)UnwrapForTooling(sp.GetRequiredService<T>())])
+        {
+            Subject = new Uri($"event-model://projections/{typeof(T).Name.ToLowerInvariant()}")
+        });
 
         // fisher#172 — an ancillary store contributes its own database(s) to both command-line seams,
         // under a subject uri of its own. That distinction matters more here than on either sibling:

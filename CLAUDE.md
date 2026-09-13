@@ -314,6 +314,9 @@ Working, with tests:
 - **The command line** — `ISystemPart` and `IDatabaseSource` registered from both `AddFisher` and
   `AddFisherStore<T>`, so `db-apply` / `db-assert` / `db-patch` / `db-dump`, the `resources` commands
   and `describe` all see a Fisher store; plus `AssertDatabaseMatchesConfigurationOnStartup()`
+- **The Event Model, derived from the store** — `AddFisher` and `AddFisherStore<T>` each register a
+  `ProjectionEventModelSource`, so every registered projection is a View slice on an Event Model canvas
+  with nothing written down by hand
 - **Schema preview, programmatically** — `Advanced.CreateMigrationAsync` (the default database, one
   tenant, or every database), `WriteMigrationFileAsync`, `WriteScriptsByTypeAsync`, `AllObjects` and
   `AllSchemaNames`, so a deployment or a test can ask what a migration *would* change without
@@ -2606,6 +2609,53 @@ third.
   that opened a scope per batch and kept it passes the first half and leaks — and
   `a_scoped_projection_runs_under_the_async_daemon` deliberately commits a second batch after the
   daemon has already run one.
+
+#### The store-derived Event Model rung — fisher#251
+
+`AddFisher` registers a `JasperFx.Events.EventModeling.ProjectionEventModelSource` (jasperfx#825), and
+`AddFisherStore<T>` registers one of its own. One `SlicePattern.View` slice per registered projection —
+event → projection → read model — read straight out of the store's own registry.
+
+**The gap was that nobody derived from the store.** Bobcat declares slices and Wolverine derives Command
+and Automation slices from its chains, so a View slice reached an Event Model canvas only when a human
+had written one down. Yet the store knows it exactly: every registered projection, the document it
+produces, and the event types its `Apply` / `Create` / `Evolve` methods take.
+
+**Almost none of this is Fisher's, and that is the finding rather than the shortcut.** The source reads
+`IEventStore.TryCreateUsage()` and `SubscriptionDescriptor`, which Fisher already fills through shared
+code in `JasperFx.Events` — so the applied-event set cannot disagree with `AggregateDescriptor.AppliedEvents`,
+because the same reader feeds both. What is Fisher's is two registrations.
+
+- **Why a store registers this rather than the library doing it.** A store registers itself under its
+  own interface, and `AddFisher` is the only place that knows which — hence the resolver overload.
+  Fisher's `DocumentStore` implements `IEventStore` **explicitly** (fisher#45), so the cast is what
+  reaches it; `IDocumentStore` does not carry the member.
+- ⚠️ **The ancillary registration unwraps the marker proxy, and that is load-bearing.** A
+  `DispatchProxy` implements only the interfaces it was asked for, so an ancillary store's marker is
+  *not* an `IEventStore` — the same reason the `IEventStore` bridge reaches through it. Verified by
+  handing the proxy over: `InvalidCastException: Unable to cast object of type 'generatedProxy_1'`.
+  Better than a silent omission and still not a failure to rely on.
+- **Each store's source carries a `Subject` of its own** (`event-model://projections/<marker>`), which
+  is why the ancillary one is registered through `AddEventModelSource` rather than
+  `AddProjectionEventModelSource`. Same distinction `FisherSystemPart<T>` draws for the command line,
+  and it matters more here for the same reason: two Fisher stores are usually two *files*. **The model
+  name stays the default for both** — slices are grouped by model name before merging, and an ancillary
+  store's read models belong on the same canvas as the primary's.
+- **The slice is named after the DOCUMENT, not the projection**, which is what makes it *merge* with a
+  spec-declared slice of the same name into one slice carrying both a `Derived` and a `Declared` claim.
+  A mis-named slice would not merge, which is the one thing the source exists to get right.
+- **Fisher matters disproportionately here, which is why jasperfx#825's acceptance names it.** A
+  store-derived Event Model that needs a Postgres or SQL Server container to demonstrate is one nobody
+  exercises while writing the feature. Every fact in `event_model_source` runs against a throwaway
+  SQLite file.
+- ⚠️ **A View slice's `ConsumedEvents` carries `Archived` and `Compacted<T>`**, because `AppliedEvents`
+  is derived from `IAggregateProjection.AllEventTypes` and every aggregation projection handles those
+  whether or not the aggregate declares an `Apply`. Nothing here is Fisher's to change; pinned rather
+  than asserted around, and reported upstream as jasperfx#829.
+
+**There is no `event-model` CLI command in JasperFx 2.69.0**, so jasperfx#825's third acceptance item
+is covered at the seam a command would read — `EventModelDiscovery.AssembleAsync` over a plain Fisher
+host, with no Bobcat reference anywhere.
 
 #### The command-line seam — fisher#172
 
