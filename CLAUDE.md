@@ -4072,10 +4072,15 @@ honest to get the state from.
   read: asking what is running must not change what is running, and "nothing is running here" is an
   answer rather than an error. Matched on `FisherDatabase.Identifier`, the same key
   `FisherDaemonHostedService.TryFindDaemon` uses.
-- **`ShardAction` is collapsed onto `ShardStatus.State`'s own vocabulary.** The enum records what last
-  *happened*; the field is what the shard *is*, so the four actions a live shard publishes — started,
-  updated, restarted, skipped-ahead — become one `Running`. A visible daemon with no state for a shard
-  is `Stopped` rather than `Unknown`, because every agent publishes `Started` as it launches.
+- **`ShardAction` is collapsed onto `ShardStatusState`, the closed four-value vocabulary.** The enum
+  records what last *happened*; the field is what the shard *is*, so the four actions a live shard
+  publishes — started, updated, restarted, skipped-ahead — become one `Running`. A visible daemon with
+  no state for a shard is `Stopped` rather than `Unknown`, because every agent publishes `Started` as
+  it launches. **Every arm now lands inside `ShardStatusState.All`** (fisher#249): a faulted shard used
+  to answer `"Failed"` and an unrecognised action `Action.ToString()`, both outside the vocabulary — a
+  console renders this string and *filters* on it, so a fifth value is a row that matches no filter
+  rather than a more precise answer. A faulted shard is one a daemon reached and is no longer running,
+  which is `Stopped`; what it faulted on is `Error`, which is why nothing is lost.
 - ⚠️ **`EventStoreSequence` is `max(seq_id)`, not the persisted high-water row.** The two are the same
   number on a store whose daemon is current — the mark simply *is* `max(seq_id)` here — and they differ
   exactly when it matters: the row is where the daemon **got to**, so a stopped daemon leaves it behind
@@ -4085,10 +4090,22 @@ honest to get the state from.
 - **An inline or live projection is reported with an empty `Shards` list rather than omitted**, its
   `Lifecycle` saying why. Polecat synthesises a fake single shard for these and puts the *lifecycle
   string* in its `State` slot, which makes that field mean two different things depending on the row.
-- **Subscriptions are included**, since `AllShards()` spans them and a subscription is a daemon shard
-  with progress to report. A shard whose name matches no registered projection is a subscription's, and
-  `Async` is a fact about those rather than a guess — there is deliberately no inline equivalent
-  (fisher#21).
+- ⚠️ **Subscriptions are NOT included, and fisher#249 reversed that.** This answers from
+  `Projections.All`, where it used to answer from `AllShards()` — which spans subscriptions too. The
+  original argument was real and is why jasperfx#818 needed a ruling rather than a test: a subscription
+  genuinely is a daemon shard with progress worth watching, and omitting it makes a store with three
+  subscriptions look like a store with none. It went the other way because this is the page an operator
+  opens to ask about **read models**, and a subscription has no document behind it — a row for one is
+  something a reader cannot click through to. **Nothing is lost**: subscription progress stays reachable
+  non-generically through `IEventStore.RegisteredShardNames()` correlated against
+  `IEventDatabase.FetchProjectionLagAsync`, the pairing jasperfx#815 built for exactly that question,
+  and `a_subscription_is_not_in_the_projection_inventory_and_is_still_reachable` asserts both halves —
+  because "dropped from a list" and "no longer answerable" are different outcomes and only the first
+  was ruled on.
+  - **The registry drives the inventory; the shards are attributed to it.** Joining from that side is
+    what drops a subscription from *both* halves of the answer at once — the top-level list and the
+    shards inside a status — and the shared suite is shaped to catch the partial fix that filters only
+    the outer list.
 - **The store-global read refuses on a multi-database store, and for a sharper reason than the stream
   lookups above.** Those return one answer over an id unique within a database; this one *could*
   concatenate, and `Advanced.AllProjectionProgress` does exactly that and documents why. What stops it
@@ -4103,8 +4120,24 @@ honest to get the state from.
   read: the likeliest reason it fails is that the schema does not exist yet, which is precisely when a
   console is most likely to be pointed at the store.
 
-**There is no shared suite for any of this**, so `projection_statuses` is Fisher's own until one
-exists. Every decision above was verified by mutation rather than by inspection.
+**There is a shared suite now — `ProjectionStatusCompliance` (jasperfx#818) — and it adopted Fisher's
+reading of the field this whole section turns on.** `Unknown` means "no daemon here to ask" and is a
+different operational situation from `Stopped`; Fisher was the only store reading it that way, and both
+siblings change (marten#5383, polecat#589). Fisher passed 8 of 9 on the bump, and the one it failed was
+the inventory ruling above.
+
+**`projection_statuses` stays, because the suite cannot see most of what it asserts.** Its fixture
+drives one hand-built store and one hosted one; the planted progression row, the deliberately stale
+high-water row, and the subscription's survival on the lag surface all need a store arranged into a
+state a portable fixture has no vocabulary for. Every decision above was verified by mutation rather
+than by inspection.
+
+One requirement of jasperfx#818 was **dropped** rather than adopted, and it is worth knowing which way:
+it proposed that an Inline projection report an **empty shard list** — Fisher's answer, and the only
+store that gives it. Marten reports `SignalBoard:All / Unknown / 0 / 0`, which is a coherent answer of
+a different kind, and Marten's stands. Fisher's empty list is still legal and the suite says nothing
+either way. What *is* pinned is that the `State` slot never carries a lifecycle, which is Polecat's
+answer and which Fisher already satisfied.
 
 #### What `TryCreateUsage` puts on the wire — fisher#120
 
@@ -4605,7 +4638,7 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher enrolls 50 of the 52 suites `JasperFx.Events.ComplianceTests` 2.68.0 ships — 535 tests.**
+**Fisher enrolls 51 of the 56 suites `JasperFx.Events.ComplianceTests` 2.69.0 ships — 544 tests.**
 `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
 gate is gone. See HANDOFF.md for the live scoreboard, which is machine-checked against a real run by
 `scripts/check_scoreboard.py`; what follows is the history and the mechanics.
