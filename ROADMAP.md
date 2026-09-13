@@ -3,15 +3,23 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **three open issues, one of which is the next piece of real work.** 1.5.0 closed both of
-1.4.0's follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search.
+Status: **three open issues, and none of them is feature work.** 1.5.0 closed both of 1.4.0's
+follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0
+closed the vector story.
 
-[#261](https://github.com/JasperFx/fisher/issues/261) is the one with work in it — `VectorProjection`,
-embeddings derived from an event stream with content-hash skipping. It is the remaining half of the
-vector story: #241 made a declared embedding member searchable and
-[#262](https://github.com/JasperFx/fisher/issues/262) fused that leg with full text, but nothing yet
-*produces* an embedding from events, so the vector a document carries is still the application's to
-maintain. The other two are unchanged and neither is next-release work.
+**The vector trio is complete.** [#241](https://github.com/JasperFx/fisher/issues/241) made a declared
+embedding member searchable, [#262](https://github.com/JasperFx/fisher/issues/262) fused that leg with
+full text by reciprocal rank fusion, and [#261](https://github.com/JasperFx/fisher/issues/261)
+*produces* the embedding from an event stream — so the vector a document carries is no longer the
+application's to maintain on every write path.
+
+What is left is one piece of tooling and two long-standing items.
+[#265](https://github.com/JasperFx/fisher/issues/265) would hold ROADMAP's own `Status:` line — this
+one — to the real open-issue set, after it was found stale at two consecutive releases; the design
+question there is *where* such a check can live without coupling every contributor's build to the
+issue tracker. [#189](https://github.com/JasperFx/fisher/issues/189) and
+[#109](https://github.com/JasperFx/fisher/issues/109) are unchanged: an unreproduced flake with 65
+clean runs against it, and a half that cannot be specified until jasperfx#684 settles.
 
 [#243](https://github.com/JasperFx/fisher/issues/243) and
 [#245](https://github.com/JasperFx/fisher/issues/245) are both done — `GetProjectionStatusesAsync` at
