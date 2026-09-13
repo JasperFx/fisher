@@ -320,10 +320,45 @@ claim — rather than two stickies that say the same thing. A bare subscription 
 read model behind it, so a sticky for one is something a reader cannot click through to.
 :::
 
+### Naming the model
+
+Slices are grouped by **model name** before they are merged, so a host that names its own model has
+to name the store's source to match:
+
+<!-- snippet: sample_event_model_name -->
+<a id='snippet-sample_event_model_name'></a>
+```cs
+// Slices are grouped by MODEL NAME before they are merged, so a host that names its own model
+// has to name the store's source to match -- otherwise the store's View slices assemble a
+// second model called "EventModel" beside the host's, and neither canvas carries both halves.
+services.AddFisher(options =>
+{
+    options.ConnectionString = connectionString;
+    options.Projections.Snapshot<Report>(SnapshotLifecycle.Inline);
+}, eventModelName: "Storefront");
+
+// An ancillary store has to be told separately: it can be registered with no AddFisher at all,
+// so there is no primary registration for it to read the name off.
+services.AddFisherStore<IReportingStore>(options =>
+{
+    options.ConnectionString = connectionString;
+    options.Projections.Snapshot<Report>(SnapshotLifecycle.Inline);
+}, eventModelName: "Storefront");
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/configuration_samples.cs#L61-L78' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_event_model_name' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+…so that the store's slices merge into the model the host declared with
+`services.AddEventModel("Storefront", …)` rather than assembling one of their own.
+
 ::: warning
-A View slice's consumed events include JasperFx's own `Archived` and `Compacted<T>`, because the set
-is derived from what the projection *handles* rather than from what the aggregate declares an `Apply`
-for. Reported upstream as jasperfx#829.
+**Leave it out and a host that named its model gets two models, not one.** The store's slices land on
+`EventModel`, the host's declarations on its own name, and neither canvas has both halves — which
+surfaces as `Expected exactly one assembled model, but got [Storefront, EventModel]` rather than as
+anything pointing at the registration. Fisher cannot infer the name: `AddEventModel(...)` may not have
+been called yet when `AddFisher` runs.
+
+Omitting it is still right — and unchanged — for a host that never named a model at all.
 :::
 
 ## Projection step-through

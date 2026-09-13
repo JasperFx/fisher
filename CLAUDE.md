@@ -2749,9 +2749,31 @@ because the same reader feeds both. What is Fisher's is two registrations.
 - **Each store's source carries a `Subject` of its own** (`event-model://projections/<marker>`), which
   is why the ancillary one is registered through `AddEventModelSource` rather than
   `AddProjectionEventModelSource`. Same distinction `FisherSystemPart<T>` draws for the command line,
-  and it matters more here for the same reason: two Fisher stores are usually two *files*. **The model
-  name stays the default for both** — slices are grouped by model name before merging, and an ancillary
-  store's read models belong on the same canvas as the primary's.
+  and it matters more here for the same reason: two Fisher stores are usually two *files*. **The two
+  sources agree on a model NAME and differ by Subject** — slices are grouped by model name before
+  merging, and an ancillary store's read models belong on the same canvas as the primary's.
+- ⚠️ **Which canvas that is, is the caller's to say, and hardcoding the default was fisher#271.** The
+  reasoning above is right about *which store* and says nothing about *which name* — so a host calling
+  `AddEventModel("Stoat", …)` got **two** assembled models, its own and one called `EventModel`, with
+  neither carrying both halves. Reported from Stoat, whose spec suite went 18/18 → 15/18 on a version
+  bump alone: `Expected exactly one assembled model, but got [Stoat, EventModel]`, which points at
+  nothing in Fisher. `AddFisher` and `AddFisherStore<T>` each take an optional `eventModelName`; null
+  keeps the default, so a host that never named a model is unaffected.
+  - **The store cannot infer it**, which is why it is a parameter rather than something read off the
+    container: `AddEventModel(...)` may not have been called when `AddFisher` runs.
+  - **Both registrations have to be told, and nothing here can check that they agree** —
+    `AddFisherStore<T>` can be called with no `AddFisher` at all, so there is no primary registration
+    to read a name off.
+  - **An empty or whitespace name is refused by name.** It is a legal model name and would reproduce
+    the exact bug, with a blank where the name should be in whatever reports it.
+  - ⚠️ **This is not Fisher-only.** Marten (`MartenServiceCollectionExtensions.cs`) and Polecat
+    (`PolecatServiceCollectionExtensions.cs`, `PolecatStoreServiceCollectionExtensions.cs`) register
+    the same source the same way with no name, so any host on either that names its Event Model gets a
+    second one. The fix is the same three lines in each; fixing it here alone leaves the trap on both
+    siblings.
+  - `a_store_left_on_the_default_assembles_a_second_model` pins the bug as the behaviour it remains
+    for a store nobody names, because asserting only that a *named* store lands on the named model
+    passes against a store that ignores the parameter entirely.
 - **The slice is named after the DOCUMENT, not the projection**, which is what makes it *merge* with a
   spec-declared slice of the same name into one slice carrying both a `Derived` and a `Declared` claim.
   A mis-named slice would not merge, which is the one thing the source exists to get right.
