@@ -5,35 +5,47 @@ architecture and the SQLite-specific decisions.
 
 Status: **two open issues, and neither is feature work.** 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0
-closed the vector story; 1.8.0 and 1.9.0 settled how a host names the Event Model its store
-contributes to.
+closed the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which
+Event Model canvas it contributes to.
 
-[#271](https://github.com/JasperFx/fisher/issues/271) is worth reading as a reporting story rather
-than a fix. `AddFisher` registered its store-derived Event Model source under the default model name,
-so a host that called `AddEventModel("Something", …)` assembled **two** models — its own and one
-called `EventModel` — because discovery groups slices by model name before merging. Neither canvas
-then carried both halves. It surfaced as a consuming project's spec suite going 18/18 → 15/18 on a
-version bump alone, with `Expected exactly one assembled model, but got [Stoat, EventModel]` — a
-message naming neither Fisher nor the line that caused it.
+**1.10.0 is where store identity stopped being wrong in two places at once.**
+[#279](https://github.com/JasperFx/fisher/issues/279): `IEventStore.Subject` was the *database* uri,
+so two logical stores in one file — the layout `AddFisherStore<T>` exists to support — answered an
+identical Subject; and `Identity` was built from `DatabaseSchemaName`, so it ignored the one property
+documented as making stores distinguishable. Both are keys a monitoring tool uses: CritterWatch
+resolves every explorer read through the Subject and builds shard progression ids from it, so
+co-located stores clobbered each other's recorded progress. Now `fisher://{storename}`, matching
+Polecat's spelling exactly.
 
-⚠️ **[#276](https://github.com/JasperFx/fisher/issues/276) replaced 1.8.0's answer within hours, and
-1.9.0 is a breaking change against it.** The name shipped as an optional `eventModelName` parameter on
-every `AddFisher` / `AddFisherStore<T>` overload; it is now `StoreOptions.EventModelName` and the
-parameters are gone. **1.8.0 is unlisted.** Two reasons, the second the one worth carrying:
+⚠️ **Breaking for anything persisting a Fisher store's `Subject` or `Identity`** — which is the point
+of the change rather than a side effect, since both were unusable as keys.
 
-- An optional parameter on an existing public method breaks **binary** compatibility — it binds at the
-  call site, so an assembly that is not recompiled throws `MissingMethodException` while its source
-  still compiles. On Marten it was not additive at the *source* level either: an optional string on
-  the parameterless `AddMarten()` outranked `AddMarten(connectionString)` for a lone string argument,
-  so every such call silently rebound and the connection string landed in the model name.
-- **"The store cannot infer the name" was never a fact about the problem.** #271 recorded it as one,
-  on the grounds that `AddEventModel` may not have run yet. True, and irrelevant once the name is read
-  when the model is *assembled* rather than when the store is *registered* — which is what the
-  options-based version does, so the two calls may come in either order.
+**[#280](https://github.com/JasperFx/fisher/issues/280) is the actual fix for #271, two releases
+later.** The store-derived Event Model source fell back to the literal `"EventModel"` — the one
+default guaranteed to be wrong for every host. Every other contributor to a canvas defaults to
+something meaningful: Wolverine's chains and HTTP endpoints to `JasperFxOptions.ServiceName`, a Bobcat
+spec assembly to its own name. So the overwhelmingly common host — Wolverine plus one store —
+assembled two models out of the box, and every host had to restate a name it had already declared.
+The chain is now `EventModelName` → `ServiceName` → the literal.
 
-**The same trap was on both siblings**, and all three now spell it the same way: Marten
-(JasperFx/marten#5405) and Polecat (JasperFx/polecat#618) moved to `StoreOptions` too, which is what
-keeps store-agnostic docs and samples reading alike.
+The history behind that is worth keeping, because it took three goes to find the real defect.
+[#271](https://github.com/JasperFx/fisher/issues/271) surfaced as a consuming project's spec suite
+going 18/18 → 15/18 on a version bump alone, with `Expected exactly one assembled model, but got
+[Stoat, EventModel]` — a message naming neither Fisher nor the line that caused it. 1.8.0 answered it
+with an optional `eventModelName` parameter on every registration overload;
+[#276](https://github.com/JasperFx/fisher/issues/276) replaced that within hours with
+`StoreOptions.EventModelName`, because an optional parameter on an existing public method breaks
+**binary** compatibility — it binds at the call site — and on Marten was not additive at the *source*
+level either, an optional string on the parameterless `AddMarten()` outranking
+`AddMarten(connectionString)` for a lone string argument. **1.8.0 is unlisted.** Both of those fixed
+the symptom; #280 fixed the default.
+
+⚠️ Also breaking, quietly: a host that had settled on the literal `EventModel` now contributes to its
+service's canvas instead. Set `StoreOptions.EventModelName` to keep the old name.
+
+**The same traps were on both siblings**, and all three now agree: Marten
+(JasperFx/marten#5405, JasperFx/marten#5409) and Polecat (JasperFx/polecat#618) moved the same way,
+which is what keeps store-agnostic docs and samples reading alike.
 
 [#265](https://github.com/JasperFx/fisher/issues/265) is done, and it is why this line can be
 trusted: `scripts/check_roadmap_status.py` holds the region below to the real open-issue set at
