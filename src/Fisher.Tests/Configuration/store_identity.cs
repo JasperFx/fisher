@@ -101,6 +101,45 @@ public class store_identity
         ((IEventStore)store).Subject.ShouldBe(new Uri("fisher://main"));
     }
 
+    /// <summary>
+    ///     A store name is user-supplied text and a uri host is not. Verified against .NET 10 before
+    ///     this was written: <c>new Uri("fisher://my store")</c> throws <c>UriFormatException</c> and
+    ///     <c>new Uri("fisher://a/b")</c> silently parses the tail as a PATH — so a naive concatenation
+    ///     would turn naming a store into a crash at construction.
+    /// </summary>
+    /// <remarks>
+    ///     The generic case is not hypothetical here: an ancillary store takes its name from its marker
+    ///     type's <c>Name</c>, so a CLOSED GENERIC marker arrives carrying a backtick and arity. Marten
+    ///     met the same thing in marten#5039.
+    /// </remarks>
+    [Theory]
+    [InlineData("My Store", "fisher://my-store")]
+    [InlineData("Orders/Archive", "fisher://orders-archive")]
+    [InlineData("IStore`1", "fisher://istore-1")]
+    [InlineData("Orders_v2", "fisher://orders_v2")]
+    public async Task a_store_name_a_uri_host_cannot_carry_is_folded_rather_than_thrown_on(
+        string name, string expected)
+    {
+        using var database = TemporaryDatabase.Create("identity-exotic");
+        await using var store = StoreFor(database.ConnectionString, name);
+
+        ((IEventStore)store).Subject.ShouldBe(new Uri(expected));
+    }
+
+    /// <summary>
+    ///     Identity is folded the same way as the subject, so the two cannot disagree about a name the
+    ///     uri had to change.
+    /// </summary>
+    [Fact]
+    public async Task the_identity_is_folded_the_same_way_as_the_subject()
+    {
+        using var database = TemporaryDatabase.Create("identity-fold");
+        await using var store = StoreFor(database.ConnectionString, "My Store");
+
+        ((IEventStore)store).Identity.Name.ShouldBe("my-store");
+        ((IEventStore)store).Subject.Host.ShouldBe("my-store");
+    }
+
     // ---- Identity ----
 
     /// <summary>

@@ -67,7 +67,7 @@ public partial class DocumentStore : IEventStore
     // stores answer the same shape: marten://main, polecat://{storename}, fisher://{storename}.
     // The DATABASE keeps its own surfaces -- Database.Describe().DatabaseUri(), IEventDatabase.Identifier
     // and the usage descriptors' SubjectUri -- exactly as Polecat left them.
-    Uri IEventStore.Subject => new("fisher://" + Options.StoreName.ToLowerInvariant());
+    Uri IEventStore.Subject => Internal.StoreSubject.For(Options.StoreName);
 
     /// <summary>
     ///     How many databases this store spans — the tenancy's answer, which is not always
@@ -115,7 +115,7 @@ public partial class DocumentStore : IEventStore
     //
     // Identity feeds EventStoreUsage.PopulateAgentUris, so it names daemon agent uris; a collision there
     // is two stores' shards answering to one address.
-    EventStoreIdentity IEventStore.Identity => new(Options.StoreName.ToLowerInvariant(), "fisher");
+    EventStoreIdentity IEventStore.Identity => new(Internal.StoreSubject.Sanitize(Options.StoreName), "fisher");
 
     /// <summary>
     ///     jasperfx#420 — how many projection rebuild cells may run concurrently against this database.
