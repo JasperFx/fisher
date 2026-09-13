@@ -127,16 +127,23 @@ public class StoreOptions
 
     /// <summary>
     ///     Name of the Event Model that this store's projections contribute their derived slices to.
-    ///     Leave null to contribute to the default model,
-    ///     <see cref="JasperFx.Events.EventModeling.ProjectionEventModelSource.DefaultModelName" />.
+    ///     Leave null and the store contributes to the model named after the running service
+    ///     (<c>JasperFxOptions.ServiceName</c>), which is what every other contributor to a canvas
+    ///     defaults to — see fisher#280.
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         Set this to the same name a host passes to <c>AddEventModel("Something", …)</c>. Slices
-    ///         merge by model name, so leaving it null while the application named its own model
-    ///         assembles <b>two</b> models — the host's and this one — which surfaces as "expected
-    ///         exactly one assembled model" and names neither Fisher nor the line that caused it
-    ///         (fisher#271).
+    ///         <b>Most hosts should leave this alone.</b> The default follows the service name, so a
+    ///         Wolverine application and its store land on one canvas with nothing said — which is
+    ///         what fisher#271 was really about. Set it when a store is genuinely its own bounded
+    ///         context, as each module's store is in a modular monolith, or to match a host that
+    ///         passes something other than its service name to <c>AddEventModel</c>.
+    ///     </para>
+    ///     <para>
+    ///         Slices merge by model name, so a store on a <em>different</em> name from the host's
+    ///         declarations assembles <b>two</b> models rather than one richer one — which surfaces as
+    ///         "expected exactly one assembled model" and names neither Fisher nor the line that
+    ///         caused it (fisher#271).
     ///     </para>
     ///     <para>
     ///         <b>This lives here rather than as a parameter on <c>AddFisher</c> (fisher#276)</b>, so
