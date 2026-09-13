@@ -1,3 +1,4 @@
+using JasperFx.Events.EventModeling;
 using JasperFx.Events.Projections;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -66,15 +67,22 @@ public static class configuration_samples
         {
             options.ConnectionString = connectionString;
             options.Projections.Snapshot<Report>(SnapshotLifecycle.Inline);
-        }, eventModelName: "Storefront");
 
-        // An ancillary store has to be told separately: it can be registered with no AddFisher at all,
+            options.EventModelName = "Storefront";
+        });
+
+        // An ancillary store is configured separately: it can be registered with no AddFisher at all,
         // so there is no primary registration for it to read the name off.
         services.AddFisherStore<IReportingStore>(options =>
         {
             options.ConnectionString = connectionString;
             options.Projections.Snapshot<Report>(SnapshotLifecycle.Inline);
-        }, eventModelName: "Storefront");
+
+            options.EventModelName = "Storefront";
+        });
+
+        // Either side of the store registrations -- the name is read when the model is assembled.
+        services.AddEventModel("Storefront", model => model.Slice(nameof(Report)));
         #endregion
     }
 }

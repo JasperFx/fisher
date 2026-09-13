@@ -103,7 +103,7 @@ services.ConfigureFisher<IReportingStore>((serviceProvider, options) =>
     options.Projections.Add(
         serviceProvider.GetRequiredService<SalesProjection>(), ProjectionLifecycle.Async));
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/configuration_samples.cs#L48-L56' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_configure_fisher_lambda_targeted' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/configuration_samples.cs#L49-L57' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_configure_fisher_lambda_targeted' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 ::: tip
