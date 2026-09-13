@@ -3285,6 +3285,12 @@ whole commit.
   - **The explorer needed no change at all.** `GetRecentStreamsAsync`'s `database.TenantId is null`
     branch — keep the row's own `tenant_id` rather than stamping the file's tenant — was correct all
     along and was simply unreachable, because nothing ever built a database with a null tenant.
+  - ⚠️ **Two tenants sharing a file *without* conjoined tenancy is silently the same data**, and is
+    deliberately **not** refused yet — fisher#257. The obvious guard (`Events.TenancyStyle != Conjoined`)
+    is wrong, because document tenancy is per type (`MultiTenanted()`) rather than store-wide, so it
+    would refuse a legitimately document-sharded store; and mappings are created lazily, so the
+    tenancy's constructor is too early to enumerate them honestly. The multi-tenancy docs carry it as
+    a warning until the guard has a home.
   - **Neither compliance arm reaches it**, which is why `sharded_tenancy_reads` exists:
     `ShardedTenancyExplorerCompliance` never asks for a *store-global* listing, and
     `DatabasePerTenantExplorerCompliance` has no co-located tenants for a file to misattribute. Five of
