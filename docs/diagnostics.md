@@ -323,7 +323,7 @@ read model behind it, so a sticky for one is something a reader cannot click thr
 ### Naming the model
 
 Slices are grouped by **model name** before they are merged, so a host that names its own model has
-to name the store's source to match:
+to set the same name on the store:
 
 <!-- snippet: sample_event_model_name -->
 <a id='snippet-sample_event_model_name'></a>
@@ -335,30 +335,43 @@ services.AddFisher(options =>
 {
     options.ConnectionString = connectionString;
     options.Projections.Snapshot<Report>(SnapshotLifecycle.Inline);
-}, eventModelName: "Storefront");
 
-// An ancillary store has to be told separately: it can be registered with no AddFisher at all,
+    options.EventModelName = "Storefront";
+});
+
+// An ancillary store is configured separately: it can be registered with no AddFisher at all,
 // so there is no primary registration for it to read the name off.
 services.AddFisherStore<IReportingStore>(options =>
 {
     options.ConnectionString = connectionString;
     options.Projections.Snapshot<Report>(SnapshotLifecycle.Inline);
-}, eventModelName: "Storefront");
+
+    options.EventModelName = "Storefront";
+});
+
+// Either side of the store registrations -- the name is read when the model is assembled.
+services.AddEventModel("Storefront", model => model.Slice(nameof(Report)));
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/configuration_samples.cs#L61-L78' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_event_model_name' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/configuration_samples.cs#L62-L86' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_event_model_name' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
-…so that the store's slices merge into the model the host declared with
-`services.AddEventModel("Storefront", …)` rather than assembling one of their own.
+Each store is configured separately — `AddFisherStore<T>` can be registered with no `AddFisher` at
+all, so there is no primary registration for it to read a name off.
 
 ::: warning
-**Leave it out and a host that named its model gets two models, not one.** The store's slices land on
-`EventModel`, the host's declarations on its own name, and neither canvas has both halves — which
+**Leave it unset and a host that named its model gets two models, not one.** The store's slices land
+on `EventModel`, the host's declarations on its own name, and neither canvas has both halves — which
 surfaces as `Expected exactly one assembled model, but got [Storefront, EventModel]` rather than as
-anything pointing at the registration. Fisher cannot infer the name: `AddEventModel(...)` may not have
-been called yet when `AddFisher` runs.
+anything pointing at the registration.
 
-Omitting it is still right — and unchanged — for a host that never named a model at all.
+Leaving it null is still right — and unchanged — for a host that never named a model at all. An empty
+or whitespace name is refused by the setter, because it is a legal model name that reproduces the
+same bug with a blank where the name should be.
+:::
+
+::: tip
+**The order does not matter.** `EventModelName` is read when the Event Model is *assembled*, not when
+the store is registered, so `AddEventModel(...)` may be called either side of `AddFisher`.
 :::
 
 ## Projection step-through

@@ -2757,23 +2757,44 @@ because the same reader feeds both. What is Fisher's is two registrations.
   `AddEventModel("Stoat", …)` got **two** assembled models, its own and one called `EventModel`, with
   neither carrying both halves. Reported from Stoat, whose spec suite went 18/18 → 15/18 on a version
   bump alone: `Expected exactly one assembled model, but got [Stoat, EventModel]`, which points at
-  nothing in Fisher. `AddFisher` and `AddFisherStore<T>` each take an optional `eventModelName`; null
-  keeps the default, so a host that never named a model is unaffected.
-  - **The store cannot infer it**, which is why it is a parameter rather than something read off the
-    container: `AddEventModel(...)` may not have been called when `AddFisher` runs.
-  - **Both registrations have to be told, and nothing here can check that they agree** —
-    `AddFisherStore<T>` can be called with no `AddFisher` at all, so there is no primary registration
-    to read a name off.
-  - **An empty or whitespace name is refused by name.** It is a legal model name and would reproduce
-    the exact bug, with a blank where the name should be in whatever reports it.
-  - ⚠️ **This is not Fisher-only.** Marten (`MartenServiceCollectionExtensions.cs`) and Polecat
-    (`PolecatServiceCollectionExtensions.cs`, `PolecatStoreServiceCollectionExtensions.cs`) register
-    the same source the same way with no name, so any host on either that names its Event Model gets a
-    second one. The fix is the same three lines in each; fixing it here alone leaves the trap on both
-    siblings.
-  - `a_store_left_on_the_default_assembles_a_second_model` pins the bug as the behaviour it remains
-    for a store nobody names, because asserting only that a *named* store lands on the named model
-    passes against a store that ignores the parameter entirely.
+  nothing in Fisher.
+- ⚠️ **The name is `StoreOptions.EventModelName`, and it is read LAZILY — fisher#276 replaced
+  fisher#271's answer within hours of shipping it.** 1.8.0 took it as an optional `eventModelName`
+  parameter on all five `AddFisher` / `AddFisherStore<T>` overloads. Two things were wrong with that,
+  and the second is the one worth keeping:
+  - **An optional parameter on an existing public method breaks binary compatibility.** It binds at
+    the call site, so the caller's IL hard-codes the full signature and an assembly that is not
+    recompiled throws `MissingMethodException` — while its source still compiles, which is what makes
+    it quiet. Marten has a standing rule against it: new configuration goes on `StoreOptions`, which
+    is additive. **It is not additive at the source level either** — on Marten, giving the
+    parameterless `AddMarten()` an optional string made it a *better* overload match than
+    `AddMarten(connectionString)` for a lone string argument, because C# prefers the candidate with no
+    omitted optionals. Every such call silently rebound, the connection string landing in the model
+    name; 10 CI failures, all `No tenancy is configured!`, no ambiguity error anywhere. Fisher has no
+    parameterless `AddFisher()` and so dodged that one, which is luck rather than design.
+  - ⚠️ **"The store cannot infer the name" was never a fact about the problem.** fisher#271 recorded
+    it as one — in this file, in the release notes, and in a test comment added by fisher#274 — on the
+    grounds that `AddEventModel` may not have run when `AddFisher` does. That is true and irrelevant
+    once the name is read at *assembly* time instead of *registration* time.
+    `FisherProjectionEventModelSource.TryCreateAsync` resolves the store and reads its options there,
+    so `AddEventModel` may be called either side of `AddFisher`. `the_registration_order_does_not_matter`
+    pins both orders, because a source that went looking early would pass one and fail the other.
+- **`FisherProjectionEventModelSource` composes rather than subclasses**, `ProjectionEventModelSource`
+  being `sealed`. It owns the three things Fisher alone knows: which service the store is registered
+  under, where the name came from, and which store the slices came from (the `Subject`). It resolves
+  through `IDocumentStore` — which the ancillary marker proxy implements, so `Options` is reachable
+  without unwrapping — and unwraps only for the `IEventStore` cast, which a `DispatchProxy` cannot
+  satisfy because that interface is implemented explicitly (fisher#45).
+- **An empty or whitespace name is refused by the setter**, null meaning the default. It is a legal
+  model name that reproduces the exact bug with a blank where the name should be. On a property this
+  refuses at the line that set it; the 1.8.0 parameter had to hoist its guard above four registrations
+  to avoid leaving a half-populated `IServiceCollection` behind a catchable exception.
+- **This was not Fisher-only.** Marten (marten#5405 → marten#5407) and Polecat (polecat#618) had the
+  identical trap and have taken the identical `StoreOptions` answer, which is the other half of
+  fisher#276's point: one spelling across the three, so store-agnostic docs and samples read alike.
+- `a_store_left_on_the_default_assembles_a_second_model` pins the bug as the behaviour it remains
+  for a store nobody names, because asserting only that a *named* store lands on the named model
+  passes against a store that ignores the setting entirely.
 - **The slice is named after the DOCUMENT, not the projection**, which is what makes it *merge* with a
   spec-declared slice of the same name into one slice carrying both a `Derived` and a `Declared` claim.
   A mis-named slice would not merge, which is the one thing the source exists to get right.

@@ -161,7 +161,7 @@ services.ConfigureFisher((serviceProvider, options) =>
         serviceProvider.GetRequiredService<SalesProjection>(), ProjectionLifecycle.Async);
 });
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/configuration_samples.cs#L29-L43' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_configure_fisher_lambda' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/configuration_samples.cs#L30-L44' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_configure_fisher_lambda' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 Contributions run after the `AddFisher(...)` lambda, in registration order, and may be registered

@@ -35,27 +35,19 @@ public static class FisherServiceCollectionExtensions
     /// <summary>
     ///     Register a Fisher store against a SQLite connection string.
     /// </summary>
-    /// <param name="eventModelName">
-    ///     <inheritdoc cref="AddFisher(IServiceCollection,Func{IServiceProvider,StoreOptions},string)"
-    ///         path="/param[@name='eventModelName']" />
-    /// </param>
     public static FisherConfigurationExpression AddFisher(this IServiceCollection services,
-        string connectionString, string? eventModelName = null)
+        string connectionString)
     {
         ArgumentException.ThrowIfNullOrEmpty(connectionString);
 
-        return services.AddFisher(options => options.ConnectionString = connectionString, eventModelName);
+        return services.AddFisher(options => options.ConnectionString = connectionString);
     }
 
     /// <summary>
     ///     Register a Fisher store, configuring its <see cref="StoreOptions" />.
     /// </summary>
-    /// <param name="eventModelName">
-    ///     <inheritdoc cref="AddFisher(IServiceCollection,Func{IServiceProvider,StoreOptions},string)"
-    ///         path="/param[@name='eventModelName']" />
-    /// </param>
     public static FisherConfigurationExpression AddFisher(this IServiceCollection services,
-        Action<StoreOptions> configure, string? eventModelName = null)
+        Action<StoreOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(configure);
 
@@ -64,31 +56,18 @@ public static class FisherServiceCollectionExtensions
             var options = new StoreOptions();
             configure(options);
             return options;
-        }, eventModelName);
+        });
     }
 
     /// <summary>
     ///     Register a Fisher store whose options are built from the container — for a connection string
     ///     out of <c>IConfiguration</c>, or anything else that needs a resolved service.
     /// </summary>
-    /// <param name="eventModelName">
-    ///     The Event Model canvas this store's derived View slices contribute to (fisher#271). Leave it
-    ///     null — the default — and the slices land on <see cref="ProjectionEventModelSource.DefaultModelName" />,
-    ///     which is what a host that never named its model gets from every other source too. Name it to
-    ///     match a host that calls <c>AddEventModel("Something", …)</c>: discovery groups descriptors by
-    ///     model name before merging slices, so a store still on the default contributes a
-    ///     <em>second</em> assembled model rather than slices the named one can merge.
-    /// </param>
     public static FisherConfigurationExpression AddFisher(this IServiceCollection services,
-        Func<IServiceProvider, StoreOptions> optionSource, string? eventModelName = null)
+        Func<IServiceProvider, StoreOptions> optionSource)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(optionSource);
-
-        // Resolved up front rather than at its one use below, so a bad name is refused before
-        // anything has been registered — a half-populated service collection is a worse answer than
-        // the exception, and every other guard in this method is here for the same reason.
-        var eventModel = ResolveEventModelName(eventModelName);
 
         services.AddSingleton(sp => Configured(sp, optionSource(sp), forStore: null));
 
@@ -116,14 +95,15 @@ public static class FisherServiceCollectionExtensions
         // knows which. Fisher's DocumentStore implements IEventStore EXPLICITLY (fisher#45), so the
         // cast is what reaches it — IDocumentStore does not carry the member.
         //
-        // ⚠️ THE MODEL NAME HAS TO BE PASSED IN, and hardcoding the default was fisher#271. Discovery
-        // groups descriptors by model name before merging slices, so a host that calls
-        // AddEventModel("Stoat", …) while this source says "EventModel" assembles TWO models rather
-        // than one richer one — and the store cannot infer the name, because AddEventModel may not
-        // have been called yet when AddFisher runs. Null keeps today's default, so nothing moves for
-        // a host that never named its model.
-        services.AddProjectionEventModelSource(sp
-            => [(JasperFx.Events.IEventStore)sp.GetRequiredService<DocumentStore>()], eventModel);
+        // ⚠️ THE MODEL NAME IS READ FROM StoreOptions.EventModelName, LAZILY, and both halves of
+        // that matter (fisher#276). Discovery groups descriptors by model name before merging slices,
+        // so a host that calls AddEventModel("Stoat", …) while this source says "EventModel"
+        // assembles TWO models rather than one richer one (fisher#271). 1.8.0 answered that with an
+        // optional parameter here, which broke binary compatibility and captured the name at
+        // registration time; reading it inside TryCreateAsync instead means AddEventModel may run
+        // either side of AddFisher.
+        services.AddEventModelSource(new Events.EventModeling.FisherProjectionEventModelSource(
+            sp => sp.GetRequiredService<DocumentStore>()));
 
         // fisher#172 — the two halves of the command-line seam, and they are genuinely two: the
         // "resources" commands and AddResourceSetupOnStartup() go through ISystemPart, while Weasel's
@@ -182,15 +162,8 @@ public static class FisherServiceCollectionExtensions
     ///         are distinguishable in a monitoring tool and in a trace without anything being said.
     ///     </para>
     /// </remarks>
-    /// <param name="eventModelName">
-    ///     <inheritdoc cref="AddFisher(IServiceCollection,Func{IServiceProvider,StoreOptions},string)"
-    ///         path="/param[@name='eventModelName']" />
-    ///     An ancillary store has to be told separately from the primary one: there is nowhere shared
-    ///     to read the name from, and <c>AddFisherStore&lt;T&gt;</c> can be called without
-    ///     <c>AddFisher</c> at all.
-    /// </param>
     public static FisherStoreConfigurationExpression<T> AddFisherStore<T>(this IServiceCollection services,
-        Action<StoreOptions> configure, string? eventModelName = null) where T : class, IDocumentStore
+        Action<StoreOptions> configure) where T : class, IDocumentStore
     {
         ArgumentNullException.ThrowIfNull(configure);
 
@@ -199,20 +172,16 @@ public static class FisherServiceCollectionExtensions
             var options = new StoreOptions { StoreName = typeof(T).Name };
             configure(options);
             return options;
-        }, eventModelName);
+        });
     }
 
-    /// <inheritdoc cref="AddFisherStore{T}(IServiceCollection,Action{StoreOptions},string)" />
+    /// <inheritdoc cref="AddFisherStore{T}(IServiceCollection,Action{StoreOptions})" />
     public static FisherStoreConfigurationExpression<T> AddFisherStore<T>(this IServiceCollection services,
-        Func<IServiceProvider, StoreOptions> optionSource, string? eventModelName = null)
+        Func<IServiceProvider, StoreOptions> optionSource)
         where T : class, IDocumentStore
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(optionSource);
-
-        // Up front, for the reason AddFisher resolves it up front: refused before anything is
-        // registered rather than four registrations in.
-        var eventModel = ResolveEventModelName(eventModelName);
 
         services.TryAddSingleton<FisherStoreRegistry>();
 
@@ -240,23 +209,23 @@ public static class FisherServiceCollectionExtensions
         // the proxy over would throw at discovery time rather than silently omitting the store, which
         // is the better of the two failures but still not one to rely on.
         //
-        // Registered through AddEventModelSource rather than AddProjectionEventModelSource so the
-        // Subject can say WHICH store these slices came from. Same distinction FisherSystemPart<T>
-        // draws with its own subject uri, and it matters more here than on either sibling because two
-        // Fisher stores are usually two files.
+        // A Subject of its own, so a consumer can say WHICH store these slices came from. Same
+        // distinction FisherSystemPart<T> draws with its own subject uri, and it matters more here
+        // than on either sibling because two Fisher stores are usually two files.
         //
-        // ⚠️ The MODEL NAME is the caller's, and hardcoding the default here was the second half of
-        // fisher#271. An ancillary store's read models do belong on the same canvas as the primary's —
-        // that reasoning was right and is why the two sources share a name rather than a Subject — but
-        // it says nothing about WHICH canvas, and the answer is whichever one the application named.
-        // The two calls have to agree, and nothing here can check that they do: AddFisherStore<T> can
-        // be called without AddFisher at all, so there is no primary registration to read a name off.
-        services.AddEventModelSource(new ProjectionEventModelSource(sp
-            => [(JasperFx.Events.IEventStore)UnwrapForTooling(sp.GetRequiredService<T>())])
-        {
-            ModelName = eventModel,
-            Subject = new Uri($"event-model://projections/{typeof(T).Name.ToLowerInvariant()}")
-        });
+        // ⚠️ The MODEL NAME comes from this store's own StoreOptions.EventModelName (fisher#276). An
+        // ancillary store's read models do belong on the same canvas as the primary's — which is why
+        // the two sources share a NAME and differ by Subject — but that says nothing about WHICH
+        // canvas, and the answer is whichever one the application named. Each store is configured
+        // separately, and nothing here can check the two agree: AddFisherStore<T> can be called
+        // without AddFisher at all, so there is no primary registration to read a name off.
+        //
+        // The source resolves through IDocumentStore rather than being handed an unwrapped store,
+        // because it needs Options (which the marker proxy implements) as well as IEventStore (which
+        // it does not) -- it unwraps for the latter itself.
+        services.AddEventModelSource(new Events.EventModeling.FisherProjectionEventModelSource(
+            sp => sp.GetRequiredService<T>(),
+            new Uri($"event-model://projections/{typeof(T).Name.ToLowerInvariant()}")));
 
         // fisher#172 — an ancillary store contributes its own database(s) to both command-line seams,
         // under a subject uri of its own. That distinction matters more here than on either sibling:
@@ -654,37 +623,6 @@ public static class FisherServiceCollectionExtensions
     ///     wrapped store is what keeps a secondary store visible to a monitoring console.
     /// </remarks>
     private static object UnwrapForTooling(IDocumentStore store) => SecondaryStoreProxy.Unwrap(store);
-
-    /// <summary>
-    ///     The Event Model canvas a store's derived slices contribute to: the caller's name, or the
-    ///     shared default when they did not choose one (fisher#271).
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         Null is the ordinary answer and means "whatever every other source on the default is
-    ///         using", so a host that never named its model is unaffected.
-    ///     </para>
-    ///     <para>
-    ///         <b>An empty or whitespace name is refused by name rather than taken at its word.</b> It
-    ///         would be a legal model name and would reproduce the exact bug this parameter exists to
-    ///         fix — a second assembled model nothing merges into — with nothing to read in the failure
-    ///         but a blank where a name should be.
-    ///     </para>
-    /// </remarks>
-    private static string ResolveEventModelName(string? eventModelName)
-    {
-        if (eventModelName is null) return ProjectionEventModelSource.DefaultModelName;
-
-        if (string.IsNullOrWhiteSpace(eventModelName))
-        {
-            throw new ArgumentException(
-                "An Event Model name cannot be empty or whitespace. Pass the name the host's "
-                + $"AddEventModel(...) call uses, or null for the default '{ProjectionEventModelSource.DefaultModelName}'.",
-                nameof(eventModelName));
-        }
-
-        return eventModelName;
-    }
 }
 
 /// <summary>

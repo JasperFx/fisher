@@ -200,8 +200,9 @@ public class event_model_source : IAsyncLifetime
     {
         await using var provider = BuildBothStores();
 
+        // Read through the interface rather than a concrete source type: what a consumer sees is
+        // IEventModelDefinitionSource.Subject, and which class produces it is Fisher's business.
         var subjects = provider.GetServices<IEventModelDefinitionSource>()
-            .OfType<ProjectionEventModelSource>()
             .Select(x => x.Subject.ToString())
             .OrderBy(x => x)
             .ToArray();
@@ -349,14 +350,16 @@ public class event_model_source : IAsyncLifetime
             options.ConnectionString = _primary.ConnectionString;
             options.AutoCreateSchemaObjects = AutoCreate.All;
             options.Projections.Snapshot<ModelLedger>(SnapshotLifecycle.Inline);
-        }, eventModelName: "Stoat");
+            options.EventModelName = "Stoat";
+        });
 
         services.AddFisherStore<ILedgerArchiveStore>(options =>
         {
             options.ConnectionString = _ancillary.ConnectionString;
             options.AutoCreateSchemaObjects = AutoCreate.All;
             options.Projections.Snapshot<Manifest>(SnapshotLifecycle.Inline);
-        }, eventModelName: "Stoat");
+            options.EventModelName = "Stoat";
+        });
 
         await using var provider = services.BuildServiceProvider();
 
@@ -390,19 +393,55 @@ public class event_model_source : IAsyncLifetime
     }
 
     /// <summary>
-    ///     An empty or whitespace name is refused by name rather than taken at its word.
+    ///     ⚠️ <b>Declaring the host's model before or after <c>AddFisher</c> gives the same answer</b>
+    ///     (fisher#276), which is what reading the name lazily buys.
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         It is a legal model name, so accepting it would reproduce the very bug the parameter
-    ///         exists to fix — a second assembled model nothing merges into — with a blank where the
-    ///         name should be in the message that reports it.
+    ///         fisher#271 recorded "the store cannot infer the name" as a fact about the problem, and
+    ///         it was not — it was a consequence of capturing the name when the service was
+    ///         registered. <c>FisherProjectionEventModelSource</c> resolves the store inside
+    ///         <c>TryCreateAsync</c>, so the options are read when the model is <em>assembled</em>,
+    ///         long after every registration has run.
     ///     </para>
     ///     <para>
-    ///         <b>And refused before anything is registered</b>, which is what the emptiness assertion
-    ///         is for: both methods add several singletons before they reach the model source, so
-    ///         validating at the point of use would leave a half-populated collection behind an
-    ///         exception the caller may well catch.
+    ///         Both orders are asserted rather than just the awkward one: a source that somehow went
+    ///         looking at registration time would pass model-second and fail model-first, and a test
+    ///         carrying only one of them could not tell which.
+    ///     </para>
+    /// </remarks>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task the_registration_order_does_not_matter(bool modelFirst)
+    {
+        await using var provider = BuildNamed("Stoat", eventModelName: "Stoat", modelFirst: modelFirst);
+
+        var model = (await EventModelDiscovery.AssembleAsync(provider, Token)).ShouldHaveSingleItem();
+
+        model.Name.ShouldBe("Stoat");
+
+        var slice = model.Slices.Single(x => x.Name == nameof(ModelLedger));
+        slice.Domain.ShouldBe("Finance");
+        slice.ReadModelTypes.Select(x => x.Name).ShouldBe([nameof(ModelLedger)]);
+    }
+
+    /// <summary>
+    ///     An empty or whitespace name is refused by the setter rather than taken at its word.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         It is a legal model name, so accepting it would reproduce the very bug the setting
+    ///         exists to fix — a second assembled model nothing merges into — with a blank where the
+    ///         name should be in the message that reports it. Null is how a caller asks for the
+    ///         default.
+    ///     </para>
+    ///     <para>
+    ///         <b>On the setter, which is what moving to <see cref="StoreOptions" /> buys here</b>
+    ///         (fisher#276): the 1.8.0 parameter could only be checked inside <c>AddFisher</c>, after
+    ///         several singletons had already been registered, so the guard also had to be hoisted to
+    ///         keep a refusal from leaving a half-populated collection behind. A property refuses at
+    ///         the line that set it and there is nothing to half-populate.
     ///     </para>
     /// </remarks>
     [Theory]
@@ -410,18 +449,31 @@ public class event_model_source : IAsyncLifetime
     [InlineData("   ")]
     public void an_empty_model_name_is_refused(string name)
     {
+        Should.Throw<ArgumentException>(() => new StoreOptions { EventModelName = name });
+
+        // And from inside a configuration lambda, which is where a caller actually writes it.
         var services = new ServiceCollection();
+        services.AddFisher(options =>
+        {
+            options.ConnectionString = _primary.ConnectionString;
+            options.EventModelName = name;
+        });
 
-        Should.Throw<ArgumentException>(()
-                => services.AddFisher(options => options.ConnectionString = _primary.ConnectionString, name))
-            .ParamName.ShouldBe("eventModelName");
+        Should.Throw<ArgumentException>(() => services.BuildServiceProvider().GetRequiredService<IDocumentStore>());
+    }
 
-        Should.Throw<ArgumentException>(()
-                => services.AddFisherStore<ILedgerArchiveStore>(
-                    options => options.ConnectionString = _ancillary.ConnectionString, name))
-            .ParamName.ShouldBe("eventModelName");
-
-        services.ShouldBeEmpty();
+    /// <summary>
+    ///     Null is the way to ask for the default, and is not refused.
+    /// </summary>
+    /// <remarks>
+    ///     Worth its own fact because the guard is one <c>is not null</c> away from rejecting the
+    ///     ordinary case, and every other test here would still pass if it did — they all set a name.
+    /// </remarks>
+    [Fact]
+    public void a_null_model_name_is_the_default_and_is_allowed()
+    {
+        new StoreOptions { EventModelName = null }.EventModelName.ShouldBeNull();
+        new StoreOptions().EventModelName.ShouldBeNull();
     }
 
     /// <summary>
@@ -460,31 +512,35 @@ public class event_model_source : IAsyncLifetime
     }
 
     /// <summary>
-    ///     A host that names its Event Model, with the store either told that name or left on the
-    ///     default — the two sides of fisher#271.
+    ///     A host that names its Event Model, with the store either set to that name or left on the
+    ///     default — the two sides of fisher#271, now configured through
+    ///     <see cref="StoreOptions.EventModelName" /> (fisher#276).
     /// </summary>
-    private ServiceProvider BuildNamed(string hostModelName, string? eventModelName)
+    /// <param name="modelFirst">
+    ///     Whether to declare the host's model BEFORE registering the store. Both orders must give the
+    ///     same answer — see <see cref="the_registration_order_does_not_matter" />.
+    /// </param>
+    private ServiceProvider BuildNamed(string hostModelName, string? eventModelName, bool modelFirst = false)
     {
         var services = new ServiceCollection();
         services.AddLogging();
+
+        // The declaration carries a role the store cannot know — a Domain — so a merged slice is
+        // observably richer than either half and an unmerged one observably poorer.
+        void DeclareModel() => services.AddEventModel(hostModelName, model
+            => model.Slice(nameof(ModelLedger)).InDomain("Finance"));
+
+        if (modelFirst) DeclareModel();
 
         services.AddFisher(options =>
         {
             options.ConnectionString = _primary.ConnectionString;
             options.AutoCreateSchemaObjects = AutoCreate.All;
             options.Projections.Snapshot<ModelLedger>(SnapshotLifecycle.Inline);
-        }, eventModelName);
+            options.EventModelName = eventModelName;
+        });
 
-        // ⚠️ DELIBERATELY AFTER AddFisher, and that ordering is the argument for the parameter
-        // existing at all: at the moment AddFisher runs there is no model declared anywhere in the
-        // container, so there is nothing for the store to infer a name from even in principle.
-        // Registering these the other way round would leave the test passing against a store that
-        // went looking instead of being told.
-        //
-        // The declaration carries a role the store cannot know — a Domain — so a merged slice is
-        // observably richer than either half and an unmerged one observably poorer.
-        services.AddEventModel(hostModelName, model
-            => model.Slice(nameof(ModelLedger)).InDomain("Finance"));
+        if (!modelFirst) DeclareModel();
 
         return services.BuildServiceProvider();
     }

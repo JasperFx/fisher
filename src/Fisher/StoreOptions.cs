@@ -25,6 +25,7 @@ public class StoreOptions
     private AutoCreate? _autoCreate;
     private string _connectionString = string.Empty;
     private string _databaseSchemaName = FisherTableNaming.DefaultSchemaName;
+    private string? _eventModelName;
     private Serialization.ISerializer? _serializer;
 
     public StoreOptions()
@@ -103,6 +104,51 @@ public class StoreOptions
     ///     multiple Fisher stores in one application are distinguishable. Defaults to "Main".
     /// </summary>
     public string StoreName { get; set; } = "Main";
+
+    /// <summary>
+    ///     Name of the Event Model that this store's projections contribute their derived slices to.
+    ///     Leave null to contribute to the default model,
+    ///     <see cref="JasperFx.Events.EventModeling.ProjectionEventModelSource.DefaultModelName" />.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Set this to the same name a host passes to <c>AddEventModel("Something", …)</c>. Slices
+    ///         merge by model name, so leaving it null while the application named its own model
+    ///         assembles <b>two</b> models — the host's and this one — which surfaces as "expected
+    ///         exactly one assembled model" and names neither Fisher nor the line that caused it
+    ///         (fisher#271).
+    ///     </para>
+    ///     <para>
+    ///         <b>This lives here rather than as a parameter on <c>AddFisher</c> (fisher#276)</b>, so
+    ///         that naming a model never changes a public method signature — an optional argument binds
+    ///         at the call site, so adding one breaks binary compatibility for any assembly that is not
+    ///         recompiled. Marten and Polecat spell it the same way, which is the other half of the
+    ///         point: store-agnostic docs and samples read alike across the three.
+    ///     </para>
+    ///     <para>
+    ///         It is read when the Event Model is <em>assembled</em>, not when the store is registered,
+    ///         so it does not matter whether <c>AddEventModel</c> runs before or after
+    ///         <c>AddFisher</c>. The 1.8.0 parameter could not offer that — it captured a name at
+    ///         registration time, which is why it came with an ordering caveat this does not have.
+    ///     </para>
+    /// </remarks>
+    public string? EventModelName
+    {
+        get => _eventModelName;
+        set
+        {
+            // An empty string is a legal model name that reproduces the very bug this setting
+            // prevents, with a blank where the name should be. Null is how you say "the default".
+            if (value is not null && string.IsNullOrWhiteSpace(value))
+            {
+                throw new ArgumentException(
+                    "The Event Model name cannot be empty or whitespace. Leave it null to contribute to the default model.",
+                    nameof(value));
+            }
+
+            _eventModelName = value;
+        }
+    }
 
     /// <summary>
     ///     Whether Fisher should create or update database schema objects at runtime. Defaults to
