@@ -13,13 +13,18 @@ full text by reciprocal rank fusion, and [#261](https://github.com/JasperFx/fish
 *produces* the embedding from an event stream — so the vector a document carries is no longer the
 application's to maintain on every write path.
 
+<!-- open-issues -->
+<!-- Everything open goes in here and nothing that is closed, because scripts/check_roadmap_status.py
+     holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
+     in the Status block too — just outside these markers. -->
+
 What is left is one piece of tooling and two long-standing items.
-[#265](https://github.com/JasperFx/fisher/issues/265) would hold ROADMAP's own `Status:` line — this
-one — to the real open-issue set, after it was found stale at two consecutive releases; the design
-question there is *where* such a check can live without coupling every contributor's build to the
-issue tracker. [#189](https://github.com/JasperFx/fisher/issues/189) and
+[#265](https://github.com/JasperFx/fisher/issues/265) holds ROADMAP's own `Status:` line — this one —
+to the real open-issue set, after it was found stale at two consecutive releases.
+[#189](https://github.com/JasperFx/fisher/issues/189) and
 [#109](https://github.com/JasperFx/fisher/issues/109) are unchanged: an unreproduced flake with 65
 clean runs against it, and a half that cannot be specified until jasperfx#684 settles.
+<!-- /open-issues -->
 
 [#243](https://github.com/JasperFx/fisher/issues/243) and
 [#245](https://github.com/JasperFx/fisher/issues/245) are both done — `GetProjectionStatusesAsync` at
