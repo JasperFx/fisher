@@ -2236,9 +2236,19 @@ reserved and Fisher was passing null — so this is dialect SQL plus wiring, not
     answer to the same question, free to drift from it.
   - **`Insert` and `Update` keep the fallback and need nothing else**, having no explicit-revision
     overload — which is why `CaptureExpectedRevision` still exists, with the revision optional.
-  - **No shared suite reaches this.** `NumericRevisionCompliance` is written against `IRevisioned`
-    throughout, because the store-agnostic document contract has no configuration surface for saying
-    "this type uses numeric revisions" any other way. Fisher's own coverage did not reach it either:
+  - **No shared suite reaches this, and jasperfx#819 §2 established that none can.** It proposed
+    running `NumericRevisionCompliance`'s nine facts a second time against a type declared through
+    `Schema.For<T>().UseNumericRevisions()` — exactly this asymmetry. It was written and run against
+    Fisher: **seven of the nine failed, and not because of a bug.** Every fact works by setting the
+    document's revision before `Store` and reading it back off a load, and the declared route has no
+    member to do either with — Fisher's own DSL test says so outright ("no `IRevisioned` member to
+    project onto, so the value lives only in the column"), and Marten is the same shape. So the suite
+    could never run on the store whose bug motivated it, and it needs the mapped-member seam §3
+    deferred, which Fisher has nothing to bind to — `DocumentMetadataExpression<T>` exposes `Version`
+    and no `Revision`. `DocumentComplianceConfig.UseNumericRevisions<T>()` ships anyway as the half a
+    `Type` alone can carry, with the finding recorded on it.
+    `NumericRevisionCompliance` itself is enrolled and green (fisher#250) through the interface route.
+    Fisher's own coverage did not reach the DSL route either:
     `a_type_configured_through_the_dsl_gets_the_same_column` asserted the column existed and
     auto-incremented, and stopped there. The four `a_dsl_configured_type_*` tests are the
     interface-route guard tests one for one, against a type that opted in the other way, so the
@@ -2384,12 +2394,29 @@ to be checked against.
   `Version` and **no `Revision`**, so `IRevisioned` is the only way to declare one, and weasel#590's
   `MappedRevisionFor` has nothing here to adopt it for.
 
-⚠️ **No shared suite reaches any of this, for any store.** The only document-concurrency suite is
-`NumericRevisionCompliance`, which is numeric-only and written against `IRevisioned` throughout; every
-other "optimistic" fact in the shared set is about the *event store* (`AppendOptimistic`,
-`FetchForWritingByTags`). **Fisher passed all fifty enrolled suites with this broken** — the
-jasperfx#700 / #718 / #732 pattern again, a capability all three stores are assumed to share with
-nothing shared holding any of them to it.
+⚠️ **No shared suite reached any of this, for any store — and that is what fisher#250 closed.** The
+whole shared coverage of document concurrency was `NumericRevisionCompliance`, which is numeric-only
+and written against `IRevisioned` throughout; every other "optimistic" fact in the shared set is about
+the *event store* (`AppendOptimistic`, `FetchForWritingByTags`), and grepping the 2.68.0 `Suites/`
+directory for `IVersioned` returned nothing at all. **Fisher passed all fifty enrolled suites with this
+broken** — the jasperfx#700 / #718 / #732 pattern again, a capability all three stores are assumed to
+share with nothing shared holding any of them to it.
+
+`GuidOptimisticConcurrencyCompliance` (jasperfx#819, JasperFx 2.69.0) is the suite this section would
+have been caught by, and Fisher enrolls it green against the fix above. Its shape is worth knowing:
+**each "it works" fact has an "and staleness is still refused" twin**, because the cheap wrong fix —
+seed nothing, or seed whatever the row currently holds — makes one half pass and the other fail, and a
+suite carrying only the first half would have blessed exactly that. Fact 4 is the one Fisher is the
+reference for: a successful write **moves the stored instance's own `Version` on**, so the same
+instance can be stored again without tripping its own guard.
+
+⚠️ **`FisherDocumentComplianceFixture`'s `OptimisticConcurrencyTypes` replay is load-bearing for other
+stores and a no-op for Fisher**, which is exactly why it is there rather than skipped. The suite's
+document implements `IVersioned` *and* the config declares the type, because the stores disagree about
+whether the marker is itself the opt-in or merely supplies the member to guard on. On Fisher the marker
+*is* the opt-in — `DocumentMetadata`'s conventions turn it on, as Marten's `VersionedPolicy` does — so
+dropping the loop leaves all five facts passing and nothing announcing that the config was ignored.
+Verified by dropping it.
 
 **`UpdateExpectedVersion<T>(T, Guid)` is still absent**, where Marten has it as the Guid counterpart of
 `UpdateRevision`. Not needed for the above — seeding off the document covers the ordinary flow — and
@@ -4638,7 +4665,7 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher enrolls 51 of the 56 suites `JasperFx.Events.ComplianceTests` 2.69.0 ships — 544 tests.**
+**Fisher enrolls 53 of the 56 suites `JasperFx.Events.ComplianceTests` 2.69.0 ships — 558 tests.**
 `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
 gate is gone. See HANDOFF.md for the live scoreboard, which is machine-checked against a real run by
 `scripts/check_scoreboard.py`; what follows is the history and the mechanics.
