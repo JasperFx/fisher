@@ -339,6 +339,13 @@ containing a quote is escaped rather than spliced into the SQL.
 Every one of them throws `BadLinqExpressionException` naming the operator. Each replaces an answer
 that would have been an empty result — which for a search is indistinguishable from success.
 
+## Fusing with vector search
+
+Full text and embedding search fail in **different directions**: this misses a paraphrase that shares
+no tokens, and vector search misses an exact identifier, a product code, or a rare proper noun the
+model never learned. [Hybrid Search](/documents/querying/hybrid-search) fuses the two by reciprocal
+rank so each covers the other's hole.
+
 ## Not supported
 
 - **No full-text index on an event body.** `QueryEventDataAsync` searches event bodies with the
