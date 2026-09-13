@@ -334,6 +334,8 @@ Working, with tests:
   `[VectorIndex(dimensions)]`, `session.VectorSearchAsync<T>(...)` and the scored
   `VectorSearchWithScoresAsync<T>(...)`, brute force over the stored JSON through a registered
   `fi_vector_distance` function — no side table, no trigger, no native extension
+- **Hybrid search** — `HybridSearchAsync<T>(...)`, reciprocal rank fusion over the full-text and
+  vector legs, so each covers the other's recall hole
 - **Document metadata member mapping** — `guid_version`, `last_modified`, `is_deleted` and
   `deleted_at` projected back onto members of the document, by interface, attribute or DSL
 - **Strong-typed identities** — a wrapper around any of the four id types, as an aggregate's identity
@@ -1388,8 +1390,46 @@ application code reads the same against either store.
   its own database. The identity map is not consulted, the rows coming back through the same selector
   `Query<T>()` uses — Marten's behaviour too.
 
-The event-sourced `VectorProjection` (content-hash skipping, async) and hybrid search with the
-full-text index are their own pieces.
+### Hybrid search — fisher#262
+
+`HybridSearchAsync` / `HybridSearchWithScoresAsync`, fusing the full-text and vector legs by
+**reciprocal rank fusion** — `score(d) = Σ 1 / (k + rank(d))`, `k` 60 by convention and settable.
+
+- **RRF rather than a weighted score sum, and that is the load-bearing choice.** bm25 and cosine
+  distance are not on a comparable scale, so normalising them means picking constants that are wrong
+  for someone's corpus. RRF reads only the *ordinal position* in each leg, so the two need no
+  calibration against each other and the fusion behaves the same whatever the embedding model or the
+  tokenizer is.
+- **Two statements fused in memory, not one.** Each leg already runs through tested machinery — the
+  text leg is an ordinary `Query<T>()` with the full-text predicate and `OrderByRelevance()`, the
+  vector leg is `VectorSearchAsync` — so the fuse inherits the tenant, soft-delete and hierarchy
+  filters and the existing refusals **without restating any of them**. One statement would be a join
+  whose plan neither index serves, and a fifth place for those filters to be forgotten, which is how
+  fisher#51 happened.
+- **The fusion is over the union**, so a document one leg alone found still scores. That is the point
+  rather than a tolerance: what the keyword leg alone finds is exactly what the vector leg is bad at.
+- **`CandidateDepth` must exceed `limit`** and defaults to `max(limit × 4, 50)`. A document ranked
+  40th by one leg and 1st by the other is the result the feature exists for, and reading only `limit`
+  per leg would never see it; below `limit` is refused rather than answered with a short list.
+- ⚠️ **A type with only one of the two indexes is refused, not degraded** — the user's ruling, and the
+  same stance `VectorSearchAsync` takes on an undeclared index. Degrading would silently change what
+  the method means, and a caller who asked for hybrid search and got half has no way to find out. The
+  check is up front rather than left to whichever leg runs first, so the message is about *hybrid*
+  search rather than about one leg.
+- **Ties are broken deterministically** — score, then best rank, then identity. Two documents at the
+  same rank in one leg and absent from the other have identical scores, which is common rather than
+  exotic, and without a total order the page a caller gets differs between runs. Same lesson keyset
+  paging records.
+- **`HybridTextStyle` offers `PlainText` (default) and `WebStyle` only.** Raw `Search` syntax is
+  deliberately absent: it can be malformed, and a malformed query in one leg fails the whole fused
+  call, where in a plain `Where(x => x.Search(...))` it fails only the thing the caller asked for.
+- **The discriminating test is `agreement_between_the_legs_outranks_a_single_leg_winner`**, because
+  almost every other assertion about a hybrid search is satisfied by either leg alone. Its corpus is
+  built so the legs *disagree*: an exact identifier no embedding places, a paraphrase sharing no
+  tokens, and a middling-in-both document the fusion must lift above them. Verified by dropping the
+  vector leg from the fuse — three tests fail.
+
+The event-sourced `VectorProjection` (content-hash skipping, async) is its own piece.
 
 ### The four Marten operators — fisher#202
 
