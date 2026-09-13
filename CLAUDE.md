@@ -871,6 +871,20 @@ implements `ISubscriptionRunner<ISubscription>`.
 - **There is no inline equivalent**, deliberately: "inline" would just be code in the caller's own
   unit of work. A subscription needs the daemon running — `AddAsyncDaemon()` hosts it with everything
   else.
+- ⚠️ **Fisher's daemon is built with an `ILogger`, never an `ILoggerFactory`, and that turned out to
+  matter.** jasperfx#827 (fixed in 2.69.1) was `JasperFxSubscriptionBase.BuildExecution`'s two
+  overloads disagreeing: the `ILoggerFactory` one passed the *database* where
+  `SubscriptionExecution<T>` resolves its `ISubscriptionRunner<T>` off the *store*, so construction
+  threw and **no subscription could start on that path, on any store**.
+  `JasperFxAsyncDaemon.buildAgentForShard` takes it whenever the daemon was built with a factory —
+  which is the hosted path everywhere except here, because `FisherDaemonHostedService` calls
+  `BuildProjectionDaemonsAsync(_logger)`. **Verified rather than assumed**: the regression test was run
+  against the 2.69.0 pin and passed.
+  - **What was missing was the coverage, not the behaviour.** Every subscription test built its daemon
+    by hand, and so does `SubscriptionCompliance` — which is why nothing on any store exercised the
+    other overload. `subscriptions_under_the_hosted_daemon` is the fact that a subscription runs under
+    `AddAsyncDaemon()` at all, and it is what would catch Fisher if the daemon ever moved to the
+    logger-factory constructor.
 
 One test-shaped trap worth recording, because it presented as an intermittent: **`WaitForNonStale`
 does not imply the post-commit listener has run.** The progression row is written *inside* the batch's
@@ -2648,10 +2662,16 @@ because the same reader feeds both. What is Fisher's is two registrations.
   store-derived Event Model that needs a Postgres or SQL Server container to demonstrate is one nobody
   exercises while writing the feature. Every fact in `event_model_source` runs against a throwaway
   SQLite file.
-- ⚠️ **A View slice's `ConsumedEvents` carries `Archived` and `Compacted<T>`**, because `AppliedEvents`
-  is derived from `IAggregateProjection.AllEventTypes` and every aggregation projection handles those
-  whether or not the aggregate declares an `Apply`. Nothing here is Fisher's to change; pinned rather
-  than asserted around, and reported upstream as jasperfx#829.
+- **A View slice's `ConsumedEvents` is what the aggregate declares an `Apply` for, and nothing else** —
+  but only since JasperFx 2.69.1. It used to carry `Archived` and `Compacted<T>` too, because
+  `AppliedEvents` is derived from `IAggregateProjection.AllEventTypes` and every aggregation projection
+  handles those whether the aggregate declares an `Apply` or not: correct about what the projection
+  *handles*, and two orange stickies for events the application never wrote on a canvas. Reported as
+  jasperfx#829 and filtered upstream in `ProjectionEventModelSource.ToSlice` rather than in the reader
+  that fills `AppliedEvents`, since a monitoring console asking "what does this projection handle"
+  wants both and only the canvas question is narrow.
+  **Pinning the exact set rather than asserting around it is what made the fix visible on the bump**,
+  which is the argument for pinning an upstream behaviour you have just filed an issue about.
 
 **There is no `event-model` CLI command in JasperFx 2.69.0**, so jasperfx#825's third acceptance item
 is covered at the seam a command would read — `EventModelDiscovery.AssembleAsync` over a plain Fisher
@@ -4768,7 +4788,7 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher enrolls 55 of the 56 suites `JasperFx.Events.ComplianceTests` 2.69.0 ships — 572 tests.**
+**Fisher enrolls 55 of the 56 suites `JasperFx.Events.ComplianceTests` 2.69.1 ships — 572 tests.**
 `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
 gate is gone. See HANDOFF.md for the live scoreboard, which is machine-checked against a real run by
 `scripts/check_scoreboard.py`; what follows is the history and the mechanics.

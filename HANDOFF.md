@@ -12,9 +12,9 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2137 tests green on net9.0 and net10.0** — 2082 in
+**2138 tests green on net9.0 and net10.0** — 2083 in
 `Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 572 of
-them are shared cross-store compliance tests — 489 event sourcing and 83 document. On JasperFx **2.69.0** / Weasel **9.32.0**.
+them are shared cross-store compliance tests — 489 event sourcing and 83 document. On JasperFx **2.69.1** / Weasel **9.32.0**.
 
 ## The high-water opt-out, audited (#199)
 
@@ -662,7 +662,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.69.0 ships 56 suites; Fisher enrolls **55 of them, 572 tests**.
+`JasperFx.Events.ComplianceTests` 2.69.1 ships 56 suites; Fisher enrolls **55 of them, 572 tests**.
 Fisher passes **572 of them, across all
 55 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed

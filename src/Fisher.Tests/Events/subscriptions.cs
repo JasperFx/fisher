@@ -5,6 +5,8 @@ using JasperFx;
 using JasperFx.Events;
 using JasperFx.Events.Daemon;
 using JasperFx.Events.Projections;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Fisher.Tests.Events;
 
@@ -245,5 +247,123 @@ public class subscriptions : IAsyncLifetime
             ISubscriptionController controller, IDocumentSession operations,
             CancellationToken cancellationToken)
             => Task.FromResult<IDaemonChangeListener>(NullDaemonChangeListener.Instance);
+    }
+}
+
+/// <summary>
+///     A subscription running under the <em>hosted</em> daemon — <c>AddAsyncDaemon()</c>, which is the
+///     route the documentation names and the only one an application actually takes.
+/// </summary>
+/// <remarks>
+///     <para>
+///         <b>Written for jasperfx#827 and kept for a better reason: Fisher turned out to be immune,
+///         and the immunity is one line deep.</b> That bug was
+///         <c>JasperFxSubscriptionBase.BuildExecution</c>'s two overloads disagreeing — the
+///         <c>ILoggerFactory</c> one passed the <em>database</em> where
+///         <c>SubscriptionExecution&lt;T&gt;</c> resolves its <c>ISubscriptionRunner&lt;T&gt;</c> off
+///         the <em>store</em>, so construction threw <c>ArgumentOutOfRangeException</c> and no
+///         subscription could start on that path. <c>JasperFxAsyncDaemon.buildAgentForShard</c> takes
+///         it whenever the daemon was built with a logger factory.
+///     </para>
+///     <para>
+///         <b>Fisher never reaches it, because Fisher's daemon is built with an <c>ILogger</c> — on the
+///         hosted path too.</b> <c>FisherDaemonHostedService</c> calls
+///         <c>BuildProjectionDaemonsAsync(_logger)</c>, so the correct overload is the only one this
+///         store has ever taken. <b>Verified rather than assumed</b>: this test was run against the
+///         2.69.0 pin and passed, which is what turned "Fisher was broken and is now fixed" into "the
+///         hosted path was untested here and happens to be safe".
+///     </para>
+///     <para>
+///         <b>The gap it closes is therefore Fisher's own coverage, not Fisher's behaviour.</b> Every
+///         subscription test above builds its daemon by hand, and so does
+///         <c>SubscriptionCompliance</c> — which is why nothing on any store exercised the other
+///         overload. So there was no fact anywhere saying a subscription runs under
+///         <c>AddAsyncDaemon()</c>, which is the route the documentation names and the only one an
+///         application takes. This is that fact, and it is what would catch Fisher if the daemon ever
+///         moved to the logger-factory constructor.
+///     </para>
+///     <para>
+///         Deliberately end-to-end and unglamorous — start the host, append, wait for the
+///         subscription's own signal — because the failure mode it guards against is <em>starting</em>,
+///         and any assertion reaching the events at all would catch it.
+///     </para>
+/// </remarks>
+public class subscriptions_under_the_hosted_daemon : IAsyncLifetime
+{
+    private readonly TemporaryDatabase _database = TemporaryDatabase.Create("hosted-subscription");
+
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
+
+    public ValueTask DisposeAsync()
+    {
+        _database.Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    private CancellationToken Token => TestContext.Current.CancellationToken;
+
+    [Fact]
+    public async Task a_subscription_starts_and_sees_events_under_add_async_daemon()
+    {
+        var subscription = new HostedRecordingSubscription();
+
+        using var host = await Microsoft.Extensions.Hosting.Host.CreateDefaultBuilder()
+            .ConfigureServices(services => services.AddFisher(options =>
+                {
+                    options.ConnectionString = _database.ConnectionString;
+                    options.AutoCreateSchemaObjects = AutoCreate.All;
+                    options.Projections.Subscribe(subscription);
+                })
+                .ApplyAllDatabaseChangesOnStartup()
+                .AddAsyncDaemon())
+            .StartAsync(Token);
+
+        try
+        {
+            var store = host.Services.GetRequiredService<IDocumentStore>();
+
+            await using (var session = store.LightweightSession())
+            {
+                session.Events.StartStream<Quest>(Guid.NewGuid(),
+                    new QuestStarted("Chart the Minch"), new QuestStarted("Chart the Solent"));
+                await session.SaveChangesAsync(Token);
+            }
+
+            // Waited on the subscription's own signal rather than on non-staleness: the progression
+            // row is written inside the batch's transaction, so non-stale becomes true strictly before
+            // anything the subscription did is observable. Same trap fisher#232 records one seam over.
+            await subscription.SawTwo.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+            subscription.Seen.Count.ShouldBe(2);
+        }
+        finally
+        {
+            await host.StopAsync(Token);
+        }
+    }
+
+    private sealed class HostedRecordingSubscription : SubscriptionBase
+    {
+        public ConcurrentQueue<IEvent> Seen { get; } = new();
+
+        public TaskCompletionSource SawTwo { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override Task<IDaemonChangeListener> ProcessEventsAsync(EventRange page,
+            ISubscriptionController controller, IDocumentSession operations,
+            CancellationToken cancellationToken)
+        {
+            foreach (var @event in page.Events)
+            {
+                Seen.Enqueue(@event);
+            }
+
+            if (Seen.Count >= 2)
+            {
+                SawTwo.TrySetResult();
+            }
+
+            return Task.FromResult<IDaemonChangeListener>(NullDaemonChangeListener.Instance);
+        }
     }
 }
