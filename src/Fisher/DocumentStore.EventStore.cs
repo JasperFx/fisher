@@ -55,7 +55,19 @@ public partial class DocumentStore : IEventStore
 
     string IEventStore.MetricsPrefix => "fisher";
 
-    Uri IEventStore.Subject => Database.Describe().DatabaseUri();
+    // fisher#279: Subject identifies the STORE, not the database backing it. Returning the database uri
+    // collapsed two Fisher stores over one FILE -- the documented "two logical stores in one file,
+    // isolated by table prefix" layout AddFisherStore<T> exists to support -- onto an identical Subject.
+    // Monitoring tools key per-store state by it: CritterWatch resolves every explorer read through
+    // store.Subject.ToString() and builds its shard progression id from
+    // (serviceName, storeUri, databaseIdentifier, tenantId, shardName), so two co-located stores shared
+    // an id and clobbered each other's progress.
+    //
+    // This is polecat#320 one repository over, and Polecat's spelling is adopted verbatim so the three
+    // stores answer the same shape: marten://main, polecat://{storename}, fisher://{storename}.
+    // The DATABASE keeps its own surfaces -- Database.Describe().DatabaseUri(), IEventDatabase.Identifier
+    // and the usage descriptors' SubjectUri -- exactly as Polecat left them.
+    Uri IEventStore.Subject => new("fisher://" + Options.StoreName.ToLowerInvariant());
 
     /// <summary>
     ///     How many databases this store spans — the tenancy's answer, which is not always
@@ -96,7 +108,14 @@ public partial class DocumentStore : IEventStore
            || Options.Events.TenancyStyle == JasperFx.MultiTenancy.TenancyStyle.Conjoined
            || Options.Schema.AllMappings().Any(x => x.IsConjoined);
 
-    EventStoreIdentity IEventStore.Identity => new(Options.DatabaseSchemaName, "fisher");
+    // fisher#279: StoreName, not DatabaseSchemaName. StoreOptions.StoreName is documented as the thing
+    // that makes several Fisher stores in one application distinguishable, and this is the member that
+    // sentence is about -- but it read the schema name, so two stores sharing a schema (both defaults)
+    // had one identity. Marten and Polecat both read their StoreName here.
+    //
+    // Identity feeds EventStoreUsage.PopulateAgentUris, so it names daemon agent uris; a collision there
+    // is two stores' shards answering to one address.
+    EventStoreIdentity IEventStore.Identity => new(Options.StoreName.ToLowerInvariant(), "fisher");
 
     /// <summary>
     ///     jasperfx#420 — how many projection rebuild cells may run concurrently against this database.
