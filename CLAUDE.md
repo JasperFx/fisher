@@ -5430,6 +5430,23 @@ factory)`, over `Projections.StorageProviders` in the core.
   after its test finished is doing unpredictable work while other tests run. `scripts/check_no_leaked_databases.py`
   runs in CI after a green suite and holds it at zero — a runner starts with an empty temp
   directory, so the check is exact rather than heuristic.
+- ⚠️ **ROADMAP's `Status:` line is checked at RELEASE PREP, not on every push** —
+  `scripts/check_roadmap_status.py` and `.github/workflows/release-prep.yml` (fisher#265). It is the
+  first thing a reader sees, nothing else recomputes it, and it was found stale at two consecutive
+  releases on one day: once naming shipped work as pending, once missing an issue filed in between.
+  - **It is deliberately not part of `check_scoreboard.py`.** That script reads files on disk and
+    runs on every push; this one asks GitHub. On every push it would mean that *anybody filing an
+    issue* turns the next contributor's build red for something they did not touch and cannot fix —
+    a worse failure than the stale line. The trigger is a pull request touching
+    `Directory.Build.props`, which is what release prep always does and nothing else does, so the
+    failure lands on the person cutting the release.
+  - **The claim about what is open is delimited by `<!-- open-issues -->` markers**, because the
+    Status block legitimately discusses *closed* issues — saying what a release finished is half of
+    what a status is for, and a naive sweep would reject the current one for naming five. A missing
+    marker is a failure rather than a skip.
+  - **Both the count word and the enumerated set are checked**, and the difference is reported each
+    way. A count alone goes stale silently the moment a *different* issue is open — the same argument
+    `check_scoreboard.py` already makes about HANDOFF's red list.
 - **Never call `SqliteConnection.ClearAllPools()`.** It disposes every pooled connection in the
   process, and xUnit runs test collections in parallel — one test's cleanup will take out another
   with `ObjectDisposedException: SQLitePCL.sqlite3`, intermittently enough to look like a flake.

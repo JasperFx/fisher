@@ -1,0 +1,36 @@
+# fisher#265 — the checks that belong to cutting a release rather than to every push.
+#
+# ROADMAP's `Status:` line is the first thing a reader sees and nothing recomputes it, so it rots:
+# it was found stale at two consecutive releases on one day, once naming shipped work as pending and
+# once missing an issue filed in between. Both misses are the same shape — an issue's state changed
+# between releases, and the line is prose.
+#
+# ⚠️ This is deliberately NOT a job in fisher.yml, and the reason is the trigger rather than the
+# check. Holding the line to the tracker means asking GitHub, which needs the network and a token —
+# and on every push it would also mean that ANYBODY filing an issue turns the next contributor's
+# build red for something they did not touch and cannot reasonably fix. That is a worse failure than
+# the stale line.
+#
+# So it runs on a pull request that touches Directory.Build.props, which is what release prep always
+# does and what nothing else does. The failure lands on the person cutting the release, who is the
+# person who can fix it.
+name: release prep
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'Directory.Build.props'
+  workflow_dispatch:
+
+jobs:
+  roadmap-status:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ROADMAP's Status line agrees with the open issues
+        run: python3 scripts/check_roadmap_status.py
+        env:
+          # `gh` reads this; the default token's read access to issues is all the script needs.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
