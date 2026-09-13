@@ -3,8 +3,15 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **two open issues, and neither is next-release work.** Both of 1.4.0's follow-ups closed in
-1.5.0, along with the whole of JasperFx 2.69.x's compliance wave.
+Status: **three open issues, one of which is the next piece of real work.** 1.5.0 closed both of
+1.4.0's follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search.
+
+[#261](https://github.com/JasperFx/fisher/issues/261) is the one with work in it — `VectorProjection`,
+embeddings derived from an event stream with content-hash skipping. It is the remaining half of the
+vector story: #241 made a declared embedding member searchable and
+[#262](https://github.com/JasperFx/fisher/issues/262) fused that leg with full text, but nothing yet
+*produces* an embedding from events, so the vector a document carries is still the application's to
+maintain. The other two are unchanged and neither is next-release work.
 
 [#243](https://github.com/JasperFx/fisher/issues/243) and
 [#245](https://github.com/JasperFx/fisher/issues/245) are both done — `GetProjectionStatusesAsync` at
