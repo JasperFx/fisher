@@ -12,9 +12,9 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2088 tests green on net9.0 and net10.0** — 2033 in
-`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 544 of
-them are shared cross-store compliance tests — 475 event sourcing and 69 document. On JasperFx **2.69.0** / Weasel **9.32.0**.
+**2102 tests green on net9.0 and net10.0** — 2047 in
+`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 19 in `Fisher.EntityFrameworkCore.Tests`. 558 of
+them are shared cross-store compliance tests — 475 event sourcing and 83 document. On JasperFx **2.69.0** / Weasel **9.32.0**.
 
 ## The high-water opt-out, audited (#199)
 
@@ -662,9 +662,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.69.0 ships 56 suites; Fisher enrolls **51 of them, 544 tests**.
-Fisher passes **544 of them, across all
-51 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 2.69.0 ships 56 suites; Fisher enrolls **53 of them, 558 tests**.
+Fisher passes **558 of them, across all
+53 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -809,10 +809,10 @@ case is what is Fisher's alone — the `ResetAllDataAsync` daemon handling, `Fet
 and `UnknownNaturalKeyException` (which jasperfx#764 excludes on purpose), the subscription wrapper's
 naming.
 
-**Green on all fifty-one is not the same as feature-complete.** The suites cover what is portable
+**Green on all fifty-three is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 51 suites, 544 tests
+### Green — 53 suites, 558 tests
 
 Event sourcing — 44 suites, 475 tests:
 
@@ -863,7 +863,7 @@ Event sourcing — 44 suites, 475 tests:
 | `EventProjectionRegistrationCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 7 suites, 69 tests, through `FisherDocumentComplianceFixture`:
+Documents — 9 suites, 83 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
@@ -871,9 +871,11 @@ Documents — 7 suites, 69 tests, through `FisherDocumentComplianceFixture`:
 | `DocumentLoadAndStoreCompliance` | 11 |
 | `DocumentCommitListenerCompliance` | 10 |
 | `DocumentDeleteCompliance` | 10 |
+| `NumericRevisionCompliance` | 9 |
 | `PendingStreamActionsCompliance` | 9 |
 | `DocumentSessionCompliance` | 7 |
 | `DocumentSessionEventsCompliance` | 5 |
+| `GuidOptimisticConcurrencyCompliance` | 5 |
 
 ### Nothing in the fixture throws any more
 

@@ -78,6 +78,33 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
                 options.Schema.MappingFor(documentType);
             }
 
+            // jasperfx#819. Replayed onto the SAME non-generic mapping the loop above just resolved,
+            // which is the shipped registration route rather than a test-only one —
+            // Schema.For<T>().UseOptimisticConcurrency(true) and .UseNumericRevisions() set exactly
+            // these two properties.
+            //
+            // ⚠️ The optimistic replay is load-bearing rather than belt-and-braces. ComplianceShipment
+            // implements IVersioned *and* the config declares the type, because the stores disagree
+            // about whether the marker is itself the opt-in or merely supplies the member to guard on;
+            // a suite declaring only the marker would be testing that disagreement. On Fisher the
+            // marker IS the opt-in (DocumentMetadata's conventions turn it on, as Marten's
+            // VersionedPolicy does), so dropping this loop leaves every fact passing and nothing
+            // announcing that the config was ignored — which is why the config member says so at
+            // length rather than leaving it to each fixture.
+            foreach (var type in config.OptimisticConcurrencyTypes)
+            {
+                options.Schema.MappingFor(type).UseOptimisticConcurrency = true;
+            }
+
+            // No suite populates this one — jasperfx#819 §2 was written, run against Fisher, and
+            // withdrawn, because the declared route has no document member to name a revision on or
+            // read one back off. Replayed anyway: it costs nothing, and it is the half of the
+            // declaration a Type alone can carry.
+            foreach (var type in config.NumericRevisionTypes)
+            {
+                options.Schema.MappingFor(type).UseNumericRevisions = true;
+            }
+
             // jasperfx#672. The suite states the stream identity it needs and the fixture replays it,
             // exactly as it replays the value types above. This used to be an *inference* made here —
             // string identity whenever the config declared event types — which was right only because
@@ -116,6 +143,22 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
 
     public override IDocumentSessionFactory Sessions => _store
         ?? throw new InvalidOperationException("The compliance store has not been configured yet.");
+
+    /// <summary>
+    ///     Numeric revisions — the INTEGER <c>revision</c> column, <c>Store(doc, revision)</c>,
+    ///     <c>UpdateRevision</c> and <c>TryUpdateRevision</c> (fisher#18).
+    /// </summary>
+    public override bool SupportsNumericRevisions => true;
+
+    /// <summary>
+    ///     <see cref="Guid" /> optimistic concurrency — the <c>guid_version</c> column and the guard
+    ///     behind it (fisher#245).
+    /// </summary>
+    /// <remarks>
+    ///     The two are alternatives on any one type — <c>AssertConcurrencyIsCoherent</c> refuses the
+    ///     pair at configuration time — but the store supports both, and each suite names its own type.
+    /// </remarks>
+    public override bool SupportsOptimisticConcurrency => true;
 
     public override async Task CleanDocumentDataAsync()
     {

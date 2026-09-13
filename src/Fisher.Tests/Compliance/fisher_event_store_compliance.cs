@@ -8,11 +8,10 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and fifty-one are enrolled from
+ * Suites were added one at a time as Fisher grew into them, and fifty-three are enrolled from
  * JasperFx.Events.ComplianceTests 2.69.0, which itself ships fifty-six concrete suites across
- * fifty-five files -- MultiDatabaseExplorerCompliance is one file holding two arms. Five are not
- * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below;
- * NumericRevisionCompliance and GuidOptimisticConcurrencyCompliance, which are fisher#250; and the
+ * fifty-five files -- MultiDatabaseExplorerCompliance is one file holding two arms. Three are not
+ * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below; and the
  * two arms of MultiDatabaseExplorerCompliance, which need a fixture that can build a store over more
  * than one database (SupportsMultipleDatabases) and are fisher#252.
  *
@@ -454,3 +453,44 @@ public class pending_stream_actions_compliance
 
 public class document_commit_listener_compliance
     : DocumentCommitListenerCompliance<FisherDocumentComplianceFixture>;
+
+/*
+ * jasperfx#819 — the two document concurrency suites, enrolled together because they are two halves
+ * of one question and Fisher answers both.
+ *
+ * ⚠️ GuidOptimisticConcurrencyCompliance is THE SUITE fisher#245 would have caught, and the reason
+ * to say so is the scale of what it did not catch. There was no shared suite for Guid optimistic
+ * concurrency on ANY store — grepping the 2.68.0 Suites/ directory for IVersioned returned nothing —
+ * so the whole shared coverage of document concurrency was NumericRevisionCompliance. What lived in
+ * that gap was Fisher guarding from the session's own version tracker, i.e. what THAT session had
+ * read: a document loaded in one session and stored through another had no recorded expectation and
+ * failed its guard EVERY TIME. Refusing stale writes correctly and refusing legitimate ones too, for
+ * the request-per-session workflow the feature exists for. Fisher passed all fifty enrolled suites
+ * throughout. marten#5372 is the same field one route over, found independently.
+ *
+ * So this is enrollment rather than a fix — both suites were green against the fisher#245 HEAD on
+ * the bump alone — and enrolling is what stops the next regression from being invisible for fifty
+ * suites again.
+ *
+ * NumericRevisionCompliance predates 2.69.0 and was simply never enrolled, which is the same shape
+ * one release earlier: Fisher has had numeric revisions since fisher#18 and nothing shared held them.
+ *
+ * The fixture needs two capability flags and TWO REPLAY LOOPS, and the optimistic one is load-bearing
+ * for a reason that is not obvious — see FisherDocumentComplianceFixture, where dropping it leaves
+ * every fact passing on Fisher and says nothing about the store it would break.
+ *
+ * jasperfx#819 §2 — the nine numeric facts run a second time against a type declared through
+ * Schema.For<T>().UseNumericRevisions() rather than IRevisioned, which is the asymmetry fisher#228
+ * lived in — is NOT here and is not an omission. It was written and run against Fisher: seven of the
+ * nine failed, and not because of a bug. The declared route has no document member to project the
+ * revision onto, so there is nothing for the suite to set before Store and nothing to read back off a
+ * load. Fisher's own a_dsl_configured_type_* tests cover that route because they read the column
+ * directly; a shared suite has no such reach. Recorded upstream on
+ * DocumentComplianceConfig.UseNumericRevisions so it is not rediscovered by writing the suite again.
+ */
+
+public class numeric_revision_compliance
+    : NumericRevisionCompliance<FisherDocumentComplianceFixture>;
+
+public class guid_optimistic_concurrency_compliance
+    : GuidOptimisticConcurrencyCompliance<FisherDocumentComplianceFixture>;
