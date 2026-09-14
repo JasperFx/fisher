@@ -120,26 +120,28 @@ daemon, the same round trip holds up only the shard that is waiting for it.
 The projection is ported in shape from
 [Marten.PgVector's event-sourced vector projection](https://martendb.io/documents/pgvector#event-sourced-vector-projection):
 map event types to text, hash the text, skip re-embedding when the hash is unchanged, upsert by the
-mapped id. Four things are deliberately different, and all four come from that template rather than
-from SQLite.
+mapped id. Three things are deliberately different, and all three come from that template rather
+than from SQLite.
 
 **The identity is not `Guid`-only.** Marten's hardcodes `Guid` at every layer, so a string-identified
 store cannot use it at all. `TId` here is any identity Fisher stores, strong-typed wrappers included.
 
-**A delete takes an id selector, always.** There is no overload defaulting to the stream id: a
-projection keyed on a payload member would then write rows under one id and delete under another, and
-the delete would silently match nothing. Requiring the selector on both sides makes the two incapable
-of disagreeing; the common case costs `e => e.StreamId`.
-
-**A throwing content selector faults the shard.** A content selector returning **null** means "this
-event carries no content" and skips it. A selector that **throws** is not caught — it faults the
-shard, which is what the daemon's error handling is for. Swallowing the exception into "no content"
-would drop the document out of the index with nothing reported anywhere.
+**A delete takes an id selector, always.** Marten's `Delete<TEvent>()` falls back to the stream id
+when no selector is given, and refuses the one combination that cannot work — content keyed on the
+event, deletes by stream. Fisher has no selector-less overload at all: a projection keyed on a payload
+member would otherwise write rows under one id and delete under another, and the delete would
+silently match nothing. Requiring the selector on both sides makes the two incapable of disagreeing;
+the common case costs `e => e.StreamId`.
 
 **It commits with the events that produced it.** Marten's reads and writes on a connection of its
 own, outside the batch's transaction. Here everything is queued onto the session the daemon hands
 over, so the embedding and the projection's progress land in one transaction — and on SQLite a
 second connection writing while the batch holds the write lock would block against itself anyway.
+
+One thing that used to differ no longer does: a content selector that **throws** is not caught by
+either. Here it faults the shard, which is what the daemon's error handling is for; swallowing the
+exception into "no content" would drop the document out of the index with nothing reported anywhere.
+To skip an event on purpose, return **null**, which means "this event carries no content".
 
 ## Wiring an embedding provider
 

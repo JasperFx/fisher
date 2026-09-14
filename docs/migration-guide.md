@@ -208,11 +208,12 @@ names — `IEmbeddingProvider`, `DistanceFunction`, `VectorMatch<T>` — are the
   `IVectorized<TId>` and declares its own vector index, and it is searched with `VectorSearchAsync`
   like any other — there is no `VectorProjectionSearchAsync`. `TId` is any identity Fisher stores,
   where Marten's is `Guid` only.
-- **A delete takes an id selector.** `map.Delete<TEvent>(e => …)` has no overload that defaults to the
-  stream id, so a line relying on that default gains `e => e.StreamId` — or, for a projection keyed on
-  a payload member, the member it was keyed on.
-- **A content selector that throws faults the shard** rather than reading as "no content". Return
-  null to skip an event.
+- **A delete always takes an id selector.** Marten.PgVector's `Delete<TEvent>()` falls back to the
+  stream id when no selector is given; `map.Delete<TEvent>(e => …)` here has no such overload, so a
+  line relying on that default gains `e => e.StreamId`.
+- **Selectors take the event envelope.** Marten.PgVector's `Map` and `Delete` selectors receive the
+  event's data (`e => e.Text`); Fisher's receive `IEvent<TEvent>` (`e => e.Data.Text`), so the
+  stream id and metadata are in reach without a second overload.
 - **Register it `Async`.** Nothing refuses `Inline`, but an inline projection would hold SQLite's one
   write lock across the model call. The embedding commits in the daemon's batch transaction, not on a
   connection of its own.

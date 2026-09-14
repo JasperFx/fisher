@@ -9,16 +9,18 @@ namespace Fisher.Projections.Vectors;
 /// <remarks>
 ///     <para>
 ///         <b>⚠️ There is no <c>Delete&lt;TEvent&gt;()</c> without an id selector, and that absence is
-///         the fix for a real defect rather than an omission.</b> Marten's template reads
-///         <c>@event.StreamId</c> on its delete path unconditionally and ignores the configured id
-///         selector entirely — so a projection keyed on a payload member writes rows under one id and
-///         deletes under another, and the delete silently matches nothing. The row stays in the index
-///         forever, which for a deletion is the worst possible direction to fail in.
+///         deliberate rather than an omission.</b> A projection keyed on a payload member that deletes
+///         by the stream id writes rows under one id and deletes under another, and the delete silently
+///         matches nothing. The row stays in the index forever, which for a deletion is the worst
+///         possible direction to fail in.
 ///     </para>
 ///     <para>
-///         Requiring the selector on both sides makes the two structurally incapable of disagreeing,
-///         which is better than checking that they agree. The common case costs <c>e =&gt; e.StreamId</c>
-///         — six characters of honesty.
+///         Marten's projection honours a configured delete selector, falls back to
+///         <c>@event.StreamId</c> only when none is given, and refuses at configuration time the one
+///         combination that cannot work — content keyed on the event, deletes by stream. Requiring the
+///         selector on both sides goes a step further: it makes the two structurally incapable of
+///         disagreeing, which is better than checking that they agree. The common case costs
+///         <c>e =&gt; e.StreamId</c> — six characters of honesty.
 ///     </para>
 /// </remarks>
 public sealed class VectorProjectionMap<TDoc, TId>
@@ -67,8 +69,8 @@ public sealed class VectorProjectionMap<TDoc, TId>
     ///     seen.
     /// </summary>
     /// <param name="id">
-    ///     The document to delete. Required — see the class remarks for the defect that makes a
-    ///     convenience overload defaulting to the stream id the wrong offer.
+    ///     The document to delete. Required — see the class remarks for why a convenience overload
+    ///     defaulting to the stream id is the wrong offer.
     /// </param>
     public VectorProjectionMap<TDoc, TId> Delete<TEvent>(Func<IEvent<TEvent>, TId> id)
         where TEvent : notnull
@@ -107,11 +109,12 @@ public sealed class VectorProjectionMap<TDoc, TId>
     {
         if (_content.TryGetValue(@event.EventType, out var mapping))
         {
-            // ⚠️ NOT wrapped in a try/catch, and that is the point. Marten's template catches
-            // everything a selector throws and returns null, which the caller reads as "no content
-            // for this event" -- so a selector with a bug drops the document out of the index with
-            // nothing reported anywhere. A throw here faults the shard, which is what the daemon's
-            // error handling is for and is the only outcome an operator can act on.
+            // ⚠️ NOT wrapped in a try/catch, and that is the point. Catching what a selector throws
+            // and returning null would read as "no content for this event" -- so a selector with a
+            // bug would drop the document out of the index with nothing reported anywhere. (Marten's
+            // template once did exactly that, and has since stopped.) A throw here faults the shard,
+            // which is what the daemon's error handling is for and is the only outcome an operator
+            // can act on.
             id = mapping.Id(@event);
             content = mapping.Content(@event);
             return true;
