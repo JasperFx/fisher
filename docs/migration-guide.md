@@ -191,14 +191,19 @@ on [Marten.PgVector](https://martendb.io/documents/pgvector)'s API shape, and th
 names — `IEmbeddingProvider`, `DistanceFunction`, `VectorMatch<T>` — are the store-neutral ones in
 `JasperFx.Events.Vectors` that all three stores share. What a port has to edit:
 
-- **No `UsePgVector()`, and nowhere to put an HNSW or IVFFlat index.** Declare the member with
-  `Schema.For<T>().VectorIndex(x => x.Embedding, dimensions)` or `[VectorIndex(dimensions)]`. The
-  search is brute force — every row's distance computed in full — so an approximate index added
-  beside a Marten document has no counterpart to carry across. See
+- **No `UsePgVector()`, and no HNSW index.** Marten.PgVector's
+  `opts.VectorIndex<T>(x => x.Embedding, dimensions, distance, m, efConstruction)` declares an HNSW
+  index that schema migrations track, and one index serves one metric. Fisher deliberately has none:
+  `Schema.For<T>().VectorIndex(x => x.Embedding, dimensions)` or `[VectorIndex(dimensions)]` declares
+  the member, and the search is brute force — every row's distance computed in full — so `m` and
+  `efConstruction` have nowhere to go, and one declaration serves whichever metric a call names. See
   [why there is no side table](/documents/querying/vector-search#how-it-works-and-why-there-is-no-side-table).
-- **A provider returns `ReadOnlyMemory<float>[]`.** Marten.PgVector's own `IEmbeddingProvider` returns
-  `Pgvector.Vector[]`, which no other store can accept; a provider written against it needs its return
-  type changed to implement the `JasperFx.Events.Vectors` one.
+- **The embedding provider is already shared, from Marten 9.36.** Marten.PgVector's projection and
+  search run on `JasperFx.Events.Vectors.IEmbeddingProvider`, which returns `ReadOnlyMemory<float>[]`,
+  so a provider written against it ports unchanged. Older Marten.PgVector had its own
+  `IEmbeddingProvider` returning `Pgvector.Vector[]`; it survives only as an `[Obsolete]` compatibility
+  type, and a provider still implementing it needs its return type changed, because Fisher takes only
+  the shared contract.
 - **`VectorProjection<TDoc, TId>` writes a document, not a table.** The document implements
   `IVectorized<TId>` and declares its own vector index, and it is searched with `VectorSearchAsync`
   like any other — there is no `VectorProjectionSearchAsync`. `TId` is any identity Fisher stores,

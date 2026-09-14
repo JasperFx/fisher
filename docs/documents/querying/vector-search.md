@@ -163,6 +163,6 @@ put on the document — with content-hash skipping, so unchanged text costs no e
 - [Hybrid Search](/documents/querying/hybrid-search) — fusing this with full-text search.
 - [Vector Projections](/events/projections/vector) — producing the embedding from an event stream.
 - [Marten's pgvector support](https://martendb.io/documents/pgvector) — the PostgreSQL sibling, where
-  an HNSW or IVFFlat index can accelerate the same search.
+  `VectorIndex<T>` declares an HNSW index — one per metric — that Fisher deliberately does without.
 - [Polecat's Vector Search](https://polecat.jasperfx.net/documents/querying/vector-search) — the SQL
   Server 2025 sibling.
