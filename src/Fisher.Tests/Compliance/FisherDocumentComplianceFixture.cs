@@ -1,3 +1,4 @@
+using System.Reflection;
 using JasperFx;
 using JasperFx.Events.ComplianceTests;
 using JasperFx.Events;
@@ -76,6 +77,42 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
             foreach (var documentType in config.DocumentTypes)
             {
                 options.Schema.MappingFor(documentType);
+            }
+
+            // jasperfx#842. The vector indexes DocumentSearchCompliance declares, replayed onto the
+            // same non-generic mapping as everything else above.
+            //
+            // ⚠️ This is not optional and it does not degrade gracefully. A vector search reads a
+            // DECLARED index — Fisher refuses a search over an undeclared member by name — so a
+            // fixture that flipped SupportsVectorSearch and dropped this loop fails every fact in
+            // the suite rather than skipping them, with an error about configuration rather than
+            // about the search. The metric travels with the declaration for the same reason: the
+            // index's distance is what a search uses when the caller names none, and the suite's
+            // facts are stated in terms of "nearest" under the declared metric.
+            foreach (var declaration in config.VectorIndexes)
+            {
+                options.Schema
+                    .MappingFor(declaration.DocumentType)
+                    .AddVectorIndex(
+                        MemberChainFor(declaration.DocumentType, declaration.MemberName),
+                        declaration.Dimensions,
+                        declaration.Distance);
+            }
+
+            // The full-text half of a hybrid search. One index per document type on Fisher — a
+            // search operator names no index, so a second would have nothing to tell it apart —
+            // which is why every declared member for a type goes into a single call rather than one
+            // call per member.
+            foreach (var group in config.FullTextIndexes.GroupBy(x => x.DocumentType))
+            {
+                var chains = group
+                    .SelectMany(x => x.MemberNames)
+                    .Select(name => MemberChainFor(group.Key, name))
+                    .ToArray();
+
+                options.Schema
+                    .MappingFor(group.Key)
+                    .AddFullTextIndex(chains, Fisher.Storage.FullText.FullTextTokenizer.Porter);
             }
 
             // jasperfx#819. Replayed onto the SAME non-generic mapping the loop above just resolved,
@@ -160,6 +197,23 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
     /// </remarks>
     public override bool SupportsOptimisticConcurrency => true;
 
+    /// <summary>
+    ///     Vector search — <c>IDocumentSearchOperations.VectorSearchWithScoresAsync</c>, reached
+    ///     through <c>IDocumentReadOperations.Search</c> (fisher#241, fisher#291).
+    /// </summary>
+    /// <remarks>
+    ///     Fisher's search is an EXACT scan through a registered SQLite distance function rather than
+    ///     an approximate index, so the filter facts jasperfx#842 warns approximate stores about cost
+    ///     it nothing: there is no candidate bound for a predicate to fall outside of.
+    /// </remarks>
+    public override bool SupportsVectorSearch => true;
+
+    /// <summary>
+    ///     Hybrid search — the FTS5 leg and the vector leg fused by reciprocal rank fusion
+    ///     (fisher#243).
+    /// </summary>
+    public override bool SupportsHybridSearch => true;
+
     public override async Task CleanDocumentDataAsync()
     {
         if (_store is null)
@@ -185,5 +239,28 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
 
         _database?.Dispose();
         _database = null;
+    }
+
+    /// <summary>
+    ///     Turn a declared member NAME into the member chain Fisher's mapping wants.
+    /// </summary>
+    /// <remarks>
+    ///     The shared declaration carries a name rather than an expression because it has no type
+    ///     parameter to write one against — <see cref="VectorIndexDeclaration" /> is a record holding
+    ///     a <see cref="Type" />. Fisher's public DSL takes a lambda and immediately reduces it to
+    ///     exactly this chain, so resolving the name here lands in the same place without a generic
+    ///     dance through reflection.
+    /// </remarks>
+    private static MemberInfo[] MemberChainFor(Type documentType, string memberName)
+    {
+        var member = documentType
+            .GetMember(memberName, BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(x => x is PropertyInfo or FieldInfo);
+
+        return member is null
+            ? throw new InvalidOperationException(
+                $"The compliance configuration declared an index on '{documentType.FullName}.{memberName}', "
+                + "and no public instance property or field of that name exists.")
+            : [member];
     }
 }
