@@ -13,7 +13,7 @@ opts.Schema.For<SupportTicket>()
     .FullTextIndex(x => x.Subject, x => x.Body)
     .VectorIndex(x => x.Embedding, dimensions: 768);
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/hybrid_search_samples.cs#L23-L27' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_hybrid_declare_both_indexes' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/hybrid_search_samples.cs#L24-L28' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_hybrid_declare_both_indexes' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 ## The call and its scores
@@ -32,7 +32,7 @@ var hits = await session.HybridSearchAsync<SupportTicket>(
     query,              // the vector leg
     limit: 10);
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/hybrid_search_samples.cs#L32-L43' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_hybrid_search' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/hybrid_search_samples.cs#L33-L44' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_hybrid_search' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 The text and the query vector are separate arguments because Fisher never calls a model. The vector
@@ -53,7 +53,7 @@ var matches = await session.HybridSearchWithScoresAsync<SupportTicket>(
 // one leg is worth 1/61 ≈ 0.016, so a floor of 0.03 keeps what both legs ranked near the top.
 var agreed = matches.Where(m => m.Score >= 0.03).Select(m => m.Document);
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/hybrid_search_samples.cs#L50-L57' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_hybrid_search_with_scores' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/hybrid_search_samples.cs#L51-L58' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_hybrid_search_with_scores' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 **Larger is better here** — the opposite of `VectorMatch<T>.Distance` and of bm25 — because the score
@@ -94,6 +94,44 @@ query length) carry over unchanged.
 One statement was the alternative, and it would mean a join whose plan neither index serves, plus a
 second place for those filters to be forgotten.
 
+::: warning
+**Until [fisher#285](https://github.com/JasperFx/fisher/issues/285) that claim was true of the text
+leg only.** The vector leg built its own SQL and carried the soft-delete filter alone, so under
+conjoined tenancy another tenant's document arrived through the fusion — ranked lower rather than
+first, which is the shape least likely to be noticed. Both legs now go through the same machinery
+`Query<T>()` does.
+:::
+
+`HybridSearchOptions`, `HybridTextStyle` and `HybridMatch<T>` live in `JasperFx.Events.Vectors`
+rather than in `Fisher`, shared with every store since
+[jasperfx#840](https://github.com/JasperFx/jasperfx/issues/840). The positional parameters are
+unchanged and the enum members keep their names, so construction sites do not move — but a file that
+named `HybridSearchOptions` without a `using JasperFx.Events.Vectors;` needs one. The fusion itself
+is the public `ReciprocalRankFusion.Fuse`, which also fuses **by key across document types**: that is
+the shape a vector projection writes, where a snapshot document carries the full-text index and a
+separate embedding document carries the vector, and it is not something either store's own hybrid
+search can express.
+
+## Filtering
+
+A predicate reaches **both** legs, before each leg's candidate depth:
+
+<!-- snippet: sample_hybrid_search_filter -->
+<a id='snippet-sample_hybrid_search_filter'></a>
+```cs
+// Applied to BOTH legs, before each leg's candidate depth -- otherwise closed tickets
+// consume the depth and the fused order ranks a set that includes them.
+var open = await session.HybridSearchAsync<SupportTicket>(
+    x => x.Embedding, text, query, limit: 10,
+    filter: t => t.Status == "open");
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/hybrid_search_samples.cs#L65-L71' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_hybrid_search_filter' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+Filtering after the fact would be a different answer rather than the same one written differently:
+rows the caller is going to discard would consume the candidate depth, and the fused order would be
+a ranking of a set that includes them. Applied to each leg, the fusion ranks the filtered set.
+
 ## Options
 
 <!-- snippet: sample_hybrid_search_options -->
@@ -107,7 +145,7 @@ var hits = await session.HybridSearchAsync<SupportTicket>(
         Distance: DistanceFunction.L2,          // the vector leg's metric, for this call
         TextStyle: HybridTextStyle.WebStyle));  // "quoted phrases", or, -exclusions
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/hybrid_search_samples.cs#L64-L72' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_hybrid_search_options' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/hybrid_search_samples.cs#L78-L86' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_hybrid_search_options' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 | `HybridSearchOptions` | Default | |
@@ -116,6 +154,7 @@ var hits = await session.HybridSearchAsync<SupportTicket>(
 | `CandidateDepth` | `max(limit × 4, 50)` | How deep each leg is read before fusing |
 | `Distance` | the index's | Override the vector leg's metric |
 | `TextStyle` | `PlainText` | Or `WebStyle`. Both are safe to hand a search box's raw contents |
+| `RegConfig` | null | The Postgres text-search configuration. On the shared record so one type serves three stores; **Fisher ignores it**, having no such concept |
 
 `HybridTextStyle` stops at two members because both take raw input. `PlainText` is every word in any
 order with no syntax at all; `WebStyle` adds quoted phrases, `or` and a leading `-` to exclude.
@@ -143,6 +182,8 @@ search.
 
 ## See also
 
+- [Store-Agnostic Search](/documents/querying/store-agnostic-search) — reaching this through
+  `IDocumentReadOperations.Search`, without naming Fisher.
 - [Full-Text Search](/documents/querying/linq/full-text) — the keyword leg on its own, and the
   operators, tokenizers and relevance ordering behind it.
 - [Vector Search](/documents/querying/vector-search) — the embedding leg on its own, and how a vector

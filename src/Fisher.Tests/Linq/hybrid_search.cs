@@ -1,3 +1,4 @@
+using JasperFx.Events.Vectors;
 using JasperFx;
 using Shouldly;
 

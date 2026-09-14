@@ -13,6 +13,7 @@ public class SupportTicket
     public string Id { get; set; } = "";
     public string Subject { get; set; } = "";
     public string Body { get; set; } = "";
+    public string Status { get; set; } = "";
     public float[]? Embedding { get; set; }
 }
 
@@ -57,6 +58,19 @@ public static class hybrid_search_samples
         #endregion
 
         _ = agreed;
+    }
+
+    public static async Task search_with_a_filter(IQuerySession session, string text, ReadOnlyMemory<float> query)
+    {
+        #region sample_hybrid_search_filter
+        // Applied to BOTH legs, before each leg's candidate depth -- otherwise closed tickets
+        // consume the depth and the fused order ranks a set that includes them.
+        var open = await session.HybridSearchAsync<SupportTicket>(
+            x => x.Embedding, text, query, limit: 10,
+            filter: t => t.Status == "open");
+        #endregion
+
+        _ = open;
     }
 
     public static async Task search_with_options(IQuerySession session, string searchBox, ReadOnlyMemory<float> query)
