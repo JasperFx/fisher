@@ -70,6 +70,26 @@ internal class Statement
     public List<Type> DocumentTypes { get; } = [];
 
     public string SelectColumns { get; set; } = "data";
+
+    /// <summary>
+    ///     A select list that has to bind parameters of its own, rendered instead of
+    ///     <see cref="SelectColumns" /> when set.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Exists for one caller: vector search, whose select list carries
+    ///         <c>fi_vector_distance(?, locator, ?)</c> — the metric name and the query vector's BLOB —
+    ///         and which has to be in the SELECT because SQLite's <c>ORDER BY</c> names a select-list
+    ///         alias rather than repeating the expression. <see cref="SelectColumns" /> is a plain
+    ///         string with nowhere to put a parameter (fisher#285/#291).
+    ///     </para>
+    ///     <para>
+    ///         A fragment rather than pre-rendered text plus a parameter list, for the reason
+    ///         <see cref="Subquery" /> is a nested statement: rendering it anywhere but into this
+    ///         builder would leave its parameters behind.
+    ///     </para>
+    /// </remarks>
+    public ISqlFragment? SelectFragment { get; set; }
     public List<ISqlFragment> Wheres { get; } = [];
     public List<(string Locator, bool Descending)> OrderBys { get; } = [];
     public int? Limit { get; set; }
@@ -198,7 +218,15 @@ internal class Statement
             builder.Append("distinct ");
         }
 
-        builder.Append(SelectColumns);
+        if (SelectFragment is not null)
+        {
+            SelectFragment.Apply(builder);
+        }
+        else
+        {
+            builder.Append(SelectColumns);
+        }
+
         builder.Append(" from ");
 
         if (Subquery != null)

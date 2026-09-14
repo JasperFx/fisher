@@ -288,7 +288,7 @@ public class vector_projection : IAsyncLifetime
     [Fact]
     public void an_event_mapped_both_ways_is_refused()
     {
-        var map = new VectorProjectionMap<ArticleEmbedding, string>();
+        var map = new VectorProjectionMap<string>();
         map.Map<ArticlePublished>(e => e.Data.Text, e => e.Data.Id);
 
         Should.Throw<InvalidOperationException>(() => map.Delete<ArticlePublished>(e => e.Data.Id))
@@ -315,7 +315,7 @@ public class ArticleVectors : VectorProjection<ArticleEmbedding, string>
     {
     }
 
-    protected override void Configure(VectorProjectionMap<ArticleEmbedding, string> map)
+    protected override void Configure(VectorProjectionMap<string> map)
     {
         map.Map<ArticlePublished>(e => e.Data.Text, e => e.Data.Id);
         map.Delete<ArticleRetracted>(e => e.Data.Id);
@@ -329,7 +329,7 @@ public class ThrowingArticleVectors : VectorProjection<ArticleEmbedding, string>
     {
     }
 
-    protected override void Configure(VectorProjectionMap<ArticleEmbedding, string> map)
+    protected override void Configure(VectorProjectionMap<string> map)
         => map.Map<ArticlePublished>(_ => throw new InvalidOperationException("boom"), e => e.Data.Id);
 }
 

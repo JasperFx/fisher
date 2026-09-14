@@ -1360,12 +1360,31 @@ The API shape is Marten.PgVector's and the types are the store-neutral ones from
 application code reads the same against either store.
 
 - **The search reads the embedding straight out of `data`, and that is the whole design.** One
-  statement through `IAdvancedSql`: the document's columns plus
+  statement built by `FisherQueryProvider.VectorSearchAsync`: the document's columns plus
   `fi_vector_distance(metric, json_extract(data, '$.embedding'), @query)`, ordered by that distance,
   limited; the query vector bound as a float32 BLOB. `StoreOptions.Functions` is the new
   `SqliteFunctionRegistry` the data source registers on every connection (weasel#588), and the
   distance function is registered in the `StoreOptions` constructor so it is on every tenant's
   connections for free.
+- ⚠️ **It is an ordinary `Statement` over `Query<T>()`, not hand-built SQL, and fisher#285 is why.**
+  The first version composed its own string and restated ONE implicit filter — the soft-delete one.
+  So it ignored the two it did not restate: conjoined tenancy, where a session opened for tenant `a`
+  ranked and returned tenant `b`'s rows, and the `doc_type` discriminator, where a search over a
+  sub-class read its siblings. Silent, and asymmetric in the fisher#51 direction — the tenant owning
+  most of the corpus sees a correct-looking answer with extras. Going through `BuildStatement` means
+  the filters are `Query<T>()`'s, from the same code, so the next one added to LINQ cannot be missed
+  here again. `Statement.SelectFragment` exists for this one caller: the select list carries
+  `fi_vector_distance(?, locator, ?)`'s two parameters, and `SelectColumns` is a plain string with
+  nowhere to put one.
+- **The `filter` predicate is free once it is a statement** (jasperfx#843): the caller's expression is
+  appended as an ordinary `Where` on that queryable, so it supports and refuses exactly what
+  `Query<T>().Where(...)` does. Applied BEFORE the limit, and Fisher scans every row — so the result
+  is the true top-k of the filtered set with **no recall caveat**, which a store on an approximate
+  index cannot say (pgvector's `hnsw.ef_search` bounds what the filter sees).
+- **Two knock-on differences from the old raw-SQL path, both towards `Query<T>()` rather than away.**
+  The rows materialize through the session's own storage, so a tracking session tracks them; and the
+  statement runs outside `StoreOptions.ResiliencePipeline`, which no LINQ query has ever run inside —
+  where `IAdvancedSql.QueryAsync` did. Both are parity with every other query rather than a loss.
 - ⚠️ **No side table and no trigger, deliberately, and not for lack of trying.** SQLite has no
   built-in that turns a JSON array into a float32 BLOB, so a trigger keeping a BLOB column in step —
   the full-text index's shape — would have to call an application-defined function, and then every
@@ -1388,9 +1407,20 @@ application code reads the same against either store.
 - **The locator comes from `MemberFactory`**, so the serializer's naming policy and
   `[JsonPropertyName]` decide the path — the Marten.PgVector bug (`member.Name` regardless of casing,
   zero rows with no error) is not repeated.
-- **The soft-delete filter applies**, as it does to every query; tenancy needs nothing, a tenant being
-  its own database. The identity map is not consulted, the rows coming back through the same selector
-  `Query<T>()` uses — Marten's behaviour too.
+- **All three implicit filters apply** — conjoined tenancy, the `doc_type` discriminator and soft
+  deletes — because they are `Query<T>()`'s own, not a restatement (fisher#285). The old claim here,
+  that "tenancy needs nothing, a tenant being its own database", was true of database-per-tenant and
+  false of conjoined, which is exactly how the bug survived being written down.
+- **`IDocumentSearchOperations` is implemented, reached through `IDocumentReadOperations.Search`**
+  (jasperfx#842). `FisherDocumentSearchOperations` forwards to the extension methods rather than
+  building a second statement — a second path is a second place for those filters to be forgotten,
+  and a consumer reaching search through the store-agnostic surface is the one least able to notice.
+  ⚠️ **Behind an accessor, not on the session**: Fisher's entry points are extension methods already
+  NAMED `VectorSearchWithScoresAsync` / `HybridSearchWithScoresAsync`, so instance members of those
+  names would win overload resolution over them at every existing call site, silently. The explicit
+  implementation on `FisherSession` is the non-covariance trap the two `Events` ones record, one
+  member over — the contract's default throws, and only a caller holding the session as the contract
+  would ever notice its absence.
 
 ### Hybrid search — fisher#262
 
@@ -1422,6 +1452,21 @@ application code reads the same against either store.
   same rank in one leg and absent from the other have identical scores, which is common rather than
   exotic, and without a total order the page a caller gets differs between runs. Same lesson keyset
   paging records.
+- **The types and the fusion are shared now** (jasperfx#840/#844). `HybridSearchOptions`,
+  `HybridTextStyle` and `HybridMatch<T>` come from `JasperFx.Events.Vectors`; the private `Fuse` is
+  `ReciprocalRankFusion.Fuse`, and the option refusals are `HybridSearchOptions.ResolveCandidateDepth`.
+  The record's positional parameters are Fisher's exact order with `RegConfig` appended and the enum
+  members are Fisher's names, so **no construction site moved** — a file naming `HybridSearchOptions`
+  without a `using JasperFx.Events.Vectors;` is the whole of the break. `RegConfig` is Postgres's and
+  Fisher ignores it. The shared fusion also fuses **by key across document types**, which the local
+  copy could not: a snapshot document carrying the FTS5 index fused with a separate embedding document
+  is the shape a vector projection writes.
+- **The vector leg carries the tenant and hierarchy filters now too** (fisher#285). The claim above
+  that the fuse "inherits the tenant, soft-delete and hierarchy filters" was true of the TEXT leg
+  only; the vector leg restated soft delete alone, so another tenant's document arrived through the
+  fusion ranked lower rather than first.
+- **The `filter` reaches both legs**, before each leg's candidate depth (jasperfx#843) — otherwise
+  rows the caller will discard consume the depth and the fused order ranks a set that includes them.
 - **`HybridTextStyle` offers `PlainText` (default) and `WebStyle` only.** Raw `Search` syntax is
   deliberately absent: it can be malformed, and a malformed query in one leg fails the whole fused
   call, where in a plain `Where(x => x.Search(...))` it fails only the thing the caller asked for.
@@ -1437,6 +1482,32 @@ application code reads the same against either store.
 embedding from a stream where `VectorSearchAsync` (fisher#241) searches one the application already
 put on the document. `Configure(map)` declares `map.Map<TEvent>(content, id)` and
 `map.Delete<TEvent>(id)`; content is SHA-256 hashed, and an unchanged hash costs no provider call.
+
+**The body of it is `VectorProjectionMap<TId>` + `VectorEmbeddingPlan<TId>`, shared since
+jasperfx#841**, and Fisher's shapes were the reference for both — so nothing about a declaration
+moved except the map's type parameters (`VectorProjectionMap<TDoc, TId>` → `VectorProjectionMap<TId>`;
+the document type was never used by the map). What is left here is the two things only a store can do:
+read the current hashes, and write the rows.
+
+- ⚠️ **The hash spelling was MEASURED before the swap, not assumed.** Both are
+  `Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content)))`, byte for byte. The
+  hash is *persisted* beside the vector, so a different spelling — upper-case hex, base64, a different
+  encoding — would miss on every stored row exactly once and re-embed a customer's whole corpus at
+  their provider's meter, silently. `the_shared_hash_is_fishers_own_spelling` and
+  `a_hash_written_before_the_swap_still_skips_the_model` pin both halves.
+- **`MapFromAggregate` is the new capability**, and partial-update events are why: given
+  `MemoRevised { Title = null, Body = "new" }` where null means unchanged, a one-event selector has no
+  right answer — the new body alone re-embeds without the title, and null leaves the embedding stale.
+  Fisher builds the text by **live aggregation up to the version of the last triggering event in the
+  page**, not to the head of the stream: a rebuild must embed the state the page describes, or it
+  produces different embeddings than the original run did. ⚠️ Reading an ASYNC snapshot would be the
+  wrong answer — the daemon does not order shards against each other, so one shard can read a snapshot
+  another has not caught up to. The aggregate type is closed over reflectively (`FoldAndApplyAsync<T>`,
+  with the two AOT suppressions the `CompactStreamAsync` reflection carries), so only "which aggregate
+  type" is reflective and the awaiting is ordinary typed code.
+- **One small semantic moved with the shared plan**: content that is whitespace is now dropped along
+  with null, and a delete followed in the same page by an event whose selector returns null leaves the
+  document written-nothing rather than deleted. Both are the shared rules.
 
 Ported in shape from `Marten.PgVector.Projection.VectorProjection`. **Four things differ, and all four
 are defects in that template rather than dialect differences** — which is why each is a test here
@@ -1468,10 +1539,24 @@ Three things that are Fisher's own:
   searchable with nothing added: the document declares `VectorIndex(x => x.Embedding, dimensions)` and
   `VectorSearchAsync` and `HybridSearchAsync` read it like any other. The migration, soft delete,
   tenancy and identity map all apply without this class knowing about them.
-- **Asynchronous only.** Embedding is a network call per batch, and an inline projection runs inside
-  the caller's `SaveChangesAsync` — holding SQLite's single write lock open across an HTTP round trip
-  to an embedding API would block every other writer in the process for its duration. Marten refuses
-  inline too, for the weaker reason that it needs its own connection.
+- **Asynchronous only, and refused otherwise since fisher#287.** Embedding is a network call per
+  batch, and an inline projection runs inside the caller's `SaveChangesAsync` — holding SQLite's
+  single write lock open across an HTTP round trip to an embedding API would block every other writer
+  in the process for its duration. Marten refuses inline too, for the weaker reason that it needs its
+  own connection. It was documented and unenforced for two releases: `VectorProjection` is a bare
+  `IProjection`, so `Projections.Add(projection, Inline)` binds to `ProjectionGraph.Add`, which
+  refuses only `Live`.
+  - **An ordinary `IValidatedProjection<StoreOptions>`, which is only possible because jasperfx#845
+    shipped.** `ProjectionGraph.AssertValidity` used to test the sources with
+    `OfType<IValidatedProjection<T>>()`, and a `ProjectionWrapper` is not its inner projection's type
+    — so the interface was never asked and the check would have failed OPEN. Polecat's port ran a pass
+    of its own (`AssertVectorProjectionsAreAsync`) for exactly that reason; Fisher does not need one.
+  - ⚠️ **The same fix means a hand-written `IProjection` in a Fisher application that implemented
+    `IValidatedProjection<StoreOptions>` starts being asked on the 2.70.0 bump**, which can surface
+    configuration errors that were silently passing.
+  - **The lifecycle is read off the registration, not off the projection**, because a bare
+    `IProjection` has nowhere to carry one — the wrapper the graph built is what knows. So the refusal
+    cannot be reached around by the static type of the variable that held the projection.
 - **The declared index is checked against the provider on the first page**, both that it is on
   `Embedding` and that its dimensions match. Both fail silently otherwise, and the second is the worse
   one: the rows are written and every *search* then refuses at the caller's end with a message about
@@ -4945,7 +5030,7 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher enrolls 55 of the 56 suites `JasperFx.Events.ComplianceTests` 2.69.3 ships — 572 tests.**
+**Fisher enrolls 55 of the 56 suites `JasperFx.Events.ComplianceTests` 2.70.0 ships — 572 tests.**
 `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
 gate is gone. See HANDOFF.md for the live scoreboard, which is machine-checked against a real run by
 `scripts/check_scoreboard.py`; what follows is the history and the mechanics.

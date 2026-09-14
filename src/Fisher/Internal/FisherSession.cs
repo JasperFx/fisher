@@ -394,6 +394,32 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     IEventStoreOperations IDocumentSessionOperations.Events => Events;
 
     /// <summary>
+    ///     jasperfx#842 — the store-agnostic route from a session to vector and hybrid search.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Explicit, and behind an accessor rather than on the session itself.</b> Fisher's own
+    ///         search entry points are extension methods named <c>VectorSearchWithScoresAsync</c> and
+    ///         <c>HybridSearchWithScoresAsync</c>; instance members of those names would win overload
+    ///         resolution over the extensions at every existing call site, silently. Reaching the
+    ///         contract through <c>session.Search</c> makes that collision impossible to have — see
+    ///         <see cref="FisherDocumentSearchOperations" />.
+    ///     </para>
+    ///     <para>
+    ///         The contract's default throws, so omitting this is the non-covariance trap the two
+    ///         <c>Events</c> implementations above record, one member over: it compiles, and the only
+    ///         caller that ever notices is one holding the session as the contract.
+    ///     </para>
+    ///     <para>
+    ///         Built per call rather than cached. It holds nothing but this session and every call it
+    ///         makes is an extension over that session, so an allocation per <c>Search</c> access is
+    ///         cheaper than a field on every session ever opened.
+    ///     </para>
+    /// </remarks>
+    JasperFx.Events.Vectors.IDocumentSearchOperations IDocumentReadOperations.Search
+        => new FisherDocumentSearchOperations(this);
+
+    /// <summary>
     ///     jasperfx#673 — the <see cref="StreamAction" />s this unit of work has queued and not yet
     ///     committed, for a consumer that did not do the appending.
     /// </summary>

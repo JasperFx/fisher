@@ -19,7 +19,7 @@ public class ArticleVector : IVectorized<string>
     public float[]? Embedding { get; set; }
 }
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_projection_samples.cs#L22-L32' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_projection_document' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_projection_samples.cs#L43-L53' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_projection_document' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 The projection writes an ordinary Fisher document, not a table of its own. `IVectorized<TId>` names
@@ -43,7 +43,7 @@ public class ArticleVectorProjection : VectorProjection<ArticleVector, string>
     {
     }
 
-    protected override void Configure(VectorProjectionMap<ArticleVector, string> map)
+    protected override void Configure(VectorProjectionMap<string> map)
     {
         // The text to embed, and the document it belongs to -- keyed on the payload, not the stream.
         map.Map<ArticleDrafted>(e => e.Data.Body, e => e.Data.Slug);
@@ -56,7 +56,7 @@ public class ArticleVectorProjection : VectorProjection<ArticleVector, string>
     }
 }
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_projection_samples.cs#L34-L53' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_projection' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_projection_samples.cs#L55-L74' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_projection' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 `Map<TEvent>(content, id)` names the text to embed and the document it belongs to; `Delete<TEvent>(id)`
@@ -67,6 +67,88 @@ delete ends deleted.
 Mapping one event type twice, or for both content and deletion, is refused when the projection is
 constructed — the outcome would otherwise depend on registration order. So is a projection that maps
 nothing.
+
+`VectorProjectionMap<TId>` lives in `JasperFx.Events.Vectors` and is shared with every store
+([jasperfx#841](https://github.com/JasperFx/jasperfx/issues/841)). It was modelled on Fisher's own,
+so nothing about a declaration moved — but the type parameter did: `Configure` now takes
+`VectorProjectionMap<TId>` where it used to take `VectorProjectionMap<TDoc, TId>`. The document type
+was never used by the map, and dropping it is what lets one map serve a store whose projection writes
+something other than a Fisher document.
+
+## Building the text from aggregate state
+
+A content selector sees **one event**, and for a partial-update event that has no right answer.
+Given `ArticleRevised { Title = null, Body = "new", Tags = null }`, where null means *unchanged*,
+returning the new body re-embeds the article without its title and tags, and returning null leaves
+the embedding stale. `MapFromAggregate` is the third answer: build the text from the aggregate as it
+stands after the page's events.
+
+<!-- snippet: sample_vector_projection_from_aggregate -->
+<a id='snippet-sample_vector_projection_from_aggregate'></a>
+```cs
+public class ArticleAggregateVectors : VectorProjection<ArticleVector, string>
+{
+    public ArticleAggregateVectors(IEmbeddingProvider provider) : base(provider)
+    {
+    }
+
+    protected override void Configure(VectorProjectionMap<string> map)
+        => map.MapFromAggregate<Article>(
+            // The text, built from the aggregate as it stands after this page's events.
+            article => $"{article.Title}\n{article.Body}\n{string.Join(", ", article.Tags)}",
+
+            // The events that make it worth rebuilding, each paired with the document id it names.
+            (typeof(ArticleDrafted), e => e.StreamKey!),
+            (typeof(ArticleRevised), e => e.StreamKey!),
+            (typeof(ArticleTagged), e => e.StreamKey!));
+}
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_projection_samples.cs#L76-L93' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_projection_from_aggregate' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+The aggregate it folds is an ordinary self-aggregating type:
+
+<!-- snippet: sample_vector_projection_aggregate -->
+<a id='snippet-sample_vector_projection_aggregate'></a>
+```cs
+// The aggregate the embedded text is built from. An ordinary self-aggregating Fisher type -- the
+// projection does not care where the fields came from, only what they hold now.
+public class Article
+{
+    public string Id { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Body { get; set; } = "";
+    public List<string> Tags { get; } = [];
+
+    public static Article Create(ArticleDrafted e) => new() { Id = e.Slug, Body = e.Body };
+
+    // The merge: null means "unchanged", which is exactly what a single-event selector cannot embed.
+    public void Apply(ArticleRevised e) => Body = e.Body ?? Body;
+
+    public void Apply(ArticleTagged e) => Tags.Add(e.Tag);
+}
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_projection_samples.cs#L24-L41' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_projection_aggregate' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+- **Each trigger names the document id it belongs to**, usually `e => e.StreamId` or
+  `e => e.StreamKey`, because the document's identity is not always the stream's.
+- **Fisher folds the stream live**, up to the version of the last triggering event in the page — one
+  read per affected stream per page. Not the head of the stream: a projection replaying history must
+  embed the state the page describes, or a rebuild would produce a different embedding than the
+  original run did for every stream that has moved on since.
+- ⚠️ **Reading an async snapshot would be the wrong answer, which is why Fisher does not.** The
+  daemon does not order shards against each other, so a vector projection on one shard can see a
+  snapshot another shard has not caught up to — and the embedding is then silently built from stale
+  state.
+- **A stream that folds to nothing is "nothing to index"**, the same as a content selector returning
+  null.
+- **Content hashing does the rest.** A triggering event that turns out not to change the built text
+  costs no model call at all — which is the common case precisely when the events are partial
+  updates.
+
+One aggregate mapping per projection, and an event type cannot be both a trigger and a `Map` or a
+`Delete`; both are refused when the projection is constructed.
 
 ## Registering it
 
@@ -80,7 +162,7 @@ opts.Schema.For<ArticleVector>().VectorIndex(x => x.Embedding, dimensions: provi
 // Async: the model call happens on the daemon, never inside the caller's SaveChangesAsync.
 opts.Projections.Add(new ArticleVectorProjection(provider), ProjectionLifecycle.Async);
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_projection_samples.cs#L59-L66' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_projection_registration' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_projection_samples.cs#L99-L106' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_projection_registration' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 The projection checks the declaration on the first page it runs — a store is built after its
@@ -103,6 +185,15 @@ The comparison is one query for the page's ids, through the session. Only the te
 go to the provider, and they go as **one** `GenerateEmbeddingsAsync` call for the page rather than one
 per document — a page of a hundred changed documents is one round trip, not a hundred.
 
+::: tip
+**The hash is lowercase hex SHA-256 of the UTF-8 text, and that spelling is now the shared one.** It
+is *persisted* beside the vector, so a store that changed how it spelled the hash would miss on every
+stored row exactly once and re-embed an entire corpus at the provider's meter. Fisher's private hash
+and `VectorEmbeddingPlan<TId>.HashOf` are byte-for-byte the same function, so adopting the shared
+core re-embeds nothing — pinned by a test rather than asserted here, because the whole failure would
+be silent.
+:::
+
 ## Why it is async-only
 
 ::: warning
@@ -111,9 +202,20 @@ caller's `SaveChangesAsync` — holding SQLite's single write lock open across a
 embedding API would block every other writer in the process for its duration.
 :::
 
-Fisher does not refuse `ProjectionLifecycle.Inline` — the projection is an `IProjection` like any
-other, and it would run — so this is a rule to keep rather than one the store enforces for you. On the
-daemon, the same round trip holds up only the shard that is waiting for it.
+**Fisher refuses it** ([fisher#287](https://github.com/JasperFx/fisher/issues/287)). Registering a
+vector projection with any lifecycle but `Async` fails when the store is built, naming the projection,
+the lifecycle it was given and `ProjectionLifecycle.Async` — which is the last moment before the
+mistake costs anything. Until Fisher 1.10.0 it was documented and unenforced, so an `Inline`
+registration simply worked, on a laptop where the model call is quick, and in production put a
+metered network round trip inside every caller's `SaveChangesAsync`. On the daemon the same round
+trip holds up only the shard that is waiting for it.
+
+The refusal is an ordinary `IValidatedProjection<StoreOptions>`, which is possible only because
+[jasperfx#845](https://github.com/JasperFx/jasperfx/issues/845) shipped: a bare `IProjection` is
+registered through a `ProjectionWrapper`, and validity used to be checked against the wrapper rather
+than the projection inside it. The same fix means **a hand-written `IProjection` in your own
+application that already implemented `IValidatedProjection<StoreOptions>` starts being asked** on
+this upgrade, which can surface configuration errors that were silently passing.
 
 ## Where it differs from Marten.PgVector
 
@@ -122,6 +224,11 @@ The projection is ported in shape from
 map event types to text, hash the text, skip re-embedding when the hash is unchanged, upsert by the
 mapped id. Three things are deliberately different, and all three come from that template rather
 than from SQLite.
+
+All three are now the **shared** behaviour rather than Fisher's alone: Fisher's shapes were taken as
+the reference when `VectorProjectionMap<TId>` and `VectorEmbeddingPlan<TId>` were lifted into
+`JasperFx.Events.Vectors`, so what follows describes what every Critter Stack store does and what
+Marten.PgVector's own template did not.
 
 **The identity is not `Guid`-only.** Marten's hardcodes `Guid` at every layer, so a string-identified
 store cannot use it at all. `TId` here is any identity Fisher stores, strong-typed wrappers included.
@@ -172,7 +279,7 @@ services.ConfigureFisher((serviceProvider, options) =>
     options.Projections.Add(new ArticleVectorProjection(provider), ProjectionLifecycle.Async);
 });
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_projection_samples.cs#L71-L87' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_projection_embedding_provider' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_projection_samples.cs#L111-L127' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_projection_embedding_provider' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 `AsEmbeddingProvider()` with no argument takes the dimension count from the generator's metadata, and

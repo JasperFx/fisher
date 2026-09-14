@@ -101,6 +101,7 @@ const config: UserConfig<DefaultTheme.Config> = {
                 { text: 'Full-Text Search', link: '/documents/querying/linq/full-text' },
                 { text: 'Vector Search', link: '/documents/querying/vector-search' },
                 { text: 'Hybrid Search', link: '/documents/querying/hybrid-search' },
+                { text: 'Store-Agnostic Search', link: '/documents/querying/store-agnostic-search' },
                 { text: 'Including Related Documents', link: '/documents/querying/linq/includes' },
                 { text: 'Querying for Raw JSON', link: '/documents/querying/query-json' },
                 { text: 'Batched Queries', link: '/documents/querying/batched-queries' },
