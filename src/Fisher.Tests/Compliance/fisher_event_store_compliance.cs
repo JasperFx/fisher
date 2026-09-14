@@ -8,9 +8,9 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and fifty-five are enrolled from
- * JasperFx.Events.ComplianceTests 2.70.0, which itself ships fifty-six concrete suites across
- * fifty-five files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
+ * Suites were added one at a time as Fisher grew into them, and fifty-six are enrolled from
+ * JasperFx.Events.ComplianceTests 2.71.1, which itself ships fifty-seven concrete suites across
+ * fifty-six files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
  * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
@@ -532,3 +532,28 @@ public class numeric_revision_compliance
 
 public class guid_optimistic_concurrency_compliance
     : GuidOptimisticConcurrencyCompliance<FisherDocumentComplianceFixture>;
+
+/*
+ * jasperfx#842 / #843 — the shared SEARCH suite, and the first time those facts have run against
+ * Fisher's engine rather than against a design argument.
+ *
+ * Fisher enrolls both halves. The fixture flips SupportsVectorSearch and SupportsHybridSearch, and
+ * it has to replay DocumentComplianceConfig.VectorIndexes and FullTextIndexes as well — a vector
+ * search reads a DECLARED index, so a fixture that flipped the flags and dropped the replay fails
+ * every fact rather than skipping them.
+ *
+ * ⚠️ The filter facts (jasperfx#843) are the ones worth watching here, and Fisher is the store they
+ * are cheapest on. They assert that a predicate excluding every globally-nearest row still returns
+ * the full limit, which an exact scan gives for free and an approximate index does not — pgvector
+ * applies the predicate after an index scan bounded by hnsw.ef_search. Fisher's search is an exact
+ * scan through a registered SQLite distance function, so there is no candidate bound for a filtered
+ * row to fall outside of. Passing these says nothing about the stores where they are hard.
+ *
+ * The suite is deliberately NOT a relevance suite: what it holds is nearest-first, that the score is
+ * a DISTANCE on the vector side and the opposite on the hybrid side, that the store's implicit
+ * predicates apply, and that a filter narrows BEFORE the limit. Fisher's own tests own the tokenizer
+ * and BM25 behaviour, which nothing shared could state.
+ */
+
+public class document_search_compliance
+    : DocumentSearchCompliance<FisherDocumentComplianceFixture>;
