@@ -461,7 +461,7 @@ public class DocumentMapping
         {
             throw new InvalidOperationException(
                 $"'{DocumentType.Name}.{name}' is a {memberType.Name}, which cannot hold an embedding. Declare the "
-                + "vector index on a float[], ReadOnlyMemory<float>, double[] or List<float> member.");
+                + $"vector index on a {Vectors.VectorIndex.AcceptedTypesDescription} member.");
         }
 
         if (dimensions < 1)

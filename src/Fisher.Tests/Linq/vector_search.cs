@@ -214,6 +214,36 @@ public class vector_search : IAsyncLifetime
     }
 
     [Fact]
+    public void vector_index_unsupported_type_error_message_lists_all_accepted_types()
+    {
+        var ex = Should.Throw<InvalidOperationException>(() => DocumentStore.For(o =>
+        {
+            o.ConnectionString = _database.ConnectionString;
+            o.Schema.For<Passage>().VectorIndex(x => x.Text, 3);
+        }));
+
+        ex.Message.ShouldContain("'Passage.Text' is a String, which cannot hold an embedding");
+        ex.Message.ShouldContain("float[]");
+        ex.Message.ShouldContain("ReadOnlyMemory<float>");
+        ex.Message.ShouldContain("ReadOnlyMemory<float>?");
+        ex.Message.ShouldContain("Memory<float>");
+        ex.Message.ShouldContain("double[]");
+        ex.Message.ShouldContain("List<float>");
+        ex.Message.ShouldContain("IReadOnlyList<float>");
+        ex.Message.ShouldContain("IList<float>");
+        ex.Message.ShouldContain("IEnumerable<float>");
+    }
+
+    [Fact]
+    public void all_accepted_vector_types_are_accepted_by_is_vector_type()
+    {
+        foreach (var type in Fisher.Storage.Vectors.VectorIndex.AcceptedTypes)
+        {
+            Fisher.Storage.Vectors.VectorIndex.IsVectorType(type).ShouldBeTrue();
+        }
+    }
+
+    [Fact]
     public void the_distance_function_itself_is_pinned()
     {
         var q = VectorFunctions.ToBlob(new float[] { 1, 0, 0 });

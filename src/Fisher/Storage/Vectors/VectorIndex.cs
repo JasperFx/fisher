@@ -53,21 +53,29 @@ internal sealed class VectorIndex
            && chain.Zip(MemberChain).All(pair => pair.First.MetadataToken == pair.Second.MetadataToken
                                                   && pair.First.Module == pair.Second.Module);
 
+    internal static readonly Type[] AcceptedTypes =
+    [
+        typeof(float[]),
+        typeof(ReadOnlyMemory<float>),
+        typeof(ReadOnlyMemory<float>?),
+        typeof(Memory<float>),
+        typeof(double[]),
+        typeof(List<float>),
+        typeof(IReadOnlyList<float>),
+        typeof(IList<float>),
+        typeof(IEnumerable<float>)
+    ];
+
+    internal const string AcceptedTypesDescription =
+        "float[], ReadOnlyMemory<float>, ReadOnlyMemory<float>?, Memory<float>, double[], List<float>, IReadOnlyList<float>, IList<float>, or IEnumerable<float>";
+
     /// <summary>
     ///     The member types an embedding may be declared as. Anything that serializes to a JSON array
     ///     of numbers works at query time; this is the list the declaration checks so a typo is caught
     ///     when the store is configured rather than when the first search returns nothing.
     /// </summary>
     internal static bool IsVectorType(Type type)
-        => type == typeof(float[])
-           || type == typeof(ReadOnlyMemory<float>)
-           || type == typeof(ReadOnlyMemory<float>?)
-           || type == typeof(Memory<float>)
-           || type == typeof(double[])
-           || type == typeof(List<float>)
-           || type == typeof(IReadOnlyList<float>)
-           || type == typeof(IList<float>)
-           || type == typeof(IEnumerable<float>);
+        => AcceptedTypes.Contains(type);
 }
 
 /// <summary>
