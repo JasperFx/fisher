@@ -14,6 +14,8 @@
         <PackageReference Include="xunit.v3" />
         <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
         <PackageReference Include="Microsoft.Extensions.Hosting" />
+        <!-- For docs/events/projections/vector.md's provider sample. See Documentation/. -->
+        <PackageReference Include="JasperFx.Events.MicrosoftExtensionsAI" />
     </ItemGroup>
 
     <ItemGroup>

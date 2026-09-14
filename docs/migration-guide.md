@@ -153,7 +153,7 @@ are not atomic with each other unless you wrap them in a transaction. And an `In
 `Select`, a `GroupBy`, a join, or a terminal that returns no documents is **refused by name** rather
 than silently leaving the destination empty.
 
-### Full-text search is FTS5, and there is no relevance ordering
+### Full-text search is FTS5, and relevance is `OrderByRelevance()`
 
 Fisher has [full-text search](/documents/querying/linq/full-text) over SQLite's FTS5, with all six of
 Marten's operators — `Search`, `PlainTextSearch`, `PhraseSearch`, `WebStyleSearch`, `PrefixSearch`
@@ -182,6 +182,38 @@ differ from Marten, and all but the third are what a ported line needs edited fo
 The index itself is an external-content FTS5 table kept in step by database triggers, so it survives
 writes that never went through Fisher — and it is created and populated by the ordinary schema
 migration, including on a store that already holds documents.
+
+### Vector search shares the contracts, not the index
+
+Fisher has [vector search](/documents/querying/vector-search),
+[vector projections](/events/projections/vector) and [hybrid search](/documents/querying/hybrid-search)
+on [Marten.PgVector](https://martendb.io/documents/pgvector)'s API shape, and the types a ported line
+names — `IEmbeddingProvider`, `DistanceFunction`, `VectorMatch<T>` — are the store-neutral ones in
+`JasperFx.Events.Vectors` that all three stores share. What a port has to edit:
+
+- **No `UsePgVector()`, and nowhere to put an HNSW or IVFFlat index.** Declare the member with
+  `Schema.For<T>().VectorIndex(x => x.Embedding, dimensions)` or `[VectorIndex(dimensions)]`. The
+  search is brute force — every row's distance computed in full — so an approximate index added
+  beside a Marten document has no counterpart to carry across. See
+  [why there is no side table](/documents/querying/vector-search#how-it-works-and-why-there-is-no-side-table).
+- **A provider returns `ReadOnlyMemory<float>[]`.** Marten.PgVector's own `IEmbeddingProvider` returns
+  `Pgvector.Vector[]`, which no other store can accept; a provider written against it needs its return
+  type changed to implement the `JasperFx.Events.Vectors` one.
+- **`VectorProjection<TDoc, TId>` writes a document, not a table.** The document implements
+  `IVectorized<TId>` and declares its own vector index, and it is searched with `VectorSearchAsync`
+  like any other — there is no `VectorProjectionSearchAsync`. `TId` is any identity Fisher stores,
+  where Marten's is `Guid` only.
+- **A delete takes an id selector.** `map.Delete<TEvent>(e => …)` has no overload that defaults to the
+  stream id, so a line relying on that default gains `e => e.StreamId` — or, for a projection keyed on
+  a payload member, the member it was keyed on.
+- **A content selector that throws faults the shard** rather than reading as "no content". Return
+  null to skip an event.
+- **Register it `Async`.** Nothing refuses `Inline`, but an inline projection would hold SQLite's one
+  write lock across the model call. The embedding commits in the daemon's batch transaction, not on a
+  connection of its own.
+
+[Hybrid search](/documents/querying/hybrid-search) needs both a full-text and a vector index on the
+type, and refuses a type with only one rather than degrading to the leg it has.
 
 ### String searching is ordinal and case-sensitive
 
