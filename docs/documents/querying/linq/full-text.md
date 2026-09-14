@@ -353,3 +353,11 @@ rank so each covers the other's hole.
 - **No `OrderByNgramRank`.** Marten ranks trigram matches with its own similarity function; FTS5's
   `bm25()` runs over a `Trigram` index like any other, so `OrderByRelevance` after `NgramSearch` is the
   equivalent and there is no separate operator.
+
+## See also
+
+- [Hybrid Search](/documents/querying/hybrid-search) — this search fused with vector search.
+- [Marten's Full Text Searching](https://martendb.io/documents/full-text) — the PostgreSQL sibling,
+  with weighted indexes and `OrderByTextRank`.
+- [Polecat's Full Text Search](https://polecat.jasperfx.net/documents/querying/full-text-search) — the
+  SQL Server sibling, which keeps an index of its own rather than using SQL Server's full-text engine.

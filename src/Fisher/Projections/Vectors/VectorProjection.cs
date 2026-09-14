@@ -16,8 +16,12 @@ namespace Fisher.Projections.Vectors;
 ///     <para>
 ///         Ported in shape from <c>Marten.PgVector.Projection.VectorProjection</c>: map event types to
 ///         text, hash the text, skip re-embedding when the hash is unchanged, upsert by the mapped id.
-///         <b>Four things are deliberately different, and all four come from defects in that
-///         template rather than from SQLite</b> — see each below.
+///         <b>Three things are deliberately different, and they come from that template rather than
+///         from SQLite</b>: the identity is not <c>Guid</c>-only (see <see cref="IVectorized{TId}" />),
+///         a delete always takes an id selector (see <see cref="VectorProjectionMap{TDoc,TId}" />), and
+///         every read and write goes through the batch's session rather than a connection of its own
+///         (see <c>UnchangedAsync</c>). A throwing content selector faults the shard here, as it now
+///         fails the batch in Marten's too.
 ///     </para>
 ///     <para>
 ///         <b>⚠️ It writes an ordinary Fisher document, not a table of its own.</b> That is what makes

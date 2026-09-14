@@ -13,12 +13,14 @@ namespace Fisher.Tests.Projections;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         <b>Four of the facts here are regression guards against defects in the template</b>
-///         (<c>Marten.PgVector.Projection.VectorProjection</c>) rather than against something Fisher
-///         got wrong: the embedding committing outside the caller's transaction, <c>Guid</c>-only
-///         identity, a delete that ignores the configured id selector, and a content selector whose
-///         exception is swallowed into "no content". They are written as facts here because nothing
-///         else would notice if this implementation drifted back toward any of them.
+///         <b>Several facts here guard deliberate differences from the template</b>
+///         (<c>Marten.PgVector.Projection.VectorProjection</c>): the embedding committing inside the
+///         batch's transaction rather than on a connection of its own, identity that is not
+///         <c>Guid</c>-only, and a delete that always addresses the id its own selector produced. One
+///         more — a content selector's exception propagating rather than being swallowed into "no
+///         content" — guards against a defect that template had and has since fixed. They are written
+///         as facts here because nothing else would notice if this implementation drifted toward any of
+///         them.
 ///     </para>
 ///     <para>
 ///         The provider is a recording stub. Counting its <em>calls</em> is most of the value: hash
@@ -149,9 +151,9 @@ public class vector_projection : IAsyncLifetime
     ///     ⚠️ <b>A delete addresses the row the map wrote, not the stream.</b>
     /// </summary>
     /// <remarks>
-    ///     The template's defect, and the sharpest of the four: its delete path reads
-    ///     <c>@event.StreamId</c> unconditionally and ignores the configured id selector, so a
-    ///     projection keyed on a payload member — as this one is — deletes nothing and the row stays
+    ///     Fisher's <c>Delete</c> has no selector-less overload, so it cannot fall back to
+    ///     <c>@event.StreamId</c> the way Marten's does when no selector is given. A stream-id delete on
+    ///     a projection keyed on a payload member — as this one is — deletes nothing and the row stays
     ///     in the index forever. This projection is keyed on the article id and appended on a stream
     ///     whose id is a fresh Guid, so a stream-id delete could not possibly match.
     /// </remarks>
@@ -175,11 +177,11 @@ public class vector_projection : IAsyncLifetime
     ///     ⚠️ <b>A selector that throws faults the shard rather than reading as "no content".</b>
     /// </summary>
     /// <remarks>
-    ///     The template catches everything a selector throws and returns null, which the caller reads
-    ///     as an event carrying no content — so a bug in a selector silently drops the document from
-    ///     the index with nothing reported. Here it propagates, which is what the daemon's error
-    ///     handling exists for and the only outcome an operator can act on. Asserted through the dead
-    ///     letter the shard records, since a faulted shard is how "propagates" is observable.
+    ///     Catching what a selector throws and returning null would read as an event carrying no
+    ///     content — so a bug in a selector would silently drop the document from the index with
+    ///     nothing reported. Marten's template once did exactly that. Here it propagates, which is what
+    ///     the daemon's error handling exists for and the only outcome an operator can act on. Asserted
+    ///     at <c>ApplyAsync</c>, since a throw out of the page is what faults the shard.
     /// </remarks>
     [Fact]
     public async Task a_selector_that_throws_is_not_swallowed()
@@ -320,7 +322,7 @@ public class ArticleVectors : VectorProjection<ArticleEmbedding, string>
     }
 }
 
-/// <summary>A content selector with a bug in it, which is the case the template swallows.</summary>
+/// <summary>A content selector with a bug in it, which a swallowing selector would hide.</summary>
 public class ThrowingArticleVectors : VectorProjection<ArticleEmbedding, string>
 {
     public ThrowingArticleVectors(IEmbeddingProvider provider) : base(provider)

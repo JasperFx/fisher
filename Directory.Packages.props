@@ -14,6 +14,9 @@
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
         <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.69.3" />
         <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.69.3" />
+        <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
+             vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.69.3" />
 
         <!-- Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
              source. Weasel.Storage: the dialect-neutral closed-shape document + event storage

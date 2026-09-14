@@ -25,9 +25,9 @@ var nearest = await session.VectorSearchAsync<Memory>(x => x.Embedding, query, l
 <sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L48-L54' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_search' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
-The API shape is Marten.PgVector's, and the types are the store-neutral ones from
-`JasperFx.Events.Vectors`: `IEmbeddingProvider` for the model, `DistanceFunction` for the metric,
-`VectorMatch<T>` for a scored result. Application code written against one store reads the same
+The API shape is [Marten.PgVector](https://martendb.io/documents/pgvector)'s, and the types are the
+store-neutral ones from `JasperFx.Events.Vectors`: `IEmbeddingProvider` for the model,
+`DistanceFunction` for the metric, `VectorMatch<T>` for a scored result. Application code written against one store reads the same
 against the other.
 
 Fisher never calls a model. Computing the embedding — at write time in your own code, or from an
@@ -57,7 +57,17 @@ Every metric is a **distance**: smaller is closer, on every store. That is what 
 | `L2` | Euclidean distance | when magnitude carries meaning |
 | `InnerProduct` | the **negative** inner product | unit vectors, where it equals cosine and is cheaper |
 
-The index pins the default metric; a call can name another:
+The index pins the default metric — cosine, unless the declaration names another:
+
+<!-- snippet: sample_vector_declare_index_l2 -->
+<a id='snippet-sample_vector_declare_index_l2'></a>
+```cs
+opts.Schema.For<Memory>().VectorIndex(x => x.Embedding, dimensions: 768, DistanceFunction.L2);
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L41-L43' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_declare_index_l2' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+and a call can override it:
 
 <!-- snippet: sample_vector_search_metric -->
 <a id='snippet-sample_vector_search_metric'></a>
@@ -81,6 +91,15 @@ public float[]? Embedding { get; set; }
 
 `[VectorIndex(dimensions)]` on a member declares it exactly as `Schema.For<T>().VectorIndex(...)`
 does. `Distance` is optional and defaults to cosine.
+
+Either form accepts a member of any of these types, and refuses anything else when the store is
+configured:
+
+- `float[]` or `double[]`
+- `ReadOnlyMemory<float>` (nullable or not) or `Memory<float>`
+- `List<float>`, `IList<float>`, `IReadOnlyList<float>` or `IEnumerable<float>`
+
+They all serialize to a JSON array of numbers, which is what the search reads.
 
 ## How it works, and why there is no side table
 
@@ -138,3 +157,12 @@ put on the document — with content-hash skipping, so unchanged text costs no e
 ## Not yet
 
 - **No approximate index.** See above.
+
+## See also
+
+- [Hybrid Search](/documents/querying/hybrid-search) — fusing this with full-text search.
+- [Vector Projections](/events/projections/vector) — producing the embedding from an event stream.
+- [Marten's pgvector support](https://martendb.io/documents/pgvector) — the PostgreSQL sibling, where
+  `VectorIndex<T>` declares an HNSW index — one per metric — that Fisher deliberately does without.
+- [Polecat's Vector Search](https://polecat.jasperfx.net/documents/querying/vector-search) — the SQL
+  Server 2025 sibling.
