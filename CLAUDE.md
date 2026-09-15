@@ -2868,7 +2868,7 @@ because the same reader feeds both. What is Fisher's is two registrations.
   actual fix for fisher#271 rather than a third iteration of it.** `ProjectionEventModelSource.DefaultModelName`
   is `"EventModel"`, which is the one default guaranteed to be wrong for every host — every other
   contributor to a canvas defaults to something meaningful (Wolverine's chains and HTTP endpoints to
-  `JasperFxOptions.ServiceName`, a Bobcat spec assembly to its own name, a curated file to its
+  the service name, a Bobcat spec assembly to its own name, a curated file to its
   `model:` value), so the overwhelmingly common host — Wolverine plus one store — assembled **two**
   models out of the box and every host had to restate a name it had already declared. fisher#271
   threaded a name through the registration and fisher#276 moved it to `StoreOptions`; both fixed the
@@ -2881,6 +2881,25 @@ because the same reader feeds both. What is Fisher's is two registrations.
     the value being the host's rather than Fisher's, so it is ignored.
   - **Resolved lazily, like the name itself**, so `JasperFxOptions` may be registered either side of
     `AddFisher`.
+  - ⚠️ **`ServiceName` here is `JasperFxOptions`', and until wolverine#4448 that was NOT the name a
+    Wolverine host gives itself** (fisher#284). `WolverineEventModelSource` names its model from
+    `WolverineOptions.ServiceName`; `WolverineOptions.ReadJasperFxOptions` did
+    `ServiceName ??= jasperfx.ServiceName` and nothing carried the value back — so
+    `opts.ServiceName = "Ledgers"` left `JasperFxOptions.ServiceName` at **its** default, the entry
+    assembly name, and the canvas split in two exactly as it did before #280. **The paragraph above
+    was written on the premise that the two agreed, and they did not**; it now says "the service name"
+    rather than naming the property, because which property that is has never been Fisher's to assert.
+    - **It only ever looked correct because the two defaults coincide.** A host whose assembly is
+      named what its service is named agrees with itself by accident — which is why this survived, and
+      why the coverage that would catch it needs a host where the two differ. That test lives in
+      Wolverine (`service_name_reaches_jasperfx_4448`), since Fisher references neither Wolverine nor
+      a host that sets a Wolverine service name.
+    - **Fixed upstream rather than here, and deliberately.** The alternative was Fisher reaching for
+      `WolverineOptions` by loose type lookup — Fisher does not reference Wolverine — three times over,
+      once per store. Wolverine now writes its resolved `ServiceName` into `JasperFxOptions`, so all
+      three stores inherit it and this fallback is correct as written.
+    - **`StoreOptions.EventModelName` remains the reliable answer** for a host that wants to be sure,
+      and is what a consumer should set rather than depending on two defaults lining up.
 - **`FisherProjectionEventModelSource` composes rather than subclasses**, `ProjectionEventModelSource`
   being `sealed`. It owns the three things Fisher alone knows: which service the store is registered
   under, where the name came from, and which store the slices came from (the `Subject`). It resolves
