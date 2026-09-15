@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **two open issues, and neither is feature work.** 1.5.0 closed both of 1.4.0's
+Status: **four open issues, and none is feature work.** 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0
 closed the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which
 Event Model canvas it contributes to.
@@ -23,10 +23,18 @@ of the change rather than a side effect, since both were unusable as keys.
 **[#280](https://github.com/JasperFx/fisher/issues/280) is the actual fix for #271, two releases
 later.** The store-derived Event Model source fell back to the literal `"EventModel"` — the one
 default guaranteed to be wrong for every host. Every other contributor to a canvas defaults to
-something meaningful: Wolverine's chains and HTTP endpoints to `JasperFxOptions.ServiceName`, a Bobcat
+something meaningful: Wolverine's chains and HTTP endpoints to the service name, a Bobcat
 spec assembly to its own name. So the overwhelmingly common host — Wolverine plus one store —
 assembled two models out of the box, and every host had to restate a name it had already declared.
 The chain is now `EventModelName` → `ServiceName` → the literal.
+
+⚠️ **That `ServiceName` is `JasperFxOptions`', and it took #284 to notice Wolverine does not set it.**
+Wolverine names its own model from `WolverineOptions.ServiceName` and only ever read *from* JasperFx,
+so a host naming its Wolverine service left the JasperFx side at the entry assembly name and the
+canvas split in two regardless. It looked right only where the assembly name and the service name
+coincide. Fixed upstream in wolverine#4448 rather than here — Fisher does not reference Wolverine, so
+the alternative was a loose type lookup repeated in all three stores — which means #284 needs no
+Fisher change and closes when that ships.
 
 The history behind that is worth keeping, because it took three goes to find the real defect.
 [#271](https://github.com/JasperFx/fisher/issues/271) surfaced as a consuming project's spec suite
@@ -63,11 +71,18 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is two long-standing items, neither of them work that is ready to start.
+Two are long-standing items, neither of them work that is ready to start.
 [#189](https://github.com/JasperFx/fisher/issues/189) is an unreproduced flake with 65 clean runs
 against it, so it stays open on evidence rather than on work outstanding.
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.
+
+The other two are neither of them Fisher code.
+[#284](https://github.com/JasperFx/fisher/issues/284) is **fixed upstream** in wolverine#4448 and
+needs no Fisher change — it stays open only until that ships, because until then a Wolverine host
+still splits its canvas.
+[#288](https://github.com/JasperFx/fisher/issues/288) has a community pull request open against it
+([#290](https://github.com/JasperFx/fisher/pull/290)).
 <!-- /open-issues -->
 
 [#243](https://github.com/JasperFx/fisher/issues/243) and
