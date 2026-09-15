@@ -8,7 +8,7 @@ the way you store anything else — a `float[]` on the document — and declare 
 ```cs
 opts.Schema.For<Memory>().VectorIndex(x => x.Embedding, dimensions: 768);
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L34-L36' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_declare_index' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L36-L38' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_declare_index' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 then search it with a query vector from the same model:
@@ -22,7 +22,7 @@ var query = await embeddings.GenerateEmbeddingAsync("how does the daemon pick a 
 
 var nearest = await session.VectorSearchAsync<Memory>(x => x.Embedding, query, limit: 5);
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L48-L54' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_search' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L50-L56' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_search' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 The API shape is [Marten.PgVector](https://martendb.io/documents/pgvector)'s, and the types are the
@@ -45,7 +45,7 @@ var matches = await session.VectorSearchWithScoresAsync<Memory>(x => x.Embedding
 // Distance is smaller-is-closer under every metric; for cosine it is 1 - similarity.
 var confident = matches.Where(m => m.Distance < 0.3).Select(m => m.Document);
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L61-L66' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_search_with_scores' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L63-L68' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_search_with_scores' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 Every metric is a **distance**: smaller is closer, on every store. That is what lets one
@@ -64,7 +64,7 @@ The index pins the default metric — cosine, unless the declaration names anoth
 ```cs
 opts.Schema.For<Memory>().VectorIndex(x => x.Embedding, dimensions: 768, DistanceFunction.L2);
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L41-L43' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_declare_index_l2' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L43-L45' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_declare_index_l2' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 and a call can override it:
@@ -75,8 +75,59 @@ and a call can override it:
 var byMagnitude = await session.VectorSearchAsync<Memory>(
     x => x.Embedding, query, limit: 5, distance: DistanceFunction.L2);
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L73-L76' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_search_metric' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L88-L91' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_search_metric' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
+
+## Filtering
+
+A predicate narrows the search, and it is applied **before** the limit — so the result is the top-k
+of the filtered set rather than the filtered remains of the top-k:
+
+<!-- snippet: sample_vector_search_filter -->
+<a id='snippet-sample_vector_search_filter'></a>
+```cs
+// The predicate is applied BEFORE the limit, so this is the nearest five *handbook*
+// memories rather than whichever of the nearest five happen to be handbook ones.
+var nearest = await session.VectorSearchAsync<Memory>(
+    x => x.Embedding, query, limit: 5,
+    filter: x => x.Category == "handbook" && !x.Archived);
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L75-L81' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_search_filter' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+It supports and refuses exactly what `Query<T>().Where(...)` does, because it *is* that: the search
+is built as an ordinary statement and the predicate is appended to it.
+
+::: tip
+**There is no recall caveat on Fisher, and on an approximate index there would be.** A store whose
+vector index is approximate applies the filter to whatever the index scan produced, and that scan
+has a bound of its own — pgvector's `hnsw.ef_search` defaults to 40 — so a selective filter can
+return fewer than `limit` rows. Fisher scans every row, so a selective filter costs the same as any
+other and returns the true top-k.
+:::
+
+The filter is **in addition to** the store's own predicates below, never instead of them.
+
+## The predicates that always apply
+
+A vector search carries every implicit filter `Query<T>()` carries, from the same code rather than
+from a restatement of it:
+
+| | |
+| :--- | :--- |
+| Conjoined tenancy | A session opened for one tenant reads that tenant's rows |
+| The `doc_type` discriminator | `VectorSearchAsync<SubType>` returns that sub-class, not its siblings |
+| Soft deletes | A deleted document is excluded, as it is from every query |
+
+::: warning
+**Two of those three were missing until [fisher#285](https://github.com/JasperFx/fisher/issues/285).**
+The search used to build its own SQL and restated the soft-delete filter alone, so under
+[conjoined tenancy](/documents/multi-tenancy) it ranked and returned another tenant's documents, and a
+sub-class search read the whole hierarchy's table. It was silent and asymmetric in the worst way: the
+tenant owning most of the corpus saw a correct-looking answer with extras. If you are upgrading from
+Fisher 1.10.0 or earlier and use conjoined document tenancy with vector or hybrid search, this is a
+correctness fix rather than a feature.
+:::
 
 ## The attribute
 
@@ -86,7 +137,7 @@ var byMagnitude = await session.VectorSearchAsync<Memory>(
 [VectorIndex(768, Distance = DistanceFunction.Cosine)]
 public float[]? Embedding { get; set; }
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L24-L27' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_attribute' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/vector_samples.cs#L26-L29' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_vector_attribute' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 `[VectorIndex(dimensions)]` on a member declares it exactly as `Schema.For<T>().VectorIndex(...)`
@@ -119,8 +170,10 @@ from the JSON, and the metric decides the arithmetic.
   same writers, which is precisely the failure the full-text design was built to refuse.
 
 A stored embedding that a foreign writer changed ranks by its new value, because nothing is
-cached. A document whose embedding is `null` is skipped, not scored. Soft-deleted documents are
-excluded as they are from every query. A tenant is its own database, so tenancy costs nothing.
+cached. A document whose embedding is `null` is skipped, not scored. The `WHERE` clause and the
+materialization both come from the same machinery `Query<T>()` uses, which is what makes the
+implicit predicates above apply without being restated — and what makes the next filter added to
+LINQ impossible to miss here.
 
 **It is brute force.** The JSON is parsed on every row and the distance computed in full; a
 768-float embedding parses in tens of microseconds, so a search is milliseconds at thousands of
@@ -138,6 +191,7 @@ a feature that works without one.
 | A query vector whose length is not the declared `dimensions` | Every stored row would fail, one at a time, inside SQLite |
 | Declaring a member that cannot hold a vector (a `string`, an `int`) | Caught when the store is configured, not when the first search returns nothing |
 | Declaring the same member twice, or with a dimension count under one | Same |
+| A `filter` the LINQ provider cannot translate | `BadLinqExpressionException`, exactly as `Query<T>().Where(...)` would raise — the filter is that `Where` |
 
 A **stored** vector whose length differs from the query's fails that row loudly at query time
 rather than scoring it wrong — the one check that cannot happen earlier, because the JSON is the
@@ -161,6 +215,8 @@ put on the document — with content-hash skipping, so unchanged text costs no e
 ## See also
 
 - [Hybrid Search](/documents/querying/hybrid-search) — fusing this with full-text search.
+- [Store-Agnostic Search](/documents/querying/store-agnostic-search) — the same two searches reached
+  through `IDocumentReadOperations.Search`, without naming Fisher.
 - [Vector Projections](/events/projections/vector) — producing the embedding from an event stream.
 - [Marten's pgvector support](https://martendb.io/documents/pgvector) — the PostgreSQL sibling, where
   `VectorIndex<T>` declares an HNSW index — one per metric — that Fisher deliberately does without.

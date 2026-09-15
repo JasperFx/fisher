@@ -17,6 +17,24 @@ rather than falling back to client-side evaluation. That is deliberate: a silent
 every row of the table to answer a query that looked cheap.
 :::
 
+`Fisher.Linq.BadLinqExpressionException` derives from `JasperFx.BadLinqExpressionException`, so
+store-agnostic code can catch the refusal without naming Fisher:
+
+```csharp
+try
+{
+    var results = await session.Query<User>().Where(predicate).ToListAsync();
+}
+catch (JasperFx.BadLinqExpressionException e)
+{
+    // "I cannot answer this correctly" -- categorically different from an empty result, and the
+    // same catch works against Polecat. Marten keeps its own hierarchy until Marten 10.
+}
+```
+
+Note that both names are in scope in a file importing `Fisher.Linq` and `JasperFx`, which is a
+compiler error rather than a silent bind. Qualify, or alias whichever you mean.
+
 ## How a member becomes SQL
 
 `json_extract(data, '$.lastName')`. That is it, for almost every member.

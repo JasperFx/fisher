@@ -19,6 +19,27 @@ public record ArticleRevised(string Slug, string? Body);
 
 public record ArticleWithdrawn(string Slug);
 
+public record ArticleTagged(string Slug, string Tag);
+
+#region sample_vector_projection_aggregate
+// The aggregate the embedded text is built from. An ordinary self-aggregating Fisher type -- the
+// projection does not care where the fields came from, only what they hold now.
+public class Article
+{
+    public string Id { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Body { get; set; } = "";
+    public List<string> Tags { get; } = [];
+
+    public static Article Create(ArticleDrafted e) => new() { Id = e.Slug, Body = e.Body };
+
+    // The merge: null means "unchanged", which is exactly what a single-event selector cannot embed.
+    public void Apply(ArticleRevised e) => Body = e.Body ?? Body;
+
+    public void Apply(ArticleTagged e) => Tags.Add(e.Tag);
+}
+#endregion
+
 #region sample_vector_projection_document
 // An ordinary Fisher document. IVectorized<TId> names the four members the projection writes, and
 // TId is whatever identity the document has -- a string slug here, not a Guid.
@@ -38,7 +59,7 @@ public class ArticleVectorProjection : VectorProjection<ArticleVector, string>
     {
     }
 
-    protected override void Configure(VectorProjectionMap<ArticleVector, string> map)
+    protected override void Configure(VectorProjectionMap<string> map)
     {
         // The text to embed, and the document it belongs to -- keyed on the payload, not the stream.
         map.Map<ArticleDrafted>(e => e.Data.Body, e => e.Data.Slug);
@@ -49,6 +70,25 @@ public class ArticleVectorProjection : VectorProjection<ArticleVector, string>
         // A delete names its id too. There is no overload that defaults to the stream id.
         map.Delete<ArticleWithdrawn>(e => e.Data.Slug);
     }
+}
+#endregion
+
+#region sample_vector_projection_from_aggregate
+public class ArticleAggregateVectors : VectorProjection<ArticleVector, string>
+{
+    public ArticleAggregateVectors(IEmbeddingProvider provider) : base(provider)
+    {
+    }
+
+    protected override void Configure(VectorProjectionMap<string> map)
+        => map.MapFromAggregate<Article>(
+            // The text, built from the aggregate as it stands after this page's events.
+            article => $"{article.Title}\n{article.Body}\n{string.Join(", ", article.Tags)}",
+
+            // The events that make it worth rebuilding, each paired with the document id it names.
+            (typeof(ArticleDrafted), e => e.StreamKey!),
+            (typeof(ArticleRevised), e => e.StreamKey!),
+            (typeof(ArticleTagged), e => e.StreamKey!));
 }
 #endregion
 

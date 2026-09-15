@@ -13,6 +13,7 @@ public class SupportTicket
     public string Id { get; set; } = "";
     public string Subject { get; set; } = "";
     public string Body { get; set; } = "";
+    public string Status { get; set; } = "";
     public float[]? Embedding { get; set; }
 }
 
@@ -59,6 +60,19 @@ public static class hybrid_search_samples
         _ = agreed;
     }
 
+    public static async Task search_with_a_filter(IQuerySession session, string text, ReadOnlyMemory<float> query)
+    {
+        #region sample_hybrid_search_filter
+        // Applied to BOTH legs, before each leg's candidate depth -- otherwise closed tickets
+        // consume the depth and the fused order ranks a set that includes them.
+        var open = await session.HybridSearchAsync<SupportTicket>(
+            x => x.Embedding, text, query, limit: 10,
+            filter: t => t.Status == "open");
+        #endregion
+
+        _ = open;
+    }
+
     public static async Task search_with_options(IQuerySession session, string searchBox, ReadOnlyMemory<float> query)
     {
         #region sample_hybrid_search_options
@@ -69,6 +83,20 @@ public static class hybrid_search_samples
                 CandidateDepth: 200,                    // deeper than the default max(20 × 4, 50)
                 Distance: DistanceFunction.L2,          // the vector leg's metric, for this call
                 TextStyle: HybridTextStyle.WebStyle));  // "quoted phrases", or, -exclusions
+        #endregion
+
+        _ = hits;
+    }
+
+    public static async Task search_with_column_weights(IQuerySession session, string text,
+        ReadOnlyMemory<float> query)
+    {
+        #region sample_hybrid_search_column_weights
+        // FullTextIndex(x => x.Subject, x => x.Body) — one weight per indexed member, in the order
+        // the index declared them. A hit in the subject now outweighs one buried in a long body.
+        var hits = await session.HybridSearchAsync<SupportTicket>(
+            x => x.Embedding, text, query, limit: 20,
+            options: new HybridSearchOptions(ColumnWeights: [3.0, 1.0]));
         #endregion
 
         _ = hits;

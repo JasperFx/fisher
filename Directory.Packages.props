@@ -7,16 +7,31 @@
         <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
              carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
              transitively. -->
-        <PackageVersion Include="JasperFx" Version="2.69.3" />
-        <PackageVersion Include="JasperFx.Events" Version="2.69.3" />
+        <!-- JasperFx 2.71.0 (from 2.70.0, spanning 2.70.1). Three things Fisher consumes:
+
+             (a) DocumentSearchCompliance, the shared search suite (jasperfx#842/#843), enrolled in
+             fisher_event_store_compliance.cs. Fisher implements IDocumentSearchOperations already,
+             so this is enrollment rather than a feature — and it is the first time those facts have
+             ever run against Fisher's engine.
+
+             (b) jasperfx#847 — ProjectionExecution.buildBatchAsync disposed a null batch in its
+             catch, so a NullReferenceException REPLACED the projection's real exception on every
+             batch-construction failure. Anything debugging a projection failure on 2.70.0 was
+             chasing a masked error.
+
+             (c) jasperfx#795 — JasperFx.BadLinqExpressionException, lifted so a store-agnostic
+             caller can catch a bad LINQ expression without naming a store; and jasperfx#790, the
+             daemon race in the shared compliance suites. -->
+        <PackageVersion Include="JasperFx" Version="2.72.0" />
+        <PackageVersion Include="JasperFx.Events" Version="2.72.0" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.69.3" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.69.3" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.72.0" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.72.0" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.69.3" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.72.0" />
 
         <!-- Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
              source. Weasel.Storage: the dialect-neutral closed-shape document + event storage

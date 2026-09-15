@@ -80,12 +80,12 @@ public class vector_search : IAsyncLifetime
         cosine.Single(m => m.Document.Id == "north").Distance.ShouldBe(1, 1e-6);
 
         // L2 does not ignore magnitude: far-east is now far.
-        var l2 = await session.VectorSearchWithScoresAsync<Passage>(x => x.Embedding, query, limit: 4, DistanceFunction.L2, Token);
+        var l2 = await session.VectorSearchWithScoresAsync<Passage>(x => x.Embedding, query, limit: 4, DistanceFunction.L2, token: Token);
         l2[0].Document.Id.ShouldBe("east");
         l2.Single(m => m.Document.Id == "far-east").Distance.ShouldBe(4, 1e-6);
 
         // Inner product is negated so it is still a distance: far-east is the best match.
-        var inner = await session.VectorSearchWithScoresAsync<Passage>(x => x.Embedding, query, limit: 4, DistanceFunction.InnerProduct, Token);
+        var inner = await session.VectorSearchWithScoresAsync<Passage>(x => x.Embedding, query, limit: 4, DistanceFunction.InnerProduct, token: Token);
         inner[0].Document.Id.ShouldBe("far-east");
         inner[0].Distance.ShouldBe(-5, 1e-6);
     }
@@ -150,7 +150,7 @@ public class vector_search : IAsyncLifetime
         await session.SaveChangesAsync(Token);
 
         (await session.VectorSearchAsync<Passage>(x => x.Embedding, new float[] { 1, 0, 0 }, 1, token: Token)).Single().Id.ShouldBe("near");
-        (await session.VectorSearchAsync<Passage>(x => x.Embedding, new float[] { 1, 0, 0 }, 1, DistanceFunction.InnerProduct, Token)).Single().Id.ShouldBe("far");
+        (await session.VectorSearchAsync<Passage>(x => x.Embedding, new float[] { 1, 0, 0 }, 1, DistanceFunction.InnerProduct, token: Token)).Single().Id.ShouldBe("far");
     }
 
     [Fact]

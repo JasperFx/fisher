@@ -1,12 +1,13 @@
 // Deliberately NOT importing the Fisher.Linq namespace here: its session-query terminators and the
 // shared JasperFx.Events.Documents ones overlap by name, and a file using both namespaces cannot
 // call either without qualifying. Stream-state queries execute through the shared hook, so the
-// shared namespace is the one imported and the two Fisher.Linq types come in as aliases.
+// shared namespace is the one imported and the Fisher.Linq types come in as aliases. The
+// BadLinqExpressionException alias this file used to carry is global now — JasperFx 2.71.0 lifted a
+// type of that name, so every test file needs it; see BadLinqExpressionAlias.cs.
 using System.Linq.Expressions;
 using JasperFx;
 using JasperFx.Events;
 using JasperFx.Events.Documents;
-using BadLinqExpressionException = Fisher.Linq.BadLinqExpressionException;
 using StreamStateMemberFactory = Fisher.Linq.Members.StreamStateMemberFactory;
 
 namespace Fisher.Tests.Events;

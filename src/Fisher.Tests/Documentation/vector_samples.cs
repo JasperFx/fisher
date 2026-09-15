@@ -14,6 +14,8 @@ public class Memory
     public string Id { get; set; } = "";
     public string Title { get; set; } = "";
     public string Body { get; set; } = "";
+    public string Category { get; set; } = "";
+    public bool Archived { get; set; }
     public float[]? Embedding { get; set; }
 }
 
@@ -66,6 +68,19 @@ public static class vector_samples
         #endregion
 
         _ = confident;
+    }
+
+    public static async Task search_with_a_filter(IQuerySession session, ReadOnlyMemory<float> query)
+    {
+        #region sample_vector_search_filter
+        // The predicate is applied BEFORE the limit, so this is the nearest five *handbook*
+        // memories rather than whichever of the nearest five happen to be handbook ones.
+        var nearest = await session.VectorSearchAsync<Memory>(
+            x => x.Embedding, query, limit: 5,
+            filter: x => x.Category == "handbook" && !x.Archived);
+        #endregion
+
+        _ = nearest;
     }
 
     public static async Task search_with_another_metric(IQuerySession session, ReadOnlyMemory<float> query)
