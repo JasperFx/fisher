@@ -3,10 +3,21 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **four open issues, and none is feature work.** 1.5.0 closed both of 1.4.0's
+Status: **two open issues, and neither is feature work.** 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0
 closed the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which
 Event Model canvas it contributes to.
+
+**1.11.0 finishes the search wave and empties everything that was actionable.**
+[#289](https://github.com/JasperFx/fisher/issues/289) gave the hybrid search's text leg per-column
+weights, on the shared `HybridSearchOptions` (jasperfx#854, JasperFx **2.72.0**) so all three stores
+read one definition — Fisher honours them; Marten and Polecat refuse a non-null value BY NAME rather
+than ignoring it, because a silently unweighted ranking still looks like an answer.
+[#288](https://github.com/JasperFx/fisher/issues/288) widened the unsupported-vector-type refusal to
+all nine accepted types, with the message now DERIVED from the list rather than hand-written beside
+it. [#284](https://github.com/JasperFx/fisher/issues/284) closed with no Fisher code at all: the
+Event Model name default was reading the wrong `ServiceName`, fixed upstream in wolverine#4448 and
+shipped in **Wolverine 6.38.0**, so all three stores inherit it.
 
 **1.10.0 is where store identity stopped being wrong in two places at once.**
 [#279](https://github.com/JasperFx/fisher/issues/279): `IEventStore.Subject` was the *database* uri,
@@ -71,18 +82,11 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-Two are long-standing items, neither of them work that is ready to start.
+What is left is two long-standing items, neither of them work that is ready to start.
 [#189](https://github.com/JasperFx/fisher/issues/189) is an unreproduced flake with 65 clean runs
 against it, so it stays open on evidence rather than on work outstanding.
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.
-
-The other two are neither of them Fisher code.
-[#284](https://github.com/JasperFx/fisher/issues/284) is **fixed upstream** in wolverine#4448 and
-needs no Fisher change — it stays open only until that ships, because until then a Wolverine host
-still splits its canvas.
-[#288](https://github.com/JasperFx/fisher/issues/288) has a community pull request open against it
-([#290](https://github.com/JasperFx/fisher/pull/290)).
 <!-- /open-issues -->
 
 [#243](https://github.com/JasperFx/fisher/issues/243) and
