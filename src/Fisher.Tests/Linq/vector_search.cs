@@ -223,24 +223,40 @@ public class vector_search : IAsyncLifetime
         }));
 
         ex.Message.ShouldContain("'Passage.Text' is a String, which cannot hold an embedding");
-        ex.Message.ShouldContain("float[]");
-        ex.Message.ShouldContain("ReadOnlyMemory<float>");
-        ex.Message.ShouldContain("ReadOnlyMemory<float>?");
-        ex.Message.ShouldContain("Memory<float>");
-        ex.Message.ShouldContain("double[]");
-        ex.Message.ShouldContain("List<float>");
-        ex.Message.ShouldContain("IReadOnlyList<float>");
-        ex.Message.ShouldContain("IList<float>");
-        ex.Message.ShouldContain("IEnumerable<float>");
+
+        // ⚠️ The whole rendered list, rather than a ShouldContain per type. Those read as nine
+        // assertions and are six: `Memory<float>` is a substring of `ReadOnlyMemory<float>` and
+        // `List<float>` of both `IReadOnlyList<float>` and `IList<float>`, so deleting either name
+        // from the message left every one of them green. Measured by deleting them.
+        ex.Message.ShouldContain(
+            "float[], ReadOnlyMemory<float>, ReadOnlyMemory<float>?, Memory<float>, double[], "
+            + "List<float>, IReadOnlyList<float>, IList<float>, or IEnumerable<float>");
     }
 
+    /// <summary>
+    ///     The refusal message and the list it is about cannot drift apart.
+    /// </summary>
+    /// <remarks>
+    ///     ⚠️ <b>The version of this that suggests itself asserts nothing.</b> Iterating
+    ///     <c>AcceptedTypes</c> and checking <c>IsVectorType</c> is tautological once the latter is
+    ///     <c>AcceptedTypes.Contains(type)</c> — it cannot fail for any content of the array. This
+    ///     instead requires every accepted type to be NAMED in the description, which is the claim the
+    ///     message actually makes; adding a tenth type without teaching the renderer about it fails
+    ///     here rather than shipping a message that lists nine of ten.
+    /// </remarks>
     [Fact]
-    public void all_accepted_vector_types_are_accepted_by_is_vector_type()
+    public void every_accepted_type_is_named_in_the_description()
     {
-        foreach (var type in Fisher.Storage.Vectors.VectorIndex.AcceptedTypes)
+        foreach (var type in VectorIndex.AcceptedTypes)
         {
-            Fisher.Storage.Vectors.VectorIndex.IsVectorType(type).ShouldBeTrue();
+            VectorIndex.IsVectorType(type).ShouldBeTrue();
         }
+
+        // One rendered name per accepted type, and nothing left over.
+        VectorIndex.AcceptedTypesDescription
+            .Replace(", or ", ", ")
+            .Split(", ")
+            .Length.ShouldBe(VectorIndex.AcceptedTypes.Length);
     }
 
     [Fact]

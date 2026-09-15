@@ -66,8 +66,59 @@ internal sealed class VectorIndex
         typeof(IEnumerable<float>)
     ];
 
-    internal const string AcceptedTypesDescription =
-        "float[], ReadOnlyMemory<float>, ReadOnlyMemory<float>?, Memory<float>, double[], List<float>, IReadOnlyList<float>, IList<float>, or IEnumerable<float>";
+    /// <summary>
+    ///     <see cref="AcceptedTypes" /> spelled the way a caller would declare the member, for the
+    ///     refusal message.
+    /// </summary>
+    /// <remarks>
+    ///     ⚠️ <b>Derived rather than written out beside the array, because a source of truth is only one
+    ///     if the other form is computed from it.</b> The first cut of fisher#288 kept this as a
+    ///     hand-maintained <c>const</c> next to <see cref="AcceptedTypes" /> — which is the very drift
+    ///     the array was introduced to remove, just moved one line down: adding a tenth type and
+    ///     forgetting the string left the message confidently listing nine, with nothing failing.
+    /// </remarks>
+    internal static readonly string AcceptedTypesDescription = Describe(AcceptedTypes);
+
+    /// <summary>
+    ///     A type as C# would spell it — <c>float[]</c>, <c>ReadOnlyMemory&lt;float&gt;?</c> — which is
+    ///     what a caller needs to see to fix a declaration.
+    /// </summary>
+    /// <remarks>
+    ///     JasperFx's <c>ShortNameInCode()</c> is the obvious reach and produces <c>Single[]</c> and
+    ///     <c>Nullable&lt;ReadOnlyMemory&lt;Single&gt;&gt;</c> — accurate, and not spellings anybody
+    ///     writes. Measured before this was written rather than assumed.
+    /// </remarks>
+    private static string NameFor(Type type)
+    {
+        if (Nullable.GetUnderlyingType(type) is { } inner)
+        {
+            return NameFor(inner) + "?";
+        }
+
+        if (type.IsArray)
+        {
+            return NameFor(type.GetElementType()!) + "[]";
+        }
+
+        if (type.IsGenericType)
+        {
+            var name = type.Name[..type.Name.IndexOf('`')];
+            return $"{name}<{string.Join(", ", type.GetGenericArguments().Select(NameFor))}>";
+        }
+
+        return type == typeof(float) ? "float"
+            : type == typeof(double) ? "double"
+            : type.Name;
+    }
+
+    private static string Describe(IReadOnlyList<Type> types)
+    {
+        var names = types.Select(NameFor).ToArray();
+
+        return names.Length == 1
+            ? names[0]
+            : string.Join(", ", names[..^1]) + ", or " + names[^1];
+    }
 
     /// <summary>
     ///     The member types an embedding may be declared as. Anything that serializes to a JSON array
