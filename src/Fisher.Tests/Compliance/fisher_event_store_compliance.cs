@@ -9,7 +9,7 @@ namespace Fisher.Tests.Compliance;
  * these tests cannot drift between the products.
  *
  * Suites were added one at a time as Fisher grew into them, and fifty-six are enrolled from
- * JasperFx.Events.ComplianceTests 2.71.1, which itself ships fifty-seven concrete suites across
+ * JasperFx.Events.ComplianceTests 2.72.0, which itself ships fifty-seven concrete suites across
  * fifty-six files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
  * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
  *

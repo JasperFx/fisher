@@ -83,7 +83,8 @@ and the fusion behaves the same whatever the embedding model or the tokenizer.
 - **`K` is the only dial, and there are no per-leg weights.** RRF has nothing to weight but position,
   and weighting one leg would bring back the calibration problem it exists to avoid. Larger `K`
   flattens the difference between ranks; smaller lets the top of each leg dominate. A search where one
-  leg should decide is a single-leg search.
+  leg should decide is a single-leg search. `ColumnWeights` is not an exception to this — it weights
+  columns *within* the text leg, changing that leg's own ranking before the fusion ever sees it.
 - **Ties are broken deterministically** — best rank in either leg, then the identity — so documents
   with equal scores land on the same page on every call.
 
@@ -154,7 +155,45 @@ var hits = await session.HybridSearchAsync<SupportTicket>(
 | `CandidateDepth` | `max(limit × 4, 50)` | How deep each leg is read before fusing |
 | `Distance` | the index's | Override the vector leg's metric |
 | `TextStyle` | `PlainText` | Or `WebStyle`. Both are safe to hand a search box's raw contents |
+| `ColumnWeights` | every column at 1.0 | One weight per indexed full-text member, in declaration order. See below |
 | `RegConfig` | null | The Postgres text-search configuration. On the shared record so one type serves three stores; **Fisher ignores it**, having no such concept |
+
+### Weighting the text leg's columns
+
+A full-text index over several members ranks them all the same by default, so a term repeated in a
+long body outranks the same term in a title. `ColumnWeights` is `bm25()`'s per-column weighting,
+reached through the hybrid search rather than through `OrderByRelevance` — which a hybrid caller
+never gets to write.
+
+<!-- snippet: sample_hybrid_search_column_weights -->
+<a id='snippet-sample_hybrid_search_column_weights'></a>
+```cs
+// FullTextIndex(x => x.Subject, x => x.Body) — one weight per indexed member, in the order
+// the index declared them. A hit in the subject now outweighs one buried in a long body.
+var hits = await session.HybridSearchAsync<SupportTicket>(
+    x => x.Embedding, text, query, limit: 20,
+    options: new HybridSearchOptions(ColumnWeights: [3.0, 1.0]));
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/hybrid_search_samples.cs#L94-L100' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_hybrid_search_column_weights' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+::: tip
+**The weights change which documents survive, not just their order.** RRF fuses *ranks*, so the text
+leg's ordering decides which documents make the `CandidateDepth` cut and how much each survivor
+contributes to the fused score. It is not an ordering a caller can reapply to the results — by the
+time they see them, the documents that lost are gone.
+:::
+
+A weights array whose length does not match the index's member count is refused by name rather than
+padded or truncated, as `OrderByRelevance(params double[])` already refuses one: padding would weigh
+the columns you forgot at 1.0 and hand back a ranking that is quietly not the one you asked for. An
+empty array and a non-finite weight are refused too; a *negative* weight is allowed, because `bm25()`
+takes any finite weight and a negative one makes a column count against a document.
+
+**Fisher is the only store that honours this.** Marten weights at index time through
+`WeightedFullTextIndex` and Polecat's full-text ranking addresses a single member, so neither has
+anywhere to put a per-call weight — and both refuse a non-null value by name rather than ignoring it,
+since a silently unweighted ranking still looks like an answer.
 
 `HybridTextStyle` stops at two members because both take raw input. `PlainText` is every word in any
 order with no syntax at all; `WebStyle` adds quoted phrases, `or` and a leading `-` to exclude.
