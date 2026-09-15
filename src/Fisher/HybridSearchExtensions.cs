@@ -101,9 +101,15 @@ public static class HybridSearchExtensions
         // three stores cannot drift apart on which of them still applies (jasperfx#844).
         var depth = options.ResolveCandidateDepth(limit);
 
+        // Resolved up front, for the same reason AssertBothLegsAreAvailable is: the LINQ operator
+        // would refuse a wrong-length array too, but its message is about OrderByRelevance, which a
+        // hybrid caller never called (fisher#289).
+        var weights = options.ResolveColumnWeights(
+            fisher.Options.Schema.MappingFor(typeof(T)).FullTextIndex!.ColumnNames.Length);
+
         // Both legs read through their own tested paths, so the implicit filters and the existing
         // refusals apply without being restated here.
-        var textLeg = await TextLegAsync(session, text, options.TextStyle, depth, filter, token)
+        var textLeg = await TextLegAsync(session, text, options.TextStyle, depth, weights, filter, token)
             .ConfigureAwait(false);
         var vectorLeg = await session
             .VectorSearchAsync(member, query, depth, options.Distance, filter, token).ConfigureAwait(false);
@@ -114,7 +120,8 @@ public static class HybridSearchExtensions
     }
 
     private static Task<IReadOnlyList<T>> TextLegAsync<T>(IQuerySession session, string text,
-        HybridTextStyle style, int depth, Expression<Func<T, bool>>? filter, CancellationToken token)
+        HybridTextStyle style, int depth, IReadOnlyList<double>? weights,
+        Expression<Func<T, bool>>? filter, CancellationToken token)
         where T : notnull
     {
         var matched = style switch
@@ -128,7 +135,14 @@ public static class HybridSearchExtensions
             matched = matched.Where(filter);
         }
 
-        return matched.OrderByRelevance().Take(depth).ToListAsync(token);
+        // ⚠️ The weights change WHICH documents survive, not just their order. RRF fuses ranks, so
+        // this ordering picks who makes the depth cut and how much each survivor contributes — a
+        // caller cannot reapply it afterwards, because by then the losers are gone.
+        var ranked = weights is null
+            ? matched.OrderByRelevance()
+            : matched.OrderByRelevance(weights.ToArray());
+
+        return ranked.Take(depth).ToListAsync(token);
     }
 
     /// <summary>
