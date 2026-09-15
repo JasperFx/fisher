@@ -322,9 +322,21 @@ read model behind it, so a sticky for one is something a reader cannot click thr
 
 ### Naming the model
 
-**The default follows the running service**, `JasperFxOptions.ServiceName`, which is what Wolverine's
-own chains and HTTP endpoints contribute under — so a Wolverine application and its Fisher store land
-on one canvas with nothing configured at all.
+**The default follows the running service**, `JasperFxOptions.ServiceName` — so a Wolverine
+application and its Fisher store land on one canvas with nothing configured at all.
+
+::: warning
+**That needs Wolverine 6.38.0 or later** (wolverine#4448, reported here as fisher#284). Wolverine names
+its own model from `WolverineOptions.ServiceName`, and until that release nothing carried the value
+back: `ReadJasperFxOptions` only ever did `ServiceName ??= jasperfx.ServiceName`, reading *from*
+JasperFx. So `opts.ServiceName = "Ledgers"` left the property this default reads at **its** own
+default, the entry assembly name, and the canvas split in two — the host's chains on one, this store's
+read models on the other.
+
+It looked correct wherever the two coincide, a host whose assembly is named what its service is named
+agreeing with itself by accident. On an older Wolverine, set `EventModelName` rather than relying on
+the two defaults lining up.
+:::
 
 Set `EventModelName` when a store is genuinely its own bounded context, as each module's store is in a
 modular monolith, or to match a host that passes something other than its service name to

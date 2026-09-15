@@ -95,11 +95,37 @@ internal sealed class FisherProjectionEventModelSource : IEventModelDefinitionSo
     ///         ⚠️ <b>The literal <c>"EventModel"</c> is the one default guaranteed to be wrong for
     ///         every host, and it was the root cause of fisher#271 rather than an incidental
     ///         choice.</b> Every other contributor to a canvas defaults to something meaningful —
-    ///         Wolverine's chains and HTTP endpoints to <c>JasperFxOptions.ServiceName</c>, a Bobcat
-    ///         spec assembly to its own name, a curated file to its <c>model:</c> value — so the
-    ///         overwhelmingly common host, Wolverine plus one store, assembled <b>two</b> models out
-    ///         of the box. Threading a name through <c>AddFisher</c> (fisher#271) and then onto
+    ///         Wolverine's chains and HTTP endpoints to the service name, a Bobcat spec assembly to
+    ///         its own name, a curated file to its <c>model:</c> value — so the overwhelmingly common
+    ///         host, Wolverine plus one store, assembled <b>two</b> models out of the box. Threading a
+    ///         name through <c>AddFisher</c> (fisher#271) and then onto
     ///         <see cref="StoreOptions" /> (fisher#276) fixed the symptom twice; this is the default.
+    ///     </para>
+    ///     <para>
+    ///         ⚠️ <b>"the service name" is deliberately not a property name, because fisher#284 found
+    ///         that naming one was wrong.</b> The paragraph above used to say Wolverine's chains
+    ///         contribute under <c>JasperFxOptions.ServiceName</c>. They do not:
+    ///         <c>WolverineEventModelSource</c> names its model from <c>WolverineOptions.ServiceName</c>,
+    ///         and <c>WolverineOptions.ReadJasperFxOptions</c> only ever did
+    ///         <c>ServiceName ??= jasperfx.ServiceName</c> — reading FROM JasperFx, with nothing
+    ///         carrying the value back. So <c>opts.ServiceName = "Ledgers"</c>, the documented way to
+    ///         name a Wolverine service, left the property <see cref="ResolveModelName" /> reads at
+    ///         ITS default, the entry assembly name, and the canvas split in two exactly as it did
+    ///         before fisher#280. It only ever looked correct where the two defaults coincide — a host
+    ///         whose assembly is named what its service is named agrees with itself by accident, which
+    ///         is why it survived a release.
+    ///     </para>
+    ///     <para>
+    ///         <b>Fixed upstream in wolverine#4448 and shipped in Wolverine 6.38.0</b>, which writes
+    ///         the resolved Wolverine <c>ServiceName</c> back into <c>JasperFxOptions</c> — so all
+    ///         three Critter Stack stores inherit it and this fallback is correct as written, with no
+    ///         Fisher change. Fixed there rather than here on purpose: Fisher references neither
+    ///         Wolverine nor a host that sets a Wolverine service name, so the alternative was a loose
+    ///         type lookup repeated once per store. The regression test lives in Wolverine for the
+    ///         same reason (<c>service_name_reaches_jasperfx_4448</c>) — coverage needs a host where
+    ///         the assembly name and the service name differ, and Fisher cannot build one.
+    ///         <see cref="StoreOptions.EventModelName" /> stays the reliable answer, and is what a
+    ///         host on an older Wolverine should set.
     ///     </para>
     ///     <para>
     ///         <b>An explicit <see cref="StoreOptions.EventModelName" /> still wins</b>, which is what

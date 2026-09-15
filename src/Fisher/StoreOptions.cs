@@ -128,8 +128,9 @@ public class StoreOptions
     /// <summary>
     ///     Name of the Event Model that this store's projections contribute their derived slices to.
     ///     Leave null and the store contributes to the model named after the running service
-    ///     (<c>JasperFxOptions.ServiceName</c>), which is what every other contributor to a canvas
-    ///     defaults to — see fisher#280.
+    ///     (<c>JasperFxOptions.ServiceName</c>), which is the name every other contributor to a canvas
+    ///     defaults to as well — see fisher#280, and fisher#284 for why that agreement needed a fix
+    ///     upstream in Wolverine 6.38.0 before it was true.
     /// </summary>
     /// <remarks>
     ///     <para>
