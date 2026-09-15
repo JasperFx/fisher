@@ -214,6 +214,52 @@ public class vector_search : IAsyncLifetime
     }
 
     [Fact]
+    public void vector_index_unsupported_type_error_message_lists_all_accepted_types()
+    {
+        var ex = Should.Throw<InvalidOperationException>(() => DocumentStore.For(o =>
+        {
+            o.ConnectionString = _database.ConnectionString;
+            o.Schema.For<Passage>().VectorIndex(x => x.Text, 3);
+        }));
+
+        ex.Message.ShouldContain("'Passage.Text' is a String, which cannot hold an embedding");
+
+        // ⚠️ The whole rendered list, rather than a ShouldContain per type. Those read as nine
+        // assertions and are six: `Memory<float>` is a substring of `ReadOnlyMemory<float>` and
+        // `List<float>` of both `IReadOnlyList<float>` and `IList<float>`, so deleting either name
+        // from the message left every one of them green. Measured by deleting them.
+        ex.Message.ShouldContain(
+            "float[], ReadOnlyMemory<float>, ReadOnlyMemory<float>?, Memory<float>, double[], "
+            + "List<float>, IReadOnlyList<float>, IList<float>, or IEnumerable<float>");
+    }
+
+    /// <summary>
+    ///     The refusal message and the list it is about cannot drift apart.
+    /// </summary>
+    /// <remarks>
+    ///     ⚠️ <b>The version of this that suggests itself asserts nothing.</b> Iterating
+    ///     <c>AcceptedTypes</c> and checking <c>IsVectorType</c> is tautological once the latter is
+    ///     <c>AcceptedTypes.Contains(type)</c> — it cannot fail for any content of the array. This
+    ///     instead requires every accepted type to be NAMED in the description, which is the claim the
+    ///     message actually makes; adding a tenth type without teaching the renderer about it fails
+    ///     here rather than shipping a message that lists nine of ten.
+    /// </remarks>
+    [Fact]
+    public void every_accepted_type_is_named_in_the_description()
+    {
+        foreach (var type in VectorIndex.AcceptedTypes)
+        {
+            VectorIndex.IsVectorType(type).ShouldBeTrue();
+        }
+
+        // One rendered name per accepted type, and nothing left over.
+        VectorIndex.AcceptedTypesDescription
+            .Replace(", or ", ", ")
+            .Split(", ")
+            .Length.ShouldBe(VectorIndex.AcceptedTypes.Length);
+    }
+
+    [Fact]
     public void the_distance_function_itself_is_pinned()
     {
         var q = VectorFunctions.ToBlob(new float[] { 1, 0, 0 });
