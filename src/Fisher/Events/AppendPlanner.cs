@@ -106,7 +106,16 @@ internal sealed class AppendPlanner
         // inline projections have versions to fold, and the authoritative read, the optimistic
         // concurrency check and the final numbering must all still happen under the lock — seeding
         // one from the other is exactly the race the class remarks forbid.
-        var states = await ReadCurrentStatesAsync(actionable, connection, transaction: null, token)
+        //
+        // "Outside the write lock" is only possible when the session owns its transaction and has
+        // not opened it yet. An enlisted session (SessionOptions.ForTransaction) is already inside
+        // the caller's transaction, on the caller's connection, and Microsoft.Data.Sqlite refuses to
+        // execute a command whose Transaction is unset while its connection has one pending — the
+        // reason ConfigureCommandAsync sets it on every other command the session runs. So this read
+        // joins the enlisted transaction when there is one and stays a plain autocommit read when
+        // there is not (fisher#300). Nothing about the race above changes: the read is still not the
+        // guard, and the caller already holds the lock the guard runs under.
+        var states = await ReadCurrentStatesAsync(actionable, connection, _session.EnlistedTransaction, token)
             .ConfigureAwait(false);
 
         foreach (var stream in actionable)
