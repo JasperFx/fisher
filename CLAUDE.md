@@ -3469,6 +3469,34 @@ populates deliberately.
   what makes a new tenant work with no registration step. Enumeration reports only the files that are
   there. `InMemoryTenantSource` is the opposite — it refuses what it was not told about, which is the
   difference an application pushing its own tenants table wants.
+  - ⚠️ **That is also why the id has to be validated as a FILE NAME, and it was not** (fisher#318).
+    "Any id resolves" plus `Path.Combine` not constraining its result to the first argument meant a
+    tenant id that was not a plain identifier resolved *outside* the configured directory — and
+    `LightweightSession(tenantId)` would **create a SQLite database there**, at whatever the process
+    can write. The reachable shape is not exotic: Wolverine and ASP.NET tenant-id detection commonly
+    forward a header, a route value or a subdomain straight into `ForTenant(...)`.
+  - **Fisher's to refuse rather than the application's to sanitise**, because Fisher is the layer that
+    turns the string into a path. `InMemoryTenantSource.Add` already validated its input, so the
+    sources disagreed about whether anything was checked at all.
+  - **Refused, never sanitised**, and that is the load-bearing half: stripping the unsafe characters
+    maps two tenant ids onto one database file, which is the exact failure database-per-tenant exists
+    to make impossible, and it would be silent. `TenantFileName` is a positive charset
+    (`A-Z a-z 0-9 . _ -`) plus a resolved-path containment check as belt and braces — an allowlist
+    cannot be widened by a platform Fisher was not tested on, where a denylist has to anticipate every
+    separator and every reserved name.
+  - **`.` is allowed and three cases around it are not**, which is why they are named separately:
+    `acme.co` is an ordinary id, `..` traverses, a leading `.` hides the file on every Unix-like
+    system, and Windows *silently strips* a trailing one — so `acme.` and `acme` would be one file
+    there and two everywhere else.
+  - ⚠️ **`*DEFAULT*` is exempted by exact identity**, because `DynamicTenancy.Default` resolves it
+    while the store is still being **constructed** — refusing it would make every directory-tenancy
+    store fail to build. By identity rather than by admitting `*` to the charset, since `*` in a
+    caller's id is precisely what this refuses. That it maps to a file named `*DEFAULT*.db`, which is
+    an illegal filename on Windows, is fisher#325: renaming it would orphan every existing
+    default-tenant database, so it is not a rider on a security fix.
+  - **The configuration path refuses the same ids**, through `TenantDatabases.InDirectory`. A store
+    that accepted an id in configuration and refused it at runtime would be inconsistent about its own
+    rule, and the failure would land at whichever call site came second.
 - **A source has to answer for the default tenant**, read while the store is being built rather than
   lazily, so a source that cannot says so at construction instead of at the first store-level
   operation. There is no store-level file under this tenancy for it to fall back on.

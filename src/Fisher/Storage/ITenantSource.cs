@@ -155,8 +155,17 @@ public sealed class DirectoryTenantSource : ITenantSource
         return ValueTask.FromResult<IReadOnlyList<TenantRegistration>>(found);
     }
 
+    /// <summary>
+    ///     The connection string for a tenant's file, refusing an id that would not be a safe file name
+    ///     (fisher#318).
+    /// </summary>
+    /// <remarks>
+    ///     <b>Any tenant id resolving is what makes this convention work, and it is also what makes the
+    ///     check necessary</b> — there is no registration step to act as a gate, so this is the only
+    ///     place between a caller's string and a file on disk. See <see cref="TenantFileName" />.
+    /// </remarks>
     private string PathFor(string tenantId)
-        => new SqliteConnectionStringBuilder { DataSource = Path.Combine(_directory, $"{tenantId}.db") }
+        => new SqliteConnectionStringBuilder { DataSource = TenantFileName.PathFor(_directory, tenantId) }
             .ToString();
 }
 

@@ -619,9 +619,13 @@ public sealed class TenantDatabases
 
         foreach (var tenantId in _byConvention.Where(x => !_explicitConnections.ContainsKey(x)))
         {
+            // fisher#318 — the same refusal DirectoryTenantSource makes. Configuration is a far less
+            // likely source of a hostile id than a request header, but a store that accepted one here
+            // and refused it there would be inconsistent about its own rule, and the failure would
+            // arrive at whichever call site happened to come second.
             yield return (tenantId, new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
             {
-                DataSource = Path.Combine(_directory, $"{tenantId}.db")
+                DataSource = TenantFileName.PathFor(_directory, tenantId)
             }.ToString());
         }
     }
