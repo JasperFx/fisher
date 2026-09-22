@@ -84,6 +84,25 @@ public static class FisherServiceCollectionExtensions
         services.AddSingleton<JasperFx.Events.IEventStore>(
             sp => sp.GetRequiredService<DocumentStore>());
 
+        // fisher#303 — the DOCUMENT half of that same bridge, and it was missing entirely. Both are
+        // implemented explicitly like IEventStore, so neither reached the container: a store-agnostic
+        // consumer resolving IDocumentStoreDiagnostics from a Fisher host got nothing.
+        //
+        // The failure is silent in the direction that hurts. Those interfaces document a graceful
+        // no-op pattern — a consumer that cannot resolve one carries on without it — so "not
+        // registered" renders as **the store has no documents**, not as "this store does not answer
+        // that". Same shape as fisher#120, where an unfilled slot on EventStoreUsage read as an empty
+        // store rather than an unanswered question, and it is why the CritterWatch document explorer
+        // could not browse a Fisher-backed service at all.
+        //
+        // Nothing local caught it because document_diagnostics reaches the implementation by casting
+        // the store directly — every assertion about the BEHAVIOUR passed while the only route a
+        // consumer actually takes returned nothing.
+        services.AddSingleton<JasperFx.Events.IDocumentStoreUsageSource>(
+            sp => sp.GetRequiredService<DocumentStore>());
+        services.AddSingleton<JasperFx.Documents.IDocumentStoreDiagnostics>(
+            sp => sp.GetRequiredService<DocumentStore>());
+
         // fisher#251 — the store-derived rung of the Event Model (jasperfx#825): one View slice per
         // registered projection, read straight out of this store's own registry. Bobcat declares
         // slices and Wolverine derives Command and Automation slices from its chains; nobody derived
@@ -199,6 +218,21 @@ public static class FisherServiceCollectionExtensions
         // secondary store carries its own StoreName.
         services.AddSingleton<JasperFx.Events.IEventStore>(sp
             => (JasperFx.Events.IEventStore)UnwrapForTooling(sp.GetRequiredService<T>()));
+
+        // fisher#303 — the document half, for an ancillary store too. ⚠️ UNWRAPPED, for the reason the
+        // IEventStore registration above is: a DispatchProxy implements the interfaces it was asked
+        // for and no others, and both of these are implemented explicitly and are not on
+        // IDocumentStore — so the marker proxy is neither of them. Handing it over throws
+        // InvalidCastException at registration, which is the better of the two failures and still not
+        // one to rely on.
+        //
+        // It matters more here than on either sibling: two Fisher stores are usually two *files*, so
+        // a console that could not see the ancillary one would be missing a whole database rather
+        // than a schema.
+        services.AddSingleton<JasperFx.Events.IDocumentStoreUsageSource>(sp
+            => (JasperFx.Events.IDocumentStoreUsageSource)UnwrapForTooling(sp.GetRequiredService<T>()));
+        services.AddSingleton<JasperFx.Documents.IDocumentStoreDiagnostics>(sp
+            => (JasperFx.Documents.IDocumentStoreDiagnostics)UnwrapForTooling(sp.GetRequiredService<T>()));
 
         // fisher#251 — an ancillary store's projections are View slices too, and it needs its own
         // source because AddFisherStore<T> can be called without AddFisher at all.

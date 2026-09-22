@@ -3941,6 +3941,29 @@ the document half — which renders as "no documents" rather than "this store do
 Same outcome the standing discipline exists to prevent, reached by a different route: not a member
 that throws, but an interface never implemented.
 
+⚠️ **Implementing them was only half of it, and the other half was missing for four releases**
+(fisher#303). `AddFisher` registered neither in the container, so a store-agnostic consumer resolving
+`IDocumentStoreDiagnostics` from a Fisher host got **nothing** — and both interfaces document a
+graceful-no-op pattern, so "not registered" renders as *the store has no documents* rather than as an
+unanswered question. The CritterWatch document explorer could not browse a Fisher-backed service at
+all, including the zero-infrastructure embedded configuration that is Fisher's best case.
+
+- **It is the third instance of the same shape, and the shape is the lesson.** An unfilled slot on
+  `EventStoreUsage` reads as a store with none (fisher#120); a store-agnostic interface implemented
+  but not registered reads the same way one member over. Both are silent, both are invisible to the
+  shared compliance suites, and both were found by pointing a console at Fisher rather than by any
+  test here.
+- **Nothing local caught it because `document_diagnostics` casts the store directly.** Every assertion
+  about the *behaviour* passed while the only route a consumer actually takes returned nothing —
+  which is exactly why the tests added for this resolve out of a real host instead.
+- **The ancillary registrations unwrap the marker proxy**, the same rule the `IEventStore` bridge
+  follows and for the same reason: a `DispatchProxy` implements the interfaces it was asked for, and
+  both of these are explicit and absent from `IDocumentStore`. It matters more here than on either
+  sibling, two Fisher stores usually being two *files* — a console that could not see the ancillary
+  one would be missing a whole database rather than a schema.
+- Polecat registers both for both stores and Marten registers the usage source; Fisher was the only
+  one of the three registering neither.
+
 - **The usage sweep has to force the mappings into existence.** A mapping is created lazily on first
   use, so a store that has opened no session has none — exactly the state a console sees on a fresh
   boot. `MaterializeMappings` asks the schema for every projection's aggregate type first.
