@@ -64,6 +64,31 @@ there is no lost update. What differs is that a loser gets `EventStreamUnexpecte
 instead of waiting.
 :::
 
+### When the file itself is contended
+
+Optimistic concurrency is about two writers reaching the *same stream*. A different thing can happen
+first: SQLite permits **one writer per database file**, so a commit can fail to take the write lock at
+all, whatever streams it was writing.
+
+That is retried — jittered exponential backoff through `StoreOptions.ResiliencePipeline`, recorded on
+the current span and on `fisher.write_lock.retries`. When the retries are not enough and the unit of
+work was appending events, `SaveChangesAsync` throws `Fisher.Exceptions.StreamLockedException`, which
+derives from `JasperFx.Events.StreamLockedException` — the type Marten and Polecat throw for their own
+lock contention, so a Wolverine policy reads the same on all three:
+
+```cs
+opts.OnException<JasperFx.Events.StreamLockedException>().RetryWithCooldown(/* … */);
+```
+
+::: tip
+`StreamId` carries the first stream in the unit of work, which is the whole of it for the
+aggregate-handler shape and is what the siblings can express. Fisher's subclass adds `StreamIds`,
+because the lock that was lost is the **file's** — every stream in the commit lost it together.
+:::
+
+A unit of work that appended no events keeps the raw `SqliteException`: a `StreamLockedException`
+naming no stream would say less than the driver already does.
+
 ## FetchForWriting
 
 The command-handling shape: fetch, decide, append, commit.
