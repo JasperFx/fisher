@@ -195,6 +195,38 @@ public class database_per_tenant : IAsyncLifetime
         ex.Message.ShouldContain("south");
     }
 
+    /// <summary>
+    ///     The refusal is catchable as the stack's shared type (fisher#309).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Marten, Polecat and Wolverine all throw
+    ///         <see cref="JasperFx.MultiTenancy.UnknownTenantIdException" /> for this condition, and
+    ///         Fisher's derived from plain <c>Exception</c> — so store-agnostic code and a Wolverine
+    ///         <c>OnException&lt;UnknownTenantIdException&gt;().MoveToErrorQueue()</c> policy, which
+    ///         matches with <c>ex is T</c>, worked on three stores and silently missed on this one.
+    ///     </para>
+    ///     <para>
+    ///         Asserted by catching the <em>base</em> type and then requiring Fisher's message and
+    ///         Fisher's type back out of it. Catching the base alone would pass against a store that
+    ///         had thrown the canonical exception and thrown Fisher's wording away with it, which is
+    ///         the trade this change is specifically not making.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task the_refusal_is_the_shared_unknown_tenant_type()
+    {
+        await using var store = StoreFor();
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        var ex = Should.Throw<JasperFx.MultiTenancy.UnknownTenantIdException>(
+            () => store.LightweightSession("east"));
+
+        ex.ShouldBeOfType<UnknownTenantException>();
+        ex.TenantId.ShouldBe("east");
+        ex.Message.ShouldContain("This store has no database for tenant 'east'");
+    }
+
     // ---- configuration ----
 
     [Fact]
