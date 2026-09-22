@@ -131,6 +131,32 @@ parses.
 fraction, and a `TimeOnly`'s optional fraction is a strict suffix — so trimming shortens the string
 without changing which of two values compares smaller.
 
+## Decimals
+
+A `decimal` member is stored as an ordinary JSON number and `json_extract` hands it back as REAL, so
+comparisons, `IsOneOf`, `Contains`, `HAVING` and arithmetic on one all work and all compare
+**numerically**:
+
+```cs
+.Where(x => x.Total > 100m)
+.Where(x => x.Total == 250.75m)
+.Where(x => x.Total.IsOneOf(50m, 250.75m))
+.Where(x => x.Total + 60m > 200m)
+.OrderByDescending(x => x.Total)
+```
+
+Nothing to configure. Fisher normalises the comparison value to `double` where the query binds it,
+because Microsoft.Data.Sqlite binds a raw `decimal` as **TEXT** and SQLite orders every numeric value
+below every TEXT one — see
+[SQLite differences](/configuration/sqlite#decimal-is-a-json-number-and-it-compares-as-one) for what
+that means if you ever write the statement yourself.
+
+::: warning
+The comparison is floating point, so `SumAsync` and `AverageAsync` over a `decimal` member are
+accurate to `double` precision rather than to decimal precision. That is SQLite's arithmetic, not a
+Fisher choice; it is the same reason a duplicated `decimal` field is declared REAL.
+:::
+
 ## Enums
 
 Under the default `EnumStorage.AsInteger` everything works. Under `AsString`, **range comparison and

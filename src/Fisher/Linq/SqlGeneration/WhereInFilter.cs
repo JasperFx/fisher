@@ -1,3 +1,4 @@
+using Fisher.Storage;
 using Weasel.Core;
 using Weasel.Core.SqlGeneration;
 
@@ -7,8 +8,15 @@ namespace Fisher.Linq.SqlGeneration;
 ///     Membership against a fixed set — <c>locator in (@p0, @p1, ...)</c>.
 /// </summary>
 /// <remarks>
-///     An empty set renders <c>1=0</c> rather than <c>in ()</c>, which is a syntax error. Semantically
-///     that is right anyway: nothing is a member of the empty set.
+///     <para>
+///         An empty set renders <c>1=0</c> rather than <c>in ()</c>, which is a syntax error.
+///         Semantically that is right anyway: nothing is a member of the empty set.
+///     </para>
+///     <para>
+///         Each value is normalised the same way <see cref="ComparisonFilter" /> normalises its one
+///         (fisher#304). <c>IsOneOf</c> and <c>Contains</c> both land here, from opposite directions,
+///         so a conversion made by either caller alone would have missed the other.
+///     </para>
 /// </remarks>
 internal class WhereInFilter : ISqlFragment
 {
@@ -18,7 +26,7 @@ internal class WhereInFilter : ISqlFragment
     public WhereInFilter(string locator, IReadOnlyList<object?> values)
     {
         _locator = locator;
-        _values = values;
+        _values = [.. values.Select(SqliteParameterValue.NormalizeDecimal)];
     }
 
     public void Apply(ICommandBuilder builder)
