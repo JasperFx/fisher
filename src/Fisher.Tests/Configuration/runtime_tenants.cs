@@ -200,6 +200,70 @@ public class runtime_tenants : IAsyncLifetime
         (await query.LoadAsync<Sighting>(id, Token)).ShouldNotBeNull();
     }
 
+    /// <summary>
+    ///     The refusal is the shared type, and it is still not the "unknown tenant" one (fisher#321).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         jasperfx#875 lifted <b>Fisher's</b> exception as the canonical shape — Marten's and
+    ///         Polecat's master-table tenancies both report a disabled row as
+    ///         <c>UnknownTenantIdException</c>, so an operator who has just disabled a tenant reads
+    ///         "Unknown tenant id" about one that is still there and was turned off on purpose.
+    ///     </para>
+    ///     <para>
+    ///         <b>Both halves are asserted, because deriving widened what catches it.</b> A disabled
+    ///         tenant is now an <c>UnknownTenantIdException</c> too, which is the upstream intent — it
+    ///         still refuses the session, it just names the reason. What must NOT have changed is the
+    ///         distinction this exception exists for, so the test also requires that a disabled tenant
+    ///         is not Fisher's <c>UnknownTenantException</c> and an unknown one is not disabled.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_disabled_tenant_is_the_shared_exception_and_still_not_an_unknown_one()
+    {
+        var source = new DirectoryTenantSource(_directory);
+
+        await using var store = StoreFor(source);
+
+        await using (var session = store.LightweightSession("winter"))
+        {
+            session.Store(new Sighting { Id = Guid.NewGuid(), Species = "Fulmar" });
+            await session.SaveChangesAsync(Token);
+        }
+
+        source.Suspend("winter");
+
+        // Caught as the shared type ...
+        var refusal = Should.Throw<JasperFx.MultiTenancy.DisabledTenantException>(
+            () => store.LightweightSession("winter"));
+
+        // ... and it is still Fisher's, because subclassing rather than replacing is what keeps an
+        // existing catch site working.
+        refusal.ShouldBeOfType<DisabledTenantException>();
+        refusal.TenantId.ShouldBe("winter");
+
+        // Fisher's own wording, through the message-overriding constructor — it names the database
+        // file, which is what an operator wants to know about a store whose tenants are files.
+        refusal.Message.ShouldContain("Its database file is untouched");
+
+        // The widening: an UnknownTenantIdException catch now reaches a disabled tenant too.
+        refusal.ShouldBeAssignableTo<JasperFx.MultiTenancy.UnknownTenantIdException>();
+
+        // And the distinction fisher#58 drew is untouched, in both directions. The unknown half needs
+        // InMemoryTenantSource: DirectoryTenantSource resolves ANY id — that is the whole point of the
+        // convention — so it has no unknown tenant to refuse.
+        refusal.ShouldNotBeAssignableTo<UnknownTenantException>();
+
+        var strict = new InMemoryTenantSource()
+            .Add(StorageConstants.DefaultTenantId, PathFor("main"))
+            .Add("winter", PathFor("winter"));
+
+        await using var strictStore = StoreFor(strict);
+
+        Should.Throw<UnknownTenantException>(() => strictStore.LightweightSession("no-such-tenant"))
+            .ShouldNotBeAssignableTo<JasperFx.MultiTenancy.DisabledTenantException>();
+    }
+
     /// <remarks>
     ///     An application-supplied source is the case the issue expected to be common — the application
     ///     already has a tenants table of its own. Removing a tenant stops it resolving and leaves the

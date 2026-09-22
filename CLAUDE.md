@@ -3509,6 +3509,24 @@ populates deliberately.
   **`DisabledTenantException` is distinct from `UnknownTenantException`** because "switched off" and
   "never heard of it" are different operational situations and an application handling one should not
   have to guess which it got.
+  - **It subclasses the lifted `JasperFx.MultiTenancy.DisabledTenantException`** (jasperfx#875 /
+    fisher#321), and — as with fisher#307's archiving exception — the lift took *Fisher's* type as its
+    canonical shape. Marten's and Polecat's master-table tenancies both report a disabled row as
+    `UnknownTenantIdException`, so the operator who just disabled a tenant reads "Unknown tenant id"
+    about one that is still there and was turned off on purpose.
+  - **Deriving widened what catches it, and that is the upstream intent rather than a loss.** The
+    shared type derives from `UnknownTenantIdException`, so a `catch (UnknownTenantIdException)` now
+    reaches a disabled tenant — it still refuses the session, it just names the reason. The
+    distinction above is untouched: Fisher's `UnknownTenantException` is a different class, so
+    nothing that told the two apart stops being able to.
+  - **Fisher's own wording survives**, through the protected message-overriding constructor. It names
+    the tenant's *database file* and says it is untouched, which is what an operator wants to know
+    about a store whose tenants are files and which never deletes one.
+  - ⚠️ **The name still collides** — a file importing both `Fisher.Storage` and
+    `JasperFx.MultiTenancy` gets CS0104 and has to qualify. Subclassing does not fix that and could
+    not. It stays in `Fisher.Storage` beside `UnknownTenantException` rather than moving to
+    `Fisher.Exceptions`: the two answer the same question, and moving either is a breaking change to
+    a `using` for no behavioural gain.
 - **The daemon polls for new tenants**, at `FisherDaemonHostedService.TenantPollingInterval` (one
   minute), and only under `DynamicMultiple`. Polling rather than notification because the set of
   tenants belongs to the application and Fisher is never pushed to. A new tenant's *sessions* work
