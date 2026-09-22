@@ -3,10 +3,36 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **two open issues, and neither is feature work.** 1.5.0 closed both of 1.4.0's
-follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0
-closed the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which
-Event Model canvas it contributes to.
+Status: **four open issues, and none of them is feature work.** Two are unreproduced
+intermittents kept open on evidence, one is a platform question Fisher's CI cannot answer, and one is
+blocked upstream. 1.5.0 closed both of 1.4.0's follow-ups and the whole of JasperFx 2.69.x's
+compliance wave; 1.6.0 added hybrid search; 1.7.0 closed the vector story; 1.8.0 through 1.10.0
+settled how a Fisher store identifies itself and which Event Model canvas it contributes to; 1.11.0
+finished the search wave.
+
+**1.12.0 is a correctness wave, and three of its nine items were silently wrong rather than
+missing.** [#304](https://github.com/JasperFx/fisher/issues/304): a LINQ comparison against a
+`decimal` member returned the wrong rows — `>` and `==` matched nothing and `<` matched everything,
+with no error either way, because the provider binds a raw `decimal` as TEXT and SQLite orders every
+number below every string. [#318](https://github.com/JasperFx/fisher/issues/318): a tenant id was
+concatenated into a file path unchecked, so `LightweightSession(tenantId)` could create a database
+outside the configured directory. [#303](https://github.com/JasperFx/fisher/issues/303): `AddFisher`
+never registered `IDocumentStoreDiagnostics` or `IDocumentStoreUsageSource`, so a monitoring console
+read the document half of a Fisher store as *empty* rather than as unavailable.
+
+The rest close things that were already suspected. [#311](https://github.com/JasperFx/fisher/issues/311)
+had been one unreproduced intermittent with two candidate mechanisms; the mechanism is now confirmed
+deterministically — a connection returned to the pool carrying a transaction the wrapper had lost
+track of — and closed at the source. [#305](https://github.com/JasperFx/fisher/issues/305) was filed
+to *confirm* that Fisher disposed an EF-backed projection's `DbContext`; it does, on the async path,
+and the confirmation found the inline path leaking one per commit, with
+[#319](https://github.com/JasperFx/fisher/issues/319) closing the accumulation behind it.
+[#307](https://github.com/JasperFx/fisher/issues/307) and
+[#321](https://github.com/JasperFx/fisher/issues/321) adopt two exceptions JasperFx 2.74.0 lifted —
+and both lifts took **Fisher's** type as the canonical shape, over Marten's and Polecat's.
+[#302](https://github.com/JasperFx/fisher/issues/302) documents unit testing an event-sourced handler
+with the new store-agnostic `StubEventStream<T>`, framed for Fisher rather than copied from the
+siblings: the usual "avoid paying for a database" pitch argues against Fisher's own best feature.
 
 **1.11.0 finishes the search wave and empties everything that was actionable.**
 [#289](https://github.com/JasperFx/fisher/issues/289) gave the hybrid search's text leg per-column
@@ -82,9 +108,20 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is two long-standing items, neither of them work that is ready to start.
+What is left is four items, none of which is work that is ready to start.
+
 [#189](https://github.com/JasperFx/fisher/issues/189) is an unreproduced flake with 65 clean runs
-against it, so it stays open on evidence rather than on work outstanding.
+against it, and [#329](https://github.com/JasperFx/fisher/issues/329) is a second one — a 30-second
+daemon wait that expired once on a loaded CI runner and has not recurred. Both stay open on evidence
+rather than on work outstanding, which is the only honest thing to do with a failure nobody can
+reproduce.
+
+[#325](https://github.com/JasperFx/fisher/issues/325) is a question Fisher's own CI cannot answer:
+under the directory tenancy the default tenant maps to a file named `*DEFAULT*.db`, and `*` is a
+reserved character in a Windows filename. Fisher runs its suites on Linux, so whether this actually
+fails there is unverified — and the fix is not a rider on anything, because renaming that file would
+orphan every existing default-tenant database.
+
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.
 <!-- /open-issues -->
@@ -662,6 +699,13 @@ if something is deferred, it is in the list above.
 | Hybrid search (fisher#262) | `HybridSearchAsync` fusing the full-text and vector legs by reciprocal rank — RRF rather than a weighted score sum, because bm25 and cosine distance are not on a comparable scale and normalising them means picking constants that are wrong for someone. Two statements fused in memory, so the implicit filters and both legs' existing refusals carry over unrestated; a type with only one leg is refused rather than degraded |
 | The shared-file refusal (fisher#257) | a file shared by more than one tenant requires conjoined event tenancy **and** `MultiTenanted()` on every document type. Without them the tenants are not sharing a file — they are one tenant with two names, and it is silent in the fisher#51 direction. Two checkpoints, because a lazily-mapped document type is invisible at configuration time |
 | JasperFx 2.69.0 / 2.69.1 | three new suites enrolled across fisher#249/#250/#252, taking compliance to **55 of 56 shipped suites**. 2.69.1 carries the fix for jasperfx#829, which this repository filed while wiring the Event Model source in — and the test that pinned the old behaviour was the only one to fail on the bump, which is the argument for pinning rather than asserting around |
+| Decimal LINQ comparisons (fisher#304) | a comparison against a `decimal` member returned silently wrong rows — `>` and `==` matched nothing, `<` matched everything — because Microsoft.Data.Sqlite binds a raw decimal as TEXT and SQLite orders every number below every string. Normalised at the **binding site**, not in the member seam: four producers build a comparison and only one has a member to ask, so a per-caller conversion is one the next caller forgets |
+| Tenant ids validated as file names (fisher#318) | the directory convention concatenated a tenant id into a path unchecked, so `LightweightSession(tenantId)` could create a database **outside** the configured directory. Refused rather than sanitised, because stripping the unsafe characters maps two tenant ids onto one file — the exact failure database-per-tenant exists to prevent. `*DEFAULT*` is exempted by identity; that it is an illegal Windows filename is fisher#325 |
+| Document tooling registered in DI (fisher#303) | `DocumentStore` implemented `IDocumentStoreDiagnostics` and `IDocumentStoreUsageSource` and `AddFisher` registered neither, so a console read the document half of a Fisher store as **empty** rather than unavailable. Third instance of that shape after fisher#44 and fisher#120, and invisible to every shared suite |
+| Stray native transactions (fisher#311) | one unreproduced intermittent with two candidate mechanisms, now confirmed **deterministically**: a connection returned to the pool carrying a `BEGIN IMMEDIATE` the wrapper had lost track of. `SQLITE_ERROR` is not transient, so it escaped `SaveChangesAsync` raw past every retry a caller writes. Cleared at the source on disposal, with a one-shot recovery at `BEGIN` as defence in depth |
+| EF Core context disposal (fisher#305 / fisher#319) | filed to *confirm* Fisher disposes an EF-backed projection's `DbContext`. It does — on the async path — and the confirmation found the **inline** path leaking one per commit. ⚠️ The obvious fix silently breaks the daemon: JasperFx disposes the batch's session as soon as the projection is applied, while the batch lives on to commit, so a session-disposal drain destroys the context between the apply and the write |
+| JasperFx 2.74.0 (fisher#307 / fisher#321) | `ArchivedStreamException` and `DisabledTenantException` now derive from types JasperFx lifted — and **both lifts took Fisher's shape as canonical**, over Marten's generic `InvalidStreamOperationException` and both siblings' habit of reporting a disabled tenant as "unknown tenant id". Each keeps its own wording through the message-overriding constructor, so an upstream rewording cannot move it |
+| Unit-testing docs (fisher#302) | `StubEventStream<T>` (jasperfx#858) needs no Fisher code at all. The page is framed for Fisher rather than copied from the siblings: "avoid paying for a database in a unit test" argues against Fisher's own best feature, so what earns the stub here is that it tests a decision rather than a store, and is the alternative to mocking `IEventStream<T>` |
 
 The id-type question step 1 raised was settled with a minimal resolver, not by waiting on
 `DocumentMapping`: `Storage/AggregateIdentity.cs` resolves the aggregate's identity member through
