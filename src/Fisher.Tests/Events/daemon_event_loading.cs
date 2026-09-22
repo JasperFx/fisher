@@ -33,15 +33,33 @@ public class daemon_event_loading : IAsyncLifetime
 
     private FisherEventLoader TheLoader => new(_store.Database, _store.Options);
 
-    private static EventRequest Request(long floor, long highWater, int batchSize = 100)
+    private static EventRequest Request(long floor, long highWater, int batchSize = 100,
+        ErrorHandlingOptions? errors = null)
         => new()
         {
             Floor = floor,
             HighWater = highWater,
             BatchSize = batchSize,
             Name = new ShardName("tally"),
-            ErrorOptions = new ErrorHandlingOptions()
+            ErrorOptions = errors ?? new ErrorHandlingOptions()
         };
+
+    /// <summary>Make the row at <paramref name="sequence" /> hold a body the serializer cannot read.</summary>
+    /// <remarks>
+    ///     Not well-formed JSON of the wrong shape, deliberately. The serializer's naming policy
+    ///     decides which keys a body is read by, so a well-formed object with a mistyped member is
+    ///     liable to deserialize to a default-valued event instead of failing — which is how the
+    ///     first version of these tests passed against a store that raised nothing.
+    /// </remarks>
+    private async Task CorruptBodyAsync(long sequence)
+    {
+        await using var connection =
+            await _store.Database.OpenConnectionAsync(TestContext.Current.CancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "update fi_events set data = 'not json at all' where seq_id = @seq";
+        command.Parameters.AddWithValue("@seq", sequence);
+        (await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken)).ShouldBe(1);
+    }
 
     private async Task<Guid> AppendAsync(params object[] events)
     {
@@ -279,5 +297,111 @@ public class daemon_event_loading : IAsyncLifetime
         page.Count.ShouldBe(1);
         page.Single().Data.ShouldBeOfType<QuestStarted>();
         page.Ceiling.ShouldBe(2);
+    }
+
+    /// <summary>
+    ///     A body the serializer cannot read is quarantined and the page carries on, when the policy
+    ///     says so (fisher#308).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>`SkipSerializationErrors` was silently a no-op.</b> Fisher raised no
+    ///         <c>EventDeserializationFailureException</c> at all, so the policy had nothing to catch:
+    ///         the raw <c>JsonException</c> escaped the page, <c>ResilientEventLoader</c> wrapped it
+    ///         in <c>EventLoaderException</c> after its retries, and the shard paused as
+    ///         <c>ShardFailureCategory.Other</c> with no dead letter. The flag defaults to true on
+    ///         <c>ProjectionGraph.Errors</c>, so the store shipped promising a behaviour it did not
+    ///         have.
+    ///     </para>
+    ///     <para>
+    ///         The dead letter is what makes a skip different from a silent loss, which is why this
+    ///         asserts on the row rather than only on the page: a skip that recorded nothing would
+    ///         satisfy every assertion about the surviving event.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_bad_body_is_quarantined_and_the_page_carries_on()
+    {
+        await AppendAsync(new QuestStarted("one"), new QuestStarted("two"));
+        await CorruptBodyAsync(1);
+
+        var page = await TheLoader.LoadAsync(
+            Request(0, 2, errors: new ErrorHandlingOptions { SkipSerializationErrors = true }),
+            TestContext.Current.CancellationToken);
+
+        page.Count.ShouldBe(1);
+        page.Single().Sequence.ShouldBe(2);
+
+        // The page still exhausted its range, so the shard does not stall on the skipped row.
+        page.Ceiling.ShouldBe(2);
+
+        var letters = await _store.Database.QueryDeadLetterEventsAsync(
+            new ShardName("tally"), null, 0, 10, TestContext.Current.CancellationToken);
+
+        var letter = letters.ShouldHaveSingleItem();
+        letter.EventSequence.ShouldBe(1);
+        letter.ExceptionType.ShouldContain(nameof(Fisher.Exceptions.EventDeserializationFailureException));
+    }
+
+    /// <summary>
+    ///     With the policy off the loader refuses by name, and the refusal classifies the shard
+    ///     failure itself.
+    /// </summary>
+    /// <remarks>
+    ///     <c>ShardFailureCategory.EventSerialization</c> comes off the exception's own
+    ///     <c>IEventFailureContext</c> — the daemon never sniffs a store's exception type names — so
+    ///     asserting the category is asserting that a paused shard says <em>why</em> rather than
+    ///     reporting <c>Other</c>.
+    /// </remarks>
+    [Fact]
+    public async Task a_bad_body_refuses_by_name_when_the_policy_is_off()
+    {
+        await AppendAsync(new QuestStarted("one"), new QuestStarted("two"));
+        await CorruptBodyAsync(2);
+
+        var ex = await Should.ThrowAsync<JasperFx.Events.EventDeserializationFailureException>(
+            async () => await TheLoader.LoadAsync(Request(0, 2), TestContext.Current.CancellationToken));
+
+        ex.ShouldBeOfType<Fisher.Exceptions.EventDeserializationFailureException>();
+        ex.Sequence.ShouldBe(2);
+        ex.EventTypeName.ShouldBe(_store.Options.EventGraph.EventMappingFor(typeof(QuestStarted)).EventTypeName);
+        ex.InnerException.ShouldBeOfType<System.Text.Json.JsonException>();
+
+        ((JasperFx.Events.Daemon.IEventFailureContext)ex).Category
+            .ShouldBe(JasperFx.Events.Daemon.ShardFailureCategory.EventSerialization);
+
+        // Nothing quarantined: the shard is pausing on this row and will meet it again.
+        (await _store.Database.QueryDeadLetterEventsAsync(
+            new ShardName("tally"), null, 0, 10, TestContext.Current.CancellationToken)).ShouldBeEmpty();
+    }
+
+    /// <summary>
+    ///     An unresolvable <c>dotnet_type</c> is still governed by <c>SkipUnknownEvents</c>, not by
+    ///     the serialization policy.
+    /// </summary>
+    /// <remarks>
+    ///     The two are deliberately separate operator actions — a missing registration or a
+    ///     rolled-back deployment is a deployment fix, where an unreadable body is a data fix — so
+    ///     this is the fact that the new branch did not swallow the old one. It fails if the
+    ///     serialization catch is widened to <c>Exception</c>.
+    /// </remarks>
+    [Fact]
+    public async Task an_unknown_type_is_not_governed_by_the_serialization_policy()
+    {
+        await AppendAsync(new QuestStarted("one"));
+
+        await using (var connection =
+                     await _store.Database.OpenConnectionAsync(TestContext.Current.CancellationToken))
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                "update fi_events set dotnet_type = 'No.Such.Type, NoSuchAssembly' where seq_id = 1";
+            (await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken)).ShouldBe(1);
+        }
+
+        await Should.ThrowAsync<Fisher.Exceptions.UnknownEventTypeException>(async () =>
+            await TheLoader.LoadAsync(
+                Request(0, 1, errors: new ErrorHandlingOptions { SkipSerializationErrors = true }),
+                TestContext.Current.CancellationToken));
     }
 }

@@ -117,7 +117,16 @@ internal static class FisherEventsRowReader
         var tenantId = reader.IsDBNull(7) ? ctx.DefaultTenantId : reader.GetString(7);
         var dotNetTypeName = reader.IsDBNull(8) ? null : reader.GetString(8);
 
-        var data = ReadBodyAsJson(reader, ctx, slots, dotNetTypeName);
+        JsonElement data;
+
+        try
+        {
+            data = ReadBodyAsJson(reader, ctx, slots, dotNetTypeName);
+        }
+        catch (Exception e) when (IsBodyFailure(e))
+        {
+            throw new Fisher.Exceptions.EventDeserializationFailureException(seqId, typeName, e);
+        }
 
         return new EventRecord(
             eventId,
@@ -253,18 +262,56 @@ internal static class FisherEventsRowReader
     /// </remarks>
     private static object DeserializeBinary(DbDataReader reader, in MetadataSlots slots,
         FisherEventType mapping, Type resolvedType)
-    {
-        if (mapping.BinarySerializer is not { } serializer)
-        {
-            throw new InvalidOperationException(
-                $"This event row's body is a BLOB in {EventsTable.TableSuffix}.data_binary, but no "
-                + $"IEventBinarySerializer is registered for '{resolvedType.FullName}'. Set "
-                + "StoreOptions.Events.DefaultBinarySerializer, or register one for this type with "
-                + $"StoreOptions.Events.UseBinarySerializer<{resolvedType.Name}>(...).");
-        }
+        => RequireBinarySerializer(mapping, resolvedType)
+            .Deserialize(resolvedType, (byte[])reader.GetValue(slots.BinaryDataIdx));
 
-        return serializer.Deserialize(resolvedType, (byte[])reader.GetValue(slots.BinaryDataIdx));
-    }
+    /// <summary>
+    ///     The binary serializer registered for this event type, or a refusal naming the missing
+    ///     configuration.
+    /// </summary>
+    /// <remarks>
+    ///     <b>Deliberately separable from the decode itself, and <see cref="ReadEventCore" /> calls it
+    ///     outside that method's deserialization guard</b> (fisher#308). "No IEventBinarySerializer is
+    ///     registered for this type" is a misconfiguration of the whole store rather than one
+    ///     unreadable row, so it must not become an
+    ///     <see cref="Fisher.Exceptions.EventDeserializationFailureException" /> that
+    ///     <c>SkipSerializationErrors</c> then quarantines — that would bury the one thing worth
+    ///     saying under a dead letter per binary event in the store.
+    /// </remarks>
+    private static IEventBinarySerializer RequireBinarySerializer(FisherEventType mapping, Type resolvedType)
+        => mapping.BinarySerializer ?? throw new InvalidOperationException(
+            $"This event row's body is a BLOB in {EventsTable.TableSuffix}.data_binary, but no "
+            + $"IEventBinarySerializer is registered for '{resolvedType.FullName}'. Set "
+            + "StoreOptions.Events.DefaultBinarySerializer, or register one for this type with "
+            + $"StoreOptions.Events.UseBinarySerializer<{resolvedType.Name}>(...).");
+
+    /// <summary>
+    ///     Whether a failure raised while reading a row's body should be reported as an
+    ///     <see cref="Fisher.Exceptions.EventDeserializationFailureException" />.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Cancellation is the caller's, not the data's, and an already-classified failure keeps
+    ///         the sequence it was raised with rather than being wrapped a second time.
+    ///     </para>
+    ///     <para>
+    ///         <b><see cref="JasperFx.Events.Upcasting.UpcastingException" /> is excluded for the same
+    ///         reason <see cref="RequireBinarySerializer" />'s refusal is raised outside the guard
+    ///         entirely.</b> Upstream raises it in exactly two places, and both are contract refusals
+    ///         rather than data failures: an async-only transformation reached from a synchronous
+    ///         path, and a payload asked for an encoding it cannot supply — which is what Fisher's own
+    ///         "a raw-JSON transformation cannot read a <c>data_binary</c> body" refusal is. Those are
+    ///         misconfigurations of the whole transformation, so wrapping them would let
+    ///         <c>SkipSerializationErrors</c> — on by default — quarantine every event of that type in
+    ///         turn and bury the message that names the remedy. A transformation's <em>own</em>
+    ///         exception is not an <c>UpcastingException</c> and is still wrapped, which is the data
+    ///         failure the policy is for.
+    ///     </para>
+    /// </remarks>
+    private static bool IsBodyFailure(Exception e)
+        => e is not OperationCanceledException
+           and not JasperFx.Events.EventDeserializationFailureException
+           and not JasperFx.Events.Upcasting.UpcastingException;
 
     /// <summary>
     ///     Run the registered upcast transformation for this row's stored event type name, if there is
@@ -338,7 +385,16 @@ internal static class FisherEventsRowReader
         var dotNetTypeName = reader.IsDBNull(8) ? null : reader.GetString(8);
         var isArchived = reader.GetInt64(9) != 0;
 
-        var upcast = await TryUpcast(reader, ctx, slots, typeName, token).ConfigureAwait(false);
+        object? upcast;
+
+        try
+        {
+            upcast = await TryUpcast(reader, ctx, slots, typeName, token).ConfigureAwait(false);
+        }
+        catch (Exception e) when (IsBodyFailure(e))
+        {
+            throw new Fisher.Exceptions.EventDeserializationFailureException(seqId, typeName, e);
+        }
 
         var resolvedType = upcast?.GetType() ?? ctx.EventGraph.ResolveEventType(dotNetTypeName);
 
@@ -353,9 +409,32 @@ internal static class FisherEventsRowReader
         // never by the event type's current setting (fisher#93). That is what makes marking a type
         // [BinaryEvent] an in-place change: rows written before the change still carry JSON, and this
         // still reads them. A dispatch on the type would misread every one of them instead.
-        var data = upcast ?? (reader.IsDBNull(slots.BinaryDataIdx)
-            ? ctx.Serializer.FromJson(resolvedType, reader.GetString(4))
-            : DeserializeBinary(reader, slots, mapping, resolvedType));
+        //
+        // The binary serializer is resolved BEFORE the guard below and its refusal is left to
+        // propagate — see RequireBinarySerializer for why a missing registration must not be
+        // quarantinable.
+        var binarySerializer = upcast is not null || reader.IsDBNull(slots.BinaryDataIdx)
+            ? null
+            : RequireBinarySerializer(mapping, resolvedType);
+
+        object data;
+
+        try
+        {
+            // fisher#308. A body that will not parse is the one failure the daemon's
+            // SkipSerializationErrors policy governs, and it had nothing to catch: a raw JsonException
+            // escaped the loader, was wrapped in EventLoaderException after the resilient loader's
+            // retries, and paused the shard as ShardFailureCategory.Other with no dead letter. Done
+            // here rather than at each caller because this is the single hydration point every read
+            // path converges on — the same argument the upcasting hook makes one line above.
+            data = upcast ?? (binarySerializer is null
+                ? ctx.Serializer.FromJson(resolvedType, reader.GetString(4))
+                : binarySerializer.Deserialize(resolvedType, (byte[])reader.GetValue(slots.BinaryDataIdx)));
+        }
+        catch (Exception e) when (IsBodyFailure(e))
+        {
+            throw new Fisher.Exceptions.EventDeserializationFailureException(seqId, typeName, e);
+        }
 
         var @event = mapping.Wrap(data);
 

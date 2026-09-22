@@ -707,6 +707,34 @@ Six things that are decisions rather than mechanics:
   It honours `SkipUnknownEvents` and otherwise throws `UnknownEventTypeException`, which implements
   JasperFx's `IEventFailureContext` so the shard failure can be classified without knowing Fisher's
   exception types.
+  ⚠️ **The serialization half of that was missing entirely, and the flag governing it defaulted to
+  true** (fisher#308). Fisher raised no `EventDeserializationFailureException` anywhere, so
+  `SkipSerializationErrors` had nothing to catch: a body that would not parse escaped the loader as a
+  bare `JsonException`, `ResilientEventLoader` wrapped it in `EventLoaderException` after its retries,
+  and the shard paused as `ShardFailureCategory.Other` with no dead letter — a documented policy that
+  was silently a no-op. `Fisher.Exceptions.EventDeserializationFailureException` subclasses the shared
+  type (so the category, the sequence and `ToDeadLetterEvent` are the base's) and is raised from
+  **`FisherEventsRowReader.ReadEventCore`**, the single hydration point every read path converges on —
+  the same argument the upcasting hook makes one line above, and where Marten puts it too. Only the
+  loader acts on the policy; everywhere else the gain is that the exception names the sequence and the
+  event type instead of being whatever the serializer threw.
+  - ⚠️ **A missing `IEventBinarySerializer` is resolved OUTSIDE that guard, deliberately.** It is a
+    misconfiguration of the whole store rather than one unreadable row, so making it an
+    `EventDeserializationFailureException` would let `SkipSerializationErrors` — on by default — turn
+    every binary event in the store into a dead letter and bury the one thing worth saying.
+    `RequireBinarySerializer` exists to be callable before the try; moving it back inside fails two
+    tests, which is how the placement was verified.
+  - ⚠️ **`UpcastingException` is excluded from the wrap for the same reason.** Upstream raises it in
+    exactly two places and both are contract refusals rather than data failures — an async-only
+    transformation reached synchronously, and a payload asked for an encoding it cannot supply, which
+    is what Fisher's "a raw-JSON transformation cannot read a `data_binary` body" refusal is. Wrapping
+    them was caught by `upcasting.a_raw_json_upcast_over_a_binary_body_is_refused_by_name`, which is
+    the pre-existing guard for that refusal. A transformation's *own* exception is not an
+    `UpcastingException` and is still wrapped, which is the failure the policy is actually for.
+  - **Corrupting a body for a test means writing something that is not JSON at all.** A well-formed
+    object with a mistyped member is liable to deserialize to a default-valued event instead of
+    failing, because the serializer's naming policy decides which keys are read — which is how the
+    first version of these tests passed against a store that raised nothing.
   **`Weasel.Storage.EventLoaderBase` (weasel#566) is not adopted yet, and that is a judgement rather
   than an oversight.** The base is well shaped for Fisher — the paging, skip accounting, ceiling
   calculation and cancellation translation are all there behind an `IEventPagingDialect` seam, and it
