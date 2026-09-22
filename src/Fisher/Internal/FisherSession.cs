@@ -1572,9 +1572,19 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     ///     Where an inline projection writes its snapshot for this tenant.
     /// </summary>
     /// <remarks>
-    ///     The document table is created on demand here rather than at configuration time: a snapshot
-    ///     type is registered through <c>Projections.Snapshot&lt;T&gt;</c>, which may run after the
-    ///     schema was last applied.
+    ///     <para>
+    ///         The document table is created on demand here rather than at configuration time: a
+    ///         snapshot type is registered through <c>Projections.Snapshot&lt;T&gt;</c>, which may run
+    ///         after the schema was last applied.
+    ///     </para>
+    ///     <para>
+    ///         Not for an enlisted session — the same rule as <see cref="EnsureDocumentTablesAsync" />,
+    ///         for the same reason: creating the table runs on the database's own connection, which
+    ///         blocks against the write lock the caller's transaction is holding until the busy timeout
+    ///         and then fails as "database is locked". This seam used to bypass that branch, so an
+    ///         enlisted save on a store with any inline projection deadlocked against itself for thirty
+    ///         seconds (fisher#300). The table is asserted on the caller's connection instead.
+    ///     </para>
     /// </remarks>
     async Task<IProjectionStorage<TDoc, TId>>
         JasperFx.Events.IStorageOperations.FetchProjectionStorageAsync<TDoc, TId>(
@@ -1588,7 +1598,14 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             return registered;
         }
 
-        await FisherDatabase.EnsureDocumentTableAsync(typeof(TDoc), cancellationToken).ConfigureAwait(false);
+        if (EnlistedTransaction is not null)
+        {
+            await AssertDocumentTableExistsAsync(typeof(TDoc), cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await FisherDatabase.EnsureDocumentTableAsync(typeof(TDoc), cancellationToken).ConfigureAwait(false);
+        }
 
         var storage = (Weasel.Storage.IDocumentStorage<TDoc, TId>)StorageFor<TDoc>();
 

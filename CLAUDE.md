@@ -1880,7 +1880,13 @@ Five decisions in the enlisted path, each of which would be silently wrong the o
   this; **Weasel's command builder compiles a detached command**, which is what every Fisher statement
   is. `FisherSession.ConfigureCommandAsync` is the one place that sets it, and routing the four
   command sites through it is what keeps that true. Verified by removing the line: six of
-  `session_options`' tests fail with that exact message.
+  `session_options`' tests fail with that exact message. **The pre-projection version read was the
+  exception** (fisher#300): `AppendPlanner.AssignVersionsAheadOfProjectionsAsync` takes its
+  transaction as a parameter rather than going through `ConfigureCommandAsync`, and was handed
+  `null` — right for an owned session, which has not opened its transaction yet, and fatal for an
+  enlisted one, whose connection already has the caller's pending. Every enlisted test passed because
+  none of their stores registered a projection. It now joins `EnlistedTransaction`; pinned by
+  `an_enlisted_session_still_appends_when_an_inline_projection_is_registered`, whose store has one.
 - **No resilience pipeline.** An ordinary commit can be retried after `SQLITE_BUSY` because the failed
   attempt's transaction rolled back with it. An enlisted one did not — it is the caller's and still
   open — so a retry would write everything the first attempt already wrote a second time. The busy
@@ -1893,6 +1899,10 @@ Five decisions in the enlisted path, each of which would be silently wrong the o
   against itself, presenting after thirty seconds as `database is locked`. A missing table throws by
   name instead. The existence check runs on the *caller's* connection, so a table created inside the
   same transaction counts, which is what makes "your tables and Fisher's in one transaction" work.
+  **The projection-storage seam bypassed this** (fisher#300):
+  `IStorageOperations.FetchProjectionStorageAsync`, which the inline projection engine calls from
+  `SaveChangesAsync`, went straight to `EnsureDocumentTableAsync` — the deadlock above, verbatim, for
+  any enlisted save on a store with an inline projection registered. It takes the same branch now.
 - **A deferred caller transaction weakens the append guard, and Fisher cannot warn about it.** The
   append planner reads a stream's version and writes version+1 on the strength of holding the write
   lock. SQLite still refuses the second writer, so there is no lost update; what changes is that the

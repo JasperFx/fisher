@@ -1,6 +1,9 @@
 using System.Data;
 using Fisher.Linq;
+using Fisher.Projections;
 using JasperFx;
+using JasperFx.Events;
+using JasperFx.Events.Projections;
 using Microsoft.Data.Sqlite;
 
 namespace Fisher.Tests.Configuration;
@@ -405,6 +408,80 @@ public class session_options : IAsyncLifetime
         (await ScalarAsync("select count(*) from fi_doc_quarry")).ShouldBe(1L);
     }
 
+    /// <summary>
+    ///     fisher#300 — an enlisted session on a store that has an inline projection registered.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         With any inline projection registered, <c>SaveChangesAsync</c> reads each stream's
+    ///         version ahead of the projections so they fold events that already know their versions —
+    ///         deliberately outside the write lock, because an owned session has not opened its
+    ///         transaction yet. An enlisted session is already inside the caller's transaction, on the
+    ///         caller's connection, and that read was the one command not going through
+    ///         <c>ConfigureCommandAsync</c>: it took its transaction as a parameter and was handed
+    ///         <c>null</c>, so the provider refused it with exactly the message the first bullet of the
+    ///         enlisted path documents. Every other enlisted test in this class passed, because none of
+    ///         their stores has a projection — which is why this one builds its own.
+    ///     </para>
+    ///     <para>
+    ///         The projection matches the event on purpose, so the assertion is stronger than "it no
+    ///         longer throws": the folded document goes into the caller's transaction with the event,
+    ///         and nobody outside sees either until the caller commits.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task an_enlisted_session_still_appends_when_an_inline_projection_is_registered()
+    {
+        using var database = TemporaryDatabase.Create("session-options-inline");
+
+        await using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = database.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Schema.For<Angler>();
+            // The projection's document is registered up front, as inline_event_projections does:
+            // an enlisted session will not create a missing table on demand, and that refusal is
+            // not what this test is about.
+            options.Schema.For<CatchLog>();
+            options.Projections.Add(new CatchLogProjection(), ProjectionLifecycle.Inline);
+        });
+
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
+
+        var id = Guid.NewGuid();
+
+        await using var connection = new SqliteConnection(database.ConnectionString);
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable, TestContext.Current.CancellationToken);
+
+        await using (var session = store.OpenSession(SessionOptions.ForTransaction(transaction)))
+        {
+            session.Events.StartStream<Angler>(id, new AnglerLanded("Trout"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        // The event and the document the projection folded from it are both in the caller's
+        // transaction, and only there.
+        (await ScalarAsync(database, "select count(*) from fi_events")).ShouldBe(0L);
+        (await ScalarAsync(database, "select count(*) from fi_doc_catchlog")).ShouldBe(0L);
+
+        await transaction.CommitAsync(TestContext.Current.CancellationToken);
+
+        (await ScalarAsync(database, "select count(*) from fi_events")).ShouldBe(1L);
+        (await ScalarAsync(database, "select count(*) from fi_doc_catchlog")).ShouldBe(1L);
+        (await ScalarAsync(database, "select version from fi_streams")).ShouldBe(1L);
+    }
+
+    private static async Task<object?> ScalarAsync(TemporaryDatabase database, string sql)
+    {
+        await using var connection = new SqliteConnection(database.ConnectionString);
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return await command.ExecuteScalarAsync(TestContext.Current.CancellationToken);
+    }
+
     public record AnglerLanded(string Species);
 
     public class Angler
@@ -422,4 +499,26 @@ public class session_options : IAsyncLifetime
         public Guid Id { get; set; }
         public string Species { get; set; } = string.Empty;
     }
+}
+
+/// <summary>
+///     The inline projection <c>an_enlisted_session_still_appends_when_an_inline_projection_is_registered</c>
+///     registers — the only thing that distinguishes its store from the fixture's.
+/// </summary>
+public sealed class CatchLogProjection : SingleStreamProjection<CatchLog, Guid>
+{
+    public CatchLogProjection()
+    {
+        Name = "CatchLog";
+        IncludeType<session_options.AnglerLanded>();
+    }
+
+    public override CatchLog Evolve(CatchLog? snapshot, Guid id, IEvent e)
+        => new() { Id = id, Landed = (snapshot?.Landed ?? 0) + 1 };
+}
+
+public class CatchLog
+{
+    public Guid Id { get; set; }
+    public int Landed { get; set; }
 }
