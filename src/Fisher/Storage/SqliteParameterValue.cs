@@ -83,6 +83,37 @@ internal static class SqliteParameterValue
         };
 
     /// <summary>
+    ///     The one conversion above that the LINQ path needs too — <see cref="decimal" /> to
+    ///     <see cref="double" /> — applied where a query binds a caller's value.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Narrower than <see cref="ToDatabaseValue" /> on purpose.</b> A LINQ value has already
+    ///         been through its member's <c>ConvertValue</c>, which renders a Guid, a timestamp, an enum
+    ///         and a bool in the exact form the stored member holds — so running the full raw-SQL
+    ///         conversion over it would convert a second time and, for a timestamp, would re-render text
+    ///         that <c>TimestampMember</c> had already normalised. <see cref="decimal" /> is the one
+    ///         type no member seam handles, because it needs no *encoding* decision: it is stored as an
+    ///         ordinary JSON number and the whole problem is that the provider binds the CLR type as
+    ///         TEXT.
+    ///     </para>
+    ///     <para>
+    ///         <b>Applied at the binding site rather than in <c>QueryableMember.ConvertValue</c>, and
+    ///         that placement is the fix rather than an implementation detail</b> (fisher#304). Four
+    ///         separate producers hand a value to a comparison — the member seam, the method-transform
+    ///         locator, the arithmetic locator and <c>GroupProjection</c>'s <c>HAVING</c> — and only the
+    ///         first has a member to ask. Converting in the member would have left the other three
+    ///         silently wrong, which is the shape fisher#51 and fisher#17 both record for the implicit
+    ///         filters: a per-caller conversion is one the next caller forgets.
+    ///     </para>
+    ///     <para>
+    ///         Idempotent, so a caller that has already converted loses nothing by passing through it.
+    ///     </para>
+    /// </remarks>
+    public static object? NormalizeDecimal(object? value)
+        => value is decimal money ? (double)money : value;
+
+    /// <summary>
     ///     A <see cref="DateTime" /> carries no offset, so one has to be assumed.
     /// </summary>
     /// <remarks>

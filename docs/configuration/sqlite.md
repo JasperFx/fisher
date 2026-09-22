@@ -163,3 +163,27 @@ soft-delete and metadata range operators compare as text with no `strftime` wrap
 A `DateTimeOffset` *inside a document* is different: it is whatever System.Text.Json wrote, with
 trimmed fractional zeros and the original offset, which is not order-preserving. That one is compared
 through SQLite's date parser instead — see [Supported LINQ Operators](/documents/querying/linq/operators#timestamps).
+
+## `decimal` is a JSON number, and it compares as one
+
+SQLite has no decimal type. A `decimal` member is stored as an ordinary JSON number, and
+`json_extract` hands it back as REAL — so a predicate against one is a floating-point comparison, and
+`SumAsync`/`AverageAsync` over a `decimal` member are accurate to `double` precision rather than to
+decimal precision. A duplicated `decimal` field is declared REAL for the same reason.
+
+You do not have to do anything about this. Fisher normalises the comparison value wherever a query
+binds one, so `Where(x => x.Total > 100m)`, `IsOneOf`, `Contains`, `HAVING` and arithmetic on a
+`decimal` member all compare numerically.
+
+::: warning
+Do not reach around it. Microsoft.Data.Sqlite binds a raw `decimal` parameter as **TEXT**, and SQLite
+orders every numeric value below every TEXT one — so a hand-written comparison against
+`json_extract(data, '$.total')` with an unconverted `decimal` matches **nothing** for `>` and `=`,
+and **everything** for `<`, with no error either way. That is what
+[raw SQL](/documents/querying/raw-sql) converts for you, and it is worth knowing if you ever build a
+statement outside Fisher.
+
+A *declared column* is rescued by SQLite's affinity rules, which is why a duplicated `decimal` field
+behaves correctly even when bound raw. There is no affinity inside `json_extract`, so an undeclared
+member is not.
+:::

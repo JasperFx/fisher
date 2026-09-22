@@ -1,3 +1,4 @@
+using Fisher.Storage;
 using Weasel.Core;
 using Weasel.Core.SqlGeneration;
 
@@ -21,10 +22,11 @@ namespace Fisher.Linq.SqlGeneration;
 ///     </para>
 ///     <para>
 ///         A <see cref="decimal" /> operand is normalised to <see cref="double" /> before binding,
-///         because Microsoft.Data.Sqlite binds a raw decimal as TEXT — see
-///         <c>SqliteParameterValue</c>, which makes the identical conversion for raw SQL and records
-///         why: <c>json_extract</c> yields REAL for a JSON number and there is no column affinity
-///         inside an expression to rescue the comparison.
+///         because Microsoft.Data.Sqlite binds a raw decimal as TEXT:
+///         <c>json_extract</c> yields REAL for a JSON number and there is no column affinity inside an
+///         expression to rescue the comparison. This filter carried its own copy of that conversion
+///         until fisher#304 found <see cref="ComparisonFilter" /> beside it had never learned; both now
+///         call <see cref="Storage.SqliteParameterValue.NormalizeDecimal" />.
 ///     </para>
 /// </remarks>
 internal class ModuloFilter : ISqlFragment
@@ -37,9 +39,9 @@ internal class ModuloFilter : ISqlFragment
     public ModuloFilter(string locator, object divisor, string op, object operand)
     {
         _locator = locator;
-        _divisor = Normalize(divisor);
+        _divisor = SqliteParameterValue.NormalizeDecimal(divisor)!;
         _op = op;
-        _operand = Normalize(operand);
+        _operand = SqliteParameterValue.NormalizeDecimal(operand)!;
     }
 
     public void Apply(ICommandBuilder builder)
@@ -53,7 +55,4 @@ internal class ModuloFilter : ISqlFragment
         builder.Append(' ');
         builder.AppendParameter(_operand);
     }
-
-    private static object Normalize(object value)
-        => value is decimal number ? (double)number : value;
 }

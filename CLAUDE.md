@@ -4689,7 +4689,7 @@ REAL, a string as TEXT and `true`/`false` as INTEGER 1/0 — unlike `JSON_VALUE`
 `SupportsReturning` machinery has no analogue; `TypedLocator` and `RawLocator` are the same string for
 every member except a timestamp, which is the one case that needs wrapping.
 
-Five SQLite decisions that are easy to get wrong and fail silently:
+Six SQLite decisions that are easy to get wrong and fail silently:
 
 - **String predicates use `instr`/`substr`, not `LIKE`.** SQLite's `LIKE` is case-*insensitive* for
   ASCII while `=` is case-*sensitive*, so a LIKE-based `Contains("frodo")` matches `"Frodo"` on data
@@ -4727,6 +4727,29 @@ Five SQLite decisions that are easy to get wrong and fail silently:
   `Enumerable.Contains`, so `EnumerableContains` matches on the call's shape rather than its declaring
   type. The span operand cannot be evaluated by compiling a lambda either — `ReadOnlySpan<T>` is a ref
   struct and cannot be returned as `object` — so it is unwrapped back to the array first.
+- **A `decimal` comparison value is normalised to `double` at the point it is bound** (fisher#304).
+  Microsoft.Data.Sqlite binds a raw `decimal` as TEXT and `json_extract` yields REAL for a JSON
+  number; SQLite orders every numeric value below every TEXT one, so `>` and `==` matched **nothing**
+  and `<` matched **everything** — no exception, and a plausible result set in both directions. Money
+  is the overwhelmingly common `decimal`, so `Where(x => x.Total > limit)` silently returning nothing
+  is the dangerous half.
+  - **The conversion is in `ComparisonFilter` and `WhereInFilter` rather than in
+    `QueryableMember.ConvertValue`, and that placement IS the fix.** Four producers build a comparison
+    — the member seam, the method-transform locator, the arithmetic locator and `GroupProjection`'s
+    `HAVING` — and only the first has a member to ask, so a conversion made in the member would have
+    left the other three wrong. Same rule fisher#51 and fisher#17 record for the implicit filters: a
+    per-caller conversion is one the next caller forgets. `SqliteParameterValue.NormalizeDecimal` is
+    the one named rule; `ModuloFilter` had carried a private copy of it since fisher#161 and now calls
+    it too.
+  - **A *duplicated* decimal compares correctly either way**, because the generated column is declared
+    REAL and the column's affinity coerces a TEXT-bound parameter — there is no affinity inside
+    `json_extract`, which is why the undeclared member is the broken case and the declared one is not.
+    Pinned by `a_duplicated_decimal_column_compares_as_a_number` so a reader does not mistake the
+    asymmetry for a flaw in the fix.
+  - **Ordering was never affected** — it binds no value at all — and the raw-SQL twin has been right
+    since fisher#34 (`SqliteParameterValue`, which documents this exact conversion). Two of Fisher's
+    three decimal-binding paths were correct and documented while the one a caller reaches first was
+    not; that is the shape rather than the exception.
 
 The provider takes both the column list and the materializer from the **query-only** closed-shape
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,
