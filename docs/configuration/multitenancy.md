@@ -164,6 +164,39 @@ opening a session — has to answer without I/O, which the directory convention 
 Enumerating every tenant is a startup and daemon concern, where an `await` is available.
 :::
 
+### Tenant ids under the directory convention
+
+Because the directory convention turns a tenant id into a **file name**, Fisher constrains what an id
+may be. Letters, digits, `.`, `_` and `-`, at most 200 characters:
+
+```cs
+store.LightweightSession("acme");        // fine
+store.LightweightSession("acme-co");     // fine
+store.LightweightSession("acme.co");     // fine
+
+store.LightweightSession("../escape");   // ArgumentException
+store.LightweightSession("/var/tmp/x");  // ArgumentException
+store.LightweightSession("has space");   // ArgumentException
+store.LightweightSession("CON");         // ArgumentException — a device name on Windows
+```
+
+::: warning
+**An id is refused, never cleaned up.** Stripping the unsafe characters would map two different tenant
+ids onto one database file, which is precisely the failure database-per-tenant exists to make
+impossible — and it would be silent. If your tenant ids come from somewhere that allows more than this
+(a subdomain, a header, a customer-supplied name), map them to safe ids yourself and keep the mapping.
+:::
+
+This matters most where it is easiest to miss: **any tenant id resolves** under this convention, so
+there is no registration step acting as a gate, and framework tenant-id detection commonly forwards a
+header, route value or subdomain straight into `ForTenant(...)`. `MultiTenantedDatabases(...)`'s
+`InDirectory(...)` convention applies the same rule, so an id cannot be accepted in configuration and
+refused at runtime.
+
+`MultiTenantedDatabasesFrom(...)` with your own `ITenantSource`, and the tenant registry below, build
+connection strings rather than paths — so this rule does not apply to them, and validating what you
+put in a connection string is yours.
+
 The three supplied sources differ deliberately:
 
 | Source | Unknown tenant id | The set is |
