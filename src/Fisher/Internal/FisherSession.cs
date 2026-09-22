@@ -489,6 +489,23 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
 
     private List<ITransactionParticipant>? _participants;
 
+    /// <summary>
+    ///     True when a <c>FisherProjectionBatch</c> owns this session's participants rather than the
+    ///     session itself (fisher#305).
+    /// </summary>
+    /// <remarks>
+    ///     <b>Disposing a session is not the end of its unit of work when a batch owns it, and that is
+    ///     upstream's shape rather than Fisher's.</b> <c>ProjectionExecution.buildBatchWithNoSkippingAsync</c>
+    ///     takes a session out of the batch with <c>await using</c> and disposes it as soon as the
+    ///     projection has been applied — while the batch it came from lives on to commit, and is the
+    ///     thing that will later call the participants' <c>BeforeCommitAsync</c>. So releasing
+    ///     participants on session disposal would destroy the EF-backed projection's context between
+    ///     the apply and the write, and the entities would silently never be saved. Verified: it makes
+    ///     <c>an_event_projection_writes_to_ef_and_fisher_in_one_transaction</c> report 0 rows where it
+    ///     expects 2, with no error anywhere.
+    /// </remarks>
+    internal bool ParticipantsOwnedByBatch { get; set; }
+
     /// <inheritdoc cref="IDocumentSession.AddTransactionParticipant" />
     public void AddTransactionParticipant(ITransactionParticipant participant)
     {
@@ -1872,7 +1889,102 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             return;
         }
 
+        if (!ParticipantsOwnedByBatch)
+        {
+            await DisposeParticipantsAsync().ConfigureAwait(false);
+        }
+
         await _lifetime.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Release every participant this session owns, before the connection they may still be
+    ///     holding something against (fisher#305).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>This is the inline half of what <c>FisherProjectionBatch.DisposeAsync</c> does for the
+    ///         daemon</b>, and it was missing. An EF-backed projection creates a <c>DbContext</c> per
+    ///         unit of work and enlists it, and the context cannot dispose itself — it has to outlive
+    ///         the apply that created it and survive a retried <c>SQLITE_BUSY</c>. The batch drains its
+    ///         participants and so releases them; a session registered <c>Inline</c> has no batch, so
+    ///         nothing did. The context leaked, silently, per commit.
+    ///     </para>
+    ///     <para>
+    ///         <b>Ownership is the participant's to decide, not this method's.</b>
+    ///         <c>DbContextTransactionParticipant</c> disposes its context only in the mode where Fisher
+    ///         created it for a batch; a context handed over from DI belongs to its scope and is left
+    ///         alone. That is why this disposes the <em>participant</em> rather than reaching for
+    ///         anything it holds.
+    ///     </para>
+    ///     <para>
+    ///         Participants are <b>not</b> cleared after a commit, so a session that commits several
+    ///         times with an inline EF-backed projection registered accumulates one context per commit
+    ///         until it is disposed. That is bounded by the session's lifetime — a scoped session is one
+    ///         request — and clearing them instead would be a behaviour change for a caller who enlists
+    ///         a participant once and commits twice, so it is recorded here and filed rather than
+    ///         changed in passing (fisher#319).
+    ///     </para>
+    ///     <para>
+    ///         <c>FisherProjectionBatch</c> calls this directly at the end of the batch, bypassing
+    ///         <see cref="ParticipantsOwnedByBatch" /> — see that flag for why session disposal is the
+    ///         wrong moment for a batch's session. Taking the list and nulling it is what makes a
+    ///         second call a no-op, so the two owners cannot dispose the same participant twice.
+    ///     </para>
+    /// </remarks>
+    internal async ValueTask DisposeParticipantsAsync()
+    {
+        if (_participants is not { Count: > 0 })
+        {
+            return;
+        }
+
+        var participants = _participants;
+        _participants = null;
+
+        foreach (var participant in participants)
+        {
+            switch (participant)
+            {
+                case IAsyncDisposable asyncDisposable:
+                    await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+                    break;
+
+                case IDisposable disposable:
+                    disposable.Dispose();
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     The synchronous half, which can only reach a participant that offers
+    ///     <see cref="IDisposable" />.
+    /// </summary>
+    /// <remarks>
+    ///     A participant that implements <see cref="IAsyncDisposable" /> alone is skipped rather than
+    ///     blocked on, and that is the same trade <see cref="Dispose" /> itself documents one level up:
+    ///     a type meant to be released on a synchronously-disposed container scope has to supply the
+    ///     synchronous form. Fisher's own <c>DbContextTransactionParticipant</c> supplies both for
+    ///     exactly this reason — <c>DbContext</c> does, so there is nothing to block on.
+    /// </remarks>
+    private void DisposeParticipants()
+    {
+        if (_participants is not { Count: > 0 })
+        {
+            return;
+        }
+
+        var participants = _participants;
+        _participants = null;
+
+        foreach (var participant in participants)
+        {
+            if (participant is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
     }
 
     /// <summary>
@@ -1894,6 +2006,11 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         if (_parent is not null)
         {
             return;
+        }
+
+        if (!ParticipantsOwnedByBatch)
+        {
+            DisposeParticipants();
         }
 
         _lifetime.Dispose();

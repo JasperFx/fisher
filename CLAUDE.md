@@ -5705,6 +5705,40 @@ factory)`, over `Projections.StorageProviders` in the core.
   is created per batch and cannot dispose itself — it has to outlive the apply that created it *and*
   survive a retried commit. Disposing at the batch boundary covers the failed batch too, which is the
   case that would otherwise leak a context per attempt behind a persistently failing shard.
+  - ⚠️ **And so does the session, for the `Inline` lifecycle, which had no owner at all** (fisher#305,
+    the marten#5457 class reached from the other side). fisher#50 gave the async path a drain and
+    fisher#305 was filed to *confirm* it; the confirmation found the async path correct and the inline
+    path leaking a context per `SaveChangesAsync`, because an inline projection runs inside
+    `FisherSession.SaveChangesAsync` and there is no `FisherProjectionBatch` in that story. The
+    interesting part is which fix is wrong:
+  - ⚠️ **Releasing participants on session disposal is the obvious fix and it silently breaks the
+    daemon.** `ProjectionExecution.buildBatchWithNoSkippingAsync` takes a session out of the batch with
+    `await using` and disposes it *as soon as the projection has been applied*, while the batch lives
+    on to run the participants' `BeforeCommitAsync` — so a session-disposal drain destroys the context
+    between the apply and the write and the entities are never saved, with no error anywhere.
+    `FisherSession.ParticipantsOwnedByBatch`, set by `FisherProjectionBatch.SessionForTenant`, is what
+    separates the two owners; the batch calls the session's own drain rather than looping itself, so
+    the release lives in one place and taking-and-nulling the list makes a second call a no-op.
+    `an_async_event_projection_disposes_the_context_it_created` asserts the rows landed as well as the
+    counts, which is what makes it discriminating — the counts alone are satisfied by the broken fix.
+  - **Construction counted against disposal, not backends counted in the database.** marten#5466's
+    choice, and the main thing worth carrying over: the reported symptom is a leaked connection per
+    batch, which surfaces only when the context owns its connection, where the defect underneath pins
+    deterministically with no pool timing and no sampling. Every test also asserts a context *was*
+    built, or it passes vacuously against a store that created none — Marten's first attempt counted
+    connections, passed on unfixed master and proved nothing.
+  - **Ownership stays the participant's to decide.** `DbContextTransactionParticipant` disposes its
+    context only in the `MovingOntoFishersConnection` mode; a context from DI belongs to its scope. So
+    both drains dispose the *participant*, never anything it holds — which is why a blunt "dispose
+    everything the session saw" fix would have been wrong in the other direction.
+  - **The participant gained `IDisposable` beside `IAsyncDisposable`**, because `AddFisher` registers
+    sessions scoped and a synchronously-disposed container scope can only reach the sync form —
+    fisher#20's argument for `IDocumentStore`, one type over. `DbContext` supplies both, so nothing
+    blocks.
+  - **Participants are not cleared after a commit**, so a session committing N times with an inline
+    EF-backed projection holds N contexts until disposal. Bounded by the session's lifetime (a scoped
+    session is one request) and left alone deliberately: clearing them would change behaviour for a
+    caller who enlists once and commits twice. Filed as fisher#319 rather than changed in passing.
 - **A registered type is deliberately not mapped**, so registering the projection skips its mapping
   and the type gets no `fi_doc_*` table. That is what makes registration-before-projection
   load-bearing, and it is checked rather than documented — the same "this line has to come first"
