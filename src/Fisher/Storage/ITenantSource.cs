@@ -233,17 +233,50 @@ public sealed class InMemoryTenantSource : ITenantSource
 ///     A tenant that exists but has been suspended.
 /// </summary>
 /// <remarks>
-///     Distinct from <see cref="UnknownTenantException" /> on purpose: "this tenant is switched off" and
-///     "there is no such tenant" are different operational situations, and an application handling one
-///     should not have to guess which it got.
+///     <para>
+///         Distinct from <see cref="UnknownTenantException" /> on purpose: "this tenant is switched
+///         off" and "there is no such tenant" are different operational situations, and an application
+///         handling one should not have to guess which it got.
+///     </para>
+///     <para>
+///         <b>Subclasses the shared <see cref="JasperFx.MultiTenancy.DisabledTenantException" /></b>
+///         (jasperfx#875 / #882, in JasperFx 2.74.0) — and, like fisher#307's archiving exception, the
+///         lift took <em>this</em> type as its canonical shape. Marten's and Polecat's master-table
+///         tenancies both report a disabled row as <c>UnknownTenantIdException</c>, so the operator who
+///         just disabled a tenant reads "Unknown tenant id" about one that is still there and was
+///         turned off on purpose.
+///     </para>
+///     <para>
+///         <b>The shared type derives from <see cref="JasperFx.MultiTenancy.UnknownTenantIdException" />,
+///         so this now does too — and that is a widening rather than a change of meaning.</b> A
+///         disabled tenant still refuses the session; it refuses it for a reason the store can name. An
+///         existing <c>catch (UnknownTenantIdException)</c> starts catching it, which is the upstream
+///         intent, and the distinction this type exists for is untouched: Fisher's own
+///         <see cref="UnknownTenantException" /> is a different class, so nothing that told the two
+///         apart stops being able to.
+///     </para>
+///     <para>
+///         Through the protected message-overriding constructor, so the canonical wording cannot
+///         silently move Fisher's — the discipline <c>ExistingStreamIdCollisionException</c> records.
+///         The two do differ, and deliberately: Fisher's names the tenant's <em>database file</em> and
+///         says it is untouched, which is the thing an operator actually wants to know about a store
+///         whose tenants are files and which never deletes one.
+///     </para>
+///     <para>
+///         ⚠️ <b>The name still collides.</b> A file importing both <c>Fisher.Storage</c> and
+///         <c>JasperFx.MultiTenancy</c> gets CS0104 and has to qualify — subclassing does not fix
+///         that, and could not. Kept in <c>Fisher.Storage</c> beside
+///         <see cref="UnknownTenantException" /> rather than moved to <c>Fisher.Exceptions</c>:
+///         the two answer the same question and should be found in the same place, and moving either
+///         is a breaking change to a <c>using</c> for no behavioural gain (fisher#321).
+///     </para>
 /// </remarks>
-public class DisabledTenantException : Exception
+public class DisabledTenantException : JasperFx.MultiTenancy.DisabledTenantException
 {
     internal DisabledTenantException(string tenantId)
         : base($"Tenant '{tenantId}' is registered but suspended, so this store will not open a session "
                + "for it. Resume it through the ITenantSource that owns it. Its database file is "
-               + "untouched — Fisher never deletes a tenant's data.")
-        => TenantId = tenantId;
-
-    public string TenantId { get; }
+               + "untouched — Fisher never deletes a tenant's data.", tenantId)
+    {
+    }
 }
