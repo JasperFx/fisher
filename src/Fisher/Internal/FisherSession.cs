@@ -831,8 +831,8 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
                 // asked for the histogram, so an unwatched store does not even read the clock.
                 var waitedFrom = Options.OpenTelemetry.StartWriteLockWait();
 
-                await using var transaction = (SqliteTransaction)await connection
-                    .BeginTransactionAsync(SessionOptions.IsolationLevel, ct).ConfigureAwait(false);
+                await using var transaction = await BeginWriteTransactionAsync(connection, ct)
+                    .ConfigureAwait(false);
 
                 Options.OpenTelemetry.RecordWriteLockWait(
                     waitedFrom, Services.OpenTelemetryOptions.SessionHolder);
@@ -855,6 +855,47 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             await NotifyParticipantsOfCommitAsync(token).ConfigureAwait(false);
         }
 
+    }
+
+    /// <summary>
+    ///     <c>BEGIN IMMEDIATE</c>, recovering once from a connection that arrived carrying a native
+    ///     transaction nobody is tracking (fisher#311).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Defence in depth, not the fix.</b> The fix is
+    ///         <see cref="Sessions.OwnedConnectionLifetime" /> clearing the connection before it goes
+    ///         back to the pool, which is where the state comes from. This covers the other way in:
+    ///         attempt N of the resilience pipeline opens a transaction, fails, and its rollback on the
+    ///         way out hits the write lock — leaving <see cref="SqliteTransaction" /> marked complete
+    ///         while SQLite's transaction is still open, so attempt N+1's <c>BEGIN</c> fails. That is
+    ///         where fisher#311's stack pointed, inside this delegate.
+    ///     </para>
+    ///     <para>
+    ///         <b>Once, and only for this exact refusal.</b> A second failure is a real one and is
+    ///         raised: retrying a <c>BEGIN</c> in a loop would turn a genuinely stuck connection into a
+    ///         hang, and every other <c>SQLITE_ERROR</c> here means something this cannot fix.
+    ///         <c>SQLITE_BUSY</c> is not in scope at all — that one is transient, and
+    ///         <c>StoreOptions.ResiliencePipeline</c> around this delegate is what answers it.
+    ///     </para>
+    /// </remarks>
+    private async Task<SqliteTransaction> BeginWriteTransactionAsync(SqliteConnection connection,
+        CancellationToken token)
+    {
+        try
+        {
+            return (SqliteTransaction)await connection
+                .BeginTransactionAsync(SessionOptions.IsolationLevel, token).ConfigureAwait(false);
+        }
+        catch (SqliteException e) when (e.Message.Contains(
+                                            Sessions.StrayTransaction.WithinATransaction,
+                                            StringComparison.OrdinalIgnoreCase))
+        {
+            await Sessions.StrayTransaction.ClearAsync(connection, token).ConfigureAwait(false);
+
+            return (SqliteTransaction)await connection
+                .BeginTransactionAsync(SessionOptions.IsolationLevel, token).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

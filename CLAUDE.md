@@ -1937,6 +1937,47 @@ gets a write handle back; a genuine query-only type would cost a connection per 
 distinction the store does not make. Said on `IQuerySession` itself, and pinned by
 `a_query_session_is_the_same_session_type_narrowed` so that making it real is a deliberate change.
 
+### A stray native transaction, and why error 1 escapes everything
+
+`Internal/Sessions/StrayTransaction.cs` (fisher#311). A connection carrying a `BEGIN IMMEDIATE` that
+`SqliteTransaction` has lost track of hands the next caller
+`SQLite Error 1: 'cannot start a transaction within a transaction'`.
+
+⚠️ **`SQLITE_ERROR` (1) is not transient, and that is what makes this worth closing rather than
+retrying.** `FisherResilienceDefaults.IsTransient` declines it — correctly — so it escapes
+`SaveChangesAsync` **raw**, and a caller catching `DcbConcurrencyException` or `StreamLockedException`
+and retrying gets an unhandled exception instead of the failure they wrote the retry loop against.
+fisher#306's translation is gated on transience and deliberately does not reach this.
+
+- **The mechanism was confirmed before anything was fixed, and it reproduces deterministically.**
+  fisher#311 was one intermittent on one full-suite run, with two candidate mechanisms that wanted
+  *different* fixes, and 36 attempted reproductions in isolation had all come back clean.
+  `a_pooled_connection_carries_an_untracked_transaction_forward` settles it with no contention and no
+  timing: issue a raw `BEGIN IMMEDIATE`, dispose the connection, open another from the same pool, and
+  its `BeginTransactionAsync` throws exactly the reported exception. Microsoft.Data.Sqlite pools a
+  connection per connection string and returns it as it was left.
+- **The fix is at the source — `OwnedConnectionLifetime` clears the connection before the pool gets
+  it.** Only that lifetime, because only a connection Fisher opened is one Fisher returns;
+  `ExternalConnectionLifetime` disposing nothing is the whole point of it.
+- **Unconditional rather than gated on this session having opened a transaction.** The condition *is*
+  that the wrapper has lost track, so anything the session believes about its own transactions is
+  exactly what cannot be trusted. One in-process statement per session, not measurable against the
+  connection's own open and close — the suite's wall clock did not move.
+- **Asking SQLite is the only reliable probe**, since the wrapper is the thing that is wrong and
+  `sqlite3_get_autocommit()` has no SQL-level equivalent. `ROLLBACK` *is* the probe: it succeeds when
+  there was something to clear and refuses with "no transaction is active" when there was not, which
+  is the ordinary case and is swallowed.
+- **`FisherSession.BeginWriteTransactionAsync` is defence in depth, not the fix.** It covers the other
+  way in, which is where fisher#311's stack actually pointed: attempt N of the resilience pipeline
+  opens a transaction, fails, and its rollback on the way out hits the write lock — leaving the
+  wrapper marked complete while SQLite's transaction is still open. **Once, and only for that exact
+  refusal**: retrying a `BEGIN` in a loop would turn a stuck connection into a hang, and every other
+  `SQLITE_ERROR` here means something this cannot fix.
+- **Both regression tests plant the state with raw SQL rather than racing into it**, which is the only
+  honest shape — a test that waited for the race would be green whether the fix worked or not. Both
+  fail against the previous build; the premise test and `an_ordinary_unit_of_work_is_untouched` pass
+  either way, which is what they are for.
+
 ### Session tracking
 
 `DocumentTracking`, `SessionOptions.Tracking`, `IdentitySession()` / `DirtyTrackedSession()`, and the
