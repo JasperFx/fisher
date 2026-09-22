@@ -668,6 +668,8 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         // Inline projections run before the batch is taken, because applying one queues further
         // operations — the snapshot writes — that have to commit alongside the events that caused
         // them. Assigning event versions first is what lets a projection see them.
+        var participantsBeforeProjections = _participants?.Count ?? 0;
+
         if (streams.Length > 0)
         {
             await ApplyInlineProjectionsAsync(streams, token).ConfigureAwait(false);
@@ -811,6 +813,12 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
                 await listener.AfterCommitAsync(this, commit!, token).ConfigureAwait(false);
             }
         }
+
+        // Last, so a listener's AfterCommitAsync can still reach whatever a projection enlisted —
+        // an EF-backed projection's DbContext is the case, and its entities are only accepted in the
+        // participant's own AfterCommitAsync, which NotifyParticipantsOfCommitAsync has just run.
+        await ReleaseProjectionParticipantsAsync(participantsBeforeProjections, token)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -871,7 +879,70 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             // ITransactionParticipant.AfterCommitAsync.
             await NotifyParticipantsOfCommitAsync(token).ConfigureAwait(false);
         }
+    }
 
+    /// <summary>
+    ///     Release the participants that <see cref="ApplyInlineProjectionsAsync" /> enlisted for this
+    ///     unit of work, leaving anything the caller enlisted alone (fisher#319).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>An inline EF-backed projection builds a fresh <c>DbContext</c> on every
+    ///         <c>SaveChangesAsync</c></b>, because <c>EfCoreEventProjection.ApplyAsync</c> runs once per
+    ///         unit of work and cannot dispose what it creates — the context has to outlive the apply
+    ///         and survive a retried <c>SQLITE_BUSY</c>. fisher#305 gave that a disposal point at the
+    ///         end of the session; what it left is that a session committing N times holds N contexts
+    ///         until then, each of which is also invoked on every subsequent commit to save nothing.
+    ///     </para>
+    ///     <para>
+    ///         <b>Scoped to the projections' own window rather than clearing the list, and that is the
+    ///         whole design.</b> <c>IDocumentSession.AddTransactionParticipant</c> says "this unit of
+    ///         work's transaction", which argues for per-commit — but the implementation has always
+    ///         kept a caller's participant across commits, and a participant silently missing from the
+    ///         second commit is a worse failure than the one being fixed. Recording the count before
+    ///         the projections run and releasing only what they added leaves a hand-enlisted
+    ///         participant exactly as it was, so this is not a contract change at all.
+    ///     </para>
+    ///     <para>
+    ///         <b>Positional rather than by identity</b>, because participants are only ever appended
+    ///         and nothing removes one mid-commit — so the entries at and after the mark are precisely
+    ///         the ones the projections added. A guard against the list having been replaced underneath
+    ///         (which it is not, but disposal nulls it) keeps this from ever indexing past the end.
+    ///     </para>
+    ///     <para>
+    ///         <b>Runs after <see cref="NotifyParticipantsOfCommitAsync" />, and outside the resilience
+    ///         pipeline</b>, so a participant is told its write is durable before it is released and a
+    ///         retried <c>SQLITE_BUSY</c> cannot release one the next attempt still needs — fisher#12's
+    ///         rule, which is also why the mark is taken before the pipeline rather than inside it.
+    ///     </para>
+    ///     <para>
+    ///         Not reached for an enlisted session, which returns above: there is no commit for Fisher
+    ///         to have finished, and the caller's transaction may still use what was enlisted.
+    ///     </para>
+    /// </remarks>
+    private async Task ReleaseProjectionParticipantsAsync(int mark, CancellationToken token)
+    {
+        if (_participants is not { } participants || participants.Count <= mark)
+        {
+            return;
+        }
+
+        var added = participants.GetRange(mark, participants.Count - mark);
+        participants.RemoveRange(mark, participants.Count - mark);
+
+        foreach (var participant in added)
+        {
+            switch (participant)
+            {
+                case IAsyncDisposable asyncDisposable:
+                    await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+                    break;
+
+                case IDisposable disposable:
+                    disposable.Dispose();
+                    break;
+            }
+        }
     }
 
     /// <summary>

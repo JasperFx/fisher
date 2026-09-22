@@ -238,6 +238,91 @@ public class ef_core_context_lifetime : IAsyncLifetime
     }
 
     /// <summary>
+    ///     A session that commits several times does not hold a context per commit (fisher#319).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <c>EfCoreEventProjection.ApplyAsync</c> builds a fresh <c>DbContext</c> on every unit of
+    ///         work and cannot dispose it — it has to outlive the apply and survive a retried commit.
+    ///         fisher#305 gave that a disposal point at the end of the session; what was left is that a
+    ///         long-lived session accumulated one per commit, each of which was then also invoked on
+    ///         every subsequent commit to save nothing.
+    ///     </para>
+    ///     <para>
+    ///         <b>Asserted as "at most one alive at a time", not as a total.</b> Three commits build
+    ///         three contexts either way — the count that distinguishes a fix from a leak is how many
+    ///         are outstanding, and comparing created against disposed after each commit is the only
+    ///         form that says it.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task an_inline_projection_holds_one_context_per_commit_and_no_more()
+    {
+        await using var store = StoreWith(options =>
+        {
+            options.Schema.For<AuditNote>();
+            options.Projections.Add(new CountingAuditProjection(NewContext), ProjectionLifecycle.Inline);
+        });
+
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        await using (var session = store.LightweightSession())
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                session.Events.StartStream(Guid.NewGuid(), new MemberJoined($"Member{i}"));
+                await session.SaveChangesAsync(Token);
+
+                // Nothing outstanding between commits: the unit of work that built the context is the
+                // one that released it.
+                _counter.Disposed.ShouldBe(_counter.Created);
+            }
+        }
+
+        _counter.Created.ShouldBe(3);
+        _counter.Disposed.ShouldBe(3);
+    }
+
+    /// <summary>
+    ///     A participant the CALLER enlisted is not released by a commit.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         This is the half that keeps fisher#319 from being a contract change.
+    ///         <c>IDocumentSession.AddTransactionParticipant</c> says "this unit of work's transaction",
+    ///         which argues for per-commit release — but the implementation has always kept a caller's
+    ///         participant across commits, and one silently missing from the second commit is a worse
+    ///         failure than the accumulation being fixed.
+    ///     </para>
+    ///     <para>
+    ///         So the release is scoped to the window the inline projections ran in, not to the list.
+    ///         Asserted by committing twice and requiring the participant to have written both times.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_caller_enlisted_participant_survives_a_commit()
+    {
+        await using var store = StoreWith(options => options.Schema.For<AuditNote>());
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        var participant = new CountingParticipant();
+
+        await using (var session = store.LightweightSession())
+        {
+            session.AddTransactionParticipant(participant);
+
+            session.Store(new AuditNote { Id = Guid.NewGuid(), Name = "first" });
+            await session.SaveChangesAsync(Token);
+
+            session.Store(new AuditNote { Id = Guid.NewGuid(), Name = "second" });
+            await session.SaveChangesAsync(Token);
+        }
+
+        participant.BeforeCommits.ShouldBe(2);
+        participant.Disposals.ShouldBe(1);
+    }
+
+    /// <summary>
     ///     The ownership rule itself, asserted directly on the participant.
     /// </summary>
     /// <remarks>
@@ -388,4 +473,28 @@ public class ThrowingAuditProjection : EfCoreEventProjection<CountingTallyContex
     protected override Task ProjectAsync(IEvent @event, CountingTallyContext context,
         IDocumentOperations operations, CancellationToken token)
         => throw new InvalidOperationException("Deliberate failure from a projection under test.");
+}
+
+/// <summary>
+///     Counts what a caller-enlisted participant is asked to do, so fisher#319's scoping can be
+///     asserted without an EF context in the way.
+/// </summary>
+public class CountingParticipant : ITransactionParticipant, IAsyncDisposable
+{
+    public int BeforeCommits { get; private set; }
+
+    public int Disposals { get; private set; }
+
+    public Task BeforeCommitAsync(Microsoft.Data.Sqlite.SqliteConnection connection,
+        Microsoft.Data.Sqlite.SqliteTransaction transaction, CancellationToken token)
+    {
+        BeforeCommits++;
+        return Task.CompletedTask;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        Disposals++;
+        return ValueTask.CompletedTask;
+    }
 }
