@@ -497,18 +497,48 @@ public sealed class DynamicTenancy : ITenancy
 /// <summary>
 ///     A tenant this store has no database for.
 /// </summary>
-public class UnknownTenantException : Exception
+/// <remarks>
+///     <para>
+///         <b>Subclasses the shared <see cref="JasperFx.MultiTenancy.UnknownTenantIdException" /></b>
+///         (fisher#309). Marten, Polecat and Wolverine all throw that type for this condition, so a
+///         store-agnostic <c>catch</c> and a Wolverine
+///         <c>OnException&lt;UnknownTenantIdException&gt;()</c> policy — both matched with
+///         <c>ex is T</c> — worked on three stores and silently missed on Fisher. Subclassing rather
+///         than replacing is the compatible choice, exactly as
+///         <see cref="Fisher.Exceptions.ExistingStreamIdCollisionException" /> records: an existing
+///         <c>catch (UnknownTenantException)</c> keeps working and a catch on the shared type starts
+///         working.
+///     </para>
+///     <para>
+///         <b>The message is Fisher's and is kept by overriding <see cref="Exception.Message" />,
+///         not by a message-taking base constructor</b> — the shared type has none, which is the only
+///         reason this is not the usual protected-constructor shape. The wording is worth keeping: it
+///         is the most useful one in the stack, where the canonical text states the fact alone
+///         (<c>Unknown tenant id '{id}'</c>). jasperfx#874 asks the canonical message to gain a remedy
+///         and the known-tenant list, at which point this override can shrink to nothing and this type
+///         becomes a name.
+///     </para>
+///     <para>
+///         <see cref="JasperFx.MultiTenancy.UnknownTenantIdException.TenantId" /> comes from the base
+///         rather than being declared here — the shared type has carried it since 2.0.0-alpha.7 — so
+///         nothing about reading it from a <c>catch</c> block moved.
+///     </para>
+/// </remarks>
+public class UnknownTenantException : JasperFx.MultiTenancy.UnknownTenantIdException
 {
+    private readonly string _message;
+
     internal UnknownTenantException(string tenantId, IEnumerable<string> known)
-        : base($"This store has no database for tenant '{tenantId}'. It knows: "
-               + $"{string.Join(", ", known.OrderBy(x => x, StringComparer.Ordinal))}. A tenant's database "
-               + "is named at configuration time under MultiTenantedDatabases; falling back to another "
-               + "tenant's file would be the one failure database-per-tenant exists to make impossible.")
+        : base(tenantId)
     {
-        TenantId = tenantId;
+        _message = $"This store has no database for tenant '{tenantId}'. It knows: "
+                   + $"{string.Join(", ", known.OrderBy(x => x, StringComparer.Ordinal))}. A tenant's database "
+                   + "is named at configuration time under MultiTenantedDatabases; falling back to another "
+                   + "tenant's file would be the one failure database-per-tenant exists to make impossible.";
     }
 
-    public string TenantId { get; }
+    /// <inheritdoc />
+    public override string Message => _message;
 }
 
 /// <summary>

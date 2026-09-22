@@ -286,6 +286,11 @@ and keep the file, use `store.Advanced.DeleteAllTenantDataAsync(id)`.
 "never heard of it" are different operational situations, and an application handling one should not
 have to guess which it got.
 
+`UnknownTenantException` derives from `JasperFx.MultiTenancy.UnknownTenantIdException`, the type
+Marten, Polecat and Wolverine all throw for the same condition — so store-agnostic code and a
+Wolverine `OnException<UnknownTenantIdException>()` policy catch it here too. The message stays
+Fisher's, which names the tenants this store does know.
+
 ### The daemon under database-per-tenant
 
 The [async daemon](/events/projections/async-daemon) runs **one instance per tenant database**:
