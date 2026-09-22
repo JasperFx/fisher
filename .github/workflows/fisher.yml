@@ -7,6 +7,28 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# fisher#314. Without this, every push to a pull request branch queued a NEW set of three jobs while
+# the previous set was still waiting, and nothing cancelled the superseded one — it held a slot until
+# it finished testing content nobody would look at.
+#
+# That is not a Fisher-only cost. JasperFx is on the Free org plan, so the concurrent-job ceiling is
+# shared across every repo in the org: during the #306/#308/#309 wave the org queue reached 230 jobs
+# queued against 9 running, and a wasted Fisher run is a slot marten, wolverine or weasel does not get.
+#
+# `cancel-in-progress` is CONDITIONAL rather than simply true, and that is the part worth reading
+# twice. On a pull request the older run really is superseded. On a push to `main` it is not — each
+# commit's CI result is the record for that commit, and a release is cut from one, so cancelling an
+# in-flight `main` run destroys the only evidence that the commit was green.
+#
+# `head_ref || ref` groups a pull request by its source branch rather than by the synthetic
+# `refs/pull/N/merge`; identical in effect here, and it reads correctly in the Actions UI.
+#
+# `publish.yml` is deliberately left without one: it fires on a tag, each tag publishes once, and a
+# cancelled publish is worse than a duplicated queue slot.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
