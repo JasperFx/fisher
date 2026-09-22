@@ -103,6 +103,28 @@ opts.Projections.Errors.SkipUnknownEvents = true;   // if you really want that
 Otherwise it throws, and the exception is classified as a shard failure without the daemon needing to
 know Fisher's exception types.
 
+## Unreadable event bodies
+
+A body the serializer cannot read is a different problem from a type it cannot resolve — a data or
+serializer fix rather than a deployment one — and it has its own policy:
+
+```cs
+opts.Projections.Errors.SkipSerializationErrors = true;   // the default
+```
+
+With it on, the row is quarantined into [`fi_dead_letters`](/events/storage#dead-letters) and the
+shard carries on. With it off the loader throws `Fisher.Exceptions.EventDeserializationFailureException`
+— which derives from `JasperFx.Events.EventDeserializationFailureException` and carries the sequence,
+the stored event type alias and the serializer's own exception — and the shard pauses classified
+`EventSerialization` rather than `Other`.
+
+::: warning
+A **missing `IEventBinarySerializer`** is deliberately not covered by this policy. That is a
+misconfiguration of the whole store rather than one unreadable row, so it is refused by name whatever
+the flag says — quarantining it would turn every binary event in the store into a dead letter and bury
+the one thing worth saying.
+:::
+
 ## Errors and dead letters
 
 ```cs

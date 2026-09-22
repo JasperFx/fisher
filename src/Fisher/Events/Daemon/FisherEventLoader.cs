@@ -144,8 +144,41 @@ internal sealed class FisherEventLoader : IEventLoader
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         while (await reader.ReadAsync(token).ConfigureAwait(false))
         {
-            var @event = await FisherEventsRowReader.ReadEventAcrossStreams(reader, ctx, slots, isGuid, token)
-                .ConfigureAwait(false);
+            IEvent? @event;
+
+            try
+            {
+                @event = await FisherEventsRowReader
+                    .ReadEventAcrossStreams(reader, ctx, slots, isGuid, token).ConfigureAwait(false);
+            }
+            catch (JasperFx.Events.EventDeserializationFailureException e)
+            {
+                // fisher#308. The body is there and will not parse — a data or serializer problem,
+                // governed by SkipSerializationErrors, which is a different operator action from an
+                // unregistered event type and is why the two have separate policies. Before this the
+                // raw JsonException escaped the page, ResilientEventLoader wrapped it in
+                // EventLoaderException after its retries, and the shard paused as
+                // ShardFailureCategory.Other with no dead letter — so the flag, which defaults to
+                // true, was silently a no-op.
+                if (!request.ErrorOptions.SkipSerializationErrors)
+                {
+                    // Rethrown as itself, so the shard failure is classified EventSerialization off
+                    // the exception's own IEventFailureContext rather than the daemon having to know
+                    // Fisher's exception types.
+                    throw;
+                }
+
+                // Quarantined on its own connection, outside anything this page is doing — the same
+                // rule the apply-error dead letter follows, and for the same reason.
+                await _database.StoreDeadLetterEventAsync(null!, e.ToDeadLetterEvent(request.Name), token)
+                    .ConfigureAwait(false);
+
+                Diagnostics.DaemonTrace.Record("loader.skipped_bad_body", request.Name.Identity,
+                    e.Sequence);
+
+                skipped++;
+                continue;
+            }
 
             if (@event is null)
             {

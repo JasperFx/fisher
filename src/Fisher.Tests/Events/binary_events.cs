@@ -480,6 +480,70 @@ public class binary_events : IAsyncLifetime
         ex.Message.ShouldContain("data_binary");
     }
 
+    /// <remarks>
+    ///     <para>
+    ///         And the daemon must not quarantine that refusal (fisher#308). A missing
+    ///         <see cref="IEventBinarySerializer" /> is a misconfiguration of the whole store, not one
+    ///         unreadable row, so it is deliberately resolved <em>outside</em> the deserialization
+    ///         guard the row reader now wraps the body in — otherwise
+    ///         <c>SkipSerializationErrors</c>, which defaults to true, would turn every binary event
+    ///         in the store into a dead letter and the one thing worth saying would be buried under
+    ///         them.
+    ///     </para>
+    ///     <para>
+    ///         This is the discriminating fact for that placement: moving the serializer lookup back
+    ///         inside the guard makes the loader skip instead of throw, and every other test in this
+    ///         class still passes.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task the_daemon_does_not_quarantine_a_missing_binary_serializer()
+    {
+        await using var database = TemporaryDatabase.Create("binary-events-daemon-downgrade");
+        var streamId = Guid.NewGuid();
+
+        await using (var before = DocumentStore.For(options =>
+                     {
+                         options.ConnectionString = database.ConnectionString;
+                         options.AutoCreateSchemaObjects = AutoCreate.All;
+                         options.Events.UseBinarySerializer<VoyageEnded>(new CountingBinarySerializer());
+                     }))
+        {
+            await before.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+            await using var session = before.LightweightSession();
+            session.Events.StartStream(streamId, new VoyageEnded("Lisbon"));
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using var after = DocumentStore.For(options =>
+        {
+            options.ConnectionString = database.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+        });
+
+        var loader = new Fisher.Events.Daemon.FisherEventLoader(after.Database, after.Options);
+
+        var ex = await Should.ThrowAsync<InvalidOperationException>(async () => await loader.LoadAsync(
+            new JasperFx.Events.Daemon.EventRequest
+            {
+                Floor = 0,
+                HighWater = 1,
+                BatchSize = 100,
+                Name = new JasperFx.Events.Projections.ShardName("tally"),
+                ErrorOptions = new JasperFx.Events.Daemon.ErrorHandlingOptions
+                {
+                    SkipSerializationErrors = true
+                }
+            }, Token));
+
+        ex.ShouldNotBeAssignableTo<JasperFx.Events.EventDeserializationFailureException>();
+        ex.Message.ShouldContain("data_binary");
+
+        (await after.Database.QueryDeadLetterEventsAsync(
+            new JasperFx.Events.Projections.ShardName("tally"), null, 0, 10, Token)).ShouldBeEmpty();
+    }
+
     /// <summary>How each row stores its body, oldest first — <c>text/null</c> or <c>text/blob</c>.</summary>
     private Task<List<string>> ReadEncodingsAsync() => ReadEncodingsAsync(_database.ConnectionString);
 
