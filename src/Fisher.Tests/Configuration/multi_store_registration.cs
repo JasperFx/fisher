@@ -246,6 +246,42 @@ public class multi_store_registration : IAsyncLifetime
         await host.StopAsync(Token);
     }
 
+    /// <summary>
+    ///     The document half of the same bridge (fisher#303), and the half where the marker proxy
+    ///     bites hardest.
+    /// </summary>
+    /// <remarks>
+    ///     Both interfaces are implemented explicitly, so a <c>DispatchProxy</c> over
+    ///     <c>IArchiveStore</c> is neither of them — the ancillary registration has to unwrap, exactly
+    ///     as the <c>IEventStore</c> one above does. Handing the proxy over throws
+    ///     <c>InvalidCastException</c> at registration rather than omitting the store silently, which
+    ///     is the better of the two failures and still not one to rely on.
+    /// </remarks>
+    [Fact]
+    public async Task both_stores_are_discoverable_through_the_document_surfaces()
+    {
+        using var host = await Host.CreateDefaultBuilder()
+            .ConfigureServices(services =>
+            {
+                services.AddFisher(options =>
+                {
+                    options.ConnectionString = _first.ConnectionString;
+                    options.StoreName = "Primary";
+                });
+
+                services.AddFisherStore<IArchiveStore>(options =>
+                    options.ConnectionString = _second.ConnectionString);
+            })
+            .StartAsync(Token);
+
+        host.Services.GetServices<JasperFx.Documents.IDocumentStoreDiagnostics>()
+            .ToList().Count.ShouldBe(2);
+        host.Services.GetServices<IDocumentStoreUsageSource>()
+            .ToList().Count.ShouldBe(2);
+
+        await host.StopAsync(Token);
+    }
+
     // ---- IConfigureFisher ----
 
     [Fact]

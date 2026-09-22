@@ -98,6 +98,36 @@ public class service_registration : IAsyncLifetime
             .ShouldBeSameAs(provider.GetRequiredService<DocumentStore>());
     }
 
+    /// <summary>
+    ///     The document half of the same bridge (fisher#303). <c>DocumentStore</c> implements both of
+    ///     these explicitly too, so neither reached the container and a store-agnostic consumer read
+    ///     the document half of a Fisher host as <b>absent</b> rather than unavailable — which is what
+    ///     the graceful-no-op pattern those interfaces document turns into: a console that renders "no
+    ///     documents" for a store that has them.
+    /// </summary>
+    /// <remarks>
+    ///     <c>document_diagnostics</c> exercises the implementation by casting the store directly,
+    ///     which is exactly why this went unnoticed: every assertion about the behaviour passed while
+    ///     the only route a consumer actually takes returned nothing.
+    /// </remarks>
+    [Fact]
+    public void the_store_is_discoverable_as_document_diagnostics()
+    {
+        using var provider = ProviderFor();
+
+        provider.GetServices<JasperFx.Documents.IDocumentStoreDiagnostics>().ShouldHaveSingleItem()
+            .ShouldBeSameAs(provider.GetRequiredService<DocumentStore>());
+    }
+
+    [Fact]
+    public void the_store_is_discoverable_as_a_document_usage_source()
+    {
+        using var provider = ProviderFor();
+
+        provider.GetServices<IDocumentStoreUsageSource>().ShouldHaveSingleItem()
+            .ShouldBeSameAs(provider.GetRequiredService<DocumentStore>());
+    }
+
     [Fact]
     public void the_connection_string_overload_configures_the_store()
     {
