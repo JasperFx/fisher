@@ -58,19 +58,53 @@ internal sealed class OwnedConnectionLifetime : IConnectionLifetime
     public async ValueTask<SqliteConnection> ConnectionAsync(CancellationToken token)
         => _connection ??= await _database.OpenConnectionAsync(token).ConfigureAwait(false);
 
+    /// <summary>
+    ///     Clears any stray native transaction before the connection goes back to the pool
+    ///     (fisher#311).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>This is the source of the failure rather than a symptom of it.</b> Microsoft.Data.Sqlite
+    ///         pools a connection per connection string, so a connection returned with a native
+    ///         transaction still open is handed to the next <c>LightweightSession</c> — whose first
+    ///         <c>BEGIN IMMEDIATE</c> then fails with
+    ///         <c>SQLite Error 1: 'cannot start a transaction within a transaction'</c>. Reproduced
+    ///         deterministically: issue a raw <c>BEGIN IMMEDIATE</c>, dispose the connection, open
+    ///         another from the same pool, and its <c>BeginTransactionAsync</c> throws exactly that.
+    ///     </para>
+    ///     <para>
+    ///         <b>Only <see cref="OwnedConnectionLifetime" /> does this</b>, because only a connection
+    ///         Fisher opened is a connection Fisher returns to the pool. A caller's connection is
+    ///         theirs, including whatever transaction state it carries —
+    ///         <see cref="ExternalConnectionLifetime" /> disposing nothing is the whole point of it.
+    ///     </para>
+    ///     <para>
+    ///         Unconditional rather than gated on this session having opened a transaction: the
+    ///         condition is that the wrapper has <em>lost track</em>, so anything the session believes
+    ///         about its own transactions is exactly the thing that cannot be trusted here. It costs one
+    ///         in-process statement per session, which is not measurable against the connection's own
+    ///         open and close.
+    ///     </para>
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
         if (_connection is not null)
         {
+            await StrayTransaction.ClearAsync(_connection, CancellationToken.None).ConfigureAwait(false);
             await _connection.DisposeAsync().ConfigureAwait(false);
             _connection = null;
         }
     }
 
+    /// <inheritdoc cref="DisposeAsync" />
     public void Dispose()
     {
-        _connection?.Dispose();
-        _connection = null;
+        if (_connection is not null)
+        {
+            StrayTransaction.Clear(_connection);
+            _connection.Dispose();
+            _connection = null;
+        }
     }
 }
 
