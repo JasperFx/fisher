@@ -5610,10 +5610,26 @@ factory)`, over `Projections.StorageProviders` in the core.
     sessions scoped and a synchronously-disposed container scope can only reach the sync form —
     fisher#20's argument for `IDocumentStore`, one type over. `DbContext` supplies both, so nothing
     blocks.
-  - **Participants are not cleared after a commit**, so a session committing N times with an inline
-    EF-backed projection holds N contexts until disposal. Bounded by the session's lifetime (a scoped
-    session is one request) and left alone deliberately: clearing them would change behaviour for a
-    caller who enlists once and commits twice. Filed as fisher#319 rather than changed in passing.
+  - **A commit releases the participants its own inline projections enlisted, and nothing else**
+    (fisher#319). Without it a session committing N times held N contexts until disposal, each also
+    invoked on every later commit to save nothing — because `EfCoreEventProjection.ApplyAsync` builds
+    a fresh one per unit of work and cannot dispose it.
+    - ⚠️ **Scoped to the projections' own window, not by clearing the list**, and that is what keeps
+      it from being a contract change. `AddTransactionParticipant` says "this unit of work's
+      transaction", which argues for per-commit release — but the implementation has always kept a
+      caller's participant across commits, and one silently missing from the second commit is a worse
+      failure than the accumulation. `SaveChangesAsync` records the participant count before the
+      projections run and releases only what they added.
+    - **Positional rather than by identity**, because participants are only ever appended and nothing
+      removes one mid-commit, so the entries at and after the mark are exactly the ones added.
+    - **Last thing in `SaveChangesAsync`**, after the session listeners: a listener's
+      `AfterCommitAsync` can still reach what a projection enlisted, and the participant's own
+      `AfterCommitAsync` — which is where an EF context accepts its changes — has already run.
+    - **`an_inline_projection_holds_one_context_per_commit_and_no_more` asserts "at most one alive at
+      a time", not a total.** Three commits build three contexts either way; the number that tells a
+      fix from a leak is how many are outstanding, so it compares created against disposed after each
+      commit. `a_caller_enlisted_participant_survives_a_commit` is the other side and passes either
+      way, which is what it is for.
 - **A registered type is deliberately not mapped**, so registering the projection skips its mapping
   and the type gets no `fi_doc_*` table. That is what makes registration-before-projection
   load-bearing, and it is checked rather than documented — the same "this line has to come first"
