@@ -226,10 +226,12 @@ internal sealed class AppendPlanner
         // still an id in use, so starting over it is a collision, and answering "archived" there would
         // tell the caller to unarchive when what they actually need is a different id.
         //
-        // JasperFx.Events carries no shared exception for the refusal — Marten and Polecat each throw
-        // their own and neither is on the shared surface — so StreamArchivingCompliance asserts only
-        // that the commit fails and the stream is untouched. Fisher's own type names both the stream
-        // and the reason, which is strictly more than the contract asks for.
+        // The refusal is JasperFx.Events.ArchivedStreamException now (jasperfx#871, in 2.74.0), and
+        // the lift took FISHER's type as the canonical shape over Marten's generic
+        // InvalidStreamOperationException and Polecat's message-matching InvalidStreamException.
+        // StreamArchivingCompliance asserts the shared type rather than merely that the commit failed,
+        // so Fisher.Exceptions.ArchivedStreamException subclasses it — see that type for why it keeps
+        // its own wording.
         if (stream.ActionType == StreamActionType.Start)
         {
             if (currentVersion is not null)

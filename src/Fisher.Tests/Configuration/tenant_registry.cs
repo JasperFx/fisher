@@ -279,7 +279,7 @@ public class tenant_registry : IAsyncLifetime
 
         // Suspended, not forgotten: a distinct exception, because "switched off" and "never heard of
         // it" are different operational situations.
-        Should.Throw<DisabledTenantException>(() => store.LightweightSession("acme"));
+        Should.Throw<Fisher.Storage.DisabledTenantException>(() => store.LightweightSession("acme"));
 
         File.Exists(PathFor("acme")).ShouldBeTrue();
         (await TenantRowCountAsync()).ShouldBe(1);
@@ -324,7 +324,7 @@ public class tenant_registry : IAsyncLifetime
 
         await source.AddTenantAsync("acme", ConnectionStringFor("acme"), Token);
 
-        Should.Throw<DisabledTenantException>(() => store.LightweightSession("acme"));
+        Should.Throw<Fisher.Storage.DisabledTenantException>(() => store.LightweightSession("acme"));
         (await source.AllSuspendedAsync(Token)).ShouldBe(["acme"]);
     }
 
@@ -434,7 +434,7 @@ public class tenant_registry : IAsyncLifetime
         reading.TryFind("acme", out var found).ShouldBeTrue();
         found.IsActive.ShouldBeFalse();
 
-        Should.Throw<DisabledTenantException>(() => reader.LightweightSession("acme"));
+        Should.Throw<Fisher.Storage.DisabledTenantException>(() => reader.LightweightSession("acme"));
     }
 
     // ---- the store-level operations ----

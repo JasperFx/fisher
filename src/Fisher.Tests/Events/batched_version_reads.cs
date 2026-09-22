@@ -211,9 +211,21 @@ public class batched_version_reads : IAsyncLifetime
             session.Events.Append(archived, new MonsterSlain("Posthumous"));
             session.Events.StartStream(fresh, new QuestStarted("New"));
 
-            var refusal = await Should.ThrowAsync<Fisher.Exceptions.ArchivedStreamException>(
+            // Caught as the SHARED type, which is what fisher#307 bought and what
+            // StreamArchivingCompliance asserts since JasperFx 2.74.0 — a store-agnostic `catch` and a
+            // Wolverine `OnException<ArchivedStreamException>()` policy now behave the same on all
+            // three stores. Asserted as the Fisher type as well, because subclassing rather than
+            // deleting is the whole point: an existing catch site has to keep working.
+            var refusal = await Should.ThrowAsync<JasperFx.Events.ArchivedStreamException>(
                 () => session.SaveChangesAsync(Token));
+            refusal.ShouldBeOfType<Fisher.Exceptions.ArchivedStreamException>();
             refusal.Id.ShouldBe(archived);
+
+            // Fisher's own wording, through the protected message-overriding constructor, so an
+            // upstream rewording cannot silently move it. The canonical message ends "…or start a new
+            // stream"; Fisher's stops at the reversal, because on Fisher an archived id is still an id
+            // in use and starting over it is ExistingStreamIdCollisionException rather than a remedy.
+            refusal.Message.ShouldEndWith("Call UnArchiveStream to reopen it.");
         }
 
         await using var query = _store.LightweightSession();

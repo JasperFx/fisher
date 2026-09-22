@@ -13,11 +13,30 @@ namespace Fisher.Exceptions;
 ///         from the start.
 ///     </para>
 ///     <para>
-///         <b>Not lifted into JasperFx.Events</b>, unlike the three types jasperfx#751 took. Marten
-///         throws its own <c>InvalidStreamOperationException</c> and Polecat a type of its own whose
-///         message merely contains "archived", neither is on the shared surface, and the shared suite
-///         deliberately asserts only that the commit fails and the stream is unchanged. So a store type
-///         is the honest shape here until the three agree on one.
+///         <b>Subclasses the shared <see cref="JasperFx.Events.ArchivedStreamException" /></b>
+///         (jasperfx#871 / #878, in JasperFx.Events 2.74.0) — and the lift took <em>this</em> type as
+///         its canonical shape, over Marten's generic <c>InvalidStreamOperationException</c> and
+///         Polecat's <c>InvalidStreamException</c> whose message merely contains "archived". The note
+///         that used to stand here, that it was deliberately not lifted "until the three agree on one",
+///         has been answered by them agreeing on Fisher's.
+///     </para>
+///     <para>
+///         Subclassing rather than deleting is the compatible choice, the same one
+///         <see cref="ExistingStreamIdCollisionException" /> documents: an existing
+///         <c>catch (Fisher.Exceptions.ArchivedStreamException)</c> keeps working and a <c>catch</c> on
+///         the shared type starts working, which is what the compliance suite now requires. A literal
+///         <c>TypeForwardedTo</c> is not available — forwarding needs the same fully qualified name and
+///         the namespaces differ.
+///     </para>
+///     <para>
+///         <b>Through the protected message-overriding constructor, so the canonical wording cannot
+///         silently move Fisher's.</b> The two differ today: the canonical one ends "…reopen it, or
+///         start a new stream", where Fisher's stops at the reversal. That is a real difference rather
+///         than an oversight — starting a new stream is not a way to append to <em>this</em> one, and
+///         on Fisher the id of an archived stream is still an id in use, so the suggestion would point
+///         at <c>ExistingStreamIdCollisionException</c>. Same reasoning
+///         <c>ExistingStreamIdCollisionException</c> records for taking that constructor even where the
+///         messages currently agree.
 ///     </para>
 ///     <para>
 ///         Raised from <c>AppendPlanner</c> before the version guard, because "this stream is closed" is
@@ -27,18 +46,11 @@ namespace Fisher.Exceptions;
 ///         bookkeeping rather than deletion.
 ///     </para>
 /// </remarks>
-public class ArchivedStreamException : Exception
+public class ArchivedStreamException : JasperFx.Events.ArchivedStreamException
 {
     public ArchivedStreamException(object id)
         : base($"Event stream '{id}' is archived and cannot be appended to. Call UnArchiveStream to "
-               + "reopen it.")
+               + "reopen it.", id)
     {
-        Id = id;
     }
-
-    /// <summary>
-    ///     The stream's identity, a <see cref="Guid" /> or a <see cref="string" /> according to the
-    ///     store's stream identity style.
-    /// </summary>
-    public object Id { get; }
 }
