@@ -704,6 +704,23 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
                 Logger.LogFailure(e, "Fisher could not commit the unit of work");
             }
 
+            // fisher#306. Lock contention on an append leaves the Critter Stack's vocabulary here,
+            // rather than a raw SqliteException saying "database is locked" — which is true, and says
+            // nothing about which write lost. Marten and Polecat both surface this as a
+            // StreamLockedException, so a store-agnostic catch and a Wolverine
+            // OnException<StreamLockedException>().RetryWithCooldown(...) policy now behave the same
+            // on all three.
+            //
+            // A translation at the boundary, NOT a change in policy: the retries above have already
+            // happened and have already been recorded on the span and on fisher.write_lock.retries.
+            // Gated on there being an append, because a StreamLockedException naming no stream would
+            // be a worse answer than the driver's — a documents-only unit of work keeps the raw one.
+            if (streams.Length > 0 && e is SqliteException sqlite
+                                   && Storage.FisherResilienceDefaults.IsTransient(sqlite))
+            {
+                throw new Exceptions.StreamLockedException(IdentitiesOf(streams), sqlite);
+            }
+
             throw;
         }
 
@@ -839,6 +856,19 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         }
 
     }
+
+    /// <summary>
+    ///     The streams a failed unit of work was appending to, as the identity each one is addressed
+    ///     by.
+    /// </summary>
+    /// <remarks>
+    ///     A <see cref="StreamAction" /> carries both halves and fills only the one its store's
+    ///     identity style uses, so reading <c>Id</c> unconditionally would report
+    ///     <c>Guid.Empty</c> for every stream on a string-identified store — which is exactly the
+    ///     shape of message this exception exists to replace.
+    /// </remarks>
+    private static object[] IdentitiesOf(StreamAction[] streams)
+        => streams.Select(x => x.Id == Guid.Empty ? (object)(x.Key ?? string.Empty) : x.Id).ToArray();
 
     /// <summary>
     ///     Tell every participant the write is durable, so one holding its work replayable across

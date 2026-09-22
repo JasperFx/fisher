@@ -119,6 +119,35 @@ the write transaction, so no lost update); what differs is that a loser gets
 `FisherSession` a session-scoped transaction, which `SaveChangesAsync` would then have to join rather
 than open.
 
+**Losing the *file's* write lock is a different failure from losing a version guard, and it now has
+the Critter Stack's vocabulary** (fisher#306). Contention is still retried by
+`StoreOptions.ResiliencePipeline` and still recorded on the span and on `fisher.write_lock.retries`;
+what changed is what a caller sees once the retries were not enough — `Fisher.Exceptions.StreamLockedException`,
+deriving from the lifted `JasperFx.Events.StreamLockedException`, where a raw `SqliteException` saying
+"database is locked" used to escape. Marten and Polecat both surface their lock contention as that
+type, so a store-agnostic `catch` and a Wolverine `OnException<StreamLockedException>()` policy —
+matched with `ex is T` — now behave the same on all three. Three decisions in it:
+
+- **A documents-only unit of work keeps the raw `SqliteException`.** A `StreamLockedException` naming
+  no stream would say less than the driver already does.
+  `a_documents_only_commit_keeps_the_raw_sqlite_exception` is the discriminating fact — translating
+  unconditionally passes every other test in that class and fails only this one.
+- **`StreamIds` beside the base's single `StreamId`.** The siblings lock a *row*, so their version of
+  this really is about one stream; SQLite locks the *file*, so every stream in the commit lost it
+  together. The base property carries the first, which is the whole of it for the aggregate-handler
+  shape and is what ports.
+- **An enlisted session gets it too.** `SessionOptions.ForTransaction` runs no pipeline — a retry
+  would rewrite what the first attempt already put in the caller's still-open transaction — so its
+  contention surfaces on the first statement with no retries at all. That is the documented rough
+  edge of a deferred caller transaction, where the loser gets `SQLITE_BUSY` rather than a clean
+  concurrency failure; the condition is identical and so is the vocabulary now.
+
+⚠️ **The test has to warm the session's connection before contending, or it tests the wrong thing.**
+Opening a Fisher connection applies the store's PRAGMAs and `journal_mode` wants the write lock, so a
+session that first touches the file under contention fails while *opening* — a long way from the
+commit path — and the raw exception escapes untranslated because it never reached the translation.
+Same trap `a_busy_retry_is_recorded_on_the_span_it_contended` records from the other side.
+
 Traps that have already bitten and are easy to reintroduce:
 
 - A column `DEFAULT` that is an expression **must be parenthesized** — `DEFAULT strftime(...)` is a
