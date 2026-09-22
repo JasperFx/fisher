@@ -11,8 +11,10 @@ longer live.
 
 ## What archiving affects
 
-- **An archived stream refuses further appends**, with `ArchivedStreamException`. Archiving is not a
-  soft delete you can keep writing through; unarchive it first if that is really the intent.
+- **An archived stream refuses further appends**, with `ArchivedStreamException` — which derives from
+  `JasperFx.Events.ArchivedStreamException`, so a store-agnostic `catch` works on Marten and Polecat
+  too. Archiving is not a soft delete you can keep writing through; unarchive it first if that is
+  really the intent.
 - A [natural key](/events/natural-keys) no longer resolves an archived stream. The lookup joins
   `fi_streams`, so the flag is read off the join rather than being copied.
 - An archived stream is excluded from the explorer's recent-streams read.

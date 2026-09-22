@@ -295,7 +295,9 @@ Working, with tests:
 - Reads: `FetchStreamAsync` (version / from-version / timestamp bounded), `FetchStreamStateAsync`,
   `LoadAsync`, both stream identity styles
 - `ArchiveStream` / `UnArchiveStream` / `TombstoneStream` — and **an archived stream refuses further
-  appends** (`Exceptions.ArchivedStreamException`, fisher#184), because archiving is not a soft delete
+  appends** (`Exceptions.ArchivedStreamException`, which subclasses the lifted
+  `JasperFx.Events.ArchivedStreamException` since fisher#307 — the lift took Fisher's type as its
+  canonical shape), because archiving is not a soft delete
   you can keep writing through. Checked in `AppendPlanner.PlanStream` before the version guard and
   deliberately *not* for a `StartStream`, where an archived id is still an id in use and
   `ExistingStreamIdCollisionException` is the more useful answer. An `Archived` event reaching a
