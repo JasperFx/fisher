@@ -72,6 +72,17 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
     public IDocumentSession SessionForTenant(string tenantId)
     {
         var session = _store.OpenSessionOn(_database, tenantId);
+
+        // fisher#305. The batch owns this session's participants, not the session — JasperFx's
+        // ProjectionExecution takes a session from here with `await using` and disposes it the moment
+        // the projection has been applied, while this batch lives on to run their BeforeCommitAsync.
+        // Without the flag, that disposal would release an EF-backed projection's DbContext between
+        // the apply and the write and the entities would silently never be saved.
+        if (session is FisherSession fisherSession)
+        {
+            fisherSession.ParticipantsOwnedByBatch = true;
+        }
+
         _sessions.Add(session);
         return session;
     }
@@ -406,21 +417,13 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
         // outlive the apply that created it and survive a retry of the commit. Disposing here covers
         // the failed batch as well as the committed one, which is the case that would otherwise leak a
         // context per attempt behind a persistently failing shard.
+        // Through the session's own drain rather than a loop here (fisher#305), so the release lives
+        // in one place — the session releases its own participants too, for the inline path that has
+        // no batch to do it. The drain takes the list and nulls it, so the second owner to reach a
+        // participant finds nothing and cannot dispose it twice.
         foreach (var session in _sessions.OfType<FisherSession>())
         {
-            foreach (var participant in session.Participants)
-            {
-                switch (participant)
-                {
-                    case IAsyncDisposable asyncDisposable:
-                        await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-                        break;
-
-                    case IDisposable disposable:
-                        disposable.Dispose();
-                        break;
-                }
-            }
+            await session.DisposeParticipantsAsync().ConfigureAwait(false);
         }
 
         foreach (var session in _sessions)

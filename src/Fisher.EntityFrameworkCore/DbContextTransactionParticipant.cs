@@ -33,7 +33,8 @@ namespace Fisher.EntityFrameworkCore;
 ///         and refuses by name.
 ///     </para>
 /// </remarks>
-public sealed class DbContextTransactionParticipant<TContext> : ITransactionParticipant, IAsyncDisposable
+public sealed class DbContextTransactionParticipant<TContext>
+    : ITransactionParticipant, IAsyncDisposable, IDisposable
     where TContext : DbContext
 {
     private readonly Func<SqliteConnection, TContext>? _factory;
@@ -164,6 +165,24 @@ public sealed class DbContextTransactionParticipant<TContext> : ITransactionPart
         if (_movesOntoFishersConnection && _context is not null)
         {
             await _context.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    ///     The synchronous form of <see cref="DisposeAsync" />, for a session disposed synchronously.
+    /// </summary>
+    /// <remarks>
+    ///     <c>AddFisher</c> registers sessions scoped, so a container scope disposed through
+    ///     <see cref="IDisposable" /> is a real path — and <c>FisherSession.Dispose</c> can only reach a
+    ///     participant that offers this form. <c>DbContext</c> supplies both, so there is nothing to
+    ///     block on; declaring only the async one would leak the context on exactly that path, which is
+    ///     the same argument <c>IDocumentStore</c> makes for declaring both itself (fisher#20).
+    /// </remarks>
+    public void Dispose()
+    {
+        if (_movesOntoFishersConnection && _context is not null)
+        {
+            _context.Dispose();
         }
     }
 
