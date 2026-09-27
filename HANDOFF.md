@@ -12,10 +12,98 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2293 tests green on net9.0 and net10.0** — 2230 in `Fisher.Tests`, 36 in
-`Fisher.AspNetCore.Tests` and 27 in `Fisher.EntityFrameworkCore.Tests`. 583 of
-them are shared cross-store compliance tests — 489 event sourcing and 94 document.
-On JasperFx **2.74.0** / Weasel **9.32.0**.
+**2321 tests green on net9.0 and net10.0** — 2258 in `Fisher.Tests`, 36 in
+`Fisher.AspNetCore.Tests` and 27 in `Fisher.EntityFrameworkCore.Tests`. 603 of
+them are shared cross-store compliance tests — 499 event sourcing and 104 document.
+On JasperFx **2.75.1** / Weasel **9.35.1**.
+
+## The JasperFx 2.75.x bump — conjoined document tenancy, and the hazard it uncovered
+
+**The bump is the work.** jasperfx#898/#899 added the document half of a tenancy seam the shared library
+had never had: one new suite (`DocumentConjoinedTenancyCompliance`, 10 facts) and seven more facts on
+`ConjoinedEventTenancyCompliance`, which had eleven. Fisher's tenancy itself needed nothing — the
+statement-level tenant pass fisher#51 built is what the facts want — but three things around it did.
+
+**The route, and it is the one that would have read as a product bug.** `IDocumentSessionFactory`
+gained `LightweightSession(string)` / `QuerySession(string)` **additively, with throwing defaults**, and
+Fisher's own members take `string? tenantId = null` — which satisfies neither the parameterless member
+(an optional parameter does not implement one) nor the string one (the nullability differs, and a hiding
+declaration on a derived interface never implements the base's anyway). So `IDocumentStore` forwards all
+four explicitly and marks its own two `new`. ⚠️ **Delete the forwarders and Fisher still compiles, is
+still perfectly correct about tenancy, and every fact in the suite fails with `NotSupportedException`**
+— on the one route the shared contract exists for, which is the route least likely to be exercised by a
+Fisher-local test. Same near-miss `IDocumentReadOperations.Events` and
+`IDocumentSessionOperations.PendingStreams` already carry.
+
+**The event fixture had to conjoin its documents, and that is a gap rather than a fixture detail.** The
+conjoined store now registers two snapshots, and a snapshot document keyed on the stream id alone holds
+one row for a stream id two tenants both wrote — so the second tenant's projection **overwrites** the
+first's, with no error appending and no error reading, and both tenants then read a document describing
+the other one's stream. Marten refuses to build such a store ("Tenancy storage style mismatch",
+marten#5343); **Fisher has no such guard**, so the fixture calls
+`Policies.AllDocumentsAreMultiTenanted()` exactly as Marten's does. fisher#335 predicted this would be
+the fact to go red and asks whether the answer is a refusal or auto-marking the document; that decision
+is deliberately not folded into a bump. Until it is made, **a Fisher application configuring conjoined
+events has to write that line for itself**, and nothing tells it so.
+
+**`OpenReadOnlyEventStore(tenantId)` (jasperfx#888) was cheap and the cheapness is structural.** The
+interface default throws for any non-null tenant, which leaves the whole read-only tier unreachable on a
+store whose default tenant is refused. `FisherReadOnlyEventStore` already opens a session per read
+precisely so it holds none (the divergence from Polecat, which leaks one per call), so the tenant goes on
+the session and every read it serves is scoped by the same code that scopes an application's. Closes a
+bullet of fisher#335.
+
+⚠️ **Implementing it uncovered a real hazard one member over, and the two halves fail differently.** A
+tenant scope has two mechanisms: under conjoined tenancy a `tenant_id` predicate, under
+database-per-tenant the *file*. `QueryStreamStates` is the one member on the tier that takes a tenant of
+its own, and it took **only** its own — so `OpenReadOnlyEventStore("north").QueryStreamStates()` answered
+about `*DEFAULT*`, a reader whose two halves disagreed about whose streams they were reading. And the
+provider behind it opened its session with no tenant at all, so under database-per-tenant it read the
+*default file* rather than north's — not a wrong row set but a wrong database, and on a fresh store an
+empty one, which reads as "this tenant has no streams". Both are closed, an explicit argument still
+outranks the tier's, and `tenant_scoped_read_only_event_store` pins all five facts; **each half was
+verified by reverting it, and they fail different tests**.
+
+- **`DocumentStore.IsTenanted()` is one predicate for "does naming a tenant mean anything here"**,
+  because the tier now has two refusals that must not drift. It is deliberately **broader** than the
+  conjoined-only test `QueryStreamStates` used to carry: that refused a tenant on a database-per-tenant
+  store, where a tenant is the most meaningful thing a caller can name. What stays refused is a store
+  with no tenant dimension of either kind, where the read would answer from the unscoped tables and
+  report every tenant's events as one tenant's.
+
+### The one fact that was red, and what 2.75.1 fixed
+
+**`DocumentConjoinedTenancyCompliance.optimistic_concurrency_is_scoped_to_the_tenant_for_a_shared_id`
+shipped in 2.75.0 asserting a refusal no correct store can produce**, and Fisher found it by being the
+store that ran the suite — first-contact validation of the document arm, the way wave 13 was for the
+event suites. Nine of its ten facts passed.
+
+⚠️ **Two shared facts contradicted each other, so no store could be green on both.** The tenancy fact
+advanced tenant A's row by storing the very instance it loaded, then re-stored *that same instance* and
+required a `ConcurrencyException`, on the premise that it still carried its pre-update version. It did
+not: `GuidOptimisticConcurrencyCompliance.a_successful_write_moves_the_instances_own_version_on`
+**requires** a committed write to write the landed version back onto the caller's instance, so the
+re-store guarded on the current version and was admitted. A store could only have passed by dropping
+the write-back — failing the suite this fact is a tenanted special case of.
+
+**jasperfx#903, fixed in 2.75.1 (jasperfx#905), and the fix is the one the issue proposed**: the stale
+instance is now read first on its own session and never written until the end, which is what "stale"
+has to mean on a store with write-back. The suite is 10 of 10 here.
+
+**`tenant_scoped_concurrency_guards` stays, and the reason changed rather than expiring.** It was
+written to pin the behaviour the red fact was *about*, so a real regression could not hide behind an
+already-failing fact. Now that the shared fact is correct there is overlap — but the local one still
+says two things the suite does not: revisions are counted per `(tenant, id)` over a deliberately
+advanced count, and Fisher's "strictly greater" explicit-revision rule (fisher#228) is what a caller
+meets here, which is why the test reaches for `UpdateRevision` rather than `Store`. Cheap, and it
+documents the interaction of two rules that arrived from different directions.
+
+**Weasel 9.35.1 (from 9.32.0) is inherited whole** — a message-and-diagnostics wave with no Fisher
+change and the whole suite green unedited. The two that reach Fisher are weasel#595 (a numeric-revision
+`ConcurrencyException` always carries the `UpdateRevision` hint — met while writing
+`tenant_scoped_concurrency_guards`, which is a better demonstration than a test) and weasel#596 (the
+per-event append gets the exception-transform hook the stream insert had, so both halves of an append
+now translate). `Directory.Packages.props` has the full accounting, including what is inert and why.
 
 ## The high-water opt-out, audited (#199)
 
@@ -663,9 +751,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.74.0 ships 57 suites; Fisher enrolls **56 of them, 583 tests**.
-Fisher passes **583 of them, across all
-56 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 2.75.1 ships 58 suites; Fisher enrolls **57 of them, 603 tests**.
+Fisher passes **603 of them, across all
+57 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -810,12 +898,12 @@ case is what is Fisher's alone — the `ResetAllDataAsync` daemon handling, `Fet
 and `UnknownNaturalKeyException` (which jasperfx#764 excludes on purpose), the subscription wrapper's
 naming.
 
-**Green on all fifty-six is not the same as feature-complete.** The suites cover what is portable
+**Green on all fifty-seven is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 56 suites, 583 tests
+### Green — 57 suites, 603 tests
 
-Event sourcing — 46 suites, 489 tests:
+Event sourcing — 46 suites, 499 tests:
 
 | Suite | Tests |
 |---|---|
@@ -825,7 +913,7 @@ Event sourcing — 46 suites, 489 tests:
 | `StringStreamIdentityCompliance` | 19 |
 | `EventStoreExplorerCompliance` | 18 |
 | `NaturalKeyCompliance` | 17 |
-| `StreamArchivingCompliance` | 16 |
+| `StreamArchivingCompliance` | 19 |
 | `StreamStateQueryCompliance` | 15 |
 | `AggregateWriteCacheCompliance` | 14 |
 | `StrongTypedIdentityCompliance` | 14 |
@@ -833,7 +921,7 @@ Event sourcing — 46 suites, 489 tests:
 | `StreamQueryPlanCompliance` | 13 |
 | `FetchLatestCompliance` | 12 |
 | `AlwaysEnforceConsistencyCompliance` | 11 |
-| `ConjoinedEventTenancyCompliance` | 11 |
+| `ConjoinedEventTenancyCompliance` | 18 |
 | `EventDataMaskingCompliance` | 11 |
 | `RebuildAndCatchUpCompliance` | 11 |
 | `StreamCompactingCompliance` | 13 |
@@ -866,11 +954,12 @@ Event sourcing — 46 suites, 489 tests:
 | `EventProjectionRegistrationCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 10 suites, 94 tests, through `FisherDocumentComplianceFixture`:
+Documents — 11 suites, 104 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
 | `DocumentQueryCompliance` | 17 |
+| `DocumentConjoinedTenancyCompliance` | 10 |
 | `DocumentSearchCompliance` | 11 |
 | `DocumentLoadAndStoreCompliance` | 11 |
 | `DocumentCommitListenerCompliance` | 10 |

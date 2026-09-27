@@ -1219,6 +1219,18 @@ document tests were single-tenant, and `LoadAsync`/`LoadManyAsync` bake the tena
 once in the storage's constructor — so the bug was confined to the one path that composed it per
 predicate. `tenanted_queries` now checks every statement shape in **both** directions.
 
+**There is a shared suite for it now — `DocumentConjoinedTenancyCompliance` (jasperfx#898) — and what
+took so long is worth knowing.** The event side has had twelve tenanted facts since 2.45.0 while
+`DocumentComplianceConfig` carried no tenancy seam at all, so `DocumentSearchCompliance` cites
+fisher#285 (Fisher's own search path ignoring conjoined tenancy) as a reason to exist and then
+configures no tenancy. Two things give its facts teeth that no earlier tenanted fact in the library had,
+and both are worth copying into any local tenancy test: **every fact reuses one document id across two
+tenants**, because a store keying on id alone does not fail loudly but folds the two writes into one
+row — distinct ids per tenant, which is what the library used before, passes cleanly on exactly that
+store; and **every fact checks both directions**, because a leaking store still answers correctly for
+whichever tenant owns the data. Fisher passes it on the pass described above, with no change to the
+filter; what it needed was the *route* — see the covariance note under the document contract.
+
 Being its own pass is also what `AnyTenant()` and `TenantIsOneOf(...)` need: they *replace* the term,
 which is impossible while it is welded to each predicate. Both are refused against a type that is not
 `MultiTenanted()`, because there is no column to have an opinion about — the same rule the soft-delete
@@ -3352,6 +3364,19 @@ convenience.** The binding is four interface declarations and one partial class:
   `DocumentStore` and three more on `SecondaryStoreProxy`. The tenant argument defaults to null, which
   is the right reading of a contract with no tenant parameter: JasperFx left tenant-scoped opening out
   deliberately and can add it additively.
+  - ⚠️ **It did, and the optional parameter is exactly why the additive pair needed four more
+    forwarders** (jasperfx#898). `LightweightSession(string)` / `QuerySession(string)` arrived with
+    throwing defaults, and `LightweightSession(string? tenantId = null)` satisfies **neither** member:
+    not the parameterless one, because an optional parameter does not implement it, and not the string
+    one, because the nullability differs and a hiding declaration on a derived interface never
+    implements the base's member anyway. So the two declarations on `IDocumentStore` are now `new` —
+    the hiding is deliberate, and a caller holding `IDocumentStore` should bind to Fisher's own
+    member — and four explicit forwarders carry the contract. Same near-miss `IDocumentReadOperations.Events`
+    and `IDocumentSessionOperations.PendingStreams` already carry, and the same reason it is written
+    down: **delete the forwarders and Fisher still compiles, is still perfectly correct about tenancy,
+    and every fact in `DocumentConjoinedTenancyCompliance` fails with `NotSupportedException`** — on
+    the one route the shared contract exists for, which is the route least likely to be exercised by a
+    Fisher-local test.
 - **No DI registration was needed or added**, matching both siblings. `IDocumentStore` is already
   registered and *is* the factory.
 
@@ -4479,6 +4504,18 @@ releases it only in `DisposeAsync`, so the same shape would leak a pooled connec
 database file on every call — to a method whose caller is a polling monitoring tool. Opening a session
 per read costs a pool checkout, which for an embedded database is a rounding error next to that.
 
+**That shape is also what makes `OpenReadOnlyEventStore(tenantId)` nearly free** (jasperfx#888). The
+interface's default throws for any non-null tenant, which would leave the whole tier unreachable on a
+store whose default tenant is refused, and leave its tenant-*less* members — `FetchStreamAsync` and
+`FetchStreamStateAsync`, whose signatures carry nowhere to name a tenant — answering about an arbitrary
+one on a store whose default tenant is not. Since the tier already opens a session per read precisely so
+it holds none, the tenant goes on the session: every read it serves is then scoped by the same code that
+scopes an application's, so there is no per-member tenant term for a later member to forget.
+`QueryStreamStates` and `EventQuery.TenantId` keep taking their own, being the two members that already
+had somewhere to put one. **A tenant on a store that is not multi-tenanted is refused rather than
+ignored**, the rule `QueryStreamStates` already followed one member over: `DefaultTenancy.DatabaseFor`
+resolves any id, so a quietly-unscoped reader would report every tenant's events as that tenant's.
+
 `EventOperations.QueryEventsAsync(EventQuery)` is the paging read behind it. Two things in it are
 load-bearing, and both were verified by removing them:
 
@@ -5251,10 +5288,17 @@ coalescing on purpose. Do not present it as a performance feature.
 
 ### Compliance suites
 
-**Fisher enrolls 55 of the 56 suites `JasperFx.Events.ComplianceTests` 2.70.0 ships — 572 tests.**
-`JasperFx.Events.ComplianceTests` is referenced unconditionally — the old `$(EnableComplianceTests)`
-gate is gone. See HANDOFF.md for the live scoreboard, which is machine-checked against a real run by
-`scripts/check_scoreboard.py`; what follows is the history and the mechanics.
+**Fisher enrolls every suite `JasperFx.Events.ComplianceTests` ships but one**, and
+`SingleTenantedEventSlicingCompliance` is the exception, for a precondition reason set out in the
+enrollment file. `JasperFx.Events.ComplianceTests` is referenced unconditionally — the old
+`$(EnableComplianceTests)` gate is gone.
+
+**The counts live in HANDOFF.md and deliberately not here.** They were repeated in this file until they
+went stale in the usual way: it claimed "55 of the 56 suites 2.70.0 ships — 572 tests" while HANDOFF
+two bumps later said 56 and 583, and nothing recomputed either. HANDOFF is the scoreboard and is
+machine-checked against a real run by `scripts/check_scoreboard.py`, which covers the three files that
+carry those numbers on purpose; a fourth copy is a fourth thing to rot. What follows here is the
+history and the mechanics.
 
 ### Wave 13 — the first suites to run anywhere (fisher#184)
 

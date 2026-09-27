@@ -27,12 +27,28 @@ namespace Fisher.Events;
 ///         This is also why the type holds the <see cref="DocumentStore" /> rather than a session: there
 ///         is no session to hold.
 ///     </para>
+///     <para>
+///         <b>A tenant is held rather than passed per read</b> (jasperfx#885). Opening the tier for a
+///         tenant is what makes its tenant-<em>less</em> members — <see cref="FetchStreamAsync(Guid, long, DateTimeOffset?, long, CancellationToken)" />
+///         and <see cref="FetchStreamStateAsync(Guid, CancellationToken)" /> and their string twins —
+///         usable under conjoined tenancy at all: a shared stream id has a different version in each
+///         tenant, and those signatures carry nowhere to say which one is meant. That the tenant lands
+///         on the session rather than on each statement is not a shortcut: a session already scopes
+///         every read it serves to its own tenant, so there is no per-member tenant term for a later
+///         member to forget. <c>QueryStreamStates</c> and <c>EventQuery.TenantId</c> keep taking their
+///         own, being the two members that already had somewhere to put one.
+///     </para>
 /// </remarks>
 internal sealed class FisherReadOnlyEventStore : IReadOnlyEventStore
 {
     private readonly DocumentStore _store;
+    private readonly string? _tenantId;
 
-    internal FisherReadOnlyEventStore(DocumentStore store) => _store = store;
+    internal FisherReadOnlyEventStore(DocumentStore store, string? tenantId = null)
+    {
+        _store = store;
+        _tenantId = tenantId;
+    }
 
     public Task<IReadOnlyList<IEvent>> FetchStreamAsync(Guid streamId, long version = 0,
         DateTimeOffset? timestamp = null, long fromVersion = 0, CancellationToken token = default)
@@ -58,24 +74,35 @@ internal sealed class FisherReadOnlyEventStore : IReadOnlyEventStore
     ///     <see cref="ReadAsync{T}" /> — a queryable that captured one would pin a pooled connection
     ///     for as long as the caller keeps composing on it.
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>An omitted <paramref name="tenantId" /> falls back to the tenant this tier was opened
+    ///         for</b> (jasperfx#885), which is what keeps the two halves of a tenant-scoped reader
+    ///         agreeing. Without it, <c>OpenReadOnlyEventStore("north").QueryStreamStates()</c> would
+    ///         read the *default* tenant — a silent wrong answer under conjoined tenancy, and the wrong
+    ///         database file entirely under database-per-tenant. An explicit argument still wins, since
+    ///         this member is one of the two on the tier that has somewhere to name a tenant.
+    ///     </para>
+    /// </remarks>
     /// <exception cref="NotSupportedException">
-    ///     A non-null <paramref name="tenantId" /> on a store without conjoined event tenancy. Refused
-    ///     rather than ignored, per the contract: the unscoped streams table would read as one
-    ///     tenant's, which is the jasperfx#737 silently-unfiltered failure mode.
+    ///     A non-null tenant on a store with no tenant dimension at all — neither conjoined events nor a
+    ///     database per tenant. Refused rather than ignored, per the contract: the unscoped streams table
+    ///     would read as one tenant's, which is the jasperfx#737 silently-unfiltered failure mode.
     /// </exception>
     public IQueryable<StreamState> QueryStreamStates(string? tenantId = null)
     {
-        if (tenantId is not null
-            && _store.Options.EventGraph.TenancyStyle != JasperFx.MultiTenancy.TenancyStyle.Conjoined)
+        var scope = tenantId ?? _tenantId;
+
+        if (scope is not null && !_store.IsTenanted())
         {
             throw new NotSupportedException(
                 $"This event store is not multi-tenanted, so QueryStreamStates cannot scope to tenantId "
-                + $"'{tenantId}': fi_streams has no tenant dimension, and the unscoped streams would read "
+                + $"'{scope}': fi_streams has no tenant dimension, and the unscoped streams would read "
                 + "as that tenant's. Set StoreOptions.Events.TenancyStyle = TenancyStyle.Conjoined before "
-                + "the schema is created, or omit the tenant id.");
+                + "the schema is created, configure a database per tenant, or omit the tenant id.");
         }
 
-        return new StreamStateQueryProvider(_store, tenantId).CreateRoot();
+        return new StreamStateQueryProvider(_store, scope).CreateRoot();
     }
 
     /// <summary>
@@ -88,7 +115,7 @@ internal sealed class FisherReadOnlyEventStore : IReadOnlyEventStore
     /// </remarks>
     private async Task<T> ReadAsync<T>(Func<EventOperations, Task<T>> read)
     {
-        await using var session = _store.LightweightSession();
+        await using var session = _store.LightweightSession(_tenantId);
 
         return await read((EventOperations)session.Events).ConfigureAwait(false);
     }

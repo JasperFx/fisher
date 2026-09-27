@@ -735,6 +735,70 @@ public partial class DocumentStore : IEventStore
     IReadOnlyEventStore IEventStore.OpenReadOnlyEventStore() => new Events.FisherReadOnlyEventStore(this);
 
     /// <summary>
+    ///     The read-only event store slice, opened in one tenant's scope (jasperfx#885).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The interface's default throws for any non-null tenant, which would make the whole tier
+    ///         unreachable on a store whose default tenant is refused — and leave its tenant-less
+    ///         members answering about an arbitrary tenant on one whose default tenant is not. Fisher
+    ///         can honour it for the price of a field: the tier already opens a session per read
+    ///         precisely so it holds none, so the tenant goes to the session and every read it serves is
+    ///         scoped by the same code that scopes an application's.
+    ///     </para>
+    ///     <para>
+    ///         <b>A tenant on a store that is not multi-tenanted is refused rather than ignored</b>, the
+    ///         rule <c>QueryStreamStates</c> already follows one member over and for the same reason: a
+    ///         reader that quietly answered from the unscoped tables would report every tenant's events
+    ///         as that tenant's. <c>DefaultTenancy.DatabaseFor</c> resolves any id, so the refusal has
+    ///         to be here rather than left to the tenancy to raise.
+    ///     </para>
+    /// </remarks>
+    IReadOnlyEventStore IEventStore.OpenReadOnlyEventStore(string? tenantId)
+    {
+        if (tenantId is null)
+        {
+            return new Events.FisherReadOnlyEventStore(this);
+        }
+
+        if (!IsTenanted())
+        {
+            throw new NotSupportedException(
+                $"This event store is not multi-tenanted, so OpenReadOnlyEventStore cannot scope to "
+                + $"tenantId '{tenantId}': its reads would answer from the unscoped tables and report "
+                + "every tenant's events as that tenant's. Set StoreOptions.Events.TenancyStyle = "
+                + "TenancyStyle.Conjoined before the schema is created, configure a database per tenant, "
+                + "or omit the tenant id.");
+        }
+
+        return new Events.FisherReadOnlyEventStore(this, tenantId);
+    }
+
+    /// <summary>
+    ///     Does naming a tenant mean anything to this store's event reads?
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Two ways it can, and they scope a read by different mechanisms: conjoined tenancy puts a
+    ///         <c>tenant_id</c> predicate on the statement, while a database per tenant selects the
+    ///         <em>file</em> and adds no predicate at all. Either is a real tenant dimension; neither
+    ///         alone is the whole answer, which is why this is one predicate rather than a check written
+    ///         twice.
+    ///     </para>
+    ///     <para>
+    ///         <b>It is deliberately broader than the conjoined-only test <c>QueryStreamStates</c> used to
+    ///         carry</b> (jasperfx#885). That test refused a tenant on a database-per-tenant store, where
+    ///         a tenant is the most meaningful thing a caller can name — the reader resolves that
+    ///         tenant's database and reads it, which is exactly right. What must stay refused is a store
+    ///         with no tenant dimension of either kind, where the read would answer from the unscoped
+    ///         tables and report every tenant's events as one tenant's.
+    ///     </para>
+    /// </remarks>
+    internal bool IsTenanted()
+        => Options.EventGraph.TenancyStyle == JasperFx.MultiTenancy.TenancyStyle.Conjoined
+           || Tenancy.Cardinality != DatabaseCardinality.Single;
+
+    /// <summary>
     ///     The tooling-facing compaction entry point, which has no aggregate type parameter and so has
     ///     to resolve one from <c>fi_streams</c>.
     /// </summary>

@@ -133,6 +133,23 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
             if (config.ConjoinedEventTenancy)
             {
                 options.Events.TenancyStyle = JasperFx.MultiTenancy.TenancyStyle.Conjoined;
+
+                // jasperfx#898 / marten#5343: conjoined EVENTS are not enough once the configuration
+                // also registers a snapshot. A snapshot document keyed on the stream id alone holds one
+                // row for a stream id that two tenants both wrote, so the second tenant's projection
+                // OVERWRITES the first tenant's snapshot -- no error appending, no error reading, and
+                // both tenants then read a document describing the other one's stream. Marten refuses
+                // to build such a store ("Tenancy storage style mismatch"); Fisher has no such guard
+                // yet (fisher#335, which predicted this fact would be the one to go red and asks
+                // whether the answer is a refusal or auto-marking the snapshot document), so until it
+                // decides, this line is what a Fisher application configuring conjoined events has to
+                // write for itself — Marten's fixture writes the same one, for the same reason
+                // (marten#5343).
+                //
+                // Every conjoined suite before 2.75.0 registered no projection, which is why the
+                // pairing had never arisen: inline_and_async_snapshots_of_a_shared_stream_id_stay_isolated_per_tenant
+                // is the fact that needs it, and it fails on the INLINE read without this.
+                options.Policies.AllDocumentsAreMultiTenanted();
             }
 
             if (config.MaxConcurrentRebuildsPerDatabase.HasValue)
@@ -148,6 +165,24 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
             if (config.MaxPoolSize.HasValue)
             {
                 options.MaxPoolSize = config.MaxPoolSize.Value;
+            }
+
+            // jasperfx#893. The EVENT-store twin of DocumentComplianceConfig.CommitListeners, which the
+            // document fixture has replayed since jasperfx#679 — the slot had to be duplicated upstream
+            // because a listener is registered when the store is BUILT and an event-store fixture had no
+            // way to install one. Adapted onto Fisher's own listener type and added to the same
+            // Listeners collection every other listener uses, so this is the shipped registration route
+            // rather than a test-only one.
+            //
+            // ⚠️ Not optional, and it does not degrade into a skip. A listener that was never registered
+            // never fires, which is indistinguishable from a store that reports nothing — so
+            // creating_and_deleting_within_one_batch_reports_no_deletion would pass VACUOUSLY on the very
+            // bug it exists to catch. Its control assertion (the commit was reported at all) is what
+            // turns that into the failure it should be, and that is the assertion that fails without
+            // this loop.
+            foreach (var listener in config.CommitListeners)
+            {
+                options.Listeners.Add(listener.AsSessionListener());
             }
 
             config.ApplyTo(new FisherComplianceRegistrar(options));

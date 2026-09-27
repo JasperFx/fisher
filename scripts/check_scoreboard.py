@@ -268,8 +268,10 @@ def main() -> int:
                 f"red declaration is a suppressed failure."
             )
 
-        red_heading = find(r"### Red — (\d+) facts", handoff)
-        failures.expect("HANDOFF '### Red — N facts'", red_heading, len(red))
+        # "facts?" so a single red fact reads as "1 fact" rather than "1 facts". The count is what
+        # is checked; the plural is prose.
+        red_heading = find(r"### Red — (\d+) facts?\b", handoff)
+        failures.expect("HANDOFF '### Red — N fact(s)'", red_heading, len(red))
 
         failures.expect(
             "HANDOFF header, total tests (red wording)",
@@ -436,13 +438,22 @@ def main() -> int:
     # HANDOFF when fisher#107 was filed -- which is how the disagreement became visible at all.
     readme = (root / README).read_text(encoding="utf-8")
 
-    readme_claim = re.search(r"\*\*all (\d+) suites and (\d+) tests\*\*", readme)
+    # "all" is optional because the front page cannot say it during a red run. The numbers stay
+    # checked either way; what the second check enforces is that the wording does not overstate.
+    readme_claim = re.search(r"\*\*(?:all )?(\d+) suites and (\d+) tests\*\*", readme)
     if readme_claim is None:
-        failures.expect("README, 'all N suites and M tests'", None,
+        failures.expect("README, '[all] N suites and M tests'", None,
                         f"{len(compliance)} suites, {compliance_total} tests")
     else:
         failures.expect("README, suites", readme_claim.group(1), len(compliance))
         failures.expect("README, compliance tests", readme_claim.group(2), compliance_total)
+
+    if red and re.search(r"passes \*\*all \d+ suites", readme):
+        failures.add(
+            "README says Fisher passes ALL the suites it enrolls while this run is red. The front page "
+            "is the first account a prospective user reads, so it must not claim a clean sweep it does "
+            "not have -- name the shortfall and point at HANDOFF's red list."
+        )
 
     failures.expect(
         "README, Fisher.Tests count",
