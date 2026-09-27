@@ -831,6 +831,23 @@ Six things that are decisions rather than mechanics:
   `EventStoreOptions.HighWaterLivenessInterval` bounds it (five seconds; zero turns it off and leaves
   the health check on the gap heuristic alone).
 
+**A non-stale timeout says what each lagging agent last reported** (fisher#329). The wait used to name
+the lagging shard and add "the daemon may not be running" — which, in the one CI failure #329 has, sat
+beside a sibling shard at the head: the daemon *was* running, and the only thing that could have told a
+stalled shard from a slow one, the agent's own state, was discarded with its `NullLogger`.
+`DescribeLaggingAgents` now appends each lagging shard's last `ShardState` from this database's tracker
+— action, agent status, and a pause reason cut to its exception lines (the stack frames dropped, the
+inner `--->` lines kept, since an apply failure arrives wrapped in `ApplyEventException`).
+- **Read, never created.** `_tracker` is lazy, and a store with no daemon in this process has none; building
+  one to ask it would invent an observation. That case keeps the old hint, and
+  `with_no_daemon_in_this_process_the_hint_is_kept` pins it.
+- ⚠️ **It diagnoses #329 rather than fixing it.** The stall is not reproduced — 99 of 100 local runs of
+  the class were clean, and the hundredth was a failure the investigation caused itself (another loop
+  deleting its files mid-run) — and the hypothesis it was checked
+  against (a shard missing the one high-water publication on an idle store) does not survive
+  `StartAllAsync` priming the mark before any agent starts (jasperfx#709). The next occurrence names its
+  cause.
+
 **The hosted service is the store's `IProjectionCoordinator`** (fisher#138). It registered only as an
 `IHostedService` over an internal class implementing nothing else, so **both** documented routes to the
 running daemon failed — the service was not resolvable, and the

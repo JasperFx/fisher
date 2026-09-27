@@ -382,7 +382,7 @@ public partial class FisherDatabase : IEventDatabase
 
             var detail = missing.Length > 0
                 ? $" Registered shards that have not recorded any progress: [{string.Join(", ", missing)}]"
-                  + " — the daemon may not be running."
+                  + (_tracker is null ? " — the daemon may not be running." : ".")
                 : string.Empty;
 
             var recorded = lags.Where(x => x.HasProgressionRow)
@@ -391,8 +391,91 @@ public partial class FisherDatabase : IEventDatabase
             throw new TimeoutException(
                 $"Projection data was still stale after {timeout}. High water is at {highWater}; "
                 + $"shards are at [{string.Join(", ", recorded)}]."
-                + detail);
+                + detail
+                + DescribeLaggingAgents(lags.Where(x => !x.HasProgressionRow || x.Sequence < highWater)));
         }
+    }
+
+    /// <summary>
+    ///     What the daemon in this process last said about each lagging shard, for the timeout message
+    ///     (fisher#329).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         A timeout that names a shard and nothing else cannot tell "slow" from "stopped". fisher#329
+    ///         was exactly that: one CI run reported <c>AggregateMemoVectors:All</c> with no progress and
+    ///         "the daemon may not be running" beside a sibling shard at the head — so the daemon WAS
+    ///         running, and whatever stopped that one agent was thrown away with its logger. The tracker
+    ///         the daemon publishes through holds each agent's last state, including a pause reason and the
+    ///         exception, so the timeout now says which.
+    ///     </para>
+    ///     <para>
+    ///         Read, never created: a store with no daemon in this process has no tracker yet, and building
+    ///         one here would claim an observation that was never made. That case keeps the old hint.
+    ///     </para>
+    /// </remarks>
+    private string DescribeLaggingAgents(IEnumerable<ProjectionLag> lagging)
+    {
+        if (_tracker is null)
+        {
+            return string.Empty;
+        }
+
+        var described = lagging
+            .Select(lag =>
+            {
+                var identity = lag.Shard.Identity;
+
+                if (!_tracker.TryGetCurrentState(identity, out var state))
+                {
+                    return $"{identity}: no agent has reported any state in this process";
+                }
+
+                var parts = new List<string> { $"{identity}: last {state.Action} at {state.Sequence}" };
+
+                if (state.AgentStatus is { } status)
+                {
+                    parts.Add($"agent {status}");
+                }
+
+                if (state.PauseReason is { } reason)
+                {
+                    parts.Add($"paused: {Headline(reason)}");
+                }
+
+                if (state.Exception is { } exception)
+                {
+                    parts.Add($"{exception.GetType().Name}: {exception.Message}");
+                }
+                else if (state.Failure is { } failure)
+                {
+                    parts.Add($"{failure.Category} failure, {failure.ExceptionType}: {failure.Message}");
+                }
+
+                return string.Join(", ", parts);
+            })
+            .ToArray();
+
+        return described.Length == 0 ? string.Empty : $" Agents: [{string.Join("; ", described)}].";
+    }
+
+    /// <summary>
+    ///     An exception's text without its stack trace: the outer line and every inner
+    ///     <c>---&gt;</c> line.
+    /// </summary>
+    /// <remarks>
+    ///     JasperFx records a pause reason as the whole exception, frames included, and a timeout
+    ///     carrying one per lagging shard is unreadable. The inner lines have to survive, though — an
+    ///     apply failure arrives wrapped in <c>ApplyEventException</c>, whose own message names the event
+    ///     and not what went wrong with it.
+    /// </remarks>
+    private static string Headline(string exceptionText)
+    {
+        var lines = exceptionText.Split('\n');
+
+        return string.Join(" ", lines
+            .Where((line, index) => index == 0 || line.TrimStart().StartsWith("--->", StringComparison.Ordinal))
+            .Select(line => line.Trim()));
     }
 
     /// <summary>
