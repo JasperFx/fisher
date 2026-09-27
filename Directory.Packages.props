@@ -7,7 +7,20 @@
         <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
              carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
              transitively. -->
-        <!-- JasperFx 2.75.1 (from 2.74.0, spanning 2.75.0).
+        <!-- JasperFx 2.75.2 (from 2.75.1). A source-generator diagnostics patch, adopted with no Fisher
+             change and no suite change (the ComplianceTests content is byte-identical to 2.75.1):
+
+             - jasperfx#906: the "no source-generated dispatcher" message decided whether the generator
+               ran by checking the projection type's assembly for the marker — and for Snapshot<T>,
+               whose projection is the STORE'S OWN closed SingleStreamProjection<T, TId>, that is
+               Fisher.dll, which always carries it. So for Fisher's commonest registration the message
+               told the reader the one cause they actually had was not the cause. Closed generics are
+               now excluded from the evidence.
+             - jasperfx#902: a double-loaded generator with the dedupe turned off now warns JFXEVT902
+               instead of going straight to CS0433. Fisher's builds and the packed-consumer smoke test
+               (fisher#337) raise no JFXEVT warning on this version.
+
+             JasperFx 2.75.1 (from 2.74.0, spanning 2.75.0).
 
              THE BUMP IS THE WORK, and almost all of it is jasperfx#898/#899 — conjoined DOCUMENT
              tenancy, which the shared library had no seam for at all until now. One new suite
@@ -104,16 +117,16 @@
              generation, which Fisher does not do — projection dispatch is source-generated.
              jasperfx#880 is XML comments on AutoCreate. jasperfx#867 is a Wolverine codegen fix and
              jasperfx#865/#866 are the publish pipeline. -->
-        <PackageVersion Include="JasperFx" Version="2.75.1" />
-        <PackageVersion Include="JasperFx.Events" Version="2.75.1" />
+        <PackageVersion Include="JasperFx" Version="2.75.2" />
+        <PackageVersion Include="JasperFx.Events" Version="2.75.2" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.75.1" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.75.1" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.75.2" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.75.2" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.75.1" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.75.2" />
 
         <!-- Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
              source. Weasel.Storage: the dialect-neutral closed-shape document + event storage
@@ -126,6 +139,9 @@
              (weasel#561). It also carries weasel#574, which brings the shared flat-table
              DecrementMemberMap into line with fisher#183; Fisher does not use that DSL yet, but the
              agreement is what makes adopting it later cost nothing.
+
+             9.35.2 is weasel#634 alone — an exhausted DropSchema retry is reported rather than
+             returned as success. Fisher drops no schemas (SQLite has none), so it is inert here.
 
              9.35.1 (from 9.32.0, spanning 9.33.0/9.34.0/9.35.0) is a message-and-diagnostics wave,
              inherited whole with no Fisher change. Nothing in it is a behaviour change Fisher has to
@@ -152,8 +168,8 @@
              advisory lock), and #615/#621/#625/#627/#628/#629 (Weasel.EntityFrameworkCore, which
              Fisher.EntityFrameworkCore does not reference — it takes
              Microsoft.EntityFrameworkCore.Relational alone). -->
-        <PackageVersion Include="Weasel.Sqlite" Version="9.35.1" />
-        <PackageVersion Include="Weasel.Storage" Version="9.35.1" />
+        <PackageVersion Include="Weasel.Sqlite" Version="9.35.2" />
+        <PackageVersion Include="Weasel.Storage" Version="9.35.2" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
