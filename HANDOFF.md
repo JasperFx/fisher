@@ -15,7 +15,7 @@ scoreboard and the things that are true right now but not obvious from either.
 **2355 tests green on net9.0 and net10.0** — 2288 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 603 of
 them are shared cross-store compliance tests — 499 event sourcing and 104 document.
-On JasperFx **2.75.1** / Weasel **9.35.1**.
+On JasperFx **2.75.2** / Weasel **9.35.2**.
 
 ## The JasperFx 2.75.x bump — conjoined document tenancy, and the hazard it uncovered
 
@@ -751,7 +751,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.75.1 ships 58 suites; Fisher enrolls **57 of them, 603 tests**.
+`JasperFx.Events.ComplianceTests` 2.75.2 ships 58 suites; Fisher enrolls **57 of them, 603 tests**.
 Fisher passes **603 of them, across all
 57 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
