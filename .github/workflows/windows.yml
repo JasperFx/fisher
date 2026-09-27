@@ -1,0 +1,56 @@
+name: windows
+
+# fisher#325. Fisher's main CI runs on Linux only, and the directory tenancy maps the default tenant to a
+# file named `*DEFAULT*.db` — `*` is reserved in Windows file names. This runs the tests that turn tenant
+# ids into paths on a Windows runner, so the answer to "does it work there" is a CI fact rather than a
+# guess.
+#
+# Deliberately NOT a leg of fisher.yml. JasperFx is on the Free org plan and the concurrent-job ceiling
+# is shared across every repository in the org (see fisher.yml's concurrency block), so a Windows job on
+# every pull request would cost marten, wolverine and weasel queue slots for a question that only the
+# tenancy files can change the answer to. It runs when those files — or this workflow — change, and on
+# demand.
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - .github/workflows/windows.yml
+      - src/Fisher/Storage/ITenancy.cs
+      - src/Fisher/Storage/ITenantSource.cs
+      - src/Fisher/Storage/TenantFileName.cs
+      - src/Fisher.Tests/Configuration/default_tenant_file_name.cs
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  directory-tenancy:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+
+      - name: Build
+        run: dotnet build src/Fisher.Tests/Fisher.Tests.csproj -c Release -f net10.0
+
+      # The classes that turn a tenant id into a file path. default_tenant_file_name is the probe for
+      # fisher#325 itself; the others are the rest of directory tenancy, which would fail the same way
+      # if a store under it cannot even be constructed.
+      - name: Directory tenancy on Windows
+        shell: bash
+        run: |
+          src/Fisher.Tests/bin/Release/net10.0/Fisher.Tests.exe \
+            --filter-class "Fisher.Tests.Configuration.default_tenant_file_name" \
+            --filter-class "Fisher.Tests.Configuration.runtime_tenants" \
+            --filter-class "Fisher.Tests.Configuration.tenant_id_validation" \
+            --filter-class "Fisher.Tests.Configuration.database_per_tenant"
