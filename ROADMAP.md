@@ -3,12 +3,32 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **four open issues, and none of them is feature work.** Two are unreproduced
-intermittents kept open on evidence, one is a platform question Fisher's CI cannot answer, and one is
-blocked upstream. 1.5.0 closed both of 1.4.0's follow-ups and the whole of JasperFx 2.69.x's
-compliance wave; 1.6.0 added hybrid search; 1.7.0 closed the vector story; 1.8.0 through 1.10.0
-settled how a Fisher store identifies itself and which Event Model canvas it contributes to; 1.11.0
-finished the search wave.
+Status: **three open issues, and none of them is feature work.** Two are unreproduced intermittents
+kept open on evidence, and one is blocked upstream. 1.5.0 closed both of 1.4.0's follow-ups and the
+whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed the vector story;
+1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event Model canvas it
+contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
+
+**1.13.0 is a first-use and tenancy wave, and two of its changes refuse at startup what used to fail
+silently.** [#333](https://github.com/JasperFx/fisher/issues/333): the event tables are created on
+first use, as document tables have been since #74 — the first append on a fresh file failed with
+`no such table: fi_streams` under every `AutoCreate`, which is how a CritterWatch console failed every
+message it handled. [#332](https://github.com/JasperFx/fisher/issues/332): the monitoring reads answer
+"no results" rather than throwing on a store whose schema has not been applied yet.
+[#335](https://github.com/JasperFx/fisher/issues/335): conjoined events projected into a single-tenant
+aggregate document are **refused when the store is built** ("Tenancy storage style mismatch", as
+Marten does) — two tenants sharing a stream id folded into one row, silently, and the guard found an
+existing test doing exactly that; the rest of the issue's list is now pinned by tests.
+[#334](https://github.com/JasperFx/fisher/issues/334): EF-backed projections write and scope by tenant,
+accept a `(TenantId, Id)` key, and refuse an entity that cannot carry a tenant.
+[#325](https://github.com/JasperFx/fisher/issues/325): measured on a Windows runner rather than argued,
+`*DEFAULT*.db` could not be opened, so directory tenancy did not work on Windows at all; the default
+tenant's file is `(default).db` now, an existing `*DEFAULT*.db` keeps being used, and a path-filtered
+Windows workflow keeps it true. [#337](https://github.com/JasperFx/fisher/issues/337) asserts the source
+generator is attached in every project that needs it and smoke-tests the **packed** nupkg as a consumer
+would; [#329](https://github.com/JasperFx/fisher/issues/329)'s non-stale timeout now says what each
+lagging agent last reported; [#345](https://github.com/JasperFx/fisher/issues/345) turned out to be stale
+files from interrupted runs, and the leak check can now tell. On JasperFx **2.75.2** / Weasel **9.35.2**.
 
 **1.12.0 is a correctness wave, and three of its nine items were silently wrong rather than
 missing.** [#304](https://github.com/JasperFx/fisher/issues/304): a LINQ comparison against a
@@ -108,19 +128,13 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is four items, none of which is work that is ready to start.
+What is left is three items, none of which is work that is ready to start.
 
 [#189](https://github.com/JasperFx/fisher/issues/189) is an unreproduced flake with 65 clean runs
-against it, and [#329](https://github.com/JasperFx/fisher/issues/329) is a second one — a 30-second
-daemon wait that expired once on a loaded CI runner and has not recurred. Both stay open on evidence
-rather than on work outstanding, which is the only honest thing to do with a failure nobody can
-reproduce.
-
-[#325](https://github.com/JasperFx/fisher/issues/325) is a question Fisher's own CI cannot answer:
-under the directory tenancy the default tenant maps to a file named `*DEFAULT*.db`, and `*` is a
-reserved character in a Windows filename. Fisher runs its suites on Linux, so whether this actually
-fails there is unverified — and the fix is not a rider on anything, because renaming that file would
-orphan every existing default-tenant database.
+against it, and [#329](https://github.com/JasperFx/fisher/issues/329) is a second one — one shard of two
+that never recorded progress on a loaded CI runner, 99 clean local runs since. Both stay open on
+evidence rather than on work outstanding; #329's timeout now names the stalled agent's own state, so its
+next occurrence explains itself.
 
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.
