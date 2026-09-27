@@ -7,7 +7,7 @@
         <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
              carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
              transitively. -->
-        <!-- JasperFx 2.75.0 (from 2.74.0).
+        <!-- JasperFx 2.75.1 (from 2.74.0, spanning 2.75.0).
 
              THE BUMP IS THE WORK, and almost all of it is jasperfx#898/#899 — conjoined DOCUMENT
              tenancy, which the shared library had no seam for at all until now. One new suite
@@ -32,13 +32,24 @@
              Without it the whole read-only tier is unreachable on a store whose default tenant is
              refused. Closes a bullet of fisher#335.
 
-             ONE RED FACT, and it is the SUITE's rather than Fisher's:
+             2.75.1 IS WHY THE PIN IS NOT 2.75.0. Two things in it, and neither is optional:
+             jasperfx#903/#905 — 2.75.0's
              DocumentConjoinedTenancyCompliance.optimistic_concurrency_is_scoped_to_the_tenant_for_a_shared_id
-             cannot pass on any store that satisfies
-             GuidOptimisticConcurrencyCompliance.a_successful_write_moves_the_instances_own_version_on
-             — the two shared facts contradict each other. jasperfx#903; HANDOFF's red list has it, and
-             tenant_scoped_concurrency_guards pins the behaviour it is about so a real regression cannot
-             hide behind an already-failing fact.
+             asserted a refusal no correct store can produce: it re-stored the instance that had just
+             performed the winning write, which a committed Store has written the landed version back
+             onto, so nothing about it was stale. It contradicted
+             GuidOptimisticConcurrencyCompliance.a_successful_write_moves_the_instances_own_version_on,
+             and no store could be green on both. Found here by first-contact enrollment (9 of 10 passed)
+             and fixed upstream as the issue proposed — the stale instance is now separately loaded. The
+             suite is 10 of 10.
+             jasperfx#893 — ComplianceStoreConfig.AddCommitListener, the EVENT-store twin of the document
+             config's listener slot, and StreamArchivingCompliance's nineteenth fact
+             (creating_and_deleting_within_one_batch_reports_no_deletion) needs it. NOT AUTOMATIC:
+             FisherComplianceFixture has to replay it onto StoreOptions.Listeners, and ignoring it does
+             not make the fact skip — a listener that was never registered never fires, which is
+             indistinguishable from a store that reports nothing, so the fact would pass VACUOUSLY on
+             the very bug it exists to catch. Its control assertion is what fails instead, which is how
+             the replay was verified.
 
              INHERITED, no Fisher change needed:
              jasperfx#889 — the source-generated DetermineAction decides per BATCH rather than per
@@ -93,16 +104,16 @@
              generation, which Fisher does not do — projection dispatch is source-generated.
              jasperfx#880 is XML comments on AutoCreate. jasperfx#867 is a Wolverine codegen fix and
              jasperfx#865/#866 are the publish pipeline. -->
-        <PackageVersion Include="JasperFx" Version="2.75.0" />
-        <PackageVersion Include="JasperFx.Events" Version="2.75.0" />
+        <PackageVersion Include="JasperFx" Version="2.75.1" />
+        <PackageVersion Include="JasperFx.Events" Version="2.75.1" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.75.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.75.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.75.1" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.75.1" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.75.0" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.75.1" />
 
         <!-- Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
              source. Weasel.Storage: the dialect-neutral closed-shape document + event storage

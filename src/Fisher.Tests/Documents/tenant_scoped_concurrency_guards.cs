@@ -10,31 +10,31 @@ namespace Fisher.Tests.Documents;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         <b>Why this exists locally when a shared suite covers the same ground.</b>
-///         <c>DocumentConjoinedTenancyCompliance</c> states both claims, and its numeric fact passes
-///         here; its Guid fact is red against Fisher and the reason is the suite's rather than
-///         Fisher's — see jasperfx#903. That leaves the behaviour the red fact is <em>about</em>
-///         unpinned anywhere, which is the one situation where a red upstream fact should be answered
-///         with a local test rather than only with an issue: without one, a genuine regression in the
-///         tenant scope of the version guard would land behind a fact that was already failing.
+///         <b>Written because the shared fact was unsatisfiable, kept because it still says more.</b>
+///         <c>DocumentConjoinedTenancyCompliance.optimistic_concurrency_is_scoped_to_the_tenant_for_a_shared_id</c>
+///         shipped in 2.75.0 requiring a refusal no correct store can produce: it re-stored the very
+///         instance that had just performed the winning write, which a committed <c>Store</c> has
+///         written the landed version back onto, so nothing about it was stale. That contradicted
+///         <c>GuidOptimisticConcurrencyCompliance.a_successful_write_moves_the_instances_own_version_on</c>
+///         — <c>ComplianceShipment.Version</c>'s own doc comment says it carries "the landed version on
+///         the way out", and Fisher is the reference store for that fact (fisher#245) — so no store
+///         could be green on both. jasperfx#903, fixed in 2.75.1 exactly as proposed: the stale instance
+///         is now separately loaded, which is what "stale" has to mean on a store with write-back.
 ///     </para>
 ///     <para>
-///         <b>What the suite's Guid fact does differently, and why it cannot pass.</b> It advances
-///         tenant A's row by storing the very instance it loaded, then re-stores <em>that same
-///         instance</em> and requires a <see cref="ConcurrencyException" />. That instance is not
-///         stale: <c>GuidOptimisticConcurrencyCompliance.a_successful_write_moves_the_instances_own_version_on</c>
-///         requires a committed write to write the landed version back onto the caller's instance —
-///         <c>ComplianceShipment.Version</c>'s own doc comment says it carries "the landed version on
-///         the way out" — and Fisher is the reference store for that fact (fisher#245). So the two
-///         shared facts cannot both hold, and a store that made the tenancy fact pass would fail the
-///         concurrency suite it is nominally a special case of.
+///         So the suite now covers the two Guid facts below, and this class overlaps it there. It stays
+///         for the third: <b>revisions counted per <c>(tenant, id)</c> over a deliberately advanced
+///         count</b>, which needs <c>UpdateRevision</c> rather than <c>Store</c>, because Fisher follows
+///         Marten's rule that an explicit revision must be strictly <em>greater</em> than the stored one
+///         (fisher#228). That interaction — a tenancy rule and a concurrency rule that arrived from
+///         different directions — is not something a portable fixture has the vocabulary for, and it is
+///         the half most likely to be broken by a change to either.
 ///     </para>
 ///     <para>
-///         The stale instance here is therefore a <em>separately loaded</em> one, which is what "stale"
-///         has to mean on a store with write-back. Everything else is the shared fact's arrangement
-///         verbatim, including the shared id across two tenants — which is the whole point: a guard
-///         whose <c>WHERE</c> matches on <c>(id, version)</c> and omits the tenant reads whichever row
-///         it finds first, so it refuses a write that conflicts with nothing and admits one that does.
+///         The arrangement is the shared fact's verbatim, including the shared id across two tenants,
+///         which is the whole point: a guard whose <c>WHERE</c> matches on <c>(id, version)</c> and omits
+///         the tenant reads whichever row it finds first, so it refuses a write that conflicts with
+///         nothing and admits one that does.
 ///     </para>
 ///     <para>
 ///         <b>Both directions on both guards</b>, following the shared suite's own discipline. A store

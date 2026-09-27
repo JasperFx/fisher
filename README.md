@@ -26,10 +26,8 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > database-per-tenant, with tenants that appear at runtime), `AddFisher(...)` DI registration, and the
 > `Fisher.AspNetCore` and `Fisher.EntityFrameworkCore` companion packages all work and are tested.
 >
-> Fisher enrolls **57 suites and 602 tests** from `JasperFx.Events.ComplianceTests` — the shared
-> cross-store suite Marten and Polecat also enroll in — alongside its own 2,257, and passes every one
-> of them but a single fact that no store can pass: two shared facts contradict each other
-> ([jasperfx#903](https://github.com/JasperFx/jasperfx/issues/903)), and HANDOFF.md has the detail.
+> Fisher passes **all 57 suites and 603 tests** it enrolls from `JasperFx.Events.ComplianceTests`,
+> the shared cross-store suite Marten and Polecat also enroll in, alongside its own 2,258.
 >
 > That suite pins **API portability, not behavioural equivalence** — code written against one store
 > compiles and runs against another. It does not pin that the three behave identically, and they do

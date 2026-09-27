@@ -12,44 +12,12 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2320 tests on net9.0 and net10.0**, one of them red — 2257 in
-`Fisher.Tests`, 36 in `Fisher.AspNetCore.Tests` and 27 in `Fisher.EntityFrameworkCore.Tests`. 602 of
-them are shared cross-store compliance tests — 498 event sourcing and 104 document.
-On JasperFx **2.75.0** / Weasel **9.35.1**.
+**2321 tests green on net9.0 and net10.0** — 2258 in `Fisher.Tests`, 36 in
+`Fisher.AspNetCore.Tests` and 27 in `Fisher.EntityFrameworkCore.Tests`. 603 of
+them are shared cross-store compliance tests — 499 event sourcing and 104 document.
+On JasperFx **2.75.1** / Weasel **9.35.1**.
 
-### Red — 1 fact
-
-- `Fisher.Tests.Compliance.document_conjoined_tenancy_compliance.optimistic_concurrency_is_scoped_to_the_tenant_for_a_shared_id`
-
-**It is [jasperfx#903](https://github.com/JasperFx/jasperfx/issues/903), a suite bug rather than a
-product bug, and Fisher found it by being the store that ran the suite** — the same way wave 13's two
-upstream findings arrived. `DocumentConjoinedTenancyCompliance` is new in 2.75.0 and this is
-first-contact runtime validation of its document arm; **nine of its ten facts pass**, including both
-cross-tenant escapes and the numeric-revision twin of the failing one.
-
-⚠️ **Two shared facts contradict each other, so no store can be green on both.** The tenancy fact
-advances tenant A's row by storing the very instance it loaded, then re-stores *that same instance* and
-requires a `ConcurrencyException`, on the stated premise that it "carries the version A held BEFORE its
-own update above". It does not:
-`GuidOptimisticConcurrencyCompliance.a_successful_write_moves_the_instances_own_version_on` **requires**
-a committed write to write the landed version back onto the caller's instance, and
-`ComplianceShipment.Version`'s own doc comment says it carries "the landed version on the way out". So
-the instance is not stale, the guard matches, and the write lands. A store could only make the tenancy
-fact pass by dropping the write-back — which fails the concurrency suite this fact is nominally a
-tenanted special case of. Fisher is the reference store for that fact (fisher#245), but the write-back
-is Marten's behaviour Fisher adopted rather than a divergence, so this should be red on all three.
-
-**Nothing in `src/Fisher` is implicated, and that claim is tested rather than asserted.**
-`tenant_scoped_concurrency_guards` runs the fact's arrangement unchanged — including the shared id
-across two tenants, which is what gives it its teeth — with the stale instance *separately loaded*,
-which is what "stale" has to mean on a store with write-back. All three of its facts are green: a
-shared id's Guid guard in one tenant ignores the other tenant's copy however far the versions have
-diverged, a genuinely stale instance is still refused inside the tenant, and revisions are counted per
-`(tenant, id)`. It stays while jasperfx#903 is open, because otherwise the behaviour the red fact is
-*about* is pinned nowhere and a real regression in it would land behind a fact that was already
-failing.
-
-## The JasperFx 2.75.0 bump — conjoined document tenancy, and the hazard it uncovered
+## The JasperFx 2.75.x bump — conjoined document tenancy, and the hazard it uncovered
 
 **The bump is the work.** jasperfx#898/#899 added the document half of a tenancy seam the shared library
 had never had: one new suite (`DocumentConjoinedTenancyCompliance`, 10 facts) and seven more facts on
@@ -102,6 +70,33 @@ verified by reverting it, and they fail different tests**.
   store, where a tenant is the most meaningful thing a caller can name. What stays refused is a store
   with no tenant dimension of either kind, where the read would answer from the unscoped tables and
   report every tenant's events as one tenant's.
+
+### The one fact that was red, and what 2.75.1 fixed
+
+**`DocumentConjoinedTenancyCompliance.optimistic_concurrency_is_scoped_to_the_tenant_for_a_shared_id`
+shipped in 2.75.0 asserting a refusal no correct store can produce**, and Fisher found it by being the
+store that ran the suite — first-contact validation of the document arm, the way wave 13 was for the
+event suites. Nine of its ten facts passed.
+
+⚠️ **Two shared facts contradicted each other, so no store could be green on both.** The tenancy fact
+advanced tenant A's row by storing the very instance it loaded, then re-stored *that same instance* and
+required a `ConcurrencyException`, on the premise that it still carried its pre-update version. It did
+not: `GuidOptimisticConcurrencyCompliance.a_successful_write_moves_the_instances_own_version_on`
+**requires** a committed write to write the landed version back onto the caller's instance, so the
+re-store guarded on the current version and was admitted. A store could only have passed by dropping
+the write-back — failing the suite this fact is a tenanted special case of.
+
+**jasperfx#903, fixed in 2.75.1 (jasperfx#905), and the fix is the one the issue proposed**: the stale
+instance is now read first on its own session and never written until the end, which is what "stale"
+has to mean on a store with write-back. The suite is 10 of 10 here.
+
+**`tenant_scoped_concurrency_guards` stays, and the reason changed rather than expiring.** It was
+written to pin the behaviour the red fact was *about*, so a real regression could not hide behind an
+already-failing fact. Now that the shared fact is correct there is overlap — but the local one still
+says two things the suite does not: revisions are counted per `(tenant, id)` over a deliberately
+advanced count, and Fisher's "strictly greater" explicit-revision rule (fisher#228) is what a caller
+meets here, which is why the test reaches for `UpdateRevision` rather than `Store`. Cheap, and it
+documents the interaction of two rules that arrived from different directions.
 
 **Weasel 9.35.1 (from 9.32.0) is inherited whole** — a message-and-diagnostics wave with no Fisher
 change and the whole suite green unedited. The two that reach Fisher are weasel#595 (a numeric-revision
@@ -756,8 +751,8 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.75.0 ships 58 suites; Fisher enrolls **57 of them, 602 tests**.
-Fisher passes **601 of them, across all
+`JasperFx.Events.ComplianceTests` 2.75.1 ships 58 suites; Fisher enrolls **57 of them, 603 tests**.
+Fisher passes **603 of them, across all
 57 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
@@ -906,9 +901,9 @@ naming.
 **Green on all fifty-seven is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 57 suites, 602 tests
+### Green — 57 suites, 603 tests
 
-Event sourcing — 46 suites, 498 tests:
+Event sourcing — 46 suites, 499 tests:
 
 | Suite | Tests |
 |---|---|
@@ -918,7 +913,7 @@ Event sourcing — 46 suites, 498 tests:
 | `StringStreamIdentityCompliance` | 19 |
 | `EventStoreExplorerCompliance` | 18 |
 | `NaturalKeyCompliance` | 17 |
-| `StreamArchivingCompliance` | 18 |
+| `StreamArchivingCompliance` | 19 |
 | `StreamStateQueryCompliance` | 15 |
 | `AggregateWriteCacheCompliance` | 14 |
 | `StrongTypedIdentityCompliance` | 14 |

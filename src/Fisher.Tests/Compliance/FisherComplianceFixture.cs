@@ -167,6 +167,24 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
                 options.MaxPoolSize = config.MaxPoolSize.Value;
             }
 
+            // jasperfx#893. The EVENT-store twin of DocumentComplianceConfig.CommitListeners, which the
+            // document fixture has replayed since jasperfx#679 — the slot had to be duplicated upstream
+            // because a listener is registered when the store is BUILT and an event-store fixture had no
+            // way to install one. Adapted onto Fisher's own listener type and added to the same
+            // Listeners collection every other listener uses, so this is the shipped registration route
+            // rather than a test-only one.
+            //
+            // ⚠️ Not optional, and it does not degrade into a skip. A listener that was never registered
+            // never fires, which is indistinguishable from a store that reports nothing — so
+            // creating_and_deleting_within_one_batch_reports_no_deletion would pass VACUOUSLY on the very
+            // bug it exists to catch. Its control assertion (the commit was reported at all) is what
+            // turns that into the failure it should be, and that is the assertion that fails without
+            // this loop.
+            foreach (var listener in config.CommitListeners)
+            {
+                options.Listeners.Add(listener.AsSessionListener());
+            }
+
             config.ApplyTo(new FisherComplianceRegistrar(options));
         });
 
