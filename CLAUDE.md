@@ -5920,6 +5920,20 @@ factory)`, over `Projections.StorageProviders` in the core.
       fix from a leak is how many are outstanding, so it compares created against disposed after each
       commit. `a_caller_enlisted_participant_survives_a_commit` is the other side and passes either
       way, which is what it is for.
+- **Under conjoined events the entity must implement `JasperFx.MultiTenancy.ITenanted`** (fisher#334),
+  and `ProjectionTenancyGuard` refuses the store otherwise — Marten's and Polecat's EF rule. The storage
+  used to carry its tenant and write it *nowhere*, so every tenant's same-id stream folded into one
+  entity, the fisher#335 shape reached through EF. Now `AddOrUpdate` stamps `TenantId` before EF reads
+  the key, and every lookup goes through `FindUnsafe`, which is tenant-scoped two ways:
+  - **A composite `(TenantId, Id)` key is accepted**, and is the one composite `KeyProperties` does not
+    refuse — `Find` takes the values in EF's key order, so the tenant slots in wherever the model put it.
+    This is what lets two tenants share a stream id.
+  - **With an id-only key, another tenant's row is declined rather than folded onto** (`OwnedByThisTenant`),
+    and the insert that follows fails on the key — loud, where handing it back would silently rewrite
+    another tenant's entity.
+  - The **aggregation base classes stay absent on purpose** — the registration is the seam, above — which
+    is issue point 1's answer; `ef_core_tenancy` is the three facts Marten and Polecat each carry, plus
+    the refusal. All four fail against the previous build.
 - **A registered type is deliberately not mapped**, so registering the projection skips its mapping
   and the type gets no `fi_doc_*` table. That is what makes registration-before-projection
   load-bearing, and it is checked rather than documented — the same "this line has to come first"

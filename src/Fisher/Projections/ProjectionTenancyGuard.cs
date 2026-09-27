@@ -32,7 +32,8 @@ namespace Fisher.Projections;
 ///         projection whose <see cref="TenancyGrouping" /> is not <c>RespectTenant</c> has said in so
 ///         many words that its documents are not per tenant — Marten's exemption, word for word. A type
 ///         stored by a registered projection storage provider (an EF Core entity) is not a Fisher
-///         document, so Fisher has no mapping to judge; that is fisher#334's to answer on the EF side.
+///         document, so there is no mapping to judge; it has to implement <see cref="ITenanted" />
+///         instead, which is where the provider writes the tenant (fisher#334).
 ///     </para>
 ///     <para>
 ///         Only the direction that leaks is refused. Marten also refuses conjoined documents under
@@ -50,6 +51,7 @@ internal static class ProjectionTenancyGuard
         }
 
         var mismatches = new List<string>();
+        var untenantedEntities = new List<string>();
 
         foreach (var source in Flatten(options.Projections.All))
         {
@@ -65,8 +67,17 @@ internal static class ProjectionTenancyGuard
 
             var documentType = aggregate.AggregateType;
 
+            // A type stored by a projection storage provider (an EF Core entity) has no Fisher mapping
+            // to judge. What it needs instead is somewhere to put the tenant: the provider stamps
+            // IHasTenantId.TenantId, and an entity without one would fold every tenant's same-id
+            // stream into one row — Marten's and Polecat's EF rule (fisher#334).
             if (options.Projections.StorageProviders.HasProviderFor(documentType))
             {
+                if (!typeof(IHasTenantId).IsAssignableFrom(documentType))
+                {
+                    untenantedEntities.Add(documentType.FullName ?? documentType.Name);
+                }
+
                 continue;
             }
 
@@ -74,6 +85,16 @@ internal static class ProjectionTenancyGuard
             {
                 mismatches.Add(documentType.FullName ?? documentType.Name);
             }
+        }
+
+        if (untenantedEntities.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "Tenancy storage style mismatch: this store's events are Conjoined, but the projected "
+                + $"entity type(s) {string.Join(", ", untenantedEntities.Distinct())} are stored by a "
+                + "projection storage provider (EF Core) and do not implement "
+                + "JasperFx.MultiTenancy.ITenanted, so there is nowhere to write the tenant. Implement "
+                + "ITenanted, and key the entity on (TenantId, Id) if two tenants may share a stream id.");
         }
 
         if (mismatches.Count == 0)

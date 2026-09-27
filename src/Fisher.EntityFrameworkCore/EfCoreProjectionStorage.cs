@@ -1,4 +1,5 @@
 using JasperFx.Events;
+using JasperFx.MultiTenancy;
 using JasperFx.Events.Aggregation;
 using JasperFx.Events.Daemon;
 using Microsoft.EntityFrameworkCore;
@@ -101,7 +102,7 @@ internal sealed class EfCoreProjectionStorage<TDoc, TId, TContext> : IProjection
 
     public void Delete(TId identity) => Locked(() =>
     {
-        var existing = _context.Find<TDoc>(identity);
+        var existing = FindUnsafe(identity);
 
         if (existing is not null)
         {
@@ -146,7 +147,7 @@ internal sealed class EfCoreProjectionStorage<TDoc, TId, TContext> : IProjection
 
         try
         {
-            return (await _context.FindAsync<TDoc>([id], cancellation).ConfigureAwait(false))!;
+            return (await FindUnsafeAsync(id, cancellation).ConfigureAwait(false))!;
         }
         finally
         {
@@ -172,7 +173,7 @@ internal sealed class EfCoreProjectionStorage<TDoc, TId, TContext> : IProjection
 
             foreach (var id in identities)
             {
-                var document = await _context.FindAsync<TDoc>([id], cancellationToken).ConfigureAwait(false);
+                var document = await FindUnsafeAsync(id, cancellationToken).ConfigureAwait(false);
 
                 if (document is not null)
                 {
@@ -218,33 +219,92 @@ internal sealed class EfCoreProjectionStorage<TDoc, TId, TContext> : IProjection
 
     private void SetIdentityUnsafe(TDoc document, TId identity)
     {
-        var property = PrimaryKeyPropertyName(document);
-
-        _context.Entry(document).Property(property).CurrentValue = identity;
+        _context.Entry(document).Property(IdentityPropertyName).CurrentValue = identity;
     }
 
     private TId IdentityUnsafe(TDoc document)
-        => (TId)_context.Entry(document).Property(PrimaryKeyPropertyName(document)).CurrentValue!;
+        => (TId)_context.Entry(document).Property(IdentityPropertyName).CurrentValue!;
 
+    /// <summary>
+    ///     The name of <see cref="IHasTenantId.TenantId" />, which is what an entity carrying its tenant
+    ///     exposes to EF — and which may be part of its primary key (fisher#334).
+    /// </summary>
+    private const string TenantIdProperty = nameof(IHasTenantId.TenantId);
+
+    /// <summary>
+    ///     Whether the entity carries its tenant, in which case every write stamps it and every read is
+    ///     scoped by it (fisher#334).
+    /// </summary>
+    private static readonly bool IsTenanted = typeof(IHasTenantId).IsAssignableFrom(typeof(TDoc));
+
+    private IReadOnlyList<string>? _keyProperties;
+
+    /// <summary>
+    ///     The primary key's properties in EF's order, which is the order <c>Find</c> takes values in.
+    /// </summary>
     /// <remarks>
-    ///     Named rather than assumed to be called <c>Id</c>, and refused rather than guessed when the
-    ///     entity has no key or a composite one — a projection keyed on something EF does not consider
-    ///     the identity would write rows that no later slice could ever find again.
+    ///     <para>
+    ///         Named rather than assumed to be called <c>Id</c>, and refused rather than guessed when the
+    ///         entity has no key, or a composite one that is not "the identity plus the tenant" — a
+    ///         projection keyed on something EF does not consider the identity would write rows that no
+    ///         later slice could ever find again.
+    ///     </para>
+    ///     <para>
+    ///         <b>A composite <c>(TenantId, Id)</c> key is accepted for a tenanted entity</b>, and is what
+    ///         lets two tenants' streams share an id under conjoined tenancy — the key the Fisher document
+    ///         table uses for the same reason.
+    ///     </para>
     /// </remarks>
-    private string PrimaryKeyPropertyName(TDoc document)
+    private IReadOnlyList<string> KeyProperties
     {
-        var key = _context.Entry(document).Metadata.FindPrimaryKey();
-
-        if (key is null || key.Properties.Count != 1)
+        get
         {
-            throw new InvalidOperationException(
-                $"'{typeof(TDoc).Name}' needs a single-property primary key to be projected into by "
-                + $"Fisher, and EF Core reports {(key is null ? "none" : $"{key.Properties.Count}")}. A "
-                + "projection's identity is one value, so there is nothing to map a composite key onto.");
-        }
+            if (_keyProperties is not null)
+            {
+                return _keyProperties;
+            }
 
-        return key.Properties[0].Name;
+            var key = _context.Model.FindEntityType(typeof(TDoc))?.FindPrimaryKey();
+            var names = key?.Properties.Select(x => x.Name).ToArray() ?? [];
+
+            var identities = names.Where(x => !(IsTenanted && x == TenantIdProperty)).ToArray();
+
+            if (names.Length == 0 || identities.Length != 1)
+            {
+                throw new InvalidOperationException(
+                    $"'{typeof(TDoc).Name}' needs a single-property primary key to be projected into by "
+                    + $"Fisher, and EF Core reports {(names.Length == 0 ? "none" : string.Join(", ", names))}. "
+                    + "A projection's identity is one value, so the only composite key Fisher can map is "
+                    + $"({TenantIdProperty}, Id) on an entity implementing ITenanted.");
+            }
+
+            return _keyProperties = names;
+        }
     }
+
+    private string IdentityPropertyName => KeyProperties.Single(x => !(IsTenanted && x == TenantIdProperty));
+
+    private object?[] KeyValuesFor(object identity)
+        => KeyProperties.Select(x => IsTenanted && x == TenantIdProperty ? TenantId : identity).ToArray();
+
+    /// <summary>
+    ///     This tenant's row for an identity, or null.
+    /// </summary>
+    /// <remarks>
+    ///     With an id-only key, a row another tenant wrote under the same id is <em>not</em> this
+    ///     tenant's and is not handed back: folding onto it would silently rewrite another tenant's
+    ///     entity. The later insert then fails on the key, which is the loud answer — and the reason a
+    ///     conjoined store sharing stream ids between tenants wants the composite key.
+    /// </remarks>
+    private TDoc? FindUnsafe(object identity) => OwnedByThisTenant(_context.Find<TDoc>(KeyValuesFor(identity)));
+
+    private async Task<TDoc?> FindUnsafeAsync(object identity, CancellationToken token)
+        => OwnedByThisTenant(await _context.FindAsync<TDoc>(KeyValuesFor(identity), token).ConfigureAwait(false));
+
+    private TDoc? OwnedByThisTenant(TDoc? document)
+        => document is IHasTenantId tenanted && tenanted.TenantId is { } owner && owner != TenantId
+            ? null
+            : document;
 
     /// <remarks>
     ///     A projection hands over whatever its <c>Apply</c> methods produced, which may be an instance
@@ -255,13 +315,19 @@ internal sealed class EfCoreProjectionStorage<TDoc, TId, TContext> : IProjection
     /// </remarks>
     private void AddOrUpdateUnsafe(TDoc entity)
     {
+        // Stamped before EF looks at the key, since the tenant may be half of it (fisher#334).
+        if (entity is IHasTenantId tenanted)
+        {
+            tenanted.TenantId = TenantId;
+        }
+
         var entry = _context.Entry(entity);
 
         switch (entry.State)
         {
             case EntityState.Detached:
-                var identity = entry.Property(PrimaryKeyPropertyName(entity)).CurrentValue;
-                var existing = identity is null ? null : _context.Find<TDoc>(identity);
+                var identity = entry.Property(IdentityPropertyName).CurrentValue;
+                var existing = identity is null ? null : FindUnsafe(identity);
 
                 if (existing is not null && !ReferenceEquals(existing, entity))
                 {

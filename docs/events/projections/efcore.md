@@ -60,6 +60,29 @@ It is checked rather than documented, the same "this line has to come first" sha
 `SeedInitialDataOnStartup` has.
 :::
 
+## Conjoined tenancy
+
+Under conjoined events an EF entity has to carry its tenant, and **Fisher refuses to build the store
+otherwise**. Implement `JasperFx.MultiTenancy.ITenanted`. Fisher stamps `TenantId` on every write and
+scopes every lookup to it, which is also what Marten and Polecat require.
+
+If two tenants may use the same stream id, key the entity on the tenant and the id together. That is
+what a Fisher document table does for the same reason:
+
+```cs
+public class OrderSummary : ITenanted
+{
+    public Guid Id { get; set; }
+    public string? TenantId { get; set; }
+    // ...
+}
+
+modelBuilder.Entity<OrderSummary>().HasKey(x => new { x.TenantId, x.Id });
+```
+
+With an id-only key, a row another tenant wrote under the same id is never folded onto. The insert
+that follows fails on the key instead of silently rewriting the other tenant's entity.
+
 ## The context reads on its own connection and writes on Fisher's
 
 Both halves are forced rather than chosen:
