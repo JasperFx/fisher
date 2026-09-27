@@ -18,8 +18,17 @@ wrote it never deleted.
 
 Run after the suites, and only on a green run: a failing test may legitimately skip its own cleanup,
 so a leak reported over a red suite would be noise pointing at the wrong thing.
+
+`--since <epoch seconds>` counts only entries modified at or after that moment (fisher#345). A CI
+runner starts with an empty temp directory so it never needs this; a developer's machine does not, and
+both leaks fisher#345 was filed over turned out to be files an EARLIER, interrupted run left behind — a
+test process killed mid-run never disposes its fixtures — reported against the run after it. Pass the
+moment the run started:
+
+    start=$(date +%s); <run the suites>; python3 scripts/check_no_leaked_databases.py --since "$start"
 """
 
+import argparse
 import os
 import sys
 import tempfile
@@ -28,10 +37,24 @@ PREFIX = "fisher-"
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--since", type=float, default=None,
+                        help="only count entries modified at or after this Unix time")
+    args = parser.parse_args()
+
     temp = tempfile.gettempdir()
 
+    def is_recent(name: str) -> bool:
+        if args.since is None:
+            return True
+        try:
+            return os.stat(os.path.join(temp, name)).st_mtime >= args.since
+        except OSError:
+            # Gone between the listing and the stat: whatever it was, it did not survive the run.
+            return False
+
     try:
-        leaked = sorted(name for name in os.listdir(temp) if name.startswith(PREFIX))
+        leaked = sorted(name for name in os.listdir(temp) if name.startswith(PREFIX) and is_recent(name))
     except OSError as error:
         print(f"Could not read the temp directory {temp}: {error}", file=sys.stderr)
         return 0
