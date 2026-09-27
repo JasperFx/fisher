@@ -1,0 +1,6 @@
+<Project>
+    <!-- The repository manages package versions centrally; an outside consumer does not. -->
+    <PropertyGroup>
+        <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    </PropertyGroup>
+</Project>

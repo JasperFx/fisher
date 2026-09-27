@@ -197,3 +197,17 @@ jobs:
             echo "::error::generator in a project referencing two Critter Stack stores (CS0111)."
             exit 1
           fi
+
+      # fisher#337. The two assertions above read the nupkg's contents; this CONSUMES it. The
+      # smoke project references only the packed Fisher — the one shape no test project here has,
+      # since they all reference the generator directly — with JasperFxEventsRequireSourceGenerator
+      # on, so a generator that stopped flowing out of the package fails the build (JFXEVT900),
+      # and then runs a conventional aggregate to prove the attached generator dispatches.
+      #
+      # A prerelease version nothing on nuget.org carries, restored into a private package folder,
+      # with source mapping pinning Fisher to the local feed: otherwise this could quietly pass
+      # against the last published release instead of this commit.
+      - name: A consumer of the packed Fisher gets a working projection dispatcher
+        run: |
+          dotnet pack src/Fisher/Fisher.csproj -c Release -o ./artifacts/smoke -p:Version=0.0.0-smoke
+          dotnet run --project smoke/packaged-consumer -c Release -p:FisherVersion=0.0.0-smoke
