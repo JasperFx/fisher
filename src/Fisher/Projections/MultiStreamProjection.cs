@@ -26,7 +26,8 @@ namespace Fisher.Projections;
 /// <typeparam name="TDoc">The aggregate document type.</typeparam>
 /// <typeparam name="TId">The identity events are grouped by, which need not be the stream identity.</typeparam>
 public abstract class MultiStreamProjection<TDoc, TId>
-    : JasperFxMultiStreamProjectionBase<TDoc, TId, IDocumentSession, IQuerySession>, IFisherRegistrable
+    : JasperFxMultiStreamProjectionBase<TDoc, TId, IDocumentSession, IQuerySession>, IFisherRegistrable,
+        IHasTenancyGrouping
     where TDoc : notnull
     where TId : notnull
 {

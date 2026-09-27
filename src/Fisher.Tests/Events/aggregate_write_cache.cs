@@ -265,6 +265,11 @@ public class aggregate_write_cache : IAsyncLifetime
             options.AutoCreateSchemaObjects = AutoCreate.All;
             options.Events.TenancyStyle = TenancyStyle.Conjoined;
             options.Projections.Snapshot<BarTab>(SnapshotLifecycle.Inline);
+
+            // Two tenants share streamId below, so a single-tenant snapshot would fold both tenants'
+            // tabs into one row — which is what fisher#335's guard now refuses, and what this test was
+            // silently doing before it existed.
+            options.Schema.For<BarTab>().MultiTenanted();
             options.Events.AggregateWriteCaching.Cache = cache;
             options.Events.CacheAggregatesForWriting<BarTab>();
         });

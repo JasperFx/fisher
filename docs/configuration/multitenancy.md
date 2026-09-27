@@ -30,6 +30,16 @@ read it when they build their columns and their primary key, so it is a schema d
 runtime one. Set it inside the `DocumentStore.For` / `AddFisher` lambda, ahead of any migration.
 :::
 
+::: warning Conjoined events need conjoined aggregate documents
+With conjoined events, **every document an aggregation projection writes must be conjoined too**, and
+Fisher refuses to build the store otherwise, with "Tenancy storage style mismatch". Two tenants may use
+the same stream id. A single-tenant snapshot keyed on that id alone would hold one row for both, and
+each tenant's projection would silently overwrite the other's. Mark the document with
+`MultiTenanted()` or `[MultiTenanted]`, or use `Policies.AllDocumentsAreMultiTenanted()`. A multi-stream
+projection that deliberately groups across tenants says so with `TenancyGrouping.AcrossTenants`.
+Marten applies the same rule.
+:::
+
 Then open a session for a tenant:
 
 ```cs
