@@ -551,6 +551,30 @@ database — a table the caller created in a transaction they may yet roll back 
 file. **The monitoring reads do not provision**: those are fisher#332's, which answers "no results"
 instead, because a console pointed at a store must not be what changes its schema.
 
+### The monitoring reads answer "no results" without a schema — fisher#332
+
+`FisherDatabase.ReadWhenStorageExistsAsync` wraps the event store's diagnostic reads — progression,
+high-water status, the head sequence, the timestamp floor, all three dead-letter reads — and
+`Advanced.FetchEventStoreStatisticsAsync`, answering empty/`null`/`0` when the table or column does not
+exist. Marten's marten#5512, ported. These are what a console calls on a timer, and the likeliest
+reason one fails is that the schema has not been applied **yet** — the window before
+`ApplyAllDatabaseChangesOnStartup()` runs, which is exactly when a console attaches.
+
+- **Keyed on the exception, never on configuration**, because configuration cannot say whether the
+  schema has been applied. `SqliteSchemaErrors` is the classifier: `SQLITE_ERROR` (1) plus the message,
+  since SQLite has no dedicated code, and **"no such column" as well as "no such table"** — a table
+  with an older column set is the case Marten actually met in production.
+- **It replaced two call-site wrappers that caught bare `Exception`** (`HeadSequenceAsync` in the
+  projection statuses and `TryReadMaxEventSequenceAsync` in `TryCreateUsage`). Those swallowed a genuine
+  connection or corruption failure as readily as a missing table, and they did not generalise —
+  `GetProjectionStatusesAsync` called `AllProjectionProgress` unprotected two lines away.
+  `a_file_that_is_not_a_database_still_throws` is the half that pins the narrowing.
+- **Outside the resilience pipeline**, so a missing table is not offered to a retry policy first, and
+  **reads only**: a progression or dead-letter write that silently did nothing would be far worse than
+  one that failed.
+- `FetchHighWaterInputsAsync` is deliberately not wrapped — it is the daemon's poll loop rather than a
+  monitoring read, and the daemon ensures the event tables before it starts (fisher#333).
+
 ### Flat-table projections
 
 `Projections/Flattened/` — a `FlatTableProjection` writes into a plain relational table keyed on the

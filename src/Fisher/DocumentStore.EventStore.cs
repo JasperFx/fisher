@@ -705,23 +705,15 @@ public partial class DocumentStore : IEventStore
     ///         renders as "n/a" and says nothing.
     ///     </para>
     ///     <para>
-    ///         A failure is swallowed rather than propagated: this is a diagnostics call, and the most
-    ///         likely reason the read fails is that the schema has not been created yet — which is
-    ///         precisely when a monitoring tool is most likely to be pointed at the store. Failing the
-    ///         whole description over one optional number would answer nothing at all.
+    ///         A store whose schema has not been created yet reports zero — the true answer about a store
+    ///         with no events — which is precisely when a monitoring tool is most likely to be pointed at
+    ///         it. That lives in the read itself since fisher#332; this used to catch bare
+    ///         <see cref="Exception" /> and answer null, which also hid a genuine connection or
+    ///         corruption failure behind "n/a".
     ///     </para>
     /// </remarks>
     private async Task<long?> TryReadMaxEventSequenceAsync(CancellationToken token)
-    {
-        try
-        {
-            return await Database.FetchHighestEventSequenceNumber(token).ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
+        => await Database.FetchHighestEventSequenceNumber(token).ConfigureAwait(false);
 
     /// <summary>
     ///     The read-only event store slice, for monitoring tools.

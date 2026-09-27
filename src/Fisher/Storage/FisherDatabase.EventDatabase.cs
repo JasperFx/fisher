@@ -45,6 +45,45 @@ public partial class FisherDatabase : IEventDatabase
     public string StorageIdentifier => Identifier;
 
     /// <summary>
+    ///     Run a diagnostic read, answering <paramref name="whenStorageIsMissing" /> rather than throwing
+    ///     when the table or column it reads does not exist (fisher#332).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         These are the reads a monitoring console makes, usually on a timer, and the likeliest reason
+    ///         one fails is that the schema has not been applied yet — which is precisely when a console
+    ///         is most likely to be pointed at the store, in the window before
+    ///         <c>ApplyAllDatabaseChangesOnStartup()</c> has run. "No shards, no dead letters, sequence
+    ///         zero" is the true answer about a store with no event tables; a raw
+    ///         <c>no such table</c> answers nothing and fails the whole page over one number. Marten
+    ///         made the same call in marten#5512.
+    ///     </para>
+    ///     <para>
+    ///         <b>Keyed on the exception rather than on configuration</b>, because configuration cannot
+    ///         say whether the schema has been applied yet. And narrowed to the two missing-storage
+    ///         errors, where the call-site wrappers this replaced caught bare <see cref="Exception" /> and
+    ///         so swallowed a genuine connection or corruption failure just as readily.
+    ///     </para>
+    ///     <para>
+    ///         <b>Outside the resilience pipeline</b>, so a missing table is answered at once rather than
+    ///         being offered to a retry policy first. <b>Reads only</b>: a progression or dead-letter
+    ///         <em>write</em> that silently did nothing would be far worse than one that failed.
+    ///     </para>
+    /// </remarks>
+    private async Task<T> ReadWhenStorageExistsAsync<T>(Func<CancellationToken, ValueTask<T>> read,
+        T whenStorageIsMissing, CancellationToken token)
+    {
+        try
+        {
+            return await _options.ResiliencePipeline.ExecuteAsync(read, token).ConfigureAwait(false);
+        }
+        catch (Exception e) when (SqliteSchemaErrors.IsMissingStorage(e))
+        {
+            return whenStorageIsMissing;
+        }
+    }
+
+    /// <summary>
     ///     How far one shard has processed.
     /// </summary>
     /// <remarks>
@@ -53,7 +92,7 @@ public partial class FisherDatabase : IEventDatabase
     /// </remarks>
     public async Task<long> ProjectionProgressFor(ShardName name, CancellationToken token = default)
     {
-        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        return await ReadWhenStorageExistsAsync(async ct =>
         {
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
@@ -62,7 +101,7 @@ public partial class FisherDatabase : IEventDatabase
 
             var result = await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
             return result is null or DBNull ? 0L : Convert.ToInt64(result);
-        }, token).ConfigureAwait(false);
+        }, 0L, token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -70,7 +109,7 @@ public partial class FisherDatabase : IEventDatabase
     /// </summary>
     public async Task<IReadOnlyList<ShardState>> AllProjectionProgress(CancellationToken token = default)
     {
-        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        return await ReadWhenStorageExistsAsync(async ct =>
         {
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
@@ -84,7 +123,7 @@ public partial class FisherDatabase : IEventDatabase
             }
 
             return (IReadOnlyList<ShardState>)states;
-        }, token).ConfigureAwait(false);
+        }, (IReadOnlyList<ShardState>)Array.Empty<ShardState>(), token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -139,7 +178,7 @@ public partial class FisherDatabase : IEventDatabase
     /// </remarks>
     public async Task<HighWaterStatus?> FetchHighWaterStatusAsync(CancellationToken token = default)
     {
-        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        return await ReadWhenStorageExistsAsync(async ct =>
         {
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
@@ -158,7 +197,7 @@ public partial class FisherDatabase : IEventDatabase
             }
 
             return new HighWaterStatus(reader.GetInt64(0), SqliteTimestamp.FromDatabaseValue(reader.GetString(1)));
-        }, token).ConfigureAwait(false);
+        }, (HighWaterStatus?)null, token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -193,14 +232,14 @@ public partial class FisherDatabase : IEventDatabase
     /// </remarks>
     public async Task<long> FetchHighestEventSequenceNumber(CancellationToken token)
     {
-        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        return await ReadWhenStorageExistsAsync(async ct =>
         {
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
             command.CommandText = $"select coalesce(max(seq_id), 0) from {_events.EventsTableName}";
 
             return Convert.ToInt64(await command.ExecuteScalarAsync(ct).ConfigureAwait(false));
-        }, token).ConfigureAwait(false);
+        }, 0L, token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -213,7 +252,7 @@ public partial class FisherDatabase : IEventDatabase
     /// </remarks>
     public async Task<long?> FindEventStoreFloorAtTimeAsync(DateTimeOffset timestamp, CancellationToken token)
     {
-        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        return await ReadWhenStorageExistsAsync(async ct =>
         {
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
@@ -223,7 +262,7 @@ public partial class FisherDatabase : IEventDatabase
 
             var result = await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
             return result is null or DBNull ? null : (long?)Convert.ToInt64(result);
-        }, token).ConfigureAwait(false);
+        }, (long?)null, token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -439,7 +478,7 @@ public partial class FisherDatabase : IEventDatabase
     /// </summary>
     public async Task<long> CountDeadLetterEventsAsync(ShardName shard, CancellationToken token = default)
     {
-        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        return await ReadWhenStorageExistsAsync(async ct =>
         {
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
@@ -451,7 +490,7 @@ public partial class FisherDatabase : IEventDatabase
             command.Parameters.AddWithValue("@shard", shard.ShardKey);
 
             return Convert.ToInt64(await command.ExecuteScalarAsync(ct).ConfigureAwait(false));
-        }, token).ConfigureAwait(false);
+        }, 0L, token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -465,7 +504,7 @@ public partial class FisherDatabase : IEventDatabase
     public async Task<IReadOnlyList<DeadLetterEvent>> QueryDeadLetterEventsAsync(ShardName shard,
         string? tenantId, int offset, int limit, CancellationToken token = default)
     {
-        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        return await ReadWhenStorageExistsAsync(async ct =>
         {
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
@@ -515,7 +554,7 @@ public partial class FisherDatabase : IEventDatabase
             }
 
             return (IReadOnlyList<DeadLetterEvent>)results;
-        }, token).ConfigureAwait(false);
+        }, (IReadOnlyList<DeadLetterEvent>)Array.Empty<DeadLetterEvent>(), token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -556,7 +595,7 @@ public partial class FisherDatabase : IEventDatabase
     public async Task<IReadOnlyList<DeadLetterShardCount>> FetchDeadLetterCountsAsync(string? tenantId,
         CancellationToken token = default)
     {
-        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        return await ReadWhenStorageExistsAsync(async ct =>
         {
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
@@ -584,7 +623,7 @@ public partial class FisherDatabase : IEventDatabase
             }
 
             return (IReadOnlyList<DeadLetterShardCount>)results;
-        }, token).ConfigureAwait(false);
+        }, (IReadOnlyList<DeadLetterShardCount>)Array.Empty<DeadLetterShardCount>(), token).ConfigureAwait(false);
     }
 }
 

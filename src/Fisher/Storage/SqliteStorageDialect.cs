@@ -78,9 +78,7 @@ internal sealed class SqliteStorageDialect<TId> : IStorageDialect
     ///     table" message; there is no dedicated error code to match on the way SQL Server's 208 or
     ///     Postgres's 42P01 allow.
     /// </summary>
-    public bool IsUndefinedTable(Exception exception)
-        => exception is SqliteException { SqliteErrorCode: 1 } sqlite &&
-           sqlite.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase);
+    public bool IsUndefinedTable(Exception exception) => SqliteSchemaErrors.IsUndefinedTable(exception);
 
     public void SetParameterType(DbParameter parameter, StorageColumnType type)
         => ((SqliteParameter)parameter).SqliteType = type switch

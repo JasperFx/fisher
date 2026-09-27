@@ -336,9 +336,25 @@ public class AdvancedOperations
     /// <remarks>
     ///     Three scalars on one connection inside the resilience pipeline, so a <c>SQLITE_BUSY</c>
     ///     retries the set rather than leaving the three readings taken at different moments.
+    ///     <para>
+    ///         A store whose schema has not been applied answers all zeros rather than
+    ///         <c>no such table</c> (fisher#332) — the true answer about a store with no event tables.
+    ///     </para>
     /// </remarks>
     public async Task<Events.EventStoreStatistics> FetchEventStoreStatisticsAsync(
         CancellationToken token = default)
+    {
+        try
+        {
+            return await ReadEventStoreStatisticsAsync(token).ConfigureAwait(false);
+        }
+        catch (Exception e) when (Storage.SqliteSchemaErrors.IsMissingStorage(e))
+        {
+            return new Events.EventStoreStatistics();
+        }
+    }
+
+    private async Task<Events.EventStoreStatistics> ReadEventStoreStatisticsAsync(CancellationToken token)
     {
         var events = _store.Options.EventGraph;
 
