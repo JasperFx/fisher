@@ -200,23 +200,14 @@ public partial class DocumentStore
     ///         projections page is opened to find out.
     ///     </para>
     ///     <para>
-    ///         A failure is swallowed to zero rather than propagated, the same judgement
-    ///         <c>TryCreateUsage</c> makes about the same read: the likeliest reason it fails is that
-    ///         the schema does not exist yet, which is precisely when a console is most likely to be
-    ///         pointed at the store, and failing the whole page over one number answers nothing at all.
+    ///         A store whose schema has not been applied yet answers zero rather than throwing — which
+    ///         is precisely when a console is most likely to be pointed at it. That now lives in the
+    ///         read itself (fisher#332), where this used to catch bare <see cref="Exception" /> and so
+    ///         also swallowed a genuine connection or corruption failure.
     ///     </para>
     /// </remarks>
-    private static async Task<long> HeadSequenceAsync(FisherDatabase database, CancellationToken ct)
-    {
-        try
-        {
-            return await database.FetchHighestEventSequenceNumber(ct).ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
-            return 0;
-        }
-    }
+    private static Task<long> HeadSequenceAsync(FisherDatabase database, CancellationToken ct)
+        => database.FetchHighestEventSequenceNumber(ct);
 
     /// <summary>
     ///     The shard-state tracker of the daemon this process is running against
