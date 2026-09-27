@@ -306,6 +306,14 @@ internal sealed class StreamStateQueryProvider : IQueryProvider, IDocumentQueryE
     ///     applies to <see cref="EventQuery.TenantId" />. On a single-tenancy store there is no
     ///     tenant dimension worth filtering on, and a non-null tenant was already refused upstream.
     /// </summary>
+    /// <remarks>
+    ///     <b>A predicate is only half of it, and the other half is which database the session opens</b>
+    ///     (jasperfx#885). Under conjoined tenancy there is one file and this filter is the whole scope;
+    ///     under database-per-tenant there is no predicate to add and the <em>file</em> is the scope, so
+    ///     the execution methods below open their session for <c>_tenantId</c> rather than for the default
+    ///     tenant. Getting only one of the two right is silent in both directions: a predicate against the
+    ///     wrong file matches nothing, and the right file read with no predicate reads every tenant in it.
+    /// </remarks>
     private void ApplyTenantScope(Statement statement)
     {
         if (Graph.TenancyStyle == JasperFx.MultiTenancy.TenancyStyle.Conjoined)
@@ -320,7 +328,7 @@ internal sealed class StreamStateQueryProvider : IQueryProvider, IDocumentQueryE
     private async Task ExecuteAsync(Statement statement, CancellationToken token,
         Func<System.Data.Common.DbDataReader, EventGraph, bool, Task> read)
     {
-        await using var session = (FisherSession)_store.LightweightSession();
+        await using var session = (FisherSession)_store.LightweightSession(_tenantId);
 
         var command = await CommandFor(statement, session, token).ConfigureAwait(false);
 
@@ -330,7 +338,7 @@ internal sealed class StreamStateQueryProvider : IQueryProvider, IDocumentQueryE
 
     private async Task<object?> ExecuteScalarAsync(Statement statement, CancellationToken token)
     {
-        await using var session = (FisherSession)_store.LightweightSession();
+        await using var session = (FisherSession)_store.LightweightSession(_tenantId);
 
         var command = await CommandFor(statement, session, token).ConfigureAwait(false);
 

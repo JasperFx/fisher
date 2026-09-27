@@ -8,9 +8,9 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and fifty-six are enrolled from
- * JasperFx.Events.ComplianceTests 2.74.0, which itself ships fifty-seven concrete suites across
- * fifty-six files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
+ * Suites were added one at a time as Fisher grew into them, and fifty-seven are enrolled from
+ * JasperFx.Events.ComplianceTests 2.75.0, which itself ships fifty-eight concrete suites across
+ * fifty-seven files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
  * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
@@ -557,3 +557,39 @@ public class guid_optimistic_concurrency_compliance
 
 public class document_search_compliance
     : DocumentSearchCompliance<FisherDocumentComplianceFixture>;
+
+/*
+ * jasperfx#898 — conjoined DOCUMENT tenancy, and the document half of a gap that had been open on all
+ * three stores since the document contract was born.
+ *
+ * The event side has had twelve tenanted facts since 2.45.0 while DocumentComplianceConfig carried no
+ * tenancy seam at all — so DocumentSearchCompliance cites fisher#285 (Fisher's own search path
+ * ignoring conjoined tenancy) as a reason to exist and then configures no tenancy. That is the shape
+ * of the gap, and it is the fisher#51 shape one tier up: the tenant that owns most of the data sees a
+ * correct-looking answer with extras, and only the other one misbehaves.
+ *
+ * Two things make its facts sharp where every earlier tenanted fact in the library was not, and both
+ * are worth knowing because they are what a Fisher-local test would have to copy:
+ *
+ *   - EVERY fact reuses ONE document id across two tenants. Under conjoined tenancy a document's
+ *     identity is (tenant, id), and a store keying on id alone does not fail loudly — it folds the two
+ *     writes into one row. Distinct ids per tenant, which is what the library used before, passes
+ *     cleanly on exactly that store.
+ *   - EVERY fact checks both directions, for the asymmetry above.
+ *
+ * Fisher passes it on the tenancy it has had since fisher#51 made the tenant term a statement-level
+ * pass rather than a per-predicate wrapper. What it did NOT have was the route: jasperfx#898 added
+ * LightweightSession(string) / QuerySession(string) to IDocumentSessionFactory additively, with
+ * THROWING defaults, and Fisher's own `string? tenantId = null` members satisfy neither — so
+ * IDocumentStore now forwards all four explicitly. See the covariance note there; it is the same
+ * near-miss IDocumentReadOperations.Events and IDocumentSessionOperations.PendingStreams already
+ * carry, and deleting the forwarders leaves a store that compiles, is correct, and fails every fact
+ * here with NotSupportedException.
+ *
+ * The two cross-tenant facts need the fixture's QueryAllTenantsAsync / QueryTenantsAsync seam, because
+ * AnyTenant is an element predicate inside a Where on Marten and an operator on the queryable on
+ * Fisher and Polecat — neither form can be written once in shared source.
+ */
+
+public class document_conjoined_tenancy_compliance
+    : DocumentConjoinedTenancyCompliance<FisherDocumentComplianceFixture>;

@@ -79,6 +79,24 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
                 options.Schema.MappingFor(documentType);
             }
 
+            // jasperfx#898. Conjoined DOCUMENT tenancy, replayed onto the same non-generic mapping the
+            // loop above just resolved — Schema.For<T>().MultiTenanted() sets exactly this property.
+            //
+            // ⚠️ Before the migration rather than after, and that is not merely ordering hygiene:
+            // TenancyStyle decides whether the table carries a tenant_id column AND whether the primary
+            // key is (tenant_id, id) or id alone, so a type conjoined after the schema was applied has a
+            // table that cannot hold two tenants' copies of one id. Which is the exact shape
+            // DocumentConjoinedTenancyCompliance exists to catch, so it would fail as a wiring error
+            // dressed as a product bug.
+            //
+            // Per type rather than through Policies.AllDocumentsAreMultiTenanted(), because the suite
+            // needs a single-tenanted type to remain single-tenanted where it declares one.
+            foreach (var documentType in config.ConjoinedDocuments)
+            {
+                options.Schema.MappingFor(documentType).TenancyStyle =
+                    JasperFx.MultiTenancy.TenancyStyle.Conjoined;
+            }
+
             // jasperfx#842. The vector indexes DocumentSearchCompliance declares, replayed onto the
             // same non-generic mapping as everything else above.
             //
@@ -213,6 +231,51 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
     ///     (fisher#243).
     /// </summary>
     public override bool SupportsHybridSearch => true;
+
+    /// <summary>
+    ///     Conjoined document tenancy — <c>Schema.For&lt;T&gt;().MultiTenanted()</c>, a <c>tenant_id</c>
+    ///     column leading the primary key, and every read scoped to the session's tenant (fisher#51).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Flipping this is what makes <c>document_conjoined_tenancy_compliance</c> run, and the
+    ///         thing it was gated behind on Fisher was not the tenancy — that has worked since fisher#51
+    ///         made the filter a statement-level pass — but the two tenant-scoped session overloads on
+    ///         <see cref="IDocumentSessionFactory" />. Those are additive members with throwing
+    ///         defaults, and Fisher's own <c>LightweightSession(string? tenantId = null)</c> does not
+    ///         satisfy either of them, so <see cref="IDocumentStore" /> forwards all four explicitly.
+    ///     </para>
+    ///     <para>
+    ///         ⚠️ That is the near-miss the contract's own remarks warn about and it is worth restating
+    ///         where a reader will meet it: the forwarders are not decoration. Delete them and this
+    ///         fixture still compiles, the store is still perfectly correct about tenancy, and every
+    ///         fact in the suite fails with <c>NotSupportedException</c> from a default implementation.
+    ///     </para>
+    /// </remarks>
+    public override bool SupportsConjoinedDocuments => true;
+
+    /// <summary>
+    ///     The two deliberate escapes from tenant scoping — <c>AnyTenant()</c> and
+    ///     <c>TenantIsOneOf(...)</c> (fisher#26).
+    /// </summary>
+    /// <remarks>
+    ///     Both are queryable operators on Fisher rather than element predicates inside a
+    ///     <c>Where</c>, which is the shape the seam's remarks describe for Polecat and Fisher against
+    ///     Marten's. They are only expressible because the tenant filter is its own statement-level
+    ///     pass: an operator that <em>replaces</em> the term cannot be written while the term is welded
+    ///     to each caller predicate, which is what fisher#51 changed.
+    /// </remarks>
+    public override bool SupportsCrossTenantQueries => true;
+
+    /// <inheritdoc />
+    public override async Task<IReadOnlyList<T>> QueryAllTenantsAsync<T>(
+        IDocumentReadOperations session, CancellationToken token)
+        => await session.Query<T>().AnyTenant().ToListAsync(token).ConfigureAwait(false);
+
+    /// <inheritdoc />
+    public override async Task<IReadOnlyList<T>> QueryTenantsAsync<T>(
+        IDocumentReadOperations session, string[] tenantIds, CancellationToken token)
+        => await session.Query<T>().TenantIsOneOf(tenantIds).ToListAsync(token).ConfigureAwait(false);
 
     public override async Task CleanDocumentDataAsync()
     {

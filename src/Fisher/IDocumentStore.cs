@@ -77,6 +77,26 @@ public interface IDocumentStore : IDisposable, IAsyncDisposable,
 
     IDocumentReadOperations IDocumentSessionFactory.QuerySession() => QuerySession();
 
+    // jasperfx#898 added the tenant-scoped pair additively, with throwing defaults, and they need the
+    // same four forwarders for the same reason plus one more: Fisher's own members take
+    // `string? tenantId = null`, so they neither bind to `LightweightSession()` (an optional parameter
+    // does not satisfy a parameterless member) nor to `LightweightSession(string)` (the nullability
+    // differs, and a hiding declaration on a derived interface never implements the base's member
+    // anyway). Without these four, a caller holding IDocumentSessionFactory -- which is every caller
+    // the shared contract exists for, and DocumentConjoinedTenancyCompliance in particular -- reaches
+    // the throwing default on a store whose conjoined document tenancy is perfectly correct. The
+    // contract's own remarks say so; document_conjoined_tenancy_compliance is what holds it.
+    IDocumentSession IDocumentSessionFactory<IDocumentSession, IQuerySession>.LightweightSession(string tenantId)
+        => LightweightSession(tenantId);
+
+    IQuerySession IDocumentSessionFactory<IDocumentSession, IQuerySession>.QuerySession(string tenantId)
+        => QuerySession(tenantId);
+
+    IDocumentSessionOperations IDocumentSessionFactory.LightweightSession(string tenantId)
+        => LightweightSession(tenantId);
+
+    IDocumentReadOperations IDocumentSessionFactory.QuerySession(string tenantId) => QuerySession(tenantId);
+
     /// <inheritdoc cref="DocumentStore.Options" />
     StoreOptions Options { get; }
 
@@ -90,7 +110,7 @@ public interface IDocumentStore : IDisposable, IAsyncDisposable,
     AdvancedOperations Advanced { get; }
 
     /// <inheritdoc cref="DocumentStore.LightweightSession" />
-    IDocumentSession LightweightSession(string? tenantId = null);
+    new IDocumentSession LightweightSession(string? tenantId = null);
 
     /// <inheritdoc cref="DocumentStore.IdentitySession" />
     IDocumentSession IdentitySession(string? tenantId = null);
@@ -102,7 +122,7 @@ public interface IDocumentStore : IDisposable, IAsyncDisposable,
     IDocumentSession OpenSession(SessionOptions options);
 
     /// <inheritdoc cref="DocumentStore.QuerySession(string)" />
-    IQuerySession QuerySession(string? tenantId = null);
+    new IQuerySession QuerySession(string? tenantId = null);
 
     /// <inheritdoc cref="DocumentStore.QuerySession(string)" />
     IQuerySession QuerySession(SessionOptions options);

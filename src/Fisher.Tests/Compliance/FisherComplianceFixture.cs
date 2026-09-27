@@ -133,6 +133,23 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
             if (config.ConjoinedEventTenancy)
             {
                 options.Events.TenancyStyle = JasperFx.MultiTenancy.TenancyStyle.Conjoined;
+
+                // jasperfx#898 / marten#5343: conjoined EVENTS are not enough once the configuration
+                // also registers a snapshot. A snapshot document keyed on the stream id alone holds one
+                // row for a stream id that two tenants both wrote, so the second tenant's projection
+                // OVERWRITES the first tenant's snapshot -- no error appending, no error reading, and
+                // both tenants then read a document describing the other one's stream. Marten refuses
+                // to build such a store ("Tenancy storage style mismatch"); Fisher has no such guard
+                // yet (fisher#335, which predicted this fact would be the one to go red and asks
+                // whether the answer is a refusal or auto-marking the snapshot document), so until it
+                // decides, this line is what a Fisher application configuring conjoined events has to
+                // write for itself — Marten's fixture writes the same one, for the same reason
+                // (marten#5343).
+                //
+                // Every conjoined suite before 2.75.0 registered no projection, which is why the
+                // pairing had never arisen: inline_and_async_snapshots_of_a_shared_stream_id_stay_isolated_per_tenant
+                // is the fact that needs it, and it fails on the INLINE read without this.
+                options.Policies.AllDocumentsAreMultiTenanted();
             }
 
             if (config.MaxConcurrentRebuildsPerDatabase.HasValue)
