@@ -2213,6 +2213,12 @@ ruled refuse over auto-marking.
 - **Only the leaking direction is refused.** Marten also refuses conjoined documents under single-tenant
   events; that is a mismatch but not a cross-tenant read, and refusing it would break stores for no
   protection.
+- **The rest of #335's list is pinned by `conjoined_tenancy_coverage` and `conjoined_tenancy_projections`**
+  — bulk insert (and `IgnoreDuplicates` across tenants), patching, soft delete, `HardDeleteWhere`,
+  plain/phrase/prefix full-text search, DCB tag queries, a multi-stream projection, a rebuild and a
+  `VectorProjection`, each over one identity two tenants share, checked in both directions. **All
+  passed first time**: none of it found a bug. They are regression pins for the operations the shared
+  `DocumentConjoinedTenancyCompliance` deliberately leaves out of scope.
 
 ### Cross-tenant writes
 
