@@ -35,7 +35,7 @@ namespace Fisher.Events.Protected;
 ///         exists.
 ///     </para>
 /// </remarks>
-internal sealed class ReplaceEventOperation : Weasel.Storage.IStorageOperation
+internal sealed class ReplaceEventOperation : Weasel.Storage.IStorageOperation, Fisher.Events.Storage.IEventStorageOperation
 {
     private readonly EventGraph _graph;
     private readonly long _sequence;

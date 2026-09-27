@@ -285,7 +285,7 @@ public partial class EventOperations
         var unwrapped = definition.Unwrap(key)
                         ?? throw new ArgumentNullException(nameof(key), "A natural key cannot be null.");
 
-        var connection = await _session.ConnectionAsync(cancellation).ConfigureAwait(false);
+        var connection = await _session.EventConnectionAsync(cancellation).ConfigureAwait(false);
 
         return await new Storage.NaturalKeyLookup(Graph)
             .ResolveAsync(definition, unwrapped, TenantId, connection, cancellation)
@@ -758,7 +758,7 @@ public partial class EventOperations
             sql += " and tenant_id = @tenant_id";
         }
 
-        var connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
+        var connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.CommandTimeout = _session.Options.CommandTimeout;

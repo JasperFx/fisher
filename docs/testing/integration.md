@@ -89,6 +89,10 @@ See [Tearing Down Document Storage](/schema/cleaning).
 **A read against a type nothing has written provisions its table and answers empty**, exactly as the
 first write of that type does. So a test that queries a collection before seeding it gets an empty
 list, not `no such table`.
+
+The same holds for events: the first append, `FetchForWriting` or stream read on a fresh file creates
+the event store's tables, so a store that never applied its schema still works. Under
+`AutoCreate.None` both halves refuse by name instead of creating anything.
 :::
 
 Registering the types up front is still worth doing, for a different reason: it puts every table in

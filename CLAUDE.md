@@ -519,6 +519,38 @@ Three things that are decisions:
   - The message names the document type, the setting, and the call to make — strictly better than the
     raw `SQLite Error 1: no such table` about a name the caller never wrote.
 
+### The event tables are created on first use too — fisher#333
+
+**fisher#74 did the document half and left the event half behind.** The event tables were created only
+by an explicit migration, so on a fresh file the first append failed with `no such table: fi_streams`
+under **every** `AutoCreate`, `All` included — while a document read on the same store worked. That
+asymmetry is what made it expensive: the on-demand document path creates enough tables that a fresh
+file *looks* provisioned, which is how CritterWatch's SQLite console failed every message it handled.
+Fisher's own suite could not see it, because every fixture applies the schema in `InitializeAsync`;
+`event_tables_on_first_use` is the class that deliberately never does.
+
+`FisherDatabase.EnsureEventStorageAsync` is `EnsureDocumentTableAsync`'s rules one feature over — only
+the event store's own schema objects are diffed, nothing is remembered until it succeeds, and
+`AutoCreate.None` checks and declines, naming `ApplyAllDatabaseChangesOnStartup()`. A flag rather than
+a per-type cache, since the event tables are one feature and migrate together. Four ways in:
+
+- **`FisherSession.EventConnectionAsync`** — every event read a session runs, which is the event half
+  of fisher#74's read-side provisioning. A fresh file answers "no events".
+- **`SaveChangesAsync`, before the inline projections** — assigning versions ahead of them is the first
+  read of `fi_streams`, and it has to be before the transaction because creating the tables is its own
+  migration on its own connection.
+- **`Events.Storage.IEventStorageOperation`**, a marker on the queued event-side operations (archive,
+  tombstone, tag assignment, the rewrites), because a unit of work can be *only* one of those with no
+  append to have ensured anything. `DocumentType` cannot say it: the event operations report
+  `typeof(object)` or `typeof(IEvent)` about as often as raw SQL and flat-table writes do.
+- **`IEventDatabase.EnsureStorageExistsAsync(typeof(IEvent))`**, which the daemon has always called
+  before starting and which used to fall through to a no-op.
+
+**An enlisted session asserts rather than creating**, remembered per session rather than on the
+database — a table the caller created in a transaction they may yet roll back is not a fact about the
+file. **The monitoring reads do not provision**: those are fisher#332's, which answers "no results"
+instead, because a console pointed at a store must not be what changes its schema.
+
 ### Flat-table projections
 
 `Projections/Flattened/` — a `FlatTableProjection` writes into a plain relational table keyed on the

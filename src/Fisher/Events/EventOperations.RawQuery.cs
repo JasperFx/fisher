@@ -72,7 +72,7 @@ public partial class EventOperations
         builder.Append(" order by seq_id");
 
         var command = builder.Compile();
-        command.Connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
+        command.Connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
         command.CommandTimeout = _session.Options.CommandTimeout;
 
         var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, string.Empty, TenantId);
@@ -172,7 +172,7 @@ public partial class EventOperations
         builder.AppendParameter((pageNumber - 1) * pageSize);
 
         var command = builder.Compile();
-        command.Connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
+        command.Connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
         command.CommandTimeout = _session.Options.CommandTimeout;
 
         var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, string.Empty, TenantId);
@@ -221,7 +221,7 @@ public partial class EventOperations
         AppendEventQueryFilters(builder, query);
 
         var command = builder.Compile();
-        command.Connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
+        command.Connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
         command.CommandTimeout = _session.Options.CommandTimeout;
 
         var raw = await command.ExecuteScalarAsync(token).ConfigureAwait(false);
@@ -623,7 +623,7 @@ public partial class EventOperations
         builder.Append(" order by seq_id");
 
         var command = builder.Compile();
-        command.Connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
+        command.Connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
         command.CommandTimeout = _session.Options.CommandTimeout;
 
         var results = new List<T>();
