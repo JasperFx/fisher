@@ -22,7 +22,7 @@ namespace Fisher.Events.Storage;
 ///         first run, unlike a guarding <c>not exists</c> subquery.
 ///     </para>
 /// </remarks>
-internal sealed class AssignTagWhereOperation : Weasel.Storage.IStorageOperation
+internal sealed class AssignTagWhereOperation : Weasel.Storage.IStorageOperation, Fisher.Events.Storage.IEventStorageOperation
 {
     private readonly EventGraph _events;
     private readonly ITagTypeRegistration _registration;

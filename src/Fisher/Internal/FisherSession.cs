@@ -580,6 +580,72 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         => _lifetime.ConnectionAsync(token);
 
     /// <summary>
+    ///     This session's connection, with the event store's tables known to exist (fisher#333).
+    /// </summary>
+    /// <remarks>
+    ///     Every event read a session runs goes through here rather than through
+    ///     <see cref="ConnectionAsync" />, which is the event half of what fisher#74 did for document
+    ///     reads: a fresh file answers "no events" instead of <c>no such table</c>.
+    /// </remarks>
+    internal async ValueTask<SqliteConnection> EventConnectionAsync(CancellationToken token = default)
+    {
+        await EnsureEventStorageAsync(token).ConfigureAwait(false);
+        return await ConnectionAsync(token).ConfigureAwait(false);
+    }
+
+    private bool _eventStorageAsserted;
+
+    /// <summary>
+    ///     Create the event store's tables if they are not there yet, or — for an enlisted session —
+    ///     check that they are.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         An enlisted session asserts rather than creating, for the reason its document path does:
+    ///         the migration runs on its own connection, and the caller's transaction is holding the
+    ///         file's write lock — a session deadlocking against itself, presenting after the busy
+    ///         timeout as <c>database is locked</c>. The check runs on the caller's connection, so
+    ///         tables created inside the same transaction count.
+    ///     </para>
+    ///     <para>
+    ///         The enlisted answer is remembered per session rather than on the database, because a
+    ///         table the caller created in a transaction they may yet roll back is not a fact about the
+    ///         file.
+    ///     </para>
+    /// </remarks>
+    internal async Task EnsureEventStorageAsync(CancellationToken token)
+    {
+        if (EnlistedTransaction is null)
+        {
+            await FisherDatabase.EnsureEventStorageAsync(token).ConfigureAwait(false);
+            return;
+        }
+
+        if (_eventStorageAsserted)
+        {
+            return;
+        }
+
+        var table = Options.EventGraph.BuildStreamsTable().Identifier.Name;
+
+        await using var command = new SqliteCommand(
+            "select 1 from sqlite_master where type = 'table' and name = $name");
+        command.Parameters.AddWithValue("$name", table);
+
+        await ConfigureCommandAsync(command, token).ConfigureAwait(false);
+
+        if (await command.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
+        {
+            throw new InvalidOperationException(Storage.FisherDatabase.MissingEventStorageMessage(table,
+                "This session is enlisted in a transaction the caller owns, so Fisher cannot create it "
+                + "on demand: that migration would run on a second connection and block against the "
+                + "write lock the caller's transaction holds."));
+        }
+
+        _eventStorageAsserted = true;
+    }
+
+    /// <summary>
     ///     Point a command at this session's connection, transaction and timeout.
     /// </summary>
     /// <remarks>
@@ -670,12 +736,23 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         // them. Assigning event versions first is what lets a projection see them.
         var participantsBeforeProjections = _participants?.Count ?? 0;
 
+        // Before the projections, because assigning versions ahead of them is the first read of
+        // fi_streams; and before the transaction, because creating the tables is its own migration on
+        // its own connection (fisher#333).
         if (streams.Length > 0)
         {
+            await EnsureEventStorageAsync(token).ConfigureAwait(false);
             await ApplyInlineProjectionsAsync(streams, token).ConfigureAwait(false);
         }
 
         var queued = TakePendingOperations();
+
+        // An archive, a tag assignment or an event rewrite can be the whole unit of work, with no
+        // append to have ensured the tables above.
+        if (queued.Any(x => x is Events.Storage.IEventStorageOperation))
+        {
+            await EnsureEventStorageAsync(token).ConfigureAwait(false);
+        }
         Events.ClearPendingStreams();
 
         foreach (var scope in TenantScopes)

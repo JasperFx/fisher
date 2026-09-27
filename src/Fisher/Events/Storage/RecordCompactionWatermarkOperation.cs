@@ -23,7 +23,7 @@ namespace Fisher.Events.Storage;
 ///         enough; a <c>max()</c> guard would defend against a sequence that cannot occur.
 ///     </para>
 /// </remarks>
-internal sealed class RecordCompactionWatermarkOperation : Weasel.Storage.IStorageOperation
+internal sealed class RecordCompactionWatermarkOperation : Weasel.Storage.IStorageOperation, Fisher.Events.Storage.IEventStorageOperation
 {
     private readonly EventGraph _events;
     private readonly string _streamId;

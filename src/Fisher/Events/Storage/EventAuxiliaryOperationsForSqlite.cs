@@ -9,7 +9,7 @@ namespace Fisher.Events.Storage;
 ///     Flips <c>is_archived</c> on a stream and all of its events. Archive and un-archive differ only
 ///     in the flag value, so both ride this one operation.
 /// </summary>
-internal sealed class SetStreamArchivedOperation : Weasel.Storage.IStorageOperation
+internal sealed class SetStreamArchivedOperation : Weasel.Storage.IStorageOperation, Fisher.Events.Storage.IEventStorageOperation
 {
     private readonly bool _archived;
     private readonly EventGraph _events;
@@ -63,7 +63,7 @@ internal sealed class SetStreamArchivedOperation : Weasel.Storage.IStorageOperat
 ///     <see cref="Protected.DeleteEventsOperation" />; unlike those two it is reached through a public
 ///     API, so it is the one where the lesson was most visible.
 /// </remarks>
-internal sealed class TombstoneStreamOperation : Weasel.Storage.IStorageOperation
+internal sealed class TombstoneStreamOperation : Weasel.Storage.IStorageOperation, Fisher.Events.Storage.IEventStorageOperation
 {
     private readonly EventGraph _events;
     private readonly object _streamId;
@@ -121,7 +121,7 @@ internal sealed class TombstoneStreamOperation : Weasel.Storage.IStorageOperatio
 ///     distinguishes the two call sites — the row may not exist yet when the shard's floor is 0 —
 ///     but the upsert branch needs no separate matched/not-matched SQL.
 /// </remarks>
-internal sealed class RecordProgressionOperation : Weasel.Storage.IStorageOperation
+internal sealed class RecordProgressionOperation : Weasel.Storage.IStorageOperation, Fisher.Events.Storage.IEventStorageOperation
 {
     private readonly long _ceiling;
     private readonly bool _extendedTracking;

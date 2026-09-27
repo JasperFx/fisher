@@ -229,12 +229,15 @@ public class service_registration : IAsyncLifetime
         var hosted = provider.GetServices<IHostedService>().ShouldHaveSingleItem();
         await hosted.StartAsync(TestContext.Current.CancellationToken);
 
-        // Nothing was created, so reading fails rather than returning an empty answer.
+        // Nothing was created, so reading fails rather than returning an empty answer — and since
+        // fisher#333 it fails naming the call to make, rather than as SQLite's "no such table".
         await using var session = provider.GetRequiredService<DocumentStore>().LightweightSession();
 
-        await Should.ThrowAsync<Microsoft.Data.Sqlite.SqliteException>(async () =>
+        var ex = await Should.ThrowAsync<InvalidOperationException>(async () =>
             await session.Events.FetchStreamStateAsync(Guid.NewGuid(),
                 TestContext.Current.CancellationToken));
+
+        ex.Message.ShouldContain("AutoCreate.None");
     }
 
     /// <summary>

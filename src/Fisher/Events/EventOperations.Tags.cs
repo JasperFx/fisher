@@ -147,7 +147,7 @@ public partial class EventOperations
             .Append(Graph.EventsTableName)
             .Append(" where ");
 
-        await using var command = (await _session.ConnectionAsync(cancellation).ConfigureAwait(false))
+        await using var command = (await _session.EventConnectionAsync(cancellation).ConfigureAwait(false))
             .CreateCommand();
 
         AppendConditions(query, sql, command);
@@ -208,7 +208,7 @@ public partial class EventOperations
             .Append(Graph.EventsTableName)
             .Append(" where ");
 
-        await using var command = (await _session.ConnectionAsync(cancellation).ConfigureAwait(false))
+        await using var command = (await _session.EventConnectionAsync(cancellation).ConfigureAwait(false))
             .CreateCommand();
 
         AppendConditions(query, sql, command);

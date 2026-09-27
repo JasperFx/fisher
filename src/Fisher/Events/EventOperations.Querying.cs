@@ -72,7 +72,7 @@ public partial class EventOperations
 
         sql.Append(" order by version");
 
-        var connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
+        var connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = sql.ToString();
         command.CommandTimeout = _session.Options.CommandTimeout;
@@ -163,7 +163,7 @@ public partial class EventOperations
             sql.Append(" and tenant_id = @tenant_id");
         }
 
-        var connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
+        var connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = sql.ToString();
         command.CommandTimeout = _session.Options.CommandTimeout;
@@ -192,7 +192,7 @@ public partial class EventOperations
     {
         var options = _session.Options.Events;
 
-        var connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
+        var connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText =
             $"select {FisherEventsRowReader.ComposeSelectColumns(options)} from {Graph.EventsTableName} where id = @id";

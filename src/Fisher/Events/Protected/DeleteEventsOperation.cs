@@ -29,7 +29,7 @@ namespace Fisher.Events.Protected;
 ///         ever see. This is the operation that would have discovered that the hard way.
 ///     </para>
 /// </remarks>
-internal sealed class DeleteEventsOperation : Weasel.Storage.IStorageOperation
+internal sealed class DeleteEventsOperation : Weasel.Storage.IStorageOperation, Fisher.Events.Storage.IEventStorageOperation
 {
     private readonly EventGraph _graph;
     private readonly long[] _sequences;

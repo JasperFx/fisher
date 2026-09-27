@@ -191,7 +191,7 @@ internal static class NaturalKeySql
 ///         command did survives — but the one that reads correctly on its own is the one to keep.
 ///     </para>
 /// </remarks>
-internal sealed class NaturalKeyClaimOperation : Weasel.Storage.IStorageOperation
+internal sealed class NaturalKeyClaimOperation : Weasel.Storage.IStorageOperation, Fisher.Events.Storage.IEventStorageOperation
 {
     private readonly EventGraph _graph;
     private readonly Type _aggregateType;
@@ -239,7 +239,7 @@ internal sealed class NaturalKeyClaimOperation : Weasel.Storage.IStorageOperatio
 ///     <c>returning</c> clause to postprocess — there is nothing to adjudicate. See
 ///     <see cref="NaturalKeySql.AppendReplayUpsert" /> for why.
 /// </remarks>
-internal sealed class NaturalKeyReplayOperation : Weasel.Storage.IStorageOperation, NoDataReturnedCall
+internal sealed class NaturalKeyReplayOperation : Weasel.Storage.IStorageOperation, Fisher.Events.Storage.IEventStorageOperation, NoDataReturnedCall
 {
     private readonly EventGraph _graph;
     private readonly Type _aggregateType;

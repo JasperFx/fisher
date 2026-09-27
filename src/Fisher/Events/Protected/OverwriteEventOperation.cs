@@ -27,7 +27,7 @@ namespace Fisher.Events.Protected;
 ///         data-at-rest operation rather than a correction.
 ///     </para>
 /// </remarks>
-internal sealed class OverwriteEventOperation : Weasel.Storage.IStorageOperation
+internal sealed class OverwriteEventOperation : Weasel.Storage.IStorageOperation, Fisher.Events.Storage.IEventStorageOperation
 {
     private readonly EventGraph _graph;
     private readonly IEvent _event;

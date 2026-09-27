@@ -352,7 +352,7 @@ internal sealed class StreamStateQueryProvider : IQueryProvider, IDocumentQueryE
         statement.Apply(builder);
 
         var command = builder.Compile();
-        command.Connection = await session.ConnectionAsync(token).ConfigureAwait(false);
+        command.Connection = await session.EventConnectionAsync(token).ConfigureAwait(false);
         command.CommandTimeout = session.Options.CommandTimeout;
 
         return command;

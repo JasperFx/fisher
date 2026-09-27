@@ -363,11 +363,23 @@ public partial class FisherDatabase : IEventDatabase
     ///     Delegates to the same on-demand document-table path a synchronous <c>Store</c> takes, so a
     ///     snapshot type gets its table whether the first write comes from an inline projection or from
     ///     the daemon.
+    ///     <para>
+    ///         <b><see cref="IEvent" /> means the event store's own tables</b> (fisher#333), which is how
+    ///         the daemon asks before it starts. It used to fall through to the no-op below, so a daemon
+    ///         built over a fresh file started against tables nobody had created.
+    ///     </para>
     /// </remarks>
     public Task EnsureStorageExistsAsync(Type storageType, CancellationToken token)
-        => _options.Schema.HasMappingFor(storageType)
+    {
+        if (storageType == typeof(IEvent) || storageType == typeof(StreamAction))
+        {
+            return EnsureEventStorageAsync(token);
+        }
+
+        return _options.Schema.HasMappingFor(storageType)
             ? EnsureDocumentTableAsync(storageType, token)
             : Task.CompletedTask;
+    }
 
     /// <summary>
     ///     Quarantine an event a projection could not apply, so its shard can keep advancing.

@@ -415,7 +415,103 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
     internal void ForgetEnsuredTables()
     {
         _ensuredDocumentTables.Clear();
+        _eventStorageEnsured = false;
     }
+
+    private volatile bool _eventStorageEnsured;
+    private readonly SemaphoreSlim _eventStorageGate = new(1, 1);
+
+    /// <summary>
+    ///     Create the event store's tables if they are not known to exist yet (fisher#333).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Document tables have been created on first use since fisher#74; the event tables were
+    ///         created only by an explicit migration. So on a fresh file the first append — under any
+    ///         <c>AutoCreate</c>, <c>All</c> included — failed with <c>no such table: fi_streams</c>,
+    ///         while a document read on the same store worked. Worse than a plain failure, because the
+    ///         on-demand document path creates enough tables that a fresh file <em>looks</em>
+    ///         provisioned, which is how a CritterWatch console failed every message it handled.
+    ///     </para>
+    ///     <para>
+    ///         <b>The same rules as <see cref="EnsureDocumentTableAsync" />, one feature over.</b> Only
+    ///         the event store's own schema objects are diffed, not the whole configuration; nothing is
+    ///         remembered until it succeeds; and under <c>AutoCreate.None</c> this checks and declines
+    ///         rather than creating (fisher#81), naming the call that applies the schema rather than
+    ///         leaving SQLite to name a table.
+    ///     </para>
+    ///     <para>
+    ///         A flag rather than a per-type cache, because the event store is one feature: its tables
+    ///         are created together by the full migration too.
+    ///     </para>
+    /// </remarks>
+    internal Task EnsureEventStorageAsync(CancellationToken token)
+        => _eventStorageEnsured ? Task.CompletedTask : ensureEventStorageAsync(token);
+
+    private async Task ensureEventStorageAsync(CancellationToken token)
+    {
+        await _eventStorageGate.WaitAsync(token).ConfigureAwait(false);
+
+        try
+        {
+            if (_eventStorageEnsured)
+            {
+                return;
+            }
+
+            if (AutoCreate == JasperFx.AutoCreate.None)
+            {
+                await AssertEventStorageExistsAsync(token).ConfigureAwait(false);
+            }
+            else
+            {
+                var objects = new EventStoreFeatureSchema(_events, _options.Projections.NaturalKeys).Objects;
+
+                await using var conn = await OpenConnectionAsync(token).ConfigureAwait(false);
+
+                var migration = await SchemaMigration
+                    .DetermineAsync(conn, Migrator, token, objects).ConfigureAwait(false);
+
+                if (migration.Difference != SchemaPatchDifference.None)
+                {
+                    await Migrator.ApplyAllAsync(conn, migration, AutoCreate, ct: token).ConfigureAwait(false);
+                }
+            }
+
+            _eventStorageEnsured = true;
+        }
+        finally
+        {
+            _eventStorageGate.Release();
+        }
+    }
+
+    /// <summary>
+    ///     Under <c>AutoCreate.None</c>, check that the event store's tables are already there and say
+    ///     what to do if they are not.
+    /// </summary>
+    private async Task AssertEventStorageExistsAsync(CancellationToken token)
+    {
+        await using var conn = await OpenConnectionAsync(token).ConfigureAwait(false);
+
+        foreach (var table in new Weasel.Sqlite.Tables.Table[] { _events.BuildStreamsTable(), _events.BuildEventsTable() })
+        {
+            await using var command = conn.CreateCommand();
+            command.CommandText = "select 1 from sqlite_master where type = 'table' and name = $name";
+            command.Parameters.AddWithValue("$name", table.Identifier.Name);
+
+            if (await command.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
+            {
+                throw new InvalidOperationException(MissingEventStorageMessage(table.Identifier.Name,
+                    "This store is configured AutoCreate.None, so Fisher will not create it on demand."));
+            }
+        }
+    }
+
+    internal static string MissingEventStorageMessage(string tableName, string reason)
+        => $"There is no event store table '{tableName}' in this database. {reason} Apply the schema first — "
+           + "ApplyAllDatabaseChangesOnStartup() when registering with AddFisher, or "
+           + "store.ApplyAllConfiguredChangesToDatabaseAsync() (or the generated DDL) otherwise.";
 
     internal Weasel.Storage.IProviderGraph Providers
         => _providers ??= new ClosedShape.DocumentProviderRegistry(_options);
