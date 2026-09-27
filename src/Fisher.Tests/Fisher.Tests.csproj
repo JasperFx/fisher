@@ -5,6 +5,10 @@
         <!-- An xunit v3 test project is its own MTP executable and will not build without this.
              Microsoft.NET.Test.Sdk used to set it and is no longer referenced. -->
         <OutputType>Exe</OutputType>
+            <!-- fisher#337 / jasperfx#892: conventional Apply/Create methods have no runtime fallback, so a
+             generator that stopped reaching this project would compile clean and fail at the first
+             fold. This makes that a build error (JFXEVT900) instead of an assumption. -->
+        <JasperFxEventsRequireSourceGenerator>true</JasperFxEventsRequireSourceGenerator>
     </PropertyGroup>
 
     <ItemGroup>

@@ -5660,8 +5660,8 @@ removes generated partials that nothing hand-written references, so the consumin
 clean* and then throws `No source-generated dispatcher found for EventProjection …` on its first
 projected event. In a service that is a clean deploy followed by a crash on the first message.
 
-Two things hold it in place, and neither is a test — the test projects reference the generator
-directly, so nothing inside this repository can observe the packaged shape:
+Three things hold it in place, and none is a test — the test projects reference the generator
+directly, so no test inside this repository can observe the packaged shape:
 
 - `_BundleEventsSourceGeneratorAnalyzer` in `Fisher.csproj` contributes the analyzer DLL to
   `analyzers/dotnet/cs`. It runs **per-TFM**, because `$(PkgJasperFx_Events_SourceGenerator)` is only
@@ -5671,6 +5671,25 @@ directly, so nothing inside this repository can observe the packaged shape:
   that the nuspec does not declare the generator as a dependency. `PrivateAssets=all` is load-bearing
   for the second half: a generator that flows downstream is double-loaded by a project referencing
   two Critter Stack stores, which emits each `.Evolver` partial twice and fails with CS0111.
+  JasperFx 2.75.0's dedupe target (jasperfx#891/#895) now keeps one copy when two *do* reach a
+  project, so that failure is upstream's to prevent — but the nuspec assertion stays, because a
+  dependency Fisher never meant to declare is wrong whether or not something downstream tidies it up.
+- **`smoke/packaged-consumer`, run by the same job** (fisher#337), is the half the two assertions above
+  cannot reach: a project that references *only* the packed Fisher, the way an application does. It sets
+  `JasperFxEventsRequireSourceGenerator` (jasperfx#892), so a generator that stopped flowing out of the
+  package fails its build with `JFXEVT900`, and then runs a conventional aggregate — live and inline — to
+  prove the attached generator dispatches. It packs a `0.0.0-smoke` version into a private feed and
+  restores into its own package folder with source mapping pinning `Fisher` to that feed, because
+  otherwise it could pass against the last published release instead of the commit under test. Not in
+  `fisher.slnx`, since the package it restores exists only after `dotnet pack`.
+  - ⚠️ **`ExcludeAssets="analyzers"` on the consumer's `Fisher` reference did NOT detach the bundled
+    analyzer** when this was built — the guard still reported it attached. So verifying `JFXEVT900` meant
+    removing the `Analyzer` item in a target instead; do not reach for `ExcludeAssets` as the negative
+    test.
+
+**The in-repo half is asserted as well**: `Fisher.Tests`, both companion test projects and
+`Fisher.Benchmarks` set `JasperFxEventsRequireSourceGenerator`, so an edit that detached the generator
+from one of them is a build error rather than a projection test failing somewhere far from the cause.
 
 ## The companion packages
 

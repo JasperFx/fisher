@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!--
+      fisher#337 — the one shape nothing else in this repository can observe: a project that
+      references ONLY the packed Fisher nupkg, the way an application does. Every test project
+      references JasperFx.Events.SourceGenerator directly, so if the analyzer stopped flowing out of
+      the package they would all stay green while a consumer compiled clean and then threw
+      "No source-generated dispatcher found" on its first projected event.
+
+      Two checks, and both are needed. JasperFxEventsRequireSourceGenerator (jasperfx#892) makes a
+      detached generator a BUILD failure (JFXEVT900); running the program then proves the attached
+      generator actually dispatches. Not in fisher.slnx on purpose — it restores a package that only
+      exists after `dotnet pack`. See the `package` job in .github/workflows/fisher.yml.
+    -->
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <JasperFxEventsRequireSourceGenerator>true</JasperFxEventsRequireSourceGenerator>
+        <!-- A private package folder, so a smoke run never resolves a stale copy of the same
+             prerelease version from the machine-wide cache. -->
+        <RestorePackagesPath>$(MSBuildThisFileDirectory)obj/packages</RestorePackagesPath>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Fisher" Version="$(FisherVersion)" />
+    </ItemGroup>
+
+</Project>
