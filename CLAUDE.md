@@ -3600,9 +3600,22 @@ populates deliberately.
   - ⚠️ **`*DEFAULT*` is exempted by exact identity**, because `DynamicTenancy.Default` resolves it
     while the store is still being **constructed** — refusing it would make every directory-tenancy
     store fail to build. By identity rather than by admitting `*` to the charset, since `*` in a
-    caller's id is precisely what this refuses. That it maps to a file named `*DEFAULT*.db`, which is
-    an illegal filename on Windows, is fisher#325: renaming it would orphan every existing
-    default-tenant database, so it is not a rider on a security fix.
+    caller's id is precisely what this refuses.
+  - ⚠️ **Its FILE is `(default).db`, not `*DEFAULT*.db`** (fisher#325). The sentinel taken literally
+    put a `*` in the file name, and that was **measured** rather than assumed to break Windows: on a
+    `windows-latest` runner the file cannot be opened (`SQLite Error 14: unable to open database
+    file`), so `ApplyAllConfiguredChangesToDatabaseAsync` failed and directory tenancy did not work
+    there at all. Fisher's main CI is Linux-only, which is why nothing noticed.
+    - **Parentheses because the charset refuses them**, so no caller's id can ever name the file — the
+      property the old name had too. `_default` would be a valid tenant id, and two tenants would share
+      a database.
+    - **An existing `*DEFAULT*.db` keeps being used** (`TenantFileName.FileStemFor`), which is what made
+      the rename safe to do at all: it could only exist where `*` is legal, so off Windows an existing
+      store keeps its data and on Windows there was never one to orphan. Enumeration maps both stems
+      back to `*DEFAULT*` and dedupes.
+    - **`.github/workflows/windows.yml`** runs the directory-tenancy classes on Windows, path-filtered to
+      the tenancy files rather than a leg of `fisher.yml`, because the org's concurrent-job ceiling is
+      shared across every JasperFx repository.
   - **The configuration path refuses the same ids**, through `TenantDatabases.InDirectory`. A store
     that accepted an id in configuration and refused it at runtime would be inconsistent about its own
     rule, and the failure would land at whichever call site came second.

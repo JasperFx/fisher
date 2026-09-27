@@ -1,9 +1,10 @@
 name: windows
 
-# fisher#325. Fisher's main CI runs on Linux only, and the directory tenancy maps the default tenant to a
-# file named `*DEFAULT*.db` — `*` is reserved in Windows file names. This runs the tests that turn tenant
-# ids into paths on a Windows runner, so the answer to "does it work there" is a CI fact rather than a
-# guess.
+# fisher#325. Fisher's main CI runs on Linux only, and directory tenancy used to map the default tenant
+# to a file named `*DEFAULT*.db` — `*` is reserved in Windows file names. The first run of this workflow
+# proved it (SQLite Error 14, unable to open database file); the default tenant's file is now
+# `(default).db`. This keeps the tests that turn tenant ids into paths running on Windows, so that stays
+# a CI fact rather than a guess.
 #
 # Deliberately NOT a leg of fisher.yml. JasperFx is on the Free org plan and the concurrent-job ceiling
 # is shared across every repository in the org (see fisher.yml's concurrency block), so a Windows job on
