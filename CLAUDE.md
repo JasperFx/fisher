@@ -6018,6 +6018,12 @@ factory)`, over `Projections.StorageProviders` in the core.
   after its test finished is doing unpredictable work while other tests run. `scripts/check_no_leaked_databases.py`
   runs in CI after a green suite and holds it at zero — a runner starts with an empty temp
   directory, so the check is exact rather than heuristic.
+  - ⚠️ **Locally, pass `--since <epoch>` with the moment the run started** (fisher#345). A developer's
+    temp directory is not empty, and both leaks #345 was filed over were files an *earlier* run left
+    behind — one of them a run whose net9.0 leg produced no results at all, which is what a test
+    process dying mid-run looks like, and a dead process disposes no fixtures. 23 clean full runs
+    across both TFMs leaked nothing. A leak reported without `--since` on a dev machine names the
+    run that noticed it, not necessarily the one that caused it.
 - ⚠️ **ROADMAP's `Status:` line is checked at RELEASE PREP, not on every push** —
   `scripts/check_roadmap_status.py` and `.github/workflows/release-prep.yml` (fisher#265). It is the
   first thing a reader sees, nothing else recomputes it, and it was found stale at two consecutive
