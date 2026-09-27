@@ -69,11 +69,39 @@ internal static class TenantFileName
     ///     <paramref name="directory" />, or an <see cref="ArgumentException" /> naming what is wrong
     ///     with the id.
     /// </summary>
+    /// <summary>
+    ///     The default tenant's file stem, since fisher#325: <c>(default)</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The default tenant used to map to <c>*DEFAULT*.db</c>, the sentinel
+    ///         <see cref="JasperFx.StorageConstants.DefaultTenantId" /> taken literally — and <c>*</c> is
+    ///         reserved in Windows file names. Measured rather than assumed: on a Windows runner the file
+    ///         cannot be opened (<c>SQLite Error 14: unable to open database file</c>), so
+    ///         <c>ApplyAllConfiguredChangesToDatabaseAsync</c> failed and directory tenancy did not work
+    ///         there at all.
+    ///     </para>
+    ///     <para>
+    ///         <b>Parentheses because the charset rule below refuses them</b>, so no caller's tenant id can
+    ///         ever name this file — the property the old name had, since <c>*</c> is refused too. A stem
+    ///         like <c>_default</c> would be a perfectly valid tenant id and two tenants would share a
+    ///         database. <c>(</c> and <c>)</c> are legal on every platform Fisher runs on.
+    ///     </para>
+    /// </remarks>
+    internal const string DefaultTenantFileStem = "(default)";
+
+    /// <summary>
+    ///     The tenant id a file stem found in the directory belongs to — the inverse of the name
+    ///     <see cref="PathFor" /> writes, including the legacy <c>*DEFAULT*</c> stem.
+    /// </summary>
+    public static string TenantIdForFileStem(string stem)
+        => stem == DefaultTenantFileStem ? JasperFx.StorageConstants.DefaultTenantId : stem;
+
     public static string PathFor(string directory, string tenantId)
     {
         Assert(tenantId);
 
-        var path = Path.Combine(directory, $"{tenantId}.db");
+        var path = Path.Combine(directory, $"{FileStemFor(directory, tenantId)}.db");
 
         // Belt and braces. The charset rule above already makes traversal unexpressible, so reaching
         // this is a bug in the rule rather than a hostile id — but the cost of checking is one
@@ -96,14 +124,32 @@ internal static class TenantFileName
     /// <summary>
     ///     Throw unless <paramref name="tenantId" /> is usable as one path component.
     /// </summary>
+    /// <summary>
+    ///     The file stem for a tenant: its id, except the default tenant's.
+    /// </summary>
+    /// <remarks>
+    ///     <b>An existing <c>*DEFAULT*.db</c> keeps being used</b>, so renaming does not orphan a
+    ///     default-tenant database written before fisher#325 — the reason the rename was not a rider on
+    ///     fisher#318. That file can only exist where <c>*</c> is legal, so on Windows this is always the
+    ///     new name, and <see cref="File.Exists" /> answers false for a path it cannot represent.
+    /// </remarks>
+    private static string FileStemFor(string directory, string tenantId)
+    {
+        if (tenantId != JasperFx.StorageConstants.DefaultTenantId)
+        {
+            return tenantId;
+        }
+
+        return File.Exists(Path.Combine(directory, $"{tenantId}.db")) ? tenantId : DefaultTenantFileStem;
+    }
+
     public static void Assert(string tenantId)
     {
         // ⚠️ Fisher's own sentinel, and the one id here that is never caller input — DynamicTenancy
         // resolves it while the store is still being CONSTRUCTED, so refusing it would make every
         // directory-tenancy store fail to build. It is exempted by exact identity rather than by
         // widening the charset to admit '*', because '*' in a caller's id is exactly what this
-        // refuses. Renaming the file it maps to would orphan every existing default-tenant database,
-        // so it stays as it is; see fisher#325 for what that costs on Windows.
+        // refuses. Its FILE is named separately — see DefaultTenantFileStem (fisher#325).
         if (tenantId == JasperFx.StorageConstants.DefaultTenantId)
         {
             return;

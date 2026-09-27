@@ -148,7 +148,11 @@ public sealed class DirectoryTenantSource : ITenantSource
             ? Directory.EnumerateFiles(_directory, "*.db")
                 .Select(Path.GetFileNameWithoutExtension)
                 .Where(x => !string.IsNullOrEmpty(x))
-                .Select(x => new TenantRegistration(x!, PathFor(x!), !_suspended.ContainsKey(x!)))
+                // The default tenant's file is not named for its id (fisher#325), and a store that
+                // predates the rename may hold the legacy name as well — one registration either way.
+                .Select(x => TenantFileName.TenantIdForFileStem(x!))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(x => new TenantRegistration(x, PathFor(x), !_suspended.ContainsKey(x)))
                 .ToList()
             : [];
 
