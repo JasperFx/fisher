@@ -2171,6 +2171,32 @@ rather than resettling the question.
 - A patch, a raw `QueueSqlCommand` and an `UndoDeleteWhere` appear in no bucket: none of them carries a
   document, and inventing one would be worse than the omission. Marten is the same.
 
+### Conjoined events refuse a single-tenant aggregate document — fisher#335
+
+`Projections.ProjectionTenancyGuard`, run from `DocumentStore`'s constructor beside
+`AssertEveryMappingHasIdentity` and for its reason — the projection and the document's tenancy can be
+configured in either order, or by an `IConfigureFisher` contribution, and only then is the answer
+final. Marten's rule and Marten's message (marten#5343, "Tenancy storage style mismatch"); the user
+ruled refuse over auto-marking.
+
+- **The failure is silent in both directions.** Two tenants may share a stream id under conjoined
+  events, a single-tenant snapshot keyed on the id alone holds one row for both, and each tenant then
+  reads a document describing the other's stream — no error appending, none reading. The shared
+  `inline_and_async_snapshots_of_a_shared_stream_id_stay_isolated_per_tenant` fact found it (fisher#336),
+  and **`aggregate_write_cache.the_key_separates_two_tenants_sharing_a_stream_id` had been doing exactly
+  this for a year** — the only existing test the guard refused.
+- **Refused rather than auto-marked**: marking the document `MultiTenanted()` for the application would
+  change an existing table's primary key — a table rebuild on live data — for a configuration nobody
+  wrote down.
+- **Exempt**: `Live` projections (they write nothing); a multi-stream projection whose `TenancyGrouping`
+  is not `RespectTenant`, which is Marten's exemption and is read through `IHasTenancyGrouping`, an
+  internal interface the inherited property satisfies; and a type stored by a projection storage
+  provider (an EF Core entity), which has no Fisher mapping to judge — that half is fisher#334's.
+  Composite projections are walked member by member.
+- **Only the leaking direction is refused.** Marten also refuses conjoined documents under single-tenant
+  events; that is a mismatch but not a cross-tenant read, and refusing it would break stores for no
+  protection.
+
 ### Cross-tenant writes
 
 `session.ForTenant(id)` returning an `ITenantOperations` (fisher#33), so one `SaveChangesAsync` writes

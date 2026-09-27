@@ -78,6 +78,12 @@ public partial class DocumentStore : IDocumentStore
         // provisioned, which is the only place it can be.
         SharedFileTenancyGuard.AssertTenantsSharingAFileCanBeToldApart(options, Tenancy);
 
+        // fisher#335. Conjoined events projected into a single-tenant document fold two tenants'
+        // same-id streams into one row, silently. Here for the same reason as the two checks above:
+        // the projection and the document's tenancy may be configured in either order, or by an
+        // IConfigureFisher contribution, and only now is the answer final.
+        Projections.ProjectionTenancyGuard.AssertAggregateDocumentsMatchEventTenancy(options);
+
         // Builds the async shard registry and fails fast on duplicate projection names.
         options.Projections.AssertValidity(options);
 

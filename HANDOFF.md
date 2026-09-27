@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2339 tests green on net9.0 and net10.0** — 2276 in `Fisher.Tests`, 36 in
+**2347 tests green on net9.0 and net10.0** — 2284 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 27 in `Fisher.EntityFrameworkCore.Tests`. 603 of
 them are shared cross-store compliance tests — 499 event sourcing and 104 document.
 On JasperFx **2.75.1** / Weasel **9.35.1**.
@@ -40,11 +40,11 @@ conjoined store now registers two snapshots, and a snapshot document keyed on th
 one row for a stream id two tenants both wrote — so the second tenant's projection **overwrites** the
 first's, with no error appending and no error reading, and both tenants then read a document describing
 the other one's stream. Marten refuses to build such a store ("Tenancy storage style mismatch",
-marten#5343); **Fisher has no such guard**, so the fixture calls
-`Policies.AllDocumentsAreMultiTenanted()` exactly as Marten's does. fisher#335 predicted this would be
-the fact to go red and asks whether the answer is a refusal or auto-marking the document; that decision
-is deliberately not folded into a bump. Until it is made, **a Fisher application configuring conjoined
-events has to write that line for itself**, and nothing tells it so.
+marten#5343), so the fixture calls `Policies.AllDocumentsAreMultiTenanted()` exactly as Marten's does.
+**Fisher now refuses too** (fisher#335, decided as a refusal rather than auto-marking the document):
+`ProjectionTenancyGuard` fails the store's construction naming the type and the line that fixes it —
+see CLAUDE.md. It found one existing test doing exactly this, `aggregate_write_cache`'s
+shared-stream-id fact.
 
 **`OpenReadOnlyEventStore(tenantId)` (jasperfx#888) was cheap and the cheapness is structural.** The
 interface default throws for any non-null tenant, which leaves the whole read-only tier unreachable on a
