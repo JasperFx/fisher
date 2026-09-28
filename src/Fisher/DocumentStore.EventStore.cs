@@ -103,6 +103,15 @@ public partial class DocumentStore : IEventStore
     ///     <see langword="false" /> renders no tenant dimension at all, so the tenant-scoped overloads
     ///     beside it are reachable by an API caller and invisible to the tool they exist for.
     /// </remarks>
+    /// <summary>
+    ///     jasperfx#914 — true when this store has an event store: any registered event type, or any
+    ///     projection or subscription (Marten's <c>EventGraph.IsActive</c>). Computed on every read, never
+    ///     cached: an event type registered lazily on first append makes a store that started
+    ///     document-only active.
+    /// </summary>
+    bool IEventStore.HasEventStore
+        => Options.EventGraph.AllKnownEventTypes().Count > 0 || Options.Projections.IsActive();
+
     bool IEventStore.HasMultipleTenants
         => Tenancy.Cardinality != DatabaseCardinality.Single
            || Options.Events.TenancyStyle == JasperFx.MultiTenancy.TenancyStyle.Conjoined
