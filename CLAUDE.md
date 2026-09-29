@@ -2898,6 +2898,14 @@ the table shape, the write SQL and the positional `?` contract are untouched.
 - **Generation mirrors the raw strategies**: version-7 Guid, or the document type's Hi-Lo sequence. A
   string-backed wrapper generates nothing, because a raw string key is externally assigned too.
 
+- **A LINQ `Select` of a wrapper is converted to the inner type and then wrapped** (fisher#351). The
+  projection materializer (`FisherQueryProvider.CoerceTo`) knew enums, timestamps and Guids and handed
+  everything else to `Convert.ChangeType`, which cannot build a wrapper — so `Select(x => x.Id)` threw
+  `InvalidCastException` for every strong-typed id, while loading the whole document worked because the
+  serializer builds it. `StrongTypedId.Wrap` caches one compiled constructor-or-builder delegate per
+  wrapper type. **This covers the identity only**: a wrapper-typed member that is not the id lives in
+  the JSON as an object, and LINQ over it is fisher#356.
+
 `LoadAsync<T, TId>(id)` is the load-by-wrapper overload. Both type parameters are explicit, which is
 what keeps it unambiguous against the four single-parameter overloads.
 

@@ -1043,6 +1043,14 @@ public partial class FisherQueryProvider : IQueryProvider
             return Guid.Parse((string)raw);
         }
 
+        // fisher#351: a strong-typed identifier is stored as its inner value, so convert to that and
+        // then wrap. Convert.ChangeType cannot build a wrapper, and threw InvalidCastException for every
+        // Select of one — loading the whole document never met it, because the serializer builds it.
+        if (Storage.StrongTypedId.TryResolve(target, out var wrapper))
+        {
+            return Storage.StrongTypedId.Wrap(wrapper, CoerceTo(raw, wrapper.SimpleType)!);
+        }
+
         return Convert.ChangeType(raw, target, System.Globalization.CultureInfo.InvariantCulture);
     }
 
