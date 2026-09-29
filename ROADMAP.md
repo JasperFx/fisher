@@ -3,11 +3,27 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **three open issues, and none of them is feature work.** Two are unreproduced intermittents
+Status: **two open issues, and none of them is feature work.** One is an unreproduced intermittent
 kept open on evidence, and one is blocked upstream. 1.5.0 closed both of 1.4.0's follow-ups and the
 whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed the vector story;
 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event Model canvas it
 contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
+
+**1.14.0 finishes strong-typed identifiers in LINQ and answers two new JasperFx contracts.**
+[#356](https://github.com/JasperFx/fisher/issues/356): a wrapper registered with `RegisterValueType`
+is now **serialized as the primitive it wraps**, so a wrapper-typed member that is not the identity can
+be filtered, ordered, projected and matched with `Contains` like the primitive itself. Rows written in
+the old `{"value":…}` shape still load, so registering on a live store needs no migration; unregistered
+wrappers and types with their own `[JsonConverter]` keep their shape.
+[#351](https://github.com/JasperFx/fisher/issues/351): `Select(x => x.Id)` over a strong-typed id no
+longer throws `InvalidCastException`. [#354](https://github.com/JasperFx/fisher/issues/354):
+`IEventStore.HasEventStore` answers honestly for a document-only store, and `CompactStreamAsync` takes a
+tenant. ⚠️ [#353](https://github.com/JasperFx/fisher/issues/353): a document store's
+`IDocumentStoreUsageSource.Subject` / `SubjectUri` is now the store (`fisher://{store}`), matching the
+event side, rather than the database file — two stores in one file were indistinguishable, and a
+consumer keyed on the old file URI sees a new value.
+[#329](https://github.com/JasperFx/fisher/issues/329): every test that waits on the daemon shares one
+ceiling, raised on CI. On JasperFx **2.76.0** / Weasel **9.36.0**.
 
 **1.13.0 is a first-use and tenancy wave, and two of its changes refuse at startup what used to fail
 silently.** [#333](https://github.com/JasperFx/fisher/issues/333): the event tables are created on
@@ -128,13 +144,10 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is three items, none of which is work that is ready to start.
+What is left is two items, neither of which is work that is ready to start.
 
 [#189](https://github.com/JasperFx/fisher/issues/189) is an unreproduced flake with 65 clean runs
-against it, and [#329](https://github.com/JasperFx/fisher/issues/329) is a second one — one shard of two
-that never recorded progress on a loaded CI runner, 99 clean local runs since. Both stay open on
-evidence rather than on work outstanding; #329's timeout now names the stalled agent's own state, so its
-next occurrence explains itself.
+against it, and stays open on evidence rather than on work outstanding.
 
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.
