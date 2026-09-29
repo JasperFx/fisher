@@ -39,6 +39,27 @@ public class has_event_store
     }
 
     [Fact]
+    public async Task archived_alone_is_not_an_event_store()
+    {
+        // Marten's rule: Archived is infrastructure every store knows about, not evidence the
+        // application appends events.
+        using var database = TemporaryDatabase.Create("has-event-store-archived");
+        await using var store = Store(database, o => o.Events.AddEventType(typeof(Archived)));
+
+        ((IEventStore)store).HasEventStore.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task a_registered_projection_is_an_event_store()
+    {
+        using var database = TemporaryDatabase.Create("has-event-store-projection");
+        await using var store = Store(database,
+            o => o.Projections.Snapshot<Purse>(JasperFx.Events.Projections.SnapshotLifecycle.Inline));
+
+        ((IEventStore)store).HasEventStore.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task an_event_type_registered_on_first_append_makes_it_one()
     {
         using var database = TemporaryDatabase.Create("has-event-store-lazy");

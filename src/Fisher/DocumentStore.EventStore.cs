@@ -93,6 +93,31 @@ public partial class DocumentStore : IEventStore
     DatabaseCardinality IEventStore.DatabaseCardinality => Tenancy.Cardinality;
 
     /// <summary>
+    ///     jasperfx#914 — true when this store has an event store: any registered event type other than
+    ///     <see cref="Archived" />, or any projection or subscription (Marten's <c>EventGraph.IsActive</c>).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The interface default is <see langword="true" />, so leaving it alone would make a
+    ///         document-only store indistinguishable from a real event store — the one question a console
+    ///         polling progression, dead letters and the head sequence needs answered before it polls.
+    ///         Since fisher#332 those reads answer "no results" on such a store rather than throwing,
+    ///         which fixed the exceptions and not the polling.
+    ///     </para>
+    ///     <para>
+    ///         Computed on every read, never cached: an event type registered lazily on first append
+    ///         makes a store that started document-only active. <see cref="Archived" /> is excluded as
+    ///         Marten excludes it, because it is infrastructure every store knows about rather than
+    ///         evidence the application appends events. <c>RegisteredShardNames()</c> is not a
+    ///         substitute: a store with event types and no projections reports no shards while holding
+    ///         real events.
+    ///     </para>
+    /// </remarks>
+    bool IEventStore.HasEventStore
+        => Options.EventGraph.AllKnownEventTypes().Any(x => x.EventType != typeof(Archived))
+           || Options.Projections.IsActive();
+
+    /// <summary>
     ///     Whether this store partitions data by tenant at all, either way it can.
     /// </summary>
     /// <remarks>
@@ -103,15 +128,6 @@ public partial class DocumentStore : IEventStore
     ///     <see langword="false" /> renders no tenant dimension at all, so the tenant-scoped overloads
     ///     beside it are reachable by an API caller and invisible to the tool they exist for.
     /// </remarks>
-    /// <summary>
-    ///     jasperfx#914 — true when this store has an event store: any registered event type, or any
-    ///     projection or subscription (Marten's <c>EventGraph.IsActive</c>). Computed on every read, never
-    ///     cached: an event type registered lazily on first append makes a store that started
-    ///     document-only active.
-    /// </summary>
-    bool IEventStore.HasEventStore
-        => Options.EventGraph.AllKnownEventTypes().Count > 0 || Options.Projections.IsActive();
-
     bool IEventStore.HasMultipleTenants
         => Tenancy.Cardinality != DatabaseCardinality.Single
            || Options.Events.TenancyStyle == JasperFx.MultiTenancy.TenancyStyle.Conjoined
