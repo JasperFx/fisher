@@ -388,7 +388,7 @@ public class dead_letters : IAsyncLifetime
 
         try
         {
-            await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+            await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
             // The two good events were applied; the poison one in the middle did not stop them.
             await using var query = store.LightweightSession();

@@ -334,7 +334,7 @@ public class runtime_tenants : IAsyncLifetime
                 await daemon.StartAllAsync();
             }
             await store.Tenancy.DatabaseFor("newcomer")
-                .WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+                .WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
             await using var query = store.LightweightSession("newcomer");
             var tallies = await query.Query<SightingTally>().ToListAsync(Token);

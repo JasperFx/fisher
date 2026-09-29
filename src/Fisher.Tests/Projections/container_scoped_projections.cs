@@ -314,7 +314,7 @@ public class container_scoped_projections : IAsyncLifetime
 
         using var daemon = await store.BuildProjectionDaemonAsync();
         await daemon.StartAllAsync();
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         await using (var query = store.QuerySession())
         {
@@ -332,7 +332,7 @@ public class container_scoped_projections : IAsyncLifetime
             await session.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         await using (var query = store.QuerySession())
         {
@@ -363,7 +363,7 @@ public class container_scoped_projections : IAsyncLifetime
 
         using var daemon = await store.BuildProjectionDaemonAsync();
         await daemon.StartAllAsync();
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
         await daemon.StopAllAsync();
 
         RecordingSubscription.Seen.ShouldContain("Hello, Heidi");

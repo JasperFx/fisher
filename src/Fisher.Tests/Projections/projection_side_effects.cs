@@ -244,7 +244,7 @@ public class projection_side_effects : IAsyncLifetime
             // is written INSIDE the batch's transaction, so non-stale becomes true strictly before
             // AfterCommitAsync runs, and the window between them is the flake. Wait on the hook's own
             // signal — the same rule the subscription listener already follows.
-            await outbox.AfterCommitted.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            await outbox.AfterCommitted.WaitAsync(DaemonWait.Timeout, TestContext.Current.CancellationToken);
 
             outbox.Batch.ShouldNotBeNull();
             outbox.Batch!.Published.ShouldContain(x => x is QuestFinished);

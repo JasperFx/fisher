@@ -82,7 +82,7 @@ public class composite_projections : IAsyncLifetime
 
         using var daemon = await _store.BuildProjectionDaemonAsync();
         await daemon.StartAllAsync();
-        await daemon.WaitForNonStaleData(TimeSpan.FromSeconds(20));
+        await daemon.WaitForNonStaleData(DaemonWait.Timeout);
         await daemon.StopAllAsync();
 
         await using var session = _store.LightweightSession();
@@ -98,7 +98,7 @@ public class composite_projections : IAsyncLifetime
         await Append(trip, new Landed("Trout"), new Landed("Pike"), new Landed("Chub"));
 
         using var daemon = await _store.BuildProjectionDaemonAsync();
-        await daemon.RebuildProjectionAsync("catches", TimeSpan.FromSeconds(30), Token);
+        await daemon.RebuildProjectionAsync("catches", DaemonWait.Timeout, Token);
         await daemon.StopAllAsync();
 
         await using var session = _store.LightweightSession();

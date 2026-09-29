@@ -67,7 +67,7 @@ public class vector_projection_shared_core : IAsyncLifetime
             await _daemon.StartAllAsync();
         }
 
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
     }
 
     /// <summary>

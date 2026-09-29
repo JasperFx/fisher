@@ -126,7 +126,7 @@ public class ef_core_projection_concurrency : IAsyncLifetime
     {
         _daemon ??= await _store.BuildProjectionDaemonAsync();
         await _daemon.StartAllAsync();
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(60));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
     }
 
     private async Task<List<SquadTally>> TalliesAsync()
@@ -260,7 +260,7 @@ public class ef_core_projection_concurrency : IAsyncLifetime
 
         SquadTallyProjection.ResetConcurrencyProbe();
 
-        await _daemon!.RebuildProjectionAsync("SquadTally", TimeSpan.FromSeconds(60), Token);
+        await _daemon!.RebuildProjectionAsync("SquadTally", DaemonWait.Timeout, Token);
 
         var tallies = await TalliesAsync();
 

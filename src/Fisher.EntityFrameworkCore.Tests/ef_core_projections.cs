@@ -87,7 +87,7 @@ public class ef_core_projections : IAsyncLifetime
     {
         _daemon ??= await _store.BuildProjectionDaemonAsync();
         await _daemon.StartAllAsync();
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
     }
 
     private async Task<List<TallyEntity>> TalliesAsync()
@@ -192,7 +192,7 @@ public class ef_core_projections : IAsyncLifetime
 
         (await TalliesAsync()).Count.ShouldBe(2);
 
-        await _daemon!.RebuildProjectionAsync("TallyEntity", TimeSpan.FromSeconds(30), Token);
+        await _daemon!.RebuildProjectionAsync("TallyEntity", DaemonWait.Timeout, Token);
 
         // The planted row has no events behind it, so a rebuild that cleared the table cannot bring it
         // back and a rebuild that merely replayed would leave it.
@@ -274,7 +274,7 @@ public class ef_core_event_projections : IAsyncLifetime
 
         _daemon = await _store.BuildProjectionDaemonAsync();
         await _daemon.StartAllAsync();
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         // EF's side.
         await using (var context = ContextFor())

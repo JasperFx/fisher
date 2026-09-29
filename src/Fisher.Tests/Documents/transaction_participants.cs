@@ -146,7 +146,7 @@ public class transaction_participants : IAsyncLifetime
 
         using var daemon = await store.BuildProjectionDaemonAsync();
         await daemon.StartAllAsync();
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
         await daemon.StopAllAsync();
 
         (await LedgerNotesAsync()).ShouldBe(["from the daemon"]);

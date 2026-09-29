@@ -6074,6 +6074,14 @@ factory)`, over `Projections.StorageProviders` in the core.
   - **Both the count word and the enumerated set are checked**, and the difference is reported each
     way. A count alone goes stale silently the moment a *different* issue is open — the same argument
     `check_scoreboard.py` already makes about HANDOFF's red list.
+- ⚠️ **A test waiting for the daemon to catch up uses `DaemonWait.Timeout`, never a literal**
+  (fisher#329). That covers `WaitForNonStale*`, `RebuildProjectionAsync`, and a post-commit signal. The
+  waits already poll until their condition holds (#189), so the ceiling only decides how slow a host may
+  be before the test fails. It is 30 s locally and 2 min when `CI=true`, and `FISHER_DAEMON_WAIT_SECONDS`
+  overrides both. It used to be a literal 30 s in 37 places, and a two-vCPU hosted runner running the
+  test process too occasionally ran out of it. That is how #329 presented: 30.292 s, a hang rather than
+  a wrong answer, and the third sighting after #189 and #311. **A test that EXPECTS the wait to time out
+  keeps its own short literal**, because scaling it only makes a correct failure take longer.
 - **Never call `SqliteConnection.ClearAllPools()`.** It disposes every pooled connection in the
   process, and xUnit runs test collections in parallel — one test's cleanup will take out another
   with `ObjectDisposedException: SQLitePCL.sqlite3`, intermittently enough to look like a flake.

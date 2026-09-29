@@ -80,7 +80,7 @@ public class conjoined_tenancy_projections : IAsyncLifetime
             await _daemon.StartAllAsync();
         }
 
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
     }
 
     private async Task<T?> LoadAsync<T>(string tenant, string id) where T : notnull
@@ -111,7 +111,7 @@ public class conjoined_tenancy_projections : IAsyncLifetime
 
         await CatchUpAsync();
         await _daemon!.RebuildProjectionAsync<Voyage>(Token);
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         var north = await LoadAsync<Voyage>(North, "voyage-1");
         north!.Legs.ShouldBe(1);

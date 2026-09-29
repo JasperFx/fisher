@@ -142,7 +142,7 @@ public class ef_core_tenancy : IAsyncLifetime
 
         _daemon = await store.BuildProjectionDaemonAsync();
         await _daemon.StartAllAsync();
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         var ledgers = await LedgersAsync();
         ledgers.Select(x => (x.TenantId, x.Deposits)).ShouldBe([("north", 2), ("south", 5)]);

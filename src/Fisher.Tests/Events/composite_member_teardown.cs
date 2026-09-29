@@ -100,7 +100,7 @@ public class composite_member_teardown : IAsyncLifetime
         using (var daemon = await _store.BuildProjectionDaemonAsync())
         {
             await daemon.StartAllAsync();
-            await daemon.WaitForNonStaleData(TimeSpan.FromSeconds(20));
+            await daemon.WaitForNonStaleData(DaemonWait.Timeout);
             await daemon.StopAllAsync();
         }
 
@@ -119,7 +119,7 @@ public class composite_member_teardown : IAsyncLifetime
     private async Task RebuildAsync()
     {
         using var daemon = await _store.BuildProjectionDaemonAsync();
-        await daemon.RebuildProjectionAsync("ledger", TimeSpan.FromSeconds(30), Token);
+        await daemon.RebuildProjectionAsync("ledger", DaemonWait.Timeout, Token);
         await daemon.StopAllAsync();
     }
 

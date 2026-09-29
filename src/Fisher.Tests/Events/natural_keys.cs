@@ -505,7 +505,7 @@ public partial class natural_keys : IAsyncLifetime
     {
         using var daemon = await store.BuildProjectionDaemonAsync();
         await daemon.StartAllAsync();
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
         await daemon.StopAllAsync();
     }
 

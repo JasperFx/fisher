@@ -260,7 +260,7 @@ public class projection_statuses : IAsyncLifetime
                 await session.SaveChangesAsync(Token);
             }
 
-            await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+            await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
             var statuses = await ((IEventStore)store).GetProjectionStatusesAsync(Token);
             var shard = statuses.Single(x => x.ProjectionName == nameof(StatusTally))
