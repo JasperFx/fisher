@@ -7,7 +7,21 @@
         <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
              carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
              transitively. -->
-        <!-- JasperFx 2.75.2 (from 2.75.1). A source-generator diagnostics patch, adopted with no Fisher
+        <!-- JasperFx 2.76.0 (from 2.75.2). Two new IEventStore members, both default-implemented
+             and both answered by Fisher in this bump rather than left to the default (fisher#354):
+
+             - jasperfx#914 HasEventStore. The default is TRUE, so a store that left it alone would be
+               indistinguishable from a real event store — which is exactly the question a console
+               polling a document-only store needs answered.
+             - jasperfx#910 CompactStreamAsync(stream, tenantId). The default throws for a non-null
+               tenant, so a compaction policy that selected a tenant's streams through
+               OpenReadOnlyEventStore(tenantId) could then compact none of them.
+
+             INERT: jasperfx#912 (ShardStartException carries a classified reason) is raised by the
+             shared daemon, not by Fisher; jasperfx#913 (IAdvisoryLock.FindHolderAsync) is a contract
+             Fisher does not implement — it refuses HotCold and takes no advisory lock.
+
+             JasperFx 2.75.2 (from 2.75.1). A source-generator diagnostics patch, adopted with no Fisher
              change and no suite change (the ComplianceTests content is byte-identical to 2.75.1):
 
              - jasperfx#906: the "no source-generated dispatcher" message decided whether the generator
@@ -117,16 +131,16 @@
              generation, which Fisher does not do — projection dispatch is source-generated.
              jasperfx#880 is XML comments on AutoCreate. jasperfx#867 is a Wolverine codegen fix and
              jasperfx#865/#866 are the publish pipeline. -->
-        <PackageVersion Include="JasperFx" Version="2.75.2" />
-        <PackageVersion Include="JasperFx.Events" Version="2.75.2" />
+        <PackageVersion Include="JasperFx" Version="2.76.0" />
+        <PackageVersion Include="JasperFx.Events" Version="2.76.0" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.75.2" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.75.2" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.76.0" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.76.0" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.75.2" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.76.0" />
 
         <!-- Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
              source. Weasel.Storage: the dialect-neutral closed-shape document + event storage
@@ -139,6 +153,20 @@
              (weasel#561). It also carries weasel#574, which brings the shared flat-table
              DecrementMemberMap into line with fisher#183; Fisher does not use that DSL yet, but the
              agreement is what makes adopting it later cost nothing.
+
+             9.36.0 (from 9.35.2) is a drift release whose SQLite half is migration behaviour, and
+             it takes JasperFx 2.76.0 as its floor — which is why the two move together here:
+             weasel#546 — delete-all with resetIdentity no longer fails at prepare time on a file with
+             no sqlite_sequence. Fisher's cleaners delete in their own order (fisher#6) rather than
+             through Migrator's delete-all, so this is inert for Fisher's own paths.
+             weasel#648 — a rebuilt table rolls back by rebuilding, not by recreating it empty. Reaches
+             Fisher through db-patch's .drop.sql companion (fisher#172).
+             weasel#639/#640 — add-only rebuilds keep undeclared objects, and PreserveIdentifierCase
+             pairs case-insensitively. Both are EF Core MapToTable defaults; Fisher's tables set
+             neither, so inert here.
+             high_water_contiguity_audit.a_table_rebuild_carries_the_autoincrement_counter_forward is
+             the fact that would notice if a rebuild change ever stopped carrying sqlite_sequence
+             forward, and it stays green.
 
              9.35.2 is weasel#634 alone — an exhausted DropSchema retry is reported rather than
              returned as success. Fisher drops no schemas (SQLite has none), so it is inert here.
@@ -168,8 +196,8 @@
              advisory lock), and #615/#621/#625/#627/#628/#629 (Weasel.EntityFrameworkCore, which
              Fisher.EntityFrameworkCore does not reference — it takes
              Microsoft.EntityFrameworkCore.Relational alone). -->
-        <PackageVersion Include="Weasel.Sqlite" Version="9.35.2" />
-        <PackageVersion Include="Weasel.Storage" Version="9.35.2" />
+        <PackageVersion Include="Weasel.Sqlite" Version="9.36.0" />
+        <PackageVersion Include="Weasel.Storage" Version="9.36.0" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,

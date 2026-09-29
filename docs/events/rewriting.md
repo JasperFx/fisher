@@ -176,3 +176,15 @@ The non-generic form on `IEventStore` **resolves the aggregate type from `fi_str
 throws at that level. The type is on the row, so declining for every stream would be a worse answer
 than declining for the streams that genuinely record none — and the message that does decline names
 the generic overload.
+
+On a multi-tenanted store, pass the tenant the stream belongs to:
+
+```cs
+await eventStore.CompactStreamAsync(streamId, "north");
+```
+
+This is the action-side twin of `OpenReadOnlyEventStore(tenantId)`: a compaction policy that selected a
+tenant's streams through that reader can then compact them. Both the stream-state read and the
+compaction run in that tenant's scope — the `tenant_id` term under conjoined tenancy, the tenant's own
+file under database-per-tenant. A tenant on a store with no tenant dimension is refused rather than
+ignored, because the unscoped tables would compact whichever stream carries that id.

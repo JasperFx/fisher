@@ -1150,6 +1150,10 @@ follows — live aggregation, `FetchForWriting` and the daemon all inherit it.
   throws at that level despite implementing the generic overload. The type is on the row, so declining
   for every stream would be a worse answer than declining for the streams that genuinely record none —
   and that message names the generic overload.
+- **The tenant-aware pair (jasperfx#910, fisher#354) opens the session for the tenant**, for both the
+  stream-state read and the compaction — the action-side twin of `OpenReadOnlyEventStore(tenantId)`,
+  whose selection was useless while the action one call later ran in the default scope. A tenant on a
+  store that is not multi-tenanted is refused by the reader's rule, not ignored.
 
 Compacting is **one-way**: a projection rebuilt afterwards rebuilds from the snapshot rather than from
 the history that produced it. `StreamCompactingRequest<T>.Archiver` is the hook for copying the events
@@ -4633,6 +4637,12 @@ scopes an application's, so there is no per-member tenant term for a later membe
 had somewhere to put one. **A tenant on a store that is not multi-tenanted is refused rather than
 ignored**, the rule `QueryStreamStates` already followed one member over: `DefaultTenancy.DatabaseFor`
 resolves any id, so a quietly-unscoped reader would report every tenant's events as that tenant's.
+
+**`HasEventStore` (jasperfx#914, fisher#354) is computed, never defaulted**: any registered event type
+other than `Archived`, or `Projections.IsActive()` — Marten's `EventGraph.IsActive` rule. The interface
+default is `true`, which makes a document-only store indistinguishable from an event store to a console
+deciding whether to poll it. Read on every call, because an event type registered on first append turns
+a document-only store into an event store.
 
 `EventOperations.QueryEventsAsync(EventQuery)` is the paging read behind it. Two things in it are
 load-bearing, and both were verified by removing them:

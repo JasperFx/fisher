@@ -93,6 +93,31 @@ public partial class DocumentStore : IEventStore
     DatabaseCardinality IEventStore.DatabaseCardinality => Tenancy.Cardinality;
 
     /// <summary>
+    ///     jasperfx#914 — true when this store has an event store: any registered event type other than
+    ///     <see cref="Archived" />, or any projection or subscription (Marten's <c>EventGraph.IsActive</c>).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The interface default is <see langword="true" />, so leaving it alone would make a
+    ///         document-only store indistinguishable from a real event store — the one question a console
+    ///         polling progression, dead letters and the head sequence needs answered before it polls.
+    ///         Since fisher#332 those reads answer "no results" on such a store rather than throwing,
+    ///         which fixed the exceptions and not the polling.
+    ///     </para>
+    ///     <para>
+    ///         Computed on every read, never cached: an event type registered lazily on first append
+    ///         makes a store that started document-only active. <see cref="Archived" /> is excluded as
+    ///         Marten excludes it, because it is infrastructure every store knows about rather than
+    ///         evidence the application appends events. <c>RegisteredShardNames()</c> is not a
+    ///         substitute: a store with event types and no projections reports no shards while holding
+    ///         real events.
+    ///     </para>
+    /// </remarks>
+    bool IEventStore.HasEventStore
+        => Options.EventGraph.AllKnownEventTypes().Any(x => x.EventType != typeof(Archived))
+           || Options.Projections.IsActive();
+
+    /// <summary>
     ///     Whether this store partitions data by tenant at all, either way it can.
     /// </summary>
     /// <remarks>
@@ -802,20 +827,49 @@ public partial class DocumentStore : IEventStore
     ///     answer, unlike declining for every stream.
     /// </remarks>
     Task IEventStore.CompactStreamAsync(Guid streamId, CancellationToken token)
-        => CompactByStreamStateAsync(streamId, token);
+        => CompactByStreamStateAsync(streamId, null, token);
 
     /// <inheritdoc cref="IEventStore.CompactStreamAsync(Guid, CancellationToken)" />
     Task IEventStore.CompactStreamAsync(string streamKey, CancellationToken token)
-        => CompactByStreamStateAsync(streamKey, token);
+        => CompactByStreamStateAsync(streamKey, null, token);
+
+    /// <summary>
+    ///     jasperfx#910 — the untyped compaction, run in one tenant's scope.
+    /// </summary>
+    /// <remarks>
+    ///     The action-side twin of <c>OpenReadOnlyEventStore(tenantId)</c>: a compaction policy selects a
+    ///     tenant's streams through that reader, and the tenant-less overload then read the stream state
+    ///     — and compacted — in the default scope, where that tenant's stream is not. Both the stream-state
+    ///     read and the compaction run on a session opened for the tenant, so under conjoined tenancy the
+    ///     <c>tenant_id</c> term and under database-per-tenant the file are the tenant's. A tenant on a
+    ///     store with no tenant dimension is refused, by the same rule and for the same reason as the
+    ///     reader: the default scope would compact whichever stream carries that id, whoever owns it.
+    /// </remarks>
+    Task IEventStore.CompactStreamAsync(Guid streamId, string? tenantId, CancellationToken token)
+        => CompactByStreamStateAsync(streamId, TenantScope(tenantId), token);
+
+    /// <inheritdoc cref="IEventStore.CompactStreamAsync(Guid, string?, CancellationToken)" />
+    Task IEventStore.CompactStreamAsync(string streamKey, string? tenantId, CancellationToken token)
+        => CompactByStreamStateAsync(streamKey, TenantScope(tenantId), token);
+
+    private string? TenantScope(string? tenantId)
+    {
+        if (tenantId is null || IsTenanted()) return tenantId;
+
+        throw new NotSupportedException(
+            $"This event store is not multi-tenanted, so CompactStreamAsync cannot scope to tenantId "
+            + $"'{tenantId}': it would compact whichever stream carries that id in the unscoped tables. "
+            + "Omit the tenant id.");
+    }
 
     [UnconditionalSuppressMessage("Trimming", "IL2060:MakeGenericMethod",
         Justification =
             "Closes CompactStreamAsync over the aggregate type named by the stream row. Aggregate types are preserved by projection registration on the caller side per the AOT publishing guide.")]
     [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
         Justification = "See the trimming justification above.")]
-    private async Task CompactByStreamStateAsync(object streamIdentity, CancellationToken token)
+    private async Task CompactByStreamStateAsync(object streamIdentity, string? tenantId, CancellationToken token)
     {
-        await using var session = LightweightSession();
+        await using var session = tenantId is null ? LightweightSession() : LightweightSession(tenantId);
 
         var state = streamIdentity is Guid streamId
             ? await session.Events.FetchStreamStateAsync(streamId, token).ConfigureAwait(false)
