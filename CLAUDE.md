@@ -2898,6 +2898,32 @@ the table shape, the write SQL and the positional `?` contract are untouched.
 - **Generation mirrors the raw strategies**: version-7 Guid, or the document type's Hi-Lo sequence. A
   string-backed wrapper generates nothing, because a raw string key is externally assigned too.
 
+- **A LINQ `Select` of a wrapper is converted to the inner type and then wrapped** (fisher#351). The
+  projection materializer (`FisherQueryProvider.CoerceTo`) knew enums, timestamps and Guids and handed
+  everything else to `Convert.ChangeType`, which cannot build a wrapper — so `Select(x => x.Id)` threw
+  `InvalidCastException` for every strong-typed id, while loading the whole document worked because the
+  serializer builds it. `StrongTypedId.Wrap` caches one compiled constructor-or-builder delegate per
+  wrapper type. It covered the identity only, and fisher#356 finished the job.
+- ⚠️ **A REGISTERED wrapper is serialized as its primitive** (fisher#356, the user's ruling over the
+  alternative of teaching every locator about `$.x.value`). `StoreOptions.RegisterValueType` records
+  the type on the store, and `ApplyValueTypeConverters` adds `ValueTypeJsonConverterFactory` to the
+  serializer's options from `DocumentStore`'s constructor. That is the first moment the serializer is
+  final, since `ConfigureSerialization` replaces it wholesale. From there `MemberFactory` types a
+  registered wrapper as its inner primitive (`ValueTypeMember`), unwrapping only the comparison value,
+  which Microsoft.Data.Sqlite refuses to bind otherwise. `x.Captain.Value` resolves to the same column,
+  and so does `c => c.Value` inside `Any` over a collection of wrappers.
+  - **Registered only, never discovered.** Discovery answers "has the shape", which many ordinary
+    single-property types do, and rewriting their JSON because they happened to fit is not Fisher's
+    call. The identity is the exception on the READ side: `IdMember` unwraps any wrapper, registered or
+    not, because the id column holds the inner value either way.
+  - **Reading accepts the old `{"value":…}` form**, so registering on a live store needs no migration.
+    LINQ still sees the old shape in rows nobody has rewritten.
+  - **A type carrying `[JsonConverter]` is skipped.** A converter in `JsonSerializerOptions.Converters`
+    outranks a type-level attribute, so claiming the type would silently override Vogen's or
+    StronglyTypedId's converter.
+  - **Read-only options are refused by name.** If something serialized with the options before the store
+    was built, they cannot take a converter, and a silent skip would leave LINQ quietly broken.
+
 `LoadAsync<T, TId>(id)` is the load-by-wrapper overload. Both type parameters are explicit, which is
 what keeps it unambiguous against the four single-parameter overloads.
 

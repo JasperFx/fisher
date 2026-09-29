@@ -29,5 +29,14 @@ internal class IdMember : IQueryableMember
     ///     conversion is not optional.
     /// </summary>
     public object? ConvertValue(object? value)
-        => value is Guid guid ? guid.ToString() : value;
+    {
+        // fisher#356: a strong-typed id compares as the inner value the column holds. The wrapper itself
+        // cannot be bound at all — Microsoft.Data.Sqlite refuses a type it has no mapping for.
+        if (value is not null && Storage.StrongTypedId.TryResolve(value.GetType(), out var wrapper))
+        {
+            value = wrapper.ValueProperty.GetValue(value);
+        }
+
+        return value is Guid guid ? guid.ToString() : value;
+    }
 }

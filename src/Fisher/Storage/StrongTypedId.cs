@@ -120,6 +120,34 @@ internal static class StrongTypedId
         }
     }
 
+    private static readonly ConcurrentDictionary<Type, Func<object, object>> Wrappers = new();
+
+    /// <summary>
+    ///     Build a wrapper around a value already converted to its inner type, for a caller that knows
+    ///     the wrapper type only at runtime (fisher#351).
+    /// </summary>
+    /// <remarks>
+    ///     A LINQ projection reads the stored inner value and has only a <see cref="Type" /> to aim at, so
+    ///     the generic <see cref="ValueTypeInfo.CreateWrapper{TOuter,TInner}" /> is out of reach. The
+    ///     constructor or builder is invoked through a delegate cached per wrapper type rather than by
+    ///     reflection per row.
+    /// </remarks>
+    internal static object Wrap(ValueTypeInfo info, object inner)
+        => Wrappers.GetOrAdd(info.OuterType, static (_, i) => BuildWrapper(i), info)(inner);
+
+    private static Func<object, object> BuildWrapper(ValueTypeInfo info)
+    {
+        var parameter = System.Linq.Expressions.Expression.Parameter(typeof(object), "inner");
+        var typed = System.Linq.Expressions.Expression.Convert(parameter, info.SimpleType);
+
+        System.Linq.Expressions.Expression body = info.Ctor is not null
+            ? System.Linq.Expressions.Expression.New(info.Ctor, typed)
+            : System.Linq.Expressions.Expression.Call(info.Builder!, typed);
+
+        return System.Linq.Expressions.Expression.Lambda<Func<object, object>>(
+            System.Linq.Expressions.Expression.Convert(body, typeof(object)), parameter).Compile();
+    }
+
     /// <summary>
     ///     The type actually stored for an identity — a wrapper's inner type, or the type itself.
     /// </summary>

@@ -70,6 +70,10 @@ public partial class DocumentStore : IDocumentStore
         // type, rather than an InvalidOperationException on somebody's first save.
         options.Schema.AssertEveryMappingHasIdentity();
 
+        // fisher#356. The serializer is final here too — ConfigureSerialization replaces it wholesale —
+        // and nothing has serialized a document yet.
+        options.ApplyValueTypeConverters();
+
         // fisher#257. Beside AssertEveryMappingHasIdentity for the same reason: this is the first
         // moment the configuration is final — an IConfigureFisher contribution may have added a
         // document type or turned conjoined tenancy on long after the configuration lambda ran — and

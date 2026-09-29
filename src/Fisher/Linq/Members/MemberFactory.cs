@@ -36,6 +36,7 @@ internal class MemberFactory : IMemberResolver
     private readonly JsonNamingPolicy? _namingPolicy;
     private readonly JsonSerializerOptions _serializerOptions;
     private readonly EnumStorage _enumStorage;
+    private readonly IReadOnlyDictionary<Type, JasperFx.Core.Reflection.ValueTypeInfo> _valueTypes;
     private readonly DocumentMapping? _mapping;
     private readonly bool _hasIdentityColumn;
     private readonly string _qualifier;
@@ -88,6 +89,13 @@ internal class MemberFactory : IMemberResolver
         _collectionDepth = 0;
         _enumStorage = options.Serializer.EnumStorage;
 
+        // fisher#356: a registered wrapper is a primitive in the JSON only when the store's serializer
+        // is the System.Text.Json one that took the converter. A custom serializer writes whatever it
+        // writes, so its wrappers stay objects and are not unwrapped here.
+        _valueTypes = options.Serializer is Weasel.Core.SystemTextJsonSerializer
+            ? options.RegisteredValueTypes
+            : new Dictionary<Type, JasperFx.Core.Reflection.ValueTypeInfo>();
+
         if (options.Serializer is Serializer serializer)
         {
             _serializerOptions = serializer.Options;
@@ -123,6 +131,7 @@ internal class MemberFactory : IMemberResolver
         _enumStorage = parent._enumStorage;
         _serializerOptions = parent._serializerOptions;
         _namingPolicy = parent._namingPolicy;
+        _valueTypes = parent._valueTypes;
     }
 
     internal MemberFactory CreateElementFactory(string dataExpression, int collectionDepth)
@@ -134,6 +143,23 @@ internal class MemberFactory : IMemberResolver
         if (expression.Expression is ParameterExpression && IsIdentityMember(expression.Member))
         {
             return new IdMember(_mapping!.IdType, _qualifier);
+        }
+
+        // fisher#356: `x.OrderId.Value` names the primitive a wrapper holds. Once the wrapper is a
+        // primitive in the JSON there is no `.value` key to extract, so the chain resolves to the
+        // wrapper member's own column, compared as the inner type. An identity's wrapper resolves the
+        // same way whether or not it was registered, because the id column holds the inner value either
+        // way.
+        if (expression.Expression is MemberExpression wrapped
+            && WrapperFor(wrapped) is { } info
+            && expression.Member.Name == info.ValueProperty.Name)
+        {
+            return ResolveMember(wrapped) switch
+            {
+                ValueTypeMember member => member.Inner,
+                IdMember => new IdMember(info.SimpleType, _qualifier),
+                var other => other
+            };
         }
 
         return ResolveMember(ChainOf(expression));
@@ -187,6 +213,25 @@ internal class MemberFactory : IMemberResolver
         return chain.ToArray();
     }
 
+    /// <summary>Whether this type is a registered wrapper stored as its primitive (fisher#356).</summary>
+    internal bool IsPrimitiveWrapper(Type type)
+        => _valueTypes.ContainsKey(Nullable.GetUnderlyingType(type) ?? type);
+
+    private JasperFx.Core.Reflection.ValueTypeInfo? WrapperFor(MemberExpression expression)
+    {
+        var type = Nullable.GetUnderlyingType(expression.Type) ?? expression.Type;
+
+        if (_valueTypes.TryGetValue(type, out var registered))
+        {
+            return registered;
+        }
+
+        return expression.Expression is ParameterExpression && IsIdentityMember(expression.Member)
+               && Storage.StrongTypedId.TryResolve(type, out var identity)
+            ? identity
+            : null;
+    }
+
     private bool IsIdentityMember(MemberInfo member)
         => _hasIdentityColumn && member.Name == _mapping!.IdMember.Name;
 
@@ -222,6 +267,13 @@ internal class MemberFactory : IMemberResolver
     internal IQueryableMember CreateScalarMember(string locator, Type memberType)
     {
         var underlying = Nullable.GetUnderlyingType(memberType) ?? memberType;
+
+        // fisher#356: a registered wrapper is its primitive in the JSON, so it is typed as that
+        // primitive, and only the comparison value needs unwrapping.
+        if (_valueTypes.TryGetValue(underlying, out var wrapper))
+        {
+            return new ValueTypeMember(CreateScalarMember(locator, wrapper.SimpleType), memberType, wrapper);
+        }
 
         if (underlying.IsEnum)
         {
