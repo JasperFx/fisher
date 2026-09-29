@@ -267,6 +267,14 @@ therefore reaches through the proxy to the real store, so a secondary store is s
 monitoring console.
 :::
 
+### Does this store have an event store at all?
+
+`IEventStore.HasEventStore` is `false` for a document-only store: no registered event type other than
+`Archived`, and no projection or subscription. A console reads it before polling progression, dead
+letters and the head sequence, which a document-only store has nothing to report for. It is read on
+every call, never cached, because an event type registered on its first append turns a document-only
+store into an event store.
+
 ## The document tooling surface
 
 `IDocumentStoreUsageSource`, `IDocumentStoreDiagnostics` and projection step-through, also implemented
@@ -279,6 +287,9 @@ var page = await diagnostics.QueryDocumentsAsync("Order", …);
 
 Several things in that surface are worth knowing:
 
+- **The store is identified as `fisher://{store name}`**, the same `Subject` the event side reports, not
+  by its database file. Two stores sharing one file under different `DatabaseSchemaName`s are two
+  identities. This changed in 1.14.0; before it, the document side reported the file's URI.
 - **The usage sweep forces the mappings into existence.** A mapping is created lazily on first use, so
   a store that has opened no session has none — exactly the state a console sees on a fresh boot.
 - **`PartitioningStrategy` is reported as null rather than omitted.** SQLite has no table partitioning,

@@ -164,6 +164,28 @@ ordering are refused by name**, because the stored value is the member's name an
 alphabetically rather than by the enum's declared order. Equality still works. See
 [JSON Serialization](/configuration/json#enum-storage-and-why-the-default-matters-here).
 
+## Strong-typed identifiers
+
+A wrapper such as `readonly record struct CustomerId(Guid Value)` can be queried like the value it
+holds, **provided it is registered**:
+
+```cs
+opts.RegisterValueType<CustomerId>();
+
+session.Query<Order>().Where(x => x.CustomerId == customerId);
+session.Query<Order>().Where(x => x.CustomerId.Value == guid);
+session.Query<Order>().Where(x => ids.Contains(x.CustomerId));
+session.Query<Order>().Where(x => x.Lines.Contains(lineId));
+session.Query<Order>().OrderBy(x => x.CustomerId).Select(x => x.CustomerId);
+```
+
+Registration makes Fisher store the wrapper in the JSON as its primitive. An unregistered wrapper is
+stored as an object, `{"value":…}`, which SQLite cannot compare against a value. The one exception is
+the document's **identity**: `Where(x => x.Id == id)` and `Select(x => x.Id)` work whether or not the
+id type is registered, because the `id` column always holds the inner value. See
+[Strong-typed identifiers](/documents/identity) for what registering changes about rows already
+written.
+
 ## Metadata operators
 
 ```cs

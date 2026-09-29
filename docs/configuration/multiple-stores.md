@@ -61,6 +61,14 @@ The registry that enforces this is **scoped to the container, not the process**.
 refused is *registering* two.
 :::
 
+::: info
+Each store identifies itself as **`fisher://{store name}`** to a monitoring tool — on both the event
+side (`IEventStore.Subject`) and, since 1.14.0, the document side (`IDocumentStoreUsageSource.Subject`
+and `DocumentStoreUsage.SubjectUri`). Before 1.14.0 the document side reported the database file's
+URI, so two logical stores in one file showed up as one store. `StoreName` defaults to the marker
+interface's name, so an ancillary store is told apart with nothing configured.
+:::
+
 ## Sessions for a secondary store
 
 A secondary store's sessions are reached **through the store**, not injected:
