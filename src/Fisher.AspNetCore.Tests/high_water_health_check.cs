@@ -91,7 +91,7 @@ public class high_water_health_check : IAsyncLifetime
     {
         _daemon = await _store.BuildProjectionDaemonAsync();
         await _daemon.StartAllAsync();
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
     }
 
     private async Task StopDaemonAsync()

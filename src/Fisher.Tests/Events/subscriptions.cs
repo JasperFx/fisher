@@ -89,7 +89,7 @@ public class subscriptions : IAsyncLifetime
 
         await AppendAsync(new QuestStarted("Find the ring"), new MemberJoined("Frodo"));
 
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         recorder.Seen.Count.ShouldBe(2);
     }
@@ -103,7 +103,7 @@ public class subscriptions : IAsyncLifetime
         await AppendAsync(new QuestStarted("One"), new MemberJoined("A"));
         await AppendAsync(new QuestStarted("Two"), new MemberJoined("B"));
 
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         var sequences = recorder.Seen.Select(x => x.Sequence).ToArray();
 
@@ -123,7 +123,7 @@ public class subscriptions : IAsyncLifetime
 
         await AppendAsync(new QuestStarted("Find the ring"));
 
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         var progress = await _store.Database
             .ProjectionProgressFor(new ShardName(recorder.Name), TestContext.Current.CancellationToken);
@@ -154,7 +154,7 @@ public class subscriptions : IAsyncLifetime
             await AppendAsync(new MemberJoined($"member-{i}"));
         }
 
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         recorder.Seen.Count.ShouldBe(1);
         recorder.Seen.Single().Data.ShouldBeOfType<QuestStarted>();
@@ -332,7 +332,7 @@ public class subscriptions_under_the_hosted_daemon : IAsyncLifetime
             // Waited on the subscription's own signal rather than on non-staleness: the progression
             // row is written inside the batch's transaction, so non-stale becomes true strictly before
             // anything the subscription did is observable. Same trap fisher#232 records one seam over.
-            await subscription.SawTwo.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
+            await subscription.SawTwo.Task.WaitAsync(DaemonWait.Timeout, Token);
 
             subscription.Seen.Count.ShouldBe(2);
         }

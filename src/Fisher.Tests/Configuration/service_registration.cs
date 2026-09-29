@@ -269,7 +269,7 @@ public class service_registration : IAsyncLifetime
         }
 
         var store = provider.GetRequiredService<DocumentStore>();
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         await using var query = store.LightweightSession();
         var quest = await query.LoadAsync<RegisteredQuest>(streamId, TestContext.Current.CancellationToken);

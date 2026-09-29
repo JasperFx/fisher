@@ -157,7 +157,7 @@ public class binary_events : IAsyncLifetime
 
         using var daemon = await store.BuildProjectionDaemonAsync();
         await daemon.StartAllAsync();
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
         await daemon.StopAllAsync();
 
         await using var query = store.LightweightSession();

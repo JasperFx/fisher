@@ -79,7 +79,7 @@ public class shared_published_table_rebuild : IAsyncLifetime
 
         using var daemon = await _store.BuildProjectionDaemonAsync(logger: _logger);
         await daemon.StartAllAsync();
-        await daemon.WaitForNonStaleData(TimeSpan.FromSeconds(20));
+        await daemon.WaitForNonStaleData(DaemonWait.Timeout);
         await daemon.StopAllAsync();
 
         return (landed, released);
@@ -88,7 +88,7 @@ public class shared_published_table_rebuild : IAsyncLifetime
     private async Task RebuildAsync(string projectionName)
     {
         using var daemon = await _store.BuildProjectionDaemonAsync(logger: _logger);
-        await daemon.RebuildProjectionAsync(projectionName, TimeSpan.FromSeconds(30), Token);
+        await daemon.RebuildProjectionAsync(projectionName, DaemonWait.Timeout, Token);
         await daemon.StopAllAsync();
     }
 
@@ -186,7 +186,7 @@ public class shared_published_table_rebuild : IAsyncLifetime
         {
             await daemon.StartAllAsync();
             await daemon.RewindSubscriptionAsync(nameof(ReleasedTally), Token, sequenceFloor: 0);
-            await daemon.WaitForNonStaleData(TimeSpan.FromSeconds(20));
+            await daemon.WaitForNonStaleData(DaemonWait.Timeout);
             await daemon.StopAllAsync();
         }
 

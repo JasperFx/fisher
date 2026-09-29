@@ -347,7 +347,7 @@ public class database_per_tenant : IAsyncLifetime
 
             foreach (var database in store.Tenancy.AllDatabases())
             {
-                await database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+                await database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
             }
 
             // North saw two events, south one — and neither file holds the other's tally.
@@ -387,7 +387,7 @@ public class database_per_tenant : IAsyncLifetime
         {
             await daemon.StartAllAsync();
             await store.Tenancy.DatabaseFor("north")
-                .WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+                .WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
             var north = await store.Tenancy.DatabaseFor("north").AllProjectionProgress(Token);
             var south = await store.Tenancy.DatabaseFor("south").AllProjectionProgress(Token);
@@ -424,7 +424,7 @@ public class database_per_tenant : IAsyncLifetime
             // form of "this daemon is built against that tenant's database".
             await daemon.StartAllAsync();
             await store.Tenancy.DatabaseFor("south")
-                .WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+                .WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
             (await store.Tenancy.DatabaseFor("north").AllProjectionProgress(Token)).ShouldBeEmpty();
         }

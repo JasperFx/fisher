@@ -433,7 +433,7 @@ public class session_listeners : IAsyncLifetime
 
         using var daemon = await store.BuildProjectionDaemonAsync();
         await daemon.StartAllAsync();
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
         await daemon.StopAllAsync();
 
         // The snapshot was written by the daemon, and the listener saw nothing of it.

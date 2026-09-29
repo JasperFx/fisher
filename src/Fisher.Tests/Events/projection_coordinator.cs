@@ -138,7 +138,7 @@ public class projection_coordinator : IAsyncLifetime
         var store = host.Services.GetRequiredService<IDocumentStore>();
 
         var before = await OpenWardAsync(host, "Ward C");
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         await store.Advanced.ResetAllDataAsync(Token);
 
@@ -148,7 +148,7 @@ public class projection_coordinator : IAsyncLifetime
         }
 
         var after = await OpenWardAsync(host, "Ward D");
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         await using (var query = store.LightweightSession())
         {

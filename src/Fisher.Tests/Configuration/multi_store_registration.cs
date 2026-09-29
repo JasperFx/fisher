@@ -508,7 +508,7 @@ public class multi_store_registration : IAsyncLifetime
             await session.SaveChangesAsync(Token);
         }
 
-        await archive.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await archive.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         await using var query = archive.LightweightSession();
         (await query.LoadAsync<Course>(streamId, Token))!.Miles.ShouldBe(12);

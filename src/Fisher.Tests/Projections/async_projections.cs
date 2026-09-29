@@ -99,7 +99,7 @@ public class async_projections : IAsyncLifetime
             new MonsterSlain("Balrog"));
 
         await StartDaemonAsync();
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         await using var query = _store.LightweightSession();
         var tally = await query.LoadAsync<AsyncQuestTally>(streamId, TestContext.Current.CancellationToken);
@@ -171,7 +171,7 @@ public class async_projections : IAsyncLifetime
 
         try
         {
-            await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+            await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
             // The first attempt was thrown away; the retry has to have written the snapshot, not just
             // the progression row that says it did.

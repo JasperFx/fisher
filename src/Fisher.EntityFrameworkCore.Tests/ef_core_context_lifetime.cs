@@ -101,7 +101,7 @@ public class ef_core_context_lifetime : IAsyncLifetime
 
         _daemon = await store.BuildProjectionDaemonAsync();
         await _daemon.StartAllAsync();
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
         await _daemon.StopAllAsync();
 
         _counter.Created.ShouldBeGreaterThan(0);
@@ -131,7 +131,7 @@ public class ef_core_context_lifetime : IAsyncLifetime
 
         _daemon = await store.BuildProjectionDaemonAsync();
         await _daemon.StartAllAsync();
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
         await _daemon.StopAllAsync();
 
         _counter.Created.ShouldBeGreaterThan(0);

@@ -252,7 +252,7 @@ public class event_stream_results : IAsyncLifetime
 
         using var daemon = await store.BuildProjectionDaemonAsync();
         await daemon.StartAllAsync();
-        await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
         await daemon.StopAllAsync();
 
         var result = await CheckFor(store, TimeProvider.System).CheckHealthAsync(new HealthCheckContext(), Token);
@@ -296,7 +296,7 @@ public class event_stream_results : IAsyncLifetime
                 await session.SaveChangesAsync(Token);
             }
 
-            await store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+            await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
             await daemon.StopAllAsync();
         }
 

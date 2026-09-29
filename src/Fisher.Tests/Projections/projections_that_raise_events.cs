@@ -59,7 +59,7 @@ public class projections_that_raise_events : IAsyncLifetime
     {
         _daemon = await _store.BuildProjectionDaemonAsync();
         await _daemon.StartAllAsync();
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public class projections_that_raise_events : IAsyncLifetime
             await session.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
-        await _store.Database.WaitForNonStaleProjectionDataAsync(TimeSpan.FromSeconds(30));
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
 
         await using var query = _store.LightweightSession();
         var events = await query.Events.FetchStreamAsync(streamId, token: TestContext.Current.CancellationToken);
