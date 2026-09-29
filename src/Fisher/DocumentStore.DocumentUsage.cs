@@ -23,7 +23,14 @@ namespace Fisher;
 /// </remarks>
 public partial class DocumentStore : IDocumentStoreUsageSource
 {
-    Uri IDocumentStoreUsageSource.Subject => Database.Describe().DatabaseUri();
+    // fisher#353: the STORE, not the file backing it -- the same identity IEventStore.Subject answers
+    // with since fisher#279, and what Marten reports on both sides. The database uri named the file and
+    // nothing narrower, so two stores sharing one file under different DatabaseSchemaNames -- the
+    // layout AddFisherStore<T> exists to support -- reported one document identity between them, and a
+    // console addressing "this store's documents" by it could not tell which store it had. It also
+    // meant one DocumentStore answered "which store are you?" two ways depending on which interface
+    // asked. The file is still reported, on DocumentStoreUsage.Database.
+    Uri IDocumentStoreUsageSource.Subject => Internal.StoreSubject.For(Options.StoreName);
 
     /// <remarks>
     ///     Pure description — no queries, nothing that can fail on a database that is not there.
@@ -34,7 +41,7 @@ public partial class DocumentStore : IDocumentStoreUsageSource
         var usage = new DocumentStoreUsage
         {
             Subject = "Fisher.DocumentStore",
-            SubjectUri = Database.Describe().DatabaseUri(),
+            SubjectUri = ((IDocumentStoreUsageSource)this).Subject,
             Version = GetType().Assembly.GetName().Version?.ToString(),
             // fisher#240 — the tenancy's answer, not a hardcoded Single. See DescribeDatabases.
             Database = DescribeDatabases(),

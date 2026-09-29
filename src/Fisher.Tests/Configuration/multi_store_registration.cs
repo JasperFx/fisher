@@ -282,6 +282,56 @@ public class multi_store_registration : IAsyncLifetime
         await host.StopAsync(Token);
     }
 
+    /// <summary>
+    ///     fisher#353 — two stores in ONE file answer with two document identities.
+    /// </summary>
+    /// <remarks>
+    ///     The document side used to report the database file's uri, so a main and an ancillary store
+    ///     sharing a file under different schema names were indistinguishable to a console that picks a
+    ///     store by <c>SubjectUri</c> and resolves its diagnostics by <c>Subject</c>. It now reports the
+    ///     store, and agrees with the event side of the same store — which is the property that lets a
+    ///     consumer pair a store's document half with its event half.
+    /// </remarks>
+    [Fact]
+    public async Task two_stores_in_one_file_have_distinct_document_identities()
+    {
+        using var host = await Host.CreateDefaultBuilder()
+            .ConfigureServices(services =>
+            {
+                services.AddFisher(options =>
+                {
+                    options.ConnectionString = _first.ConnectionString;
+                    options.StoreName = "Primary";
+                });
+
+                services.AddFisherStore<IArchiveStore>(options =>
+                {
+                    options.ConnectionString = _first.ConnectionString;
+                    options.DatabaseSchemaName = "archive";
+                });
+            })
+            .StartAsync(Token);
+
+        var sources = host.Services.GetServices<IDocumentStoreUsageSource>().ToList();
+        sources.Count.ShouldBe(2);
+
+        var subjects = sources.Select(x => x.Subject).ToList();
+        subjects.Distinct().Count().ShouldBe(2);
+
+        foreach (var source in sources)
+        {
+            var usage = await source.TryCreateUsage(Token);
+            usage.ShouldNotBeNull();
+            usage.SubjectUri.ShouldBe(source.Subject);
+        }
+
+        // The document half and the event half of each store now name it the same way.
+        var eventSubjects = host.Services.GetServices<IEventStore>().Select(x => x.Subject).ToList();
+        eventSubjects.OrderBy(x => x.ToString()).ShouldBe(subjects.OrderBy(x => x.ToString()));
+
+        await host.StopAsync(Token);
+    }
+
     // ---- IConfigureFisher ----
 
     [Fact]

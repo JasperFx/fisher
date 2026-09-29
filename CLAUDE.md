@@ -4184,6 +4184,15 @@ all, including the zero-infrastructure embedded configuration that is Fisher's b
   one would be missing a whole database rather than a schema.
 - Polecat registers both for both stores and Marten registers the usage source; Fisher was the only
   one of the three registering neither.
+- ⚠️ **The document identity is the STORE's, `fisher://{store}`, not the database file's** (fisher#353).
+  `IDocumentStoreUsageSource.Subject` and `DocumentStoreUsage.SubjectUri` used to report
+  `Database.Describe().DatabaseUri()`, which names the file and nothing narrower. So two stores sharing
+  one file under different `DatabaseSchemaName`s — the layout `AddFisherStore<T>` exists for — reported
+  one identity, and a console that picks a store by `SubjectUri` and resolves its diagnostics by
+  `Subject` could not tell them apart. It also meant one `DocumentStore` gave two different answers to
+  "which store are you?", since `IEventStore.Subject` had been the store's since fisher#279. Both halves
+  now agree, as they do on Marten. **This changes a URI a consumer may already key on**, so it belongs
+  in the release notes. The file is still reported, on `DocumentStoreUsage.Database`.
 
 - **The usage sweep has to force the mappings into existence.** A mapping is created lazily on first
   use, so a store that has opened no session has none — exactly the state a console sees on a fresh
