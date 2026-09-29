@@ -64,7 +64,7 @@ internal class CollectionMember : QueryableMember
     ///     Whether the elements are scalars a <c>Contains</c> can compare directly. A complex element
     ///     has no single stored form to compare against — <c>Any(c =&gt; …)</c> is the operator for it.
     /// </summary>
-    public bool HasScalarElements => IsScalarType(ElementType);
+    public bool HasScalarElements => IsScalarType(ElementType) || _parent.IsPrimitiveWrapper(ElementType);
 
     /// <summary>
     ///     The element as a queryable member over <c>each_N.value</c> — same typing rules as a
@@ -81,7 +81,7 @@ internal class CollectionMember : QueryableMember
     /// </summary>
     public IMemberResolver CreateElementResolver(ParameterExpression parameter)
         => new ElementMemberResolver(
-            _parent.CreateElementFactory($"{Alias}.value", Depth), parameter, ElementType);
+            _parent.CreateElementFactory($"{Alias}.value", Depth), parameter, ElementType, ElementMember);
 
     /// <summary>
     ///     Whether the CLR type is stored as a JSON array of elements worth unrolling, and which
@@ -167,11 +167,15 @@ internal sealed class ElementMemberResolver : IMemberResolver
     private readonly ParameterExpression _parameter;
     private readonly Type _elementType;
 
-    public ElementMemberResolver(MemberFactory inner, ParameterExpression parameter, Type elementType)
+    private readonly IQueryableMember? _element;
+
+    public ElementMemberResolver(MemberFactory inner, ParameterExpression parameter, Type elementType,
+        IQueryableMember? element = null)
     {
         _inner = inner;
         _parameter = parameter;
         _elementType = elementType;
+        _element = element;
     }
 
     public IQueryableMember ResolveMember(MemberExpression expression)
@@ -185,7 +189,14 @@ internal sealed class ElementMemberResolver : IMemberResolver
                 + "element's own members can be translated to SQL.");
         }
 
-        if (CollectionMember.IsScalarType(_elementType))
+        // fisher#356: an element that is a registered wrapper is stored as its primitive, so
+        // `c => c.Value == id` is a comparison against the element itself.
+        if (_element is ValueTypeMember wrapper && ReferenceEquals(expression.Expression, _parameter))
+        {
+            return wrapper.Inner;
+        }
+
+        if (CollectionMember.IsScalarType(_elementType) || _element is ValueTypeMember)
         {
             throw new BadLinqExpressionException(
                 $"Cannot translate the member access '{expression}' inside a collection predicate: "

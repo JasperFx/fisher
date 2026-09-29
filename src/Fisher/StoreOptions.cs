@@ -603,7 +603,7 @@ public class StoreOptions
     ///     store as an identity.
     /// </exception>
     public JasperFx.Core.Reflection.ValueTypeInfo RegisterValueType<TValueType>() where TValueType : notnull
-        => Storage.StrongTypedId.Register(typeof(TValueType));
+        => RegisterValueType(typeof(TValueType));
 
     /// <summary>
     ///     Register a strong-typed identifier by <see cref="Type" />. See
@@ -614,7 +614,60 @@ public class StoreOptions
     ///     an identity.
     /// </exception>
     public JasperFx.Core.Reflection.ValueTypeInfo RegisterValueType(Type type)
-        => Storage.StrongTypedId.Register(type);
+    {
+        var info = Storage.StrongTypedId.Register(type);
+        _valueTypes[type] = info;
+        return info;
+    }
+
+    private readonly Dictionary<Type, JasperFx.Core.Reflection.ValueTypeInfo> _valueTypes = new();
+
+    /// <summary>
+    ///     The wrappers this store was told about by <see cref="RegisterValueType(Type)" />, keyed by
+    ///     the wrapper type — what serializes them as their primitive and what LINQ unwraps (fisher#356).
+    /// </summary>
+    internal IReadOnlyDictionary<Type, JasperFx.Core.Reflection.ValueTypeInfo> RegisteredValueTypes
+        => _valueTypes;
+
+    /// <summary>
+    ///     Put the registered wrappers' converter into the serializer's options, once the configuration
+    ///     is final (fisher#356).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Here rather than in <see cref="RegisterValueType(Type)" />, because the serializer can be
+    ///         replaced after a type is registered — <see cref="ConfigureSerialization" /> builds a new
+    ///         one — and a converter added to the old one would silently go with it.
+    ///     </para>
+    ///     <para>
+    ///         Only a System.Text.Json serializer can take it. A custom <see cref="Serialization.ISerializer" />
+    ///         decides its own JSON shape, and a wrapper it writes as an object keeps the LINQ limitation
+    ///         this exists to remove.
+    ///     </para>
+    /// </remarks>
+    internal void ApplyValueTypeConverters()
+    {
+        if (_valueTypes.Count == 0 || Serializer is not Weasel.Core.SystemTextJsonSerializer stj)
+        {
+            return;
+        }
+
+        if (stj.Options.Converters.OfType<Serialization.ValueTypeJsonConverterFactory>().Any())
+        {
+            return;
+        }
+
+        if (stj.Options.IsReadOnly)
+        {
+            throw new InvalidOperationException(
+                "Registered value types (" + string.Join(", ", _valueTypes.Keys.Select(x => x.Name))
+                + ") cannot be serialized as their primitive values, because the serializer's "
+                + "JsonSerializerOptions were already used and are now read-only. Give this store a "
+                + "serializer whose options no other code has serialized with.");
+        }
+
+        stj.Options.Converters.Add(new Serialization.ValueTypeJsonConverterFactory(_valueTypes));
+    }
 
     internal void AssertValid()
     {

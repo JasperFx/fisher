@@ -143,11 +143,33 @@ opts.Events.StreamIdentity = StreamIdentity.AsString;
 opts.RegisterValueType<CatchId>();
 ```
 
-It is not quite a no-op, and the difference is the reason to use it. Discovery has to treat "not a
-wrapper" as the ordinary answer, because it is asked about every candidate identity member of every
-type. Naming a type here is an *assertion* that it is one, so the same answer becomes a configuration
-error — reported at configuration time, with the type named, rather than surfacing much later as
-`has no identity member`.
+It does two things discovery does not. First, a type that cannot be a wrapper is reported at
+configuration time with its name, rather than much later as `has no identity member`. Second, and more
+important:
+
+**A registered wrapper is serialized as the primitive it wraps.** Without registration, System.Text.Json
+writes `CatchId` as `{"value":"…"}`. That loads fine, but LINQ reads the JSON rather than the object,
+so a wrapper used anywhere other than the identity could not be queried. Once registered, every member
+of that type is a plain value in the JSON, and LINQ treats it as one:
+
+```cs
+opts.RegisterValueType<CrewId>();
+
+// A member that is not the identity: compared, ordered, projected and matched as its Guid.
+session.Query<Vessel>().Where(x => x.Captain == captain);
+session.Query<Vessel>().Where(x => x.Captain.Value == guid);
+session.Query<Vessel>().Where(x => x.Crew.Contains(sailor));
+session.Query<Vessel>().Select(x => x.Captain);
+```
+
+- **Rows written before registration still load.** Reading accepts the old `{"value":…}` shape too, so
+  registering a type on a live store needs no migration. LINQ sees the new shape only in rows written
+  after registration. Register before data is written, or re-store the documents you query by it.
+- **Only registered types change shape.** Plenty of ordinary single-property types match a wrapper's
+  shape, and Fisher will not rewrite their JSON because they happen to fit.
+- **A wrapper with its own `[JsonConverter]` is left alone.** Vogen's and StronglyTypedId's generated
+  converters already write the primitive, and a registration must not override them.
+- **Only Fisher's System.Text.Json serializer takes it.** A custom `ISerializer` writes its own shape.
 
 Two things fall out of the design and are worth knowing:
 
