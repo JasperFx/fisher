@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Fisher.Internal;
 using Fisher.Storage.ClosedShape;
+using JasperFx;
 using JasperFx.Events;
 using JasperFx.Events.Aggregation;
 using JasperFx.Events.Daemon;
@@ -43,15 +44,48 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
 
     public void Store(TDoc snapshot) => Store(snapshot, (TId)_storage.IdentityFor(snapshot), TenantId);
 
+    /// <remarks>
+    ///     The inline path — JasperFx's <c>ApplyInline</c> — comes through here rather than through
+    ///     <see cref="StoreProjection" />, with no last event to hand. So the revision is read off the
+    ///     snapshot, where the aggregation has already stamped the stream version (or, for a multi-stream
+    ///     projection, the sequence) onto <see cref="IRevisioned.Version" />. See
+    ///     <see cref="StoreProjection" /> for why it matters (fisher#369).
+    /// </remarks>
     public void Store(TDoc snapshot, TId id, string tenantId)
-        => _session.QueueOperation(_storage.UpsertProjected(snapshot, tenantId));
+        => _session.QueueOperation(ProjectedWrites.For(_storage, snapshot, tenantId, ProjectedWrites.RevisionCarriedBy(snapshot)));
 
     /// <summary>
-    ///     Applying a projection is storing its snapshot. The <paramref name="lastEvent" /> and
-    ///     <paramref name="scope" /> exist for stores that stamp projection metadata onto the document;
-    ///     Fisher has no such columns yet.
+    ///     Applying a projection is storing its snapshot — and, for a numeric-revisioned document, stamping
+    ///     the revision the events say it is at.
     /// </summary>
-    public void StoreProjection(TDoc aggregate, IEvent? lastEvent, AggregationScope scope) => Store(aggregate);
+    /// <remarks>
+    ///     <para>
+    ///         ⚠️ <b>fisher#369: a projected <c>IRevisioned</c> document's <c>revision</c> column used to
+    ///         be a write count.</b> This was <c>Store(aggregate)</c>, whose projected upsert binds
+    ///         revision 0 — "auto", increment whatever is stored. So after one save of two events the
+    ///         column said 1, <c>LoadAsync</c> projected that 1 back onto <c>Version</c>, and the stored
+    ///         body, a LINQ <c>Select(x =&gt; x.Version)</c>, Marten and Polecat all said 2. One store
+    ///         giving two answers depending on how the document was read, which is exactly what a
+    ///         consumer gating a reload on <c>(Id, Version)</c> cannot live with.
+    ///     </para>
+    ///     <para>
+    ///         Marten's answer, taken whole: an <b>overwrite</b> carrying an explicit revision — the last
+    ///         event's stream version for a single-stream projection, its global sequence for a
+    ///         multi-stream one, which is the same rule JasperFx's <c>AggregateVersioning</c> uses to set
+    ///         <c>Version</c> on the aggregate itself — with <c>IgnoreConcurrencyViolation</c>. An overwrite
+    ///         because a projection writes what the events say and has no prior read to guard: an upsert
+    ///         would demand the revision strictly exceed the stored one, and a replay onto a row the
+    ///         previous run left would then fail on the value it is supposed to write.
+    ///     </para>
+    ///     <para>
+    ///         Only for numeric revisions. A Guid-versioned or unversioned document has no revision column
+    ///         to disagree with its body, so its write is unchanged.
+    ///     </para>
+    /// </remarks>
+    public void StoreProjection(TDoc aggregate, IEvent? lastEvent, AggregationScope scope)
+        => _session.QueueOperation(ProjectedWrites.For(_storage, aggregate, TenantId, lastEvent is null
+            ? ProjectedWrites.RevisionCarriedBy(aggregate)
+            : scope == AggregationScope.SingleStream ? lastEvent.Version : lastEvent.Sequence));
 
     public void Delete(TId identity) => Delete(identity, TenantId);
 
@@ -169,5 +203,44 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
         }
 
         return documents.ToDictionary(x => (TId)_storage.IdentityFor(x));
+    }
+}
+
+/// <summary>
+///     How a projected document is written — shared by the projection storage and by
+///     <c>Advanced.RebuildSingleStreamAsync</c>, which is a projection write reached another way.
+/// </summary>
+internal static class ProjectedWrites
+{
+    /// <summary>The revision a snapshot carries on its own <see cref="IRevisioned.Version" />, or 0.</summary>
+    internal static long RevisionCarriedBy(object snapshot) => snapshot is IRevisioned revisioned ? revisioned.Version : 0;
+
+    /// <summary>
+    ///     The projected write: an upsert, or — for a numeric-revisioned document that knows its revision —
+    ///     an overwrite stamping it.
+    /// </summary>
+    /// <remarks>
+    ///     A revision of 0 is "auto", which is also what a document configured through
+    ///     <c>UseNumericRevisions()</c> without an <see cref="IRevisioned" /> member carries. Such a
+    ///     document has no <c>Version</c> in its body or on a member, so there is nothing for the column to
+    ///     disagree with and the upsert's write count is left alone.
+    /// </remarks>
+    internal static Weasel.Storage.IStorageOperation For<TDoc>(IDocumentStorage<TDoc> storage, TDoc snapshot,
+        string tenantId, long revision) where TDoc : notnull
+    {
+        if (!storage.UseNumericRevisions || revision <= 0)
+        {
+            return storage.UpsertProjected(snapshot, tenantId);
+        }
+
+        var operation = storage.OverwriteProjected(snapshot, tenantId);
+
+        if (operation is IRevisionedOperation revisioned)
+        {
+            revisioned.Revision = revision;
+            revisioned.IgnoreConcurrencyViolation = true;
+        }
+
+        return operation;
     }
 }

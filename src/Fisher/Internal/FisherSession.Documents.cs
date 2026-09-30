@@ -200,6 +200,31 @@ internal partial class FisherSession
         storage.Store(this, document);
     }
 
+    /// <summary>
+    ///     Store <paramref name="document" /> the way a projection stores its snapshot — for
+    ///     <c>Advanced.RebuildSingleStreamAsync</c>, which rebuilds one outside the daemon.
+    /// </summary>
+    /// <remarks>
+    ///     A numeric-revisioned <see cref="JasperFx.IRevisioned" /> document is overwritten carrying the
+    ///     stream version the fold stamped on it (fisher#369). An ordinary <c>Store</c> would guard that
+    ///     revision against the stored one with the strictly-greater rule, and since fisher#369 the stored
+    ///     one IS the stream version — so repairing an intact row would be a <c>ConcurrencyException</c>.
+    ///     Everything else goes through <c>Store</c> unchanged.
+    /// </remarks>
+    internal void StoreProjected<T>(T document) where T : notnull
+    {
+        var storage = StorageFor<T>();
+        var revision = Projections.ProjectedWrites.RevisionCarriedBy(document);
+
+        if (!storage.UseNumericRevisions || revision <= 0)
+        {
+            Store(document);
+            return;
+        }
+
+        QueueOperation(Projections.ProjectedWrites.For(storage, document, TenantId, revision));
+    }
+
     private static Weasel.Storage.IStorageOperation CaptureExpectedRevision(
         Weasel.Storage.IStorageOperation operation, object document, int? revision = null)
     {

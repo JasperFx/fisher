@@ -811,7 +811,8 @@ public class AdvancedOperations
         }
         else
         {
-            session.Store(document);
+            // As a projection stores it, so a revisioned document keeps the stream version (fisher#369).
+            ((Internal.FisherSession)session).StoreProjected(document);
         }
 
         await session.SaveChangesAsync(token).ConfigureAwait(false);

@@ -118,6 +118,18 @@ The column is INTEGER, and that is load-bearing. A TEXT affinity would sort revi
 revision 9 and turn the "must be greater" guard into nonsense.
 :::
 
+### A projected document's revision is its stream version
+
+When a projection maintains an `IRevisioned` document, the stored revision is the version the events
+put it at, as on Marten and Polecat. For a single-stream projection that is the stream version, and
+for a multi-stream projection it is the last event's sequence. `LoadAsync` and a LINQ
+`Select(x => x.Version)` return the same number, so you can check `(Id, Version)` to see whether a
+projected document changed before loading all of it. `Advanced.RebuildSingleStreamAsync` writes the
+same revision.
+
+Fisher 1.14.0 and earlier counted writes in that column instead: one save of two events stored revision 1, while the document
+body said 2.
+
 ## Which to use
 
 Guid versions are the safer default and need nothing from the caller. Numeric revisions are worth it
