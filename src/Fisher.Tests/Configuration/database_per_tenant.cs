@@ -430,6 +430,9 @@ public class database_per_tenant : IAsyncLifetime
         }
         finally
         {
+            // Stopped before disposal (fisher#189): Dispose() does not await in-flight shard work, and a
+            // shard's next poll re-creates south's file after DisposeAsync has deleted the directory.
+            await daemon.StopAllAsync();
             daemon.Dispose();
         }
     }
