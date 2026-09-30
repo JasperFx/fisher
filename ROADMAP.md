@@ -3,11 +3,27 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **two open issues, and none of them is feature work.** One is an unreproduced intermittent
-kept open on evidence, and one is blocked upstream. 1.5.0 closed both of 1.4.0's follow-ups and the
-whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed the vector story;
-1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event Model canvas it
-contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
+Status: **three open issues, and none of them is feature work.** One is a bug filed on the day of
+1.15.0, one is an unreproduced intermittent kept open on evidence, and one is blocked upstream. 1.5.0
+closed both of 1.4.0's follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added
+hybrid search; 1.7.0 closed the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies
+itself and which Event Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a
+correctness wave.
+
+**1.15.0 grows the document diagnostics surface into something a console can edit through, and fixes
+two reads that disagreed with themselves.** [#364](https://github.com/JasperFx/fisher/issues/364) /
+[#365](https://github.com/JasperFx/fisher/issues/365): `IDocumentStoreDiagnostics` implements JasperFx
+2.77.0's grown contract — rows carry their version, tenant and soft-delete state, database-per-tenant
+reads the tenant's own file, and the new `IDocumentStoreDiagnosticsWriter` saves and deletes through a
+session, with the expected version checked under Fisher's own write lock.
+[#368](https://github.com/JasperFx/fisher/issues/368): `DocumentQueryOptions.AllTenants` (JasperFx
+2.78.0) reads every tenant's documents in one paged query, fanning out across tenant databases.
+[#369](https://github.com/JasperFx/fisher/issues/369): a projected `IRevisioned` document's revision is
+now its stream version, so `LoadAsync` and a LINQ `Select` of `Version` agree — before, the column
+counted writes. [#361](https://github.com/JasperFx/fisher/issues/361): a LINQ `Select` of a `Uri`,
+`TimeSpan`, `DateOnly`, `TimeOnly` or string-stored enum no longer throws.
+[#362](https://github.com/JasperFx/fisher/issues/362) / [#363](https://github.com/JasperFx/fisher/issues/363)
+wire two new compliance facts. On JasperFx **2.78.0** / Weasel **9.36.0**.
 
 **1.14.0 finishes strong-typed identifiers in LINQ and answers two new JasperFx contracts.**
 [#356](https://github.com/JasperFx/fisher/issues/356): a wrapper registered with `RegisterValueType`
@@ -144,7 +160,11 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is two items, neither of which is work that is ready to start.
+What is left is three items.
+
+[#372](https://github.com/JasperFx/fisher/issues/372) was filed the day 1.15.0 shipped: a LINQ
+`Contains()` over more than 32,766 values exceeds SQLite's bound-variable limit and throws, where
+`LoadManyAsync` over the same ids does not.
 
 [#189](https://github.com/JasperFx/fisher/issues/189) is an unreproduced flake with 65 clean runs
 against it, and stays open on evidence rather than on work outstanding.
