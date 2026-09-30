@@ -12,10 +12,26 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2462 tests green on net9.0 and net10.0** — 2395 in `Fisher.Tests`, 36 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 647 of
-them are shared cross-store compliance tests — 502 event sourcing and 145 document.
-On JasperFx **2.77.0** / Weasel **9.36.0**.
+**2473 tests green on net9.0 and net10.0** — 2406 in `Fisher.Tests`, 36 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 656 of
+them are shared cross-store compliance tests — 502 event sourcing and 154 document.
+On JasperFx **2.78.0** / Weasel **9.36.0**.
+
+## The JasperFx 2.78.0 bump — every tenant's documents in one read
+
+**One upstream change, jasperfx#928: `DocumentQueryOptions.AllTenants`.** Since 2.77.0 a blank
+`TenantId` means the default tenant, which left a console no way to read every tenant's documents
+(CritterWatch's Document Explorer "All tenants"). It is an init property rather than an abstract member,
+so the bump compiled clean and an ignoring store would have narrowed silently — the suite's refusal
+fact exists for that. `DocumentStoreDiagnosticsCompliance` went from 41 facts to 50, and Fisher honours
+the flag (fisher#368), so the all-tenants facts run and the refusal fact is the one that skips.
+
+**fisher#368 assumed no fan-out was needed, because it assumed Fisher had no database-per-tenant.** It
+has. So the read counts matching rows per tenant in every database, orders those segments by tenant id,
+and reads only the ones the page overlaps. `document_diagnostics_contract` pins the fan-out and the case
+the suite cannot reach: tenants sharing one file interleaving in tenant order with a tenant alone in
+another. Mutation-verified: reading only the default file fails both local tests, dropping the segment
+sort fails the interleave test, and keeping the tenant predicate fails three suite facts.
 
 ## The JasperFx 2.77.0 bump — the document diagnostics contract, and two liveness facts
 
@@ -789,8 +805,8 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.77.0 ships 59 suites; Fisher enrolls **58 of them, 647 tests**.
-Fisher passes **647 of them, across all
+`JasperFx.Events.ComplianceTests` 2.78.0 ships 59 suites; Fisher enrolls **58 of them, 656 tests**.
+Fisher passes **656 of them, across all
 58 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
@@ -939,7 +955,7 @@ naming.
 **Green on all fifty-eight is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 58 suites, 647 tests
+### Green — 58 suites, 656 tests
 
 Event sourcing — 46 suites, 502 tests:
 
@@ -992,11 +1008,11 @@ Event sourcing — 46 suites, 502 tests:
 | `EventProjectionRegistrationCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 12 suites, 145 tests, through `FisherDocumentComplianceFixture`:
+Documents — 12 suites, 154 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
-| `DocumentStoreDiagnosticsCompliance` | 41 |
+| `DocumentStoreDiagnosticsCompliance` | 50 |
 | `DocumentQueryCompliance` | 17 |
 | `DocumentConjoinedTenancyCompliance` | 10 |
 | `DocumentSearchCompliance` | 11 |

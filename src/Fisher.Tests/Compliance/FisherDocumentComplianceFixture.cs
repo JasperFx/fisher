@@ -294,6 +294,12 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
     /// <summary>The fixture replays <c>DocumentComplianceConfig.SubClasses</c>.</summary>
     public override bool SupportsDocumentHierarchies => true;
 
+    /// <summary>
+    ///     <c>DocumentQueryOptions.AllTenants</c> (jasperfx#928, fisher#368): no tenant predicate under
+    ///     conjoined tenancy, a fan-out under database-per-tenant.
+    /// </summary>
+    public override bool SupportsDocumentDiagnosticAllTenants => true;
+
     // SupportsDocumentDiagnosticCriteria stays false, deliberately: Where / OrderBy are Dynamic LINQ
     // text for the store's own IQueryable<T>, and the translation is jasperfx#869, still open. Left
     // false, the suite does not skip the criteria facts — it asserts they are REFUSED with

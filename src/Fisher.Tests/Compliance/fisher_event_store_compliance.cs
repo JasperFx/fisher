@@ -9,7 +9,7 @@ namespace Fisher.Tests.Compliance;
  * these tests cannot drift between the products.
  *
  * Suites were added one at a time as Fisher grew into them, and fifty-eight are enrolled from
- * JasperFx.Events.ComplianceTests 2.77.0, which itself ships fifty-nine concrete suites across
+ * JasperFx.Events.ComplianceTests 2.78.0, which itself ships fifty-nine concrete suites across
  * fifty-eight files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
  * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
  *
@@ -604,6 +604,11 @@ public class document_conjoined_tenancy_compliance
  * Fisher runs every fact but the five criteria-FILTERING ones, which skip because
  * SupportsDocumentDiagnosticCriteria stays false until jasperfx#869 ships a Dynamic LINQ translation.
  * The criteria-REFUSAL fact runs in their place and is green.
+ *
+ * jasperfx#928 (JasperFx 2.78.0), fisher#368 — DocumentQueryOptions.AllTenants. Fisher honours it, so
+ * SupportsDocumentDiagnosticAllTenants is true and the all-tenants facts run; the all-tenants REFUSAL
+ * fact is the one that skips in their place. The database-per-tenant fan-out is pinned locally in
+ * document_diagnostics_contract, since the suite's fixture is one conjoined file.
  */
 
 public class document_store_diagnostics_compliance

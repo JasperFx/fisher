@@ -286,7 +286,7 @@ var page = await diagnostics.QueryDocumentsAsync("Order", …);
 ```
 
 Fisher implements the full `IDocumentStoreDiagnostics` contract from JasperFx 2.77.0
-(jasperfx#870), along with the write sibling `IDocumentStoreDiagnosticsWriter`. Both are registered in
+(jasperfx#870) and 2.78.0 (jasperfx#928), along with the write sibling `IDocumentStoreDiagnosticsWriter`. Both are registered in
 the container for the main store and for each ancillary store. What the contract defines:
 
 - **Every row carries metadata.** `DocumentQueryResult.Documents` holds `StoredDocument`s with the
@@ -297,6 +297,12 @@ the container for the main store and for each ancillary store. What the contract
 - **A null, empty or whitespace tenant means the default tenant.** It never means a tenant named `""`.
   Under database-per-tenant, the read goes to that tenant's own file. An unknown tenant throws rather
   than being answered from the default file.
+- **Every tenant is its own explicit request, `AllTenants`** (JasperFx 2.78.0). Under conjoined tenancy
+  it applies no tenant predicate; under database-per-tenant it reads every tenant's file, including
+  several tenants sharing one. Each row carries its `TenantId`, and pages are ordered by tenant and then
+  by id, so no page repeats a row from another. A single-tenanted type reads as the default tenant.
+  Combining `AllTenants` with a named `TenantId` is an `ArgumentException`, and `LoadDocumentAsync`
+  stays single-tenant.
 - **The version is opaque text.** For a type with `UseOptimisticConcurrency()` it is the
   `guid_version`. For numeric revisions it is the revision number. For a type with neither, it is a
   hash of `last_modified` and the stored JSON. That token still changes on every write, so a console's
