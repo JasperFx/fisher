@@ -484,6 +484,25 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override bool SupportsMessageOutbox => true;
 
     /// <summary>
+    ///     jasperfx#917 — the composite builder implements <c>Add(ProjectionBase, int)</c>, so the
+    ///     async-daemon half of the jasperfx#886 phantom-deletion facts can put its recording projection in
+    ///     stage 2 (fisher#362).
+    /// </summary>
+    public override bool SupportsAddingProjectionsToComposites => true;
+
+    /// <summary>
+    ///     jasperfx#924 — <c>AllProjectionProgress</c> carries each progression row's own
+    ///     <c>last_updated</c> as <c>ShardState.LastUpdated</c> (fisher#363).
+    /// </summary>
+    /// <remarks>
+    ///     The idle-daemon fact is the one with teeth, and Fisher satisfies it through fisher#60's
+    ///     liveness re-stamp rather than anything added here: the high-water agent rewrites the row's
+    ///     <c>last_updated</c> on an idle cycle, throttled by <c>HighWaterLivenessInterval</c> (five
+    ///     seconds), well inside the fact's wait.
+    /// </remarks>
+    public override bool SupportsProgressionLastUpdated => true;
+
+    /// <summary>
     ///     The before-commit probe reads committed state over a second connection while the first
     ///     session's write transaction is still open, which on SQLite in WAL mode answers immediately
     ///     rather than blocking.
@@ -958,6 +977,16 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
 
             public void Snapshot<TDoc>(int stageNumber) where TDoc : notnull
                 => _composite.Snapshot<TDoc>(stageNumber);
+
+            /// <remarks>
+            ///     fisher#362 / jasperfx#917. The cast is total in practice — every projection a suite
+            ///     hands over derives from Fisher's own bases through the global aliases, and those are
+            ///     all <c>IProjectionSource</c>s over Fisher's session pair — and it goes to the
+            ///     <c>IProjectionSource</c> overload rather than the bare-<c>IProjection</c> one, which
+            ///     would wrap an already-configured projection and lose its published types.
+            /// </remarks>
+            public void Add(ProjectionBase projection, int stageNumber)
+                => _composite.Add((IProjectionSource<IDocumentSession, IQuerySession>)projection, stageNumber);
         }
 
         /// <summary>

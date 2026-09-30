@@ -113,13 +113,21 @@ public partial class FisherDatabase : IEventDatabase
         {
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
-            command.CommandText = $"select name, last_seq_id from {_events.ProgressionTableName}";
+            command.CommandText = $"select name, last_seq_id, last_updated from {_events.ProgressionTableName}";
 
             var states = new List<ShardState>();
             await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
-                states.Add(new ShardState(reader.GetString(0), reader.GetInt64(1)));
+                // fisher#363 / jasperfx#924: the row's own last_updated, which is liveness rather than
+                // progress — on the high-water row it moves on an idle cycle too (fisher#60), so a
+                // monitor can tell "caught up, nothing new" from "no longer maintained". Parsed through
+                // SqliteTimestamp, whose AssumeUniversal is what keeps the zone-less text UTC rather than
+                // local; the column is NOT NULL with a default, so the null arm is only a guard.
+                states.Add(new ShardState(reader.GetString(0), reader.GetInt64(1))
+                {
+                    LastUpdated = reader.IsDBNull(2) ? null : SqliteTimestamp.FromDatabaseValue(reader.GetString(2))
+                });
             }
 
             return (IReadOnlyList<ShardState>)states;
@@ -165,9 +173,10 @@ public partial class FisherDatabase : IEventDatabase
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         fisher#60. Separate from <see cref="AllProjectionProgress" /> for two reasons.
-    ///         <see cref="ShardState" /> has no field for <c>last_updated</c>, so that read cannot carry
-    ///         the only signal a liveness check can use; and it returns every shard's row to keep one.
+    ///         fisher#60. Separate from <see cref="AllProjectionProgress" />, which returns every shard's
+    ///         row to keep one. That read carries <c>last_updated</c> too since jasperfx#924 gave
+    ///         <see cref="ShardState" /> a field for it (fisher#363); this one predates the field and
+    ///         stays for its caller, the health check.
     ///     </para>
     ///     <para>
     ///         The age of <c>last_updated</c> is a liveness signal precisely because

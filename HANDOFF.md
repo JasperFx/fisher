@@ -12,10 +12,48 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2395 tests green on net9.0 and net10.0** — 2328 in `Fisher.Tests`, 36 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 603 of
-them are shared cross-store compliance tests — 499 event sourcing and 104 document.
-On JasperFx **2.76.0** / Weasel **9.36.0**.
+**2452 tests green on net9.0 and net10.0** — 2385 in `Fisher.Tests`, 36 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 647 of
+them are shared cross-store compliance tests — 502 event sourcing and 145 document.
+On JasperFx **2.77.0** / Weasel **9.36.0**.
+
+## The JasperFx 2.77.0 bump — the document diagnostics contract, and two liveness facts
+
+**The bump broke the build on purpose.** jasperfx#870/#927 grew `IDocumentStoreDiagnostics` with two
+**abstract** members, `Subject` and `LoadDocumentAsync(type, id, tenantId)`, so Marten, Polecat and Fisher
+land in one wave (fisher#364). Fisher is the first of the three to implement it. One new suite,
+`DocumentStoreDiagnosticsCompliance` (41 facts): **36 pass, and the 5 criteria-filtering facts skip**
+because `SupportsDocumentDiagnosticCriteria` stays false. The criteria-*refusal* fact runs in their place
+and passes, so `Where`/`OrderBy` are refused with `DocumentCriteriaNotSupportedException` rather than
+ignored. Applying them needs jasperfx#869's Dynamic LINQ translation, which has not shipped.
+
+What the contract changed, and where Fisher stood:
+
+- **Tenancy.** `options.TenantId ?? DefaultTenantId` turned `""` into a tenant named `""`, and
+  database-per-tenant read the default file for every tenant. Both are fixed: the tenant goes through
+  `DocumentQueryOptions.NormalizeTenantId`, and the read goes through `Tenancy.DatabaseFor`.
+- **Soft deletes.** Soft-deleted rows were always filtered out. Now they are excluded unless
+  `IncludeSoftDeleted` is set, and a load by id returns a soft-deleted row flagged with `IsDeleted`.
+- **The version token.** It is opaque text. For an optimistic type it is `guid_version`, rendered
+  lowercase because Weasel's binder stores it uppercase. For numeric revisions it is the revision. For a
+  type with neither it is a SHA-256 of `last_modified` and `data`. `last_modified` alone is millisecond
+  precision, so two writes within one millisecond would share a token.
+- **The writer.** It opens its own `BEGIN IMMEDIATE`, reads the row and checks the expected version under
+  that lock. Only then does it save through an **enlisted** session, which it seeds with the version it
+  read. Without that seed, fisher#245's guard would refuse every console edit of an optimistic document:
+  a session that has read nothing has no version to guard with. A numeric revision is written as auto
+  (0), because Marten's strictly-greater rule would otherwise refuse every edit a console makes with the
+  revision it read.
+
+Mutation-verified: normalizing the tenant raw fails the `""`/`"  "` theories, and loading with the
+soft-delete filter on fails the two flagged-row facts.
+
+**#362 and #363 are the two other facts this bump adds, and both passed once wired.** The composite
+builder's `Add(ProjectionBase, int)` is one cast to Fisher's `IProjectionSource` overload, and the async
+phantom-deletion fact passes on SQLite. `AllProjectionProgress` now carries `last_updated`, and the
+idle-daemon fact passes through fisher#60's liveness re-stamp with nothing added. Setting
+`HighWaterLivenessInterval` to zero fails that fact with "did not move on an idle daemon", which is what
+shows the re-stamp is what satisfies it.
 
 ## The JasperFx 2.75.x bump — conjoined document tenancy, and the hazard it uncovered
 
@@ -751,9 +789,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.76.0 ships 58 suites; Fisher enrolls **57 of them, 603 tests**.
-Fisher passes **603 of them, across all
-57 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 2.77.0 ships 59 suites; Fisher enrolls **58 of them, 647 tests**.
+Fisher passes **647 of them, across all
+58 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -898,12 +936,12 @@ case is what is Fisher's alone — the `ResetAllDataAsync` daemon handling, `Fet
 and `UnknownNaturalKeyException` (which jasperfx#764 excludes on purpose), the subscription wrapper's
 naming.
 
-**Green on all fifty-seven is not the same as feature-complete.** The suites cover what is portable
+**Green on all fifty-eight is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 57 suites, 603 tests
+### Green — 58 suites, 647 tests
 
-Event sourcing — 46 suites, 499 tests:
+Event sourcing — 46 suites, 502 tests:
 
 | Suite | Tests |
 |---|---|
@@ -913,7 +951,7 @@ Event sourcing — 46 suites, 499 tests:
 | `StringStreamIdentityCompliance` | 19 |
 | `EventStoreExplorerCompliance` | 18 |
 | `NaturalKeyCompliance` | 17 |
-| `StreamArchivingCompliance` | 19 |
+| `StreamArchivingCompliance` | 20 |
 | `StreamStateQueryCompliance` | 15 |
 | `AggregateWriteCacheCompliance` | 14 |
 | `StrongTypedIdentityCompliance` | 14 |
@@ -948,16 +986,17 @@ Event sourcing — 46 suites, 499 tests:
 | `AggregateToManyCompliance` | 5 |
 | `RebuildConcurrencyCapCompliance` | 5 |
 | `ActivityCorrelationCompliance` | 4 |
-| `AsyncDaemonCompliance` | 3 |
+| `AsyncDaemonCompliance` | 5 |
 | `CompositeProjectionCompliance` | 3 |
 | `EventProjectionEnrichmentCompliance` | 3 |
 | `EventProjectionRegistrationCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 11 suites, 104 tests, through `FisherDocumentComplianceFixture`:
+Documents — 12 suites, 145 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
+| `DocumentStoreDiagnosticsCompliance` | 41 |
 | `DocumentQueryCompliance` | 17 |
 | `DocumentConjoinedTenancyCompliance` | 10 |
 | `DocumentSearchCompliance` | 11 |

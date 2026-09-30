@@ -210,6 +210,10 @@ session.CurrentUserName = "jane";
 session.SetHeader("tenant-region", "eu-west");
 ```
 
+`session.LastModifiedBy` is the same value as `CurrentUserName` under the name Marten's and Polecat's
+sessions use, so code that stamps a document's author compiles unchanged against all three stores.
+Setting either one sets both.
+
 These reach appended events (each gated on its `Enable*` option) and, if you enable the matching
 columns, stored documents. The session seeds correlation and causation from `Activity.Current` at
 construction, so tracing context reaches events with no application code; an explicit assignment

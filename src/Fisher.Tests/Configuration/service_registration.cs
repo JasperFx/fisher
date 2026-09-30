@@ -119,6 +119,21 @@ public class service_registration : IAsyncLifetime
             .ShouldBeSameAs(provider.GetRequiredService<DocumentStore>());
     }
 
+    /// <summary>
+    ///     fisher#364 — the write sibling is registered beside the reader. A writer implemented but never
+    ///     registered is fisher#303 one interface over: a console resolving it gets nothing and offers no
+    ///     editing, with nothing to say why.
+    /// </summary>
+    [Fact]
+    public void the_store_is_discoverable_as_a_document_diagnostics_writer()
+    {
+        using var provider = ProviderFor();
+
+        var writer = provider.GetServices<JasperFx.Documents.IDocumentStoreDiagnosticsWriter>().ShouldHaveSingleItem();
+        writer.ShouldBeSameAs(provider.GetRequiredService<DocumentStore>());
+        writer.Subject.ShouldBe(provider.GetRequiredService<JasperFx.Documents.IDocumentStoreDiagnostics>().Subject);
+    }
+
     [Fact]
     public void the_store_is_discoverable_as_a_document_usage_source()
     {

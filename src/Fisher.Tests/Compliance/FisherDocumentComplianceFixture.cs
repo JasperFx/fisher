@@ -1,5 +1,6 @@
 using System.Reflection;
 using JasperFx;
+using JasperFx.Documents;
 using JasperFx.Events.ComplianceTests;
 using JasperFx.Events;
 using JasperFx.Events.Documents;
@@ -95,6 +96,22 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
             {
                 options.Schema.MappingFor(documentType).TenancyStyle =
                     JasperFx.MultiTenancy.TenancyStyle.Conjoined;
+            }
+
+            // jasperfx#870 (fisher#364). Soft deletes and hierarchies, replayed onto the same
+            // non-generic mapping as everything else — Schema.For<T>().SoftDeleted() and
+            // .AddSubClass<TSub>() call exactly these two members. Both change the table the migration
+            // builds (is_deleted/deleted_at, doc_type), so they go in before it, and a dropped replay
+            // fails every gated fact rather than skipping it: a hard-deleted ticket is simply gone, and
+            // an unregistered sub-class gets a table of its own.
+            foreach (var documentType in config.SoftDeletedDocuments)
+            {
+                options.Schema.MappingFor(documentType).SoftDeleted();
+            }
+
+            foreach (var declaration in config.SubClasses)
+            {
+                options.Schema.MappingFor(declaration.Root).AddSubClass(declaration.SubClass);
             }
 
             // jasperfx#842. The vector indexes DocumentSearchCompliance declares, replayed onto the
@@ -253,6 +270,34 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
     ///     </para>
     /// </remarks>
     public override bool SupportsConjoinedDocuments => true;
+
+    /// <summary>
+    ///     <c>IDocumentStoreDiagnostics</c> and its write sibling, grown to jasperfx#870's contract
+    ///     (fisher#364). Both are the store itself, implemented explicitly, which is what the suite's
+    ///     "subject pairs with the usage source" fact relies on.
+    /// </summary>
+    public override bool SupportsDocumentDiagnostics => true;
+
+    /// <inheritdoc cref="SupportsDocumentDiagnostics" />
+    public override IDocumentStoreDiagnostics DocumentDiagnostics => (IDocumentStoreDiagnostics)Sessions;
+
+    /// <inheritdoc cref="SupportsDocumentDiagnostics" />
+    public override bool SupportsDocumentDiagnosticWrites => true;
+
+    /// <inheritdoc cref="SupportsDocumentDiagnostics" />
+    public override IDocumentStoreDiagnosticsWriter DocumentDiagnosticsWriter
+        => (IDocumentStoreDiagnosticsWriter)Sessions;
+
+    /// <summary>The fixture replays <c>DocumentComplianceConfig.SoftDeletedDocuments</c>.</summary>
+    public override bool SupportsSoftDeletedDocuments => true;
+
+    /// <summary>The fixture replays <c>DocumentComplianceConfig.SubClasses</c>.</summary>
+    public override bool SupportsDocumentHierarchies => true;
+
+    // SupportsDocumentDiagnosticCriteria stays false, deliberately: Where / OrderBy are Dynamic LINQ
+    // text for the store's own IQueryable<T>, and the translation is jasperfx#869, still open. Left
+    // false, the suite does not skip the criteria facts — it asserts they are REFUSED with
+    // DocumentCriteriaNotSupportedException, which is the contract for a store that cannot apply them.
 
     /// <summary>
     ///     The two deliberate escapes from tenant scoping — <c>AnyTenant()</c> and

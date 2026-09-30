@@ -357,6 +357,24 @@ public interface IDocumentOperations : IQuerySession, IDocumentWriteOperations
     /// <remarks>Not seeded from anything — an application that wants it sets it.</remarks>
     string? CurrentUserName { get; set; }
 
+    /// <summary>
+    ///     The same value as <see cref="CurrentUserName" />, under the name Marten's
+    ///     <c>IDocumentSession</c> and Polecat's <c>IQuerySession</c> expose it (fisher#365).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         An alias, not a second value: setting either sets both. It is the spelling the
+    ///         <c>last_modified_by</c> metadata column and <c>DocumentQueryOptions.LastModifiedBy</c> use,
+    ///         so code stamping a document's author compiles once against all three stores.
+    ///     </para>
+    ///     <para>
+    ///         Declared on the interface <em>and</em> implemented on the session rather than
+    ///         default-implemented here, because a default interface member is not a member of the class —
+    ///         a caller holding the concrete session would not see it.
+    ///     </para>
+    /// </remarks>
+    string? LastModifiedBy { get; set; }
+
     /// <inheritdoc cref="CorrelationId" />
     Dictionary<string, object>? Headers { get; }
 

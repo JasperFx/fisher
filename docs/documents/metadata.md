@@ -16,7 +16,7 @@ of them can be projected back onto members of the document.
 | `created_at` | opt-in | When the row was first written |
 | `correlation_id` | opt-in | The session's correlation id |
 | `causation_id` | opt-in | The session's causation id |
-| `last_modified_by` | opt-in | The session's `CurrentUserName` |
+| `last_modified_by` | opt-in | The session's `CurrentUserName` (also exposed as `LastModifiedBy`) |
 | `headers` | opt-in | The session's headers, as JSON |
 | `tenant_id` | tenancy | |
 
