@@ -4256,6 +4256,15 @@ defined the semantics the three stores used to disagree on, and added `IDocument
   `SupportsDocumentDiagnosticCriteria` should flip only once they go through `Query<T>()`.
 - **Tenant → `DocumentQueryOptions.NormalizeTenantId`, then `Tenancy.DatabaseFor`.** The read used
   `Database` unconditionally, so database-per-tenant answered every tenant from the default file.
+- **`AllTenants` fans out, and fisher#368 said it would not need to** (jasperfx#928, JasperFx 2.78.0).
+  The issue assumed Fisher had no database-per-tenant; it has, so a read of the default file alone would
+  be the "default tenant's rows as though they were everyone's" answer the contract forbids.
+  `QueryEveryTenantAsync` counts each database's matching rows per tenant (a `group by tenant_id` for a
+  conjoined type, the file's tenant otherwise), sorts those segments by tenant **ordinally in .NET**, and
+  reads only the segments the page overlaps, each `order by id`. One path serves one file, a file per
+  tenant, and several tenants sharing a file — whose tenants interleave with other files' in tenant
+  order, which is what `all_tenants_orders_by_tenant_across_shared_and_separate_files` pins.
+  `AssertValidTenantScope()` runs before the criteria refusal; `LoadDocumentAsync` stays single-tenant.
 - **A load by id includes soft-deleted rows, flagged; a page excludes them unless asked.**
 - ⚠️ **The version token has three sources, and the third is a hash.** It is `guid_version`, rendered
   through `Guid` because Weasel's version binder stores it UPPERCASE. Otherwise it is the numeric

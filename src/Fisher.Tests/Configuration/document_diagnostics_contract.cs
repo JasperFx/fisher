@@ -2,6 +2,7 @@ using JasperFx;
 using JasperFx.Descriptors;
 using JasperFx.Documents;
 using JasperFx.Events;
+using JasperFx.MultiTenancy;
 
 namespace Fisher.Tests.Configuration;
 
@@ -151,6 +152,98 @@ public class document_diagnostics_contract : IAsyncLifetime
 
         await Should.ThrowAsync<Exception>(() => diagnostics.QueryDocumentsAsync(LighthouseType,
             new DocumentQueryOptions(1, 10) { TenantId = "atlantis" }, Token));
+    }
+
+    // ---------------------------------------------------------------- all tenants (fisher#368)
+
+    /// <remarks>
+    ///     The shared suite's all-tenants facts run against one conjoined file, where "no tenant
+    ///     predicate" is the whole answer. Under a file per tenant the same read has to visit every
+    ///     file — reading the default file alone is the one answer jasperfx#928 forbids, and it is what
+    ///     the single-file code path would have given.
+    /// </remarks>
+    [Fact]
+    public async Task all_tenants_fans_out_across_every_tenants_database()
+    {
+        await using (var session = _perTenant.LightweightSession())
+        {
+            session.Store(new Lighthouse { Id = Guid.NewGuid(), Name = "Eddystone", Code = "E1", Keeper = "bo" });
+            await session.SaveChangesAsync(Token);
+        }
+
+        await StoreInNorthAsync();
+        await StoreInNorthAsync();
+
+        IDocumentStoreDiagnostics diagnostics = _perTenant;
+
+        var all = await diagnostics.QueryDocumentsAsync(LighthouseType,
+            new DocumentQueryOptions(1, 10) { AllTenants = true }, Token);
+
+        all.TotalCount.ShouldBe(3);
+        all.Documents.Select(x => x.TenantId)
+            .ShouldBe([StorageConstants.DefaultTenantId, "north", "north"]);
+
+        // Paged across the two files: tenant first, so the default file's row leads page one and the
+        // north file's second row is page two's only one.
+        var pageOne = await diagnostics.QueryDocumentsAsync(LighthouseType,
+            new DocumentQueryOptions(1, 2) { AllTenants = true }, Token);
+        var pageTwo = await diagnostics.QueryDocumentsAsync(LighthouseType,
+            new DocumentQueryOptions(2, 2) { AllTenants = true }, Token);
+
+        pageOne.TotalCount.ShouldBe(3);
+        pageTwo.TotalCount.ShouldBe(3);
+        pageOne.Documents.Concat(pageTwo.Documents).Select(x => (x.TenantId, x.Id))
+            .ShouldBe(all.Documents.Select(x => (x.TenantId, x.Id)));
+    }
+
+    /// <remarks>
+    ///     Two tenants sharing one file and a third alone in another (fisher#252's sharded shape), with
+    ///     the tenants named so their order interleaves the files: <c>alpha</c> and <c>gamma</c> in one,
+    ///     <c>beta</c> in the other. A merge that paged file by file would put <c>gamma</c> before
+    ///     <c>beta</c>; the contract says tenant first, wherever the tenant lives.
+    /// </remarks>
+    [Fact]
+    public async Task all_tenants_orders_by_tenant_across_shared_and_separate_files()
+    {
+        using var shared = TemporaryDatabase.Create("diag-shared");
+        using var alone = TemporaryDatabase.Create("diag-alone");
+
+        await using var store = DocumentStore.For(options =>
+        {
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Events.TenancyStyle = TenancyStyle.Conjoined;
+            options.MultiTenantedDatabases(tenants => tenants
+                .AddTenant("alpha", shared.ConnectionString)
+                .AddTenant("gamma", shared.ConnectionString)
+                .AddTenant("beta", alone.ConnectionString));
+
+            options.Schema.For<Lighthouse>().MultiTenanted();
+        });
+
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        // One id in all three tenants, so the rows differ only in the tenant they report.
+        var id = Guid.NewGuid();
+        foreach (var tenant in new[] { "gamma", "beta", "alpha" })
+        {
+            await using var session = store.LightweightSession(tenant);
+            session.Store(new Lighthouse { Id = id, Name = tenant, Code = tenant, Keeper = tenant });
+            await session.SaveChangesAsync(Token);
+        }
+
+        IDocumentStoreDiagnostics diagnostics = store;
+
+        var seen = new List<string?>();
+        for (var page = 1; page <= 3; page++)
+        {
+            var result = await diagnostics.QueryDocumentsAsync(LighthouseType,
+                new DocumentQueryOptions(page, 1) { AllTenants = true }, Token);
+
+            result.TotalCount.ShouldBe(3);
+            seen.Add(result.Documents.ShouldHaveSingleItem().TenantId);
+        }
+
+        seen.ShouldBe(["alpha", "beta", "gamma"]);
     }
 
     // ---------------------------------------------------------------- the version columns

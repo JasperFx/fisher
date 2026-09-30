@@ -9,6 +9,7 @@ using Fisher.Internal;
 using Fisher.Storage;
 using JasperFx;
 using JasperFx.Core.Reflection;
+using JasperFx.Descriptors;
 using JasperFx.Documents;
 using JasperFx.Events;
 using Microsoft.Data.Sqlite;
@@ -90,6 +91,8 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     ///     <para>
     ///         The criteria are refused <em>first</em>, before the type is resolved, so an unknown type
     ///         with a predicate is still a refusal rather than an empty page that looks like an answer.
+    ///         <see cref="DocumentQueryOptions.AllTenants" /> with a named tenant goes before even that:
+    ///         a read cannot be scoped to one tenant and to all of them, and the store must not pick.
     ///     </para>
     /// </remarks>
     async Task<DocumentQueryResult> IDocumentStoreDiagnostics.QueryDocumentsAsync(
@@ -97,6 +100,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     {
         ArgumentNullException.ThrowIfNull(options);
 
+        options.AssertValidTenantScope();
         RefuseUnsupportedCriteria(options);
 
         var pageNumber = Math.Max(1, options.PageNumber);
@@ -110,6 +114,12 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
             return empty;
         }
 
+        if (options.AllTenants)
+        {
+            return await QueryEveryTenantAsync(mapping, queriedType, options, pageNumber, pageSize, token)
+                .ConfigureAwait(false);
+        }
+
         var tenantId = DocumentQueryOptions.NormalizeTenantId(options.TenantId);
         var database = DatabaseForDiagnostics(tenantId);
 
@@ -120,16 +130,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
             return empty;
         }
 
-        var filter = new DiagnosticFilter(mapping, queriedType, tenantId)
-        {
-            IdEquals = options.IdEquals,
-            IncludeSoftDeleted = options.IncludeSoftDeleted,
-            CorrelationId = options.CorrelationId,
-            CausationId = options.CausationId,
-            LastModifiedBy = options.LastModifiedBy
-        };
-
-        var (where, bind) = filter.Build();
+        var (where, bind) = FilterFor(mapping, queriedType, tenantId, options).Build();
 
         long total;
 
@@ -149,6 +150,146 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                 command.Parameters.AddWithValue("$take", pageSize);
                 command.Parameters.AddWithValue("$skip", (pageNumber - 1) * pageSize);
             }, token).ConfigureAwait(false);
+
+        return new DocumentQueryResult(documents, total, pageNumber, pageSize);
+    }
+
+    private static DiagnosticFilter FilterFor(DocumentMapping mapping, Type queriedType, string? tenantId,
+        DocumentQueryOptions options, bool everyTenant = false)
+        => new(mapping, queriedType, tenantId)
+        {
+            EveryTenant = everyTenant,
+            IdEquals = options.IdEquals,
+            IncludeSoftDeleted = options.IncludeSoftDeleted,
+            CorrelationId = options.CorrelationId,
+            CausationId = options.CausationId,
+            LastModifiedBy = options.LastModifiedBy
+        };
+
+    /// <summary>
+    ///     <see cref="DocumentQueryOptions.AllTenants" /> (jasperfx#928, fisher#368): every tenant's rows
+    ///     of one type, each carrying its own <see cref="StoredDocument.TenantId" />, paged tenant first
+    ///     and then by id.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Fisher does have database-per-tenant, so this fans out</b> — fisher#368 said otherwise,
+    ///         and a read of the default file alone is exactly the "default tenant's rows as though they
+    ///         were every tenant's" answer the contract names as the one wrong one. Under a single file the
+    ///         fan-out is one database and conjoined tenancy is simply no tenant predicate; a
+    ///         single-tenanted type then reads as the default, because its rows belong to it.
+    ///     </para>
+    ///     <para>
+    ///         <b>Paged by segment rather than by one <c>order by tenant_id, id</c></b>, so one code path
+    ///         serves a single file, a file per tenant and several tenants sharing a file (fisher#252).
+    ///         Each database reports how many matching rows each of its tenants has; the segments are
+    ///         ordered by tenant id in .NET — so the order does not depend on which file a tenant lives
+    ///         in — and only the segments the requested page overlaps are read, each ordered by id. Exact
+    ///         for every page, and a page never repeats a row from another tenant's.
+    ///     </para>
+    ///     <para>
+    ///         The tenant order is ordinal, deliberately not SQLite's: a merge across files cannot lean on
+    ///         one file's collation, and <c>order by id</c> within a segment is SQL's because an integer id
+    ///         has to sort numerically.
+    ///     </para>
+    /// </remarks>
+    private async Task<DocumentQueryResult> QueryEveryTenantAsync(DocumentMapping mapping, Type queriedType,
+        DocumentQueryOptions options, int pageNumber, int pageSize, CancellationToken token)
+    {
+        IReadOnlyList<FisherDatabase> databases;
+        if (Tenancy.Cardinality == DatabaseCardinality.Single)
+        {
+            databases = [Database];
+        }
+        else
+        {
+            // A tenant nothing has resolved yet still has rows to show.
+            await RefreshTenantsAsync(token).ConfigureAwait(false);
+            databases = Tenancy.AllDatabases();
+        }
+
+        var segments = new List<(FisherDatabase Database, string Tenant, long Count)>();
+
+        foreach (var database in databases)
+        {
+            await using var connection = await database.OpenConnectionAsync(token).ConfigureAwait(false);
+
+            if (!await TableExistsAsync(connection, mapping, token).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            var (where, bind) = FilterFor(mapping, queriedType, null, options, everyTenant: true).Build();
+
+            await using var counting = connection.CreateCommand();
+            bind(counting);
+
+            if (mapping.IsConjoined)
+            {
+                counting.CommandText =
+                    $"select {StorageConstants.TenantIdColumn}, count(*) from {mapping.QuotedTableName}{where} group by {StorageConstants.TenantIdColumn}";
+
+                await using var reader = await counting.ExecuteReaderAsync(token).ConfigureAwait(false);
+                while (await reader.ReadAsync(token).ConfigureAwait(false))
+                {
+                    segments.Add((database, reader.GetString(0), reader.GetInt64(1)));
+                }
+            }
+            else
+            {
+                // A single-tenanted type's rows belong to the file's tenant, or to the default tenant
+                // when the file is the store's one database.
+                counting.CommandText = $"select count(*) from {mapping.QuotedTableName}{where}";
+                var count = Convert.ToInt64(await counting.ExecuteScalarAsync(token).ConfigureAwait(false));
+
+                if (count > 0)
+                {
+                    segments.Add((database, database.TenantId ?? StorageConstants.DefaultTenantId, count));
+                }
+            }
+        }
+
+        segments.Sort((x, y) =>
+        {
+            var byTenant = string.CompareOrdinal(x.Tenant, y.Tenant);
+            return byTenant != 0 ? byTenant : string.CompareOrdinal(x.Database.Identifier, y.Database.Identifier);
+        });
+
+        var total = segments.Sum(x => x.Count);
+        var skip = (long)(pageNumber - 1) * pageSize;
+        var remaining = pageSize;
+        var documents = new List<StoredDocument>();
+
+        foreach (var segment in segments)
+        {
+            if (remaining == 0)
+            {
+                break;
+            }
+
+            if (skip >= segment.Count)
+            {
+                skip -= segment.Count;
+                continue;
+            }
+
+            await using var connection = await segment.Database.OpenConnectionAsync(token).ConfigureAwait(false);
+
+            var (where, bind) = FilterFor(mapping, queriedType, segment.Tenant, options).Build();
+            var take = remaining;
+            var offset = skip;
+
+            var rows = await ReadStoredDocumentsAsync(connection, null, mapping, segment.Tenant, where, bind,
+                " order by id limit $take offset $skip", command =>
+                {
+                    command.Parameters.AddWithValue("$take", take);
+                    command.Parameters.AddWithValue("$skip", offset);
+                }, token).ConfigureAwait(false);
+
+            documents.AddRange(rows);
+            remaining -= rows.Count;
+            skip = 0;
+        }
 
         return new DocumentQueryResult(documents, total, pageNumber, pageSize);
     }
@@ -648,6 +789,9 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     /// </summary>
     private sealed class DiagnosticFilter(DocumentMapping mapping, Type queriedType, string? tenantId)
     {
+        /// <summary>No tenant predicate at all — the conjoined reading of <c>AllTenants</c>.</summary>
+        public bool EveryTenant { get; init; }
+
         public string? IdEquals { get; init; }
         public bool IncludeSoftDeleted { get; init; }
         public string? CorrelationId { get; init; }
@@ -673,7 +817,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                 terms.Add(DocumentHierarchy.FilterSqlFor(mapping, queriedType));
             }
 
-            if (mapping.IsConjoined)
+            if (mapping.IsConjoined && !EveryTenant)
             {
                 // Normalized by the caller (DocumentQueryOptions.NormalizeTenantId), so an empty or
                 // whitespace tenant is the default tenant rather than a tenant literally named "" —
