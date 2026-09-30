@@ -8,9 +8,9 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and fifty-seven are enrolled from
- * JasperFx.Events.ComplianceTests 2.76.0, which itself ships fifty-eight concrete suites across
- * fifty-seven files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
+ * Suites were added one at a time as Fisher grew into them, and fifty-eight are enrolled from
+ * JasperFx.Events.ComplianceTests 2.77.0, which itself ships fifty-nine concrete suites across
+ * fifty-eight files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
  * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
@@ -593,3 +593,18 @@ public class document_search_compliance
 
 public class document_conjoined_tenancy_compliance
     : DocumentConjoinedTenancyCompliance<FisherDocumentComplianceFixture>;
+
+/*
+ * jasperfx#870 (JasperFx 2.77.0), fisher#364 — IDocumentStoreDiagnostics and its write sibling, the
+ * surface a monitoring console browses and edits documents through by type name and raw JSON. The three
+ * stores disagreed on soft-deleted rows, hierarchies, a missing tenant and how an id is matched; the
+ * suite pins the defined semantics. Setup goes through the session contract and assertions through the
+ * diagnostics one, which is the point: a console reads what an application wrote.
+ *
+ * Fisher runs every fact but the five criteria-FILTERING ones, which skip because
+ * SupportsDocumentDiagnosticCriteria stays false until jasperfx#869 ships a Dynamic LINQ translation.
+ * The criteria-REFUSAL fact runs in their place and is green.
+ */
+
+public class document_store_diagnostics_compliance
+    : DocumentStoreDiagnosticsCompliance<FisherDocumentComplianceFixture>;

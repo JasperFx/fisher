@@ -276,6 +276,15 @@ public class multi_store_registration : IAsyncLifetime
 
         host.Services.GetServices<JasperFx.Documents.IDocumentStoreDiagnostics>()
             .ToList().Count.ShouldBe(2);
+
+        // fisher#364: the writer too, one per store, each naming its own store — two Fisher stores are
+        // usually two files, so a console editing "the" store could otherwise write into the wrong one.
+        var writers = host.Services.GetServices<JasperFx.Documents.IDocumentStoreDiagnosticsWriter>().ToList();
+        writers.Count.ShouldBe(2);
+        writers.Select(x => x.Subject).Distinct().Count().ShouldBe(2);
+        writers.Select(x => x.Subject).ShouldBe(
+            host.Services.GetServices<JasperFx.Documents.IDocumentStoreDiagnostics>().Select(x => x.Subject),
+            ignoreOrder: true);
         host.Services.GetServices<IDocumentStoreUsageSource>()
             .ToList().Count.ShouldBe(2);
 

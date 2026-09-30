@@ -48,7 +48,12 @@ public partial class DocumentStore : IDocumentStoreUsageSource
             StoreName = Options.StoreName,
             DatabaseSchemaName = Options.DatabaseSchemaName,
             AutoCreateSchemaObjects = Options.AutoCreateSchemaObjects.ToString(),
-            EnumStorage = Options.Serializer.EnumStorage.ToString()
+            EnumStorage = Options.Serializer.EnumStorage.ToString(),
+
+            // jasperfx#870 §5 — the member-name casing the stored JSON uses, so a console can build a
+            // member path into raw JSON or explain why "Status" matched nothing in a document stored as
+            // "status". Weasel's own enum, whose names are exactly the contract's three spellings.
+            SerializerCasing = Options.Serializer.Casing.ToString()
         };
 
         var migrator = new SqliteMigrator();
@@ -104,7 +109,8 @@ public partial class DocumentStore : IDocumentStoreUsageSource
     ///     <see cref="Storage.StorePolicies" /> for why that will not change.
     /// </remarks>
     private static DocumentMappingDescriptor Describe(Storage.DocumentMapping mapping, SqliteMigrator migrator)
-        => new()
+    {
+        var descriptor = new DocumentMappingDescriptor
         {
             DocumentType = TypeDescriptor.For(mapping.DocumentType),
 
@@ -124,6 +130,94 @@ public partial class DocumentStore : IDocumentStoreUsageSource
             Partitioning = null,
             Ddl = WriteCreateStatement(mapping, migrator)
         };
+
+        DescribeIndexesAndDuplicatedFields(mapping, descriptor);
+
+        return descriptor;
+    }
+
+    /// <summary>
+    ///     jasperfx#870 §5 — the table's indexes and duplicated fields in structured form, so a console
+    ///     can say whether a filter can use an index without parsing <see cref="DocumentMappingDescriptor.Ddl" />.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Read off the same <see cref="Storage.DocumentTable" /> the migration builds rather than
+    ///         re-derived from the mapping, so the names and expressions are the ones SQLite will hold —
+    ///         including the <c>doc_type</c> discriminator index and a duplicated field's own index, which
+    ///         nothing in the mapping names.
+    ///     </para>
+    ///     <para>
+    ///         <b>An index's <c>Members</c> are empty over metadata columns</b>, as the contract says, and
+    ///         a duplicated field's index reports the member it duplicates: that column <em>is</em> the
+    ///         member. <c>Method</c> is null throughout — SQLite has one index method, the b-tree.
+    ///     </para>
+    ///     <para>
+    ///         Like the DDL, a mapping whose table cannot be built reports nothing here rather than
+    ///         taking the whole store's description with it.
+    ///     </para>
+    /// </remarks>
+    private static void DescribeIndexesAndDuplicatedFields(Storage.DocumentMapping mapping,
+        DocumentMappingDescriptor descriptor)
+    {
+        Storage.DocumentTable table;
+        try
+        {
+            table = new Storage.DocumentTable(mapping);
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        static string PathOf(IEnumerable<System.Reflection.MemberInfo> chain)
+            => string.Join(".", chain.Select(x => x.Name));
+
+        var duplicatedByColumn = mapping.DuplicatedFields
+            .ToDictionary(x => x.ColumnName, x => PathOf(x.Members), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var field in mapping.DuplicatedFields)
+        {
+            descriptor.DuplicatedFields.Add(new DuplicatedFieldDescriptor
+            {
+                MemberPath = duplicatedByColumn[field.ColumnName],
+                ColumnName = field.ColumnName,
+                DbType = table.ColumnFor(field.ColumnName)?.Type ?? field.ColumnType ?? string.Empty
+            });
+        }
+
+        // The declared (fisher#16) indexes, by the name the table gave them — the same formula
+        // DocumentTable applies when a declaration names none.
+        var declaredMembers = mapping.Indexes
+            .Where(x => x.MemberChains.Length > 0)
+            .ToDictionary(
+                x => x.Name ?? $"idx_{table.Identifier.Name}_{x.DefaultNameSuffix()}",
+                x => x.MemberChains.Select(PathOf).ToArray(),
+                StringComparer.OrdinalIgnoreCase);
+
+        foreach (var index in table.Indexes)
+        {
+            var columns = index.Columns is { Length: > 0 } declared
+                ? declared
+                : index.Expression is { } expression ? [expression] : [];
+
+            var members = declaredMembers.TryGetValue(index.Name, out var paths)
+                ? paths
+                : columns.Length == 1 && duplicatedByColumn.TryGetValue(columns[0], out var path)
+                    ? [path]
+                    : [];
+
+            descriptor.Indexes.Add(new DocumentIndexDescriptor
+            {
+                Name = index.Name,
+                Members = members,
+                Columns = columns,
+                IsUnique = index.IsUnique,
+                Method = null,
+                Predicate = index.Predicate
+            });
+        }
+    }
 
     /// <remarks>
     ///     The DDL is what makes the descriptor useful for a schema diff, and it is also the one part

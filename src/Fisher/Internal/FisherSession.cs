@@ -1985,6 +1985,13 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         }
     }
 
+    /// <inheritdoc />
+    public string? LastModifiedBy
+    {
+        get => CurrentUserName;
+        set => CurrentUserName = value;
+    }
+
     private Dictionary<string, object>? _headers;
 
     public Dictionary<string, object>? Headers => _parent is null ? _headers : _parent.Headers;

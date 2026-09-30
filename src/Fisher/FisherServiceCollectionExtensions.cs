@@ -102,6 +102,11 @@ public static class FisherServiceCollectionExtensions
             sp => sp.GetRequiredService<DocumentStore>());
         services.AddSingleton<JasperFx.Documents.IDocumentStoreDiagnostics>(
             sp => sp.GetRequiredService<DocumentStore>());
+        // fisher#364 / jasperfx#870 §6 — the write-side sibling, registered beside the reader because
+        // a console resolves the two separately: a host may browse without editing, and a writer that
+        // was implemented but never registered is fisher#303 over again.
+        services.AddSingleton<JasperFx.Documents.IDocumentStoreDiagnosticsWriter>(
+            sp => sp.GetRequiredService<DocumentStore>());
 
         // fisher#251 — the store-derived rung of the Event Model (jasperfx#825): one View slice per
         // registered projection, read straight out of this store's own registry. Bobcat declares
@@ -233,6 +238,8 @@ public static class FisherServiceCollectionExtensions
             => (JasperFx.Events.IDocumentStoreUsageSource)UnwrapForTooling(sp.GetRequiredService<T>()));
         services.AddSingleton<JasperFx.Documents.IDocumentStoreDiagnostics>(sp
             => (JasperFx.Documents.IDocumentStoreDiagnostics)UnwrapForTooling(sp.GetRequiredService<T>()));
+        services.AddSingleton<JasperFx.Documents.IDocumentStoreDiagnosticsWriter>(sp
+            => (JasperFx.Documents.IDocumentStoreDiagnosticsWriter)UnwrapForTooling(sp.GetRequiredService<T>()));
 
         // fisher#251 — an ancillary store's projections are View slices too, and it needs its own
         // source because AddFisherStore<T> can be called without AddFisher at all.

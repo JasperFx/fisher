@@ -144,6 +144,50 @@ public class session_metadata_columns : IAsyncLifetime
         events[0].CausationId.ShouldBe(metadata.CausationId);
     }
 
+    /// <summary>
+    ///     fisher#365: <c>LastModifiedBy</c> is the spelling Marten's and Polecat's sessions expose, and on
+    ///     Fisher it is an alias of <c>CurrentUserName</c> rather than a second value.
+    /// </summary>
+    /// <remarks>
+    ///     Written against the interface, because that is the shape a store-agnostic spec compiles
+    ///     against — a member declared only on the concrete session would pass a test holding
+    ///     <c>DocumentStore.LightweightSession()</c>'s return type and still be CS1061 there.
+    /// </remarks>
+    [Fact]
+    public async Task last_modified_by_stamps_the_column_the_way_current_user_name_does()
+    {
+        var id = Guid.NewGuid();
+
+        await using (var session = (IDocumentSession)_store.LightweightSession())
+        {
+            session.LastModifiedBy = "sam";
+            session.Store(new Tracked { Id = id, Label = "one" });
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using var check = _store.LightweightSession();
+
+        (await check.MetadataForAsync<Tracked>(id, Token))!.LastModifiedBy.ShouldBe("sam");
+    }
+
+    [Fact]
+    public async Task last_modified_by_and_current_user_name_are_one_value()
+    {
+        await using var session = _store.LightweightSession();
+
+        session.CurrentUserName = "frodo";
+        session.LastModifiedBy.ShouldBe("frodo");
+
+        session.LastModifiedBy = "sam";
+        session.CurrentUserName.ShouldBe("sam");
+
+        // A tenant scope shares the parent's unit of work, so it shares the author too.
+        var scope = session.ForTenant("acme");
+        scope.LastModifiedBy.ShouldBe("sam");
+        scope.LastModifiedBy = "pippin";
+        session.CurrentUserName.ShouldBe("pippin");
+    }
+
     [Fact]
     public async Task headers_round_trip_as_json()
     {

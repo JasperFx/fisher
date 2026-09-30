@@ -4225,6 +4225,42 @@ all, including the zero-infrastructure embedded configuration that is Fisher's b
   every step after it. An unknown event type is skipped, following the stream reads' policy rather than
   the daemon's: a console may be pointed at a store holding types this deployment does not know.
 
+#### The grown diagnostics contract, and its writer — fisher#364
+
+JasperFx 2.77.0 (jasperfx#870) made `IDocumentStoreDiagnostics.Subject` and `LoadDocumentAsync` abstract,
+defined the semantics the three stores used to disagree on, and added `IDocumentStoreDiagnosticsWriter`.
+`DocumentStoreDiagnosticsCompliance` pins it, and Fisher is enrolled.
+
+- **`Where` / `OrderBy` are refused with `DocumentCriteriaNotSupportedException`, before the type is
+  resolved.** They are Dynamic LINQ text for `Query<T>()` (jasperfx#869, still open). Splicing them into
+  this hand-built SQL would add a fifth filter path with none of LINQ's member resolution. Returning the
+  unfiltered page is the one answer the contract forbids.
+  `SupportsDocumentDiagnosticCriteria` should flip only once they go through `Query<T>()`.
+- **Tenant → `DocumentQueryOptions.NormalizeTenantId`, then `Tenancy.DatabaseFor`.** The read used
+  `Database` unconditionally, so database-per-tenant answered every tenant from the default file.
+- **A load by id includes soft-deleted rows, flagged; a page excludes them unless asked.**
+- ⚠️ **The version token has three sources, and the third is a hash.** It is `guid_version`, rendered
+  through `Guid` because Weasel's version binder stores it UPPERCASE. Otherwise it is the numeric
+  revision. For a type with neither, it is SHA-256 of `last_modified` + `data`. `last_modified` alone is
+  millisecond-precision, so two writes in one millisecond would share a token.
+- ⚠️ **The writer checks the expected version under its own `BEGIN IMMEDIATE`, then saves through an
+  ENLISTED session on that transaction.** That is the only shape where the check and the write are
+  atomic. The session is seeded with the `guid_version` just read (`FisherSession.StoreForDiagnostics`),
+  because fisher#245's guard is fed from what the session read. A session opened a moment ago has read
+  nothing, so without the seed every console edit of an existing optimistic document fails. A numeric
+  revision is written as 0 (auto): the JSON carries the revision the console read, and Marten's
+  strictly-greater rule would refuse it.
+- **The document table is ensured before the transaction**, because an enlisted session asserts rather
+  than migrating; the migration runs on its own connection and would deadlock against the writer's lock.
+- **The generic session members are reached through `InvokeClosed`, which unwraps
+  `TargetInvocationException`.** An `ArgumentException` for an id mismatch has to reach the console as
+  itself.
+- **Registered for the main store and for each ancillary store** (unwrapped through the marker proxy),
+  beside the reader. A writer implemented but never registered would be fisher#303 over again.
+- `document_diagnostics_contract` covers what the suite cannot: database-per-tenant, both real version
+  columns, and the structured `Indexes` / `DuplicatedFields` / `SerializerCasing` descriptors. It checks
+  the descriptors against `sqlite_master` rather than against a list the test wrote.
+
 ### `Advanced`, cleaning and the projection scenario
 
 `DocumentStore.Advanced` gained event store statistics, per-type cleaning, DDL script generation and

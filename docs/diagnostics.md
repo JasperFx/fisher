@@ -285,6 +285,31 @@ var diagnostics = (IDocumentStoreDiagnostics)store;
 var page = await diagnostics.QueryDocumentsAsync("Order", …);
 ```
 
+Fisher implements the full `IDocumentStoreDiagnostics` contract from JasperFx 2.77.0
+(jasperfx#870), along with the write sibling `IDocumentStoreDiagnosticsWriter`. Both are registered in
+the container for the main store and for each ancillary store. What the contract defines:
+
+- **Every row carries metadata.** `DocumentQueryResult.Documents` holds `StoredDocument`s with the
+  version, `LastModified`, `Created` (when `created_at` is enabled), the tenant, the soft-delete flag
+  and time, and the row's own .NET type. `DocumentsJson` is still filled for older consumers.
+- **Soft-deleted rows are excluded unless `IncludeSoftDeleted` is set.** `LoadDocumentAsync` by id is an
+  explicit request, so it returns a soft-deleted row with `IsDeleted` set rather than hiding it.
+- **A null, empty or whitespace tenant means the default tenant.** It never means a tenant named `""`.
+  Under database-per-tenant, the read goes to that tenant's own file. An unknown tenant throws rather
+  than being answered from the default file.
+- **The version is opaque text.** For a type with `UseOptimisticConcurrency()` it is the
+  `guid_version`. For numeric revisions it is the revision number. For a type with neither, it is a
+  hash of `last_modified` and the stored JSON. That token still changes on every write, so a console's
+  guarded edit is guarded even for a type that did not opt into concurrency.
+- **`Where` and `OrderBy` are refused** with `DocumentCriteriaNotSupportedException`. They are Dynamic
+  LINQ text for the store's own `IQueryable<T>`, and that translation (jasperfx#869) has not shipped.
+  Returning the unfiltered page would look like a filter that matched every row.
+
+The writer saves or deletes through an ordinary session, so versions move, metadata is stamped and a
+soft-deleted type is soft-deleted. It checks `ExpectedVersion` inside Fisher's own write transaction,
+before it writes anything, so a stale edit comes back as `ConcurrencyConflict` with the current document.
+An unknown type, or JSON whose id disagrees with the requested id, is an `ArgumentException`.
+
 Several things in that surface are worth knowing:
 
 - **The store is identified as `fisher://{store name}`**, the same `Subject` the event side reports, not

@@ -7,7 +7,18 @@
         <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
              carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
              transitively. -->
-        <!-- JasperFx 2.76.0 (from 2.75.2). Two new IEventStore members, both default-implemented
+        <!-- JasperFx 2.77.0 (from 2.76.0, spanning 2.76.1). THE BUMP BREAKS THE BUILD ON PURPOSE:
+             jasperfx#870/#927 made IDocumentStoreDiagnostics.Subject and LoadDocumentAsync abstract so
+             all three stores adopt the grown contract in one wave (fisher#364), and added the
+             IDocumentStoreDiagnosticsWriter sibling and a 41-fact DocumentStoreDiagnosticsCompliance.
+             Two more facts arrive behind fixture gates: the async phantom-deletion fact
+             (jasperfx#917, IComplianceCompositeBuilder.Add — fisher#362) and ShardState.LastUpdated
+             (jasperfx#924 — fisher#363).
+
+             The rest of 2.76.1/2.77.0 (jasperfx#918's DatabaseUri host sanitizing, marten#3942's
+             generator fix) needed no Fisher change: the full suite is green on the bump.
+
+             JasperFx 2.76.0 (from 2.75.2). Two new IEventStore members, both default-implemented
              and both answered by Fisher in this bump rather than left to the default (fisher#354):
 
              - jasperfx#914 HasEventStore. The default is TRUE, so a store that left it alone would be
@@ -131,16 +142,16 @@
              generation, which Fisher does not do — projection dispatch is source-generated.
              jasperfx#880 is XML comments on AutoCreate. jasperfx#867 is a Wolverine codegen fix and
              jasperfx#865/#866 are the publish pipeline. -->
-        <PackageVersion Include="JasperFx" Version="2.76.0" />
-        <PackageVersion Include="JasperFx.Events" Version="2.76.0" />
+        <PackageVersion Include="JasperFx" Version="2.77.0" />
+        <PackageVersion Include="JasperFx.Events" Version="2.77.0" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.76.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.76.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.77.0" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.77.0" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.76.0" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.77.0" />
 
         <!-- Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
              source. Weasel.Storage: the dialect-neutral closed-shape document + event storage
