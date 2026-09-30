@@ -2705,6 +2705,24 @@ reserved and Fisher was passing null — so this is dialect SQL plus wiring, not
 `0` means auto — increment whatever is stored — which is the sentinel the shared operations bind when
 no revision was named, and why every guard starts with `? = 0 or`.
 
+⚠️ **A projected `IRevisioned` document's revision is the stream version, not a write count**
+(fisher#369). The projection storage used to upsert with revision 0, so the column counted writes: one
+save of two events stored 1, `LoadAsync` projected that 1 onto `Version`, and the body — stamped with the
+stream version by JasperFx's `AggregateVersioning` — said 2, as did a LINQ `Select`, Marten and Polecat.
+`ProjectedWrites.For` now **overwrites** with the explicit revision and `IgnoreConcurrencyViolation`,
+Marten's `StoreProjection` shape: the last event's version for a single-stream projection, its sequence
+for a multi-stream one.
+- **Both entry points, because the inline path does not reach `StoreProjection`.** JasperFx's
+  `ApplyInline` calls `Store(snapshot, id, tenantId)` with no last event, so that path reads the revision
+  off the snapshot's own `IRevisioned.Version`, which the fold has already stamped. The async daemon
+  reaches `StoreProjection` and uses the event.
+- **An overwrite, not an upsert with a revision**, because the strictly-greater guard would refuse a
+  replay writing the value the row already holds. That is also why `RebuildSingleStreamAsync` goes
+  through `FisherSession.StoreProjected` now: after this change the stored revision equals the rebuilt
+  aggregate's, and an ordinary `Store` threw `ConcurrencyException` repairing an intact row.
+- **A `UseNumericRevisions()` type with no `IRevisioned` member keeps the write count** — it has no
+  `Version` in its body or on a member, so there is nothing for the column to disagree with.
+
 ### Session metadata on documents, and `MetadataForAsync`
 
 `Storage/Metadata/` gained five opt-in columns and `IQuerySession.MetadataForAsync` (fisher#29). The
