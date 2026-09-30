@@ -1398,6 +1398,24 @@ what the aggregate terminals already return over no rows. Found while building f
 affected both projection paths; pinned by `a_null_column_becomes_the_default_rather_than_throwing` in
 both test classes.
 
+**A value `Convert.ChangeType` cannot build goes through the store's serializer** (fisher#361).
+`CoerceTo` special-cases enums, timestamps, Guids and strong-typed ids, and used to hand everything else
+to `Convert.ChangeType`. `Uri`, `TimeSpan`, `DateOnly` and `TimeOnly` are JSON strings the column returns
+as TEXT, and none of them is `IConvertible`. So every `Select` of one threw `InvalidCastException`, while
+loading the whole document worked. CritterWatch compiles one source against all three stores and had to
+revert a `Select` of a `Uri` to a whole-document read.
+
+- **The serializer, not a parser per type.** A non-`IConvertible` target gets the value re-quoted as a
+  JSON token (`JsonEncodedText` does the escaping) and handed to `Options.Serializer.FromJson`. That is
+  the same code that built the member on a whole-document load, so its converters, naming policy and enum
+  storage all apply, and the two paths cannot disagree. `CoerceTo` and `Coerce<T>` are instance methods
+  now for that reason.
+- **A string-stored enum was broken the same way, one branch over.** It arrived as its *name* and went
+  to `Convert.ToInt64`. The name is also what the serializer wrote under its naming policy (`flashing`,
+  not `Flashing`), which is why `Enum.Parse` would be the wrong fix.
+- `serializer_shaped_projections` asserts equality with the **whole-document load** rather than with a
+  literal, because agreement between those two paths is the property the fix provides.
+
 ### LINQ joins
 
 `Join` and `GroupJoin(...).SelectMany(...)` across document tables — `Linq/Joins/`. One join is

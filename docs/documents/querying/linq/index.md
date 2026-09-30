@@ -109,6 +109,11 @@ with nothing in the message to say which column or why. Defaulting matches what 
 document would have produced for an absent key.
 :::
 
+**A projected value is read back the way the whole document would have been.** Members stored as a
+JSON string, such as `Uri`, `TimeSpan`, `DateOnly`, `TimeOnly` and an enum under
+`EnumStorage.AsString`, are handed to the store's own serializer. Its converters and naming policy
+therefore apply, and a projection returns the same value a `LoadAsync` would.
+
 One `Select` per query. A second would have to project members of the first's result, which is not a
 document and has no locators.
 

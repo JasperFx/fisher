@@ -971,7 +971,7 @@ public partial class FisherQueryProvider : IQueryProvider
     ///         </item>
     ///     </list>
     /// </remarks>
-    private static TResult? Coerce<TResult>(object? raw)
+    private TResult? Coerce<TResult>(object? raw)
     {
         if (raw is null or DBNull)
         {
@@ -1008,7 +1008,24 @@ public partial class FisherQueryProvider : IQueryProvider
     ///     The same conversions, for a column type only known at runtime — what a
     ///     <see cref="SelectProjection" /> reads each of its columns through.
     /// </summary>
-    private static object? CoerceTo(object? raw, Type type)
+    /// <remarks>
+    ///     <para>
+    ///         <b>Anything <see cref="Convert.ChangeType(object, Type, IFormatProvider)" /> cannot build
+    ///         goes to the store's own serializer</b> (fisher#361). <c>Uri</c>, <c>TimeSpan</c>,
+    ///         <c>DateOnly</c> and <c>TimeOnly</c> are JSON strings the column hands back as TEXT, none of
+    ///         them is <see cref="IConvertible" />, and every <c>Select</c> of one threw
+    ///         <see cref="InvalidCastException" /> — while loading the whole document worked, because the
+    ///         serializer built them. Routing the value through that same serializer is what keeps the two
+    ///         paths from disagreeing about what the JSON means: its converters, its naming policy and its
+    ///         enum storage all apply, rather than a second parse Fisher would have to keep in step.
+    ///     </para>
+    ///     <para>
+    ///         <b>So does a string-stored enum</b>, which went to <c>Convert.ToInt64</c> and failed on the
+    ///         member's name. The name is what the serializer wrote, under its naming policy —
+    ///         <c>flashing</c>, not <c>Flashing</c> — so only the serializer can be trusted to read it.
+    ///     </para>
+    /// </remarks>
+    private object? CoerceTo(object? raw, Type type)
     {
         if (raw is null or DBNull)
         {
@@ -1024,8 +1041,9 @@ public partial class FisherQueryProvider : IQueryProvider
 
         if (target.IsEnum)
         {
-            return Enum.ToObject(target,
-                Convert.ToInt64(raw, System.Globalization.CultureInfo.InvariantCulture));
+            return raw is string
+                ? FromSerializer(raw, target)
+                : Enum.ToObject(target, Convert.ToInt64(raw, System.Globalization.CultureInfo.InvariantCulture));
         }
 
         if (target == typeof(DateTimeOffset))
@@ -1051,7 +1069,35 @@ public partial class FisherQueryProvider : IQueryProvider
             return Storage.StrongTypedId.Wrap(wrapper, CoerceTo(raw, wrapper.SimpleType)!);
         }
 
-        return Convert.ChangeType(raw, target, System.Globalization.CultureInfo.InvariantCulture);
+        return typeof(IConvertible).IsAssignableFrom(target)
+            ? Convert.ChangeType(raw, target, System.Globalization.CultureInfo.InvariantCulture)
+            : FromSerializer(raw, target);
+    }
+
+    /// <summary>
+    ///     Read a scalar column back through the store's serializer, as the JSON token it was extracted
+    ///     from — a TEXT value as a JSON string, a number as a JSON number.
+    /// </summary>
+    /// <remarks>
+    ///     <c>json_extract</c> unquotes a JSON string on the way out, so the quotes are put back before the
+    ///     serializer sees it; <see cref="System.Text.Json.JsonEncodedText" /> does the escaping, so a
+    ///     value containing a quote or a backslash round-trips.
+    /// </remarks>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification =
+            "Deserializes a member type of a mapped document with the store's own serializer, as loading the whole document does. Document types are preserved by their registration on the caller side per the AOT publishing guide.")]
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
+        Justification = "See the trimming justification above.")]
+    private object? FromSerializer(object raw, Type target)
+    {
+        var json = raw switch
+        {
+            string text => $"\"{System.Text.Json.JsonEncodedText.Encode(text)}\"",
+            IFormattable number => number.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+            _ => raw.ToString() ?? "null"
+        };
+
+        return _session.Options.Serializer.FromJson(target, json);
     }
 
     /// <summary>
