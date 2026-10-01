@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Fisher.Tests.Events;
 using JasperFx;
+using JasperFx.Core.Reflection;
 using JasperFx.Descriptors;
 using JasperFx.Documents;
 using JasperFx.Events;
@@ -134,6 +135,31 @@ public class document_diagnostics : IAsyncLifetime
         types.Select(x => x.Alias).ShouldContain("warehouse");
         types.Select(x => x.Alias).ShouldContain("cargotally");
         types.ShouldAllBe(x => x.SchemaName == "main");
+    }
+
+    /// <remarks>
+    ///     jasperfx#932. The shared fact checks the listing; this checks the two Fisher decisions it does
+    ///     not — a sub-class's alias is its <c>doc_type</c> discriminator, and it follows its root.
+    /// </remarks>
+    [Fact]
+    public async Task document_types_lists_sub_classes_after_their_root()
+    {
+        var types = (await Diagnostics.DocumentTypesAsync(Token)).ToList();
+        var root = typeof(Container).FullNameInCode();
+
+        var rootIndex = types.FindIndex(x => x.TypeName == root);
+        types[rootIndex].IsSubClass.ShouldBeFalse();
+
+        types.Skip(rootIndex + 1).Take(2).Select(x => x.TypeName).ShouldBe(
+        [
+            typeof(ReeferContainer).FullNameInCode(),
+            typeof(TankContainer).FullNameInCode()
+        ]);
+
+        types.Skip(rootIndex + 1).Take(2).ShouldAllBe(x => x.RootTypeName == root);
+        types.Single(x => x.TypeName == typeof(TankContainer).FullNameInCode()).Alias
+            .ShouldBe(_store.Options.Schema.MappingFor(typeof(Container)).SubClasses
+                .Single(x => x.DocumentType == typeof(TankContainer)).Alias);
     }
 
     /// <remarks>

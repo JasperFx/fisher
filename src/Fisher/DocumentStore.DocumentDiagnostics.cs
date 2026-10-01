@@ -62,14 +62,32 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     ///     Every mapped type, whether or not its table exists — a document table is created on demand
     ///     at first write, so a registered type with no rows yet is still one the console should offer
     ///     in its picker.
+    ///     <para>
+    ///         <b>A registered sub-class is listed too, right after its root and naming it</b>
+    ///         (jasperfx#932). It has no mapping of its own — fisher#17 — so it would otherwise be
+    ///         invisible to a picker, while <see cref="ResolveForDiagnostics" /> already accepts its name
+    ///         and narrows to its rows. Its alias is the <c>doc_type</c> discriminator rather than a
+    ///         table alias, which is Polecat's answer too: the table is the root's, named on the root's
+    ///         entry.
+    ///     </para>
     /// </remarks>
     Task<IReadOnlyList<DocumentTypeRef>> IDocumentStoreDiagnostics.DocumentTypesAsync(CancellationToken token)
     {
-        var refs = MaterializeMappings()
-            .OrderBy(x => x.DocumentType.Name, StringComparer.Ordinal)
-            .Select(x => new DocumentTypeRef(
-                x.DocumentType.FullNameInCode(), x.Alias, Options.DatabaseSchemaName))
-            .ToList();
+        var refs = new List<DocumentTypeRef>();
+
+        foreach (var mapping in MaterializeMappings().OrderBy(x => x.DocumentType.Name, StringComparer.Ordinal))
+        {
+            var rootTypeName = mapping.DocumentType.FullNameInCode();
+            refs.Add(new DocumentTypeRef(rootTypeName, mapping.Alias, Options.DatabaseSchemaName));
+
+            refs.AddRange(mapping.SubClasses
+                .OrderBy(x => x.DocumentType.Name, StringComparer.Ordinal)
+                .Select(x => new DocumentTypeRef(
+                    x.DocumentType.FullNameInCode(), x.Alias, Options.DatabaseSchemaName)
+                {
+                    RootTypeName = rootTypeName
+                }));
+        }
 
         return Task.FromResult<IReadOnlyList<DocumentTypeRef>>(refs);
     }

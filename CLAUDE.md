@@ -3452,6 +3452,16 @@ beside the two `Events` ones.
 `pending_stream_actions_compliance` (9 tests) is the definition; `pending_stream_actions` covers the
 two decisions above, which a suite written against three stores has no vocabulary for.
 
+#### `LoadManyAsync<T>(IEnumerable<…>)` — the same trap, one member over
+
+jasperfx#930 (JasperFx 2.79.0) added `LoadManyAsync<T>(IEnumerable<Guid>)` and its string twin to
+`IDocumentReadOperations`, default-implemented one id at a time. ⚠️ Fisher's own overloads take a
+`params` array and do not implement them, so without the two explicit forwarders on `FisherSession` the
+contract silently loads N rows in N statements — and the shared suite, which pins the result, stays green
+either way. `loading_many_through_the_contract` counts statements through the session logger and is the
+only thing that fails if they go. `FetchManyForWriting` keeps the default: `FetchForWriting` folds per
+stream, so there is no single round trip to override it with.
+
 #### `LoadAsync<T>(object)` — the eighth operation
 
 jasperfx#665 added `Task<T?> LoadAsync<T>(object id, …)` to `IDocumentReadOperations`, and fisher#89
@@ -4300,6 +4310,9 @@ defined the semantics the three stores used to disagree on, and added `IDocument
 - **The generic session members are reached through `InvokeClosed`, which unwraps
   `TargetInvocationException`.** An `ArgumentException` for an id mismatch has to reach the console as
   itself.
+- **`DocumentTypesAsync` lists each registered sub-class right after its root** (jasperfx#932, JasperFx
+  2.79.0), with `RootTypeName` naming the root and the `doc_type` discriminator as its alias. A sub-class
+  has no mapping of its own, so without this a picker could not offer a name the reads already accept.
 - **Registered for the main store and for each ancillary store** (unwrapped through the marker proxy),
   beside the reader. A writer implemented but never registered would be fisher#303 over again.
 - `document_diagnostics_contract` covers what the suite cannot: database-per-tenant, both real version
