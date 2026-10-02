@@ -7,7 +7,29 @@
         <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
              carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
              transitively. -->
-        <!-- JasperFx 2.78.0 (from 2.77.0). One change, jasperfx#928/#929: DocumentQueryOptions.AllTenants,
+        <!-- JasperFx 2.79.1 (from 2.78.0, spanning 2.79.0). No compile break and no new suite; four
+             existing suites widened, and two of the changes needed Fisher work:
+
+             - jasperfx#932: DocumentTypesAsync lists every sub-class registered under a mapped root,
+               naming the root in the new init-only DocumentTypeRef.RootTypeName. Fisher listed roots
+               only, so document_types_list_sub_classes_under_their_root was red on the bump. Now each
+               sub-class follows its root, its Alias being the doc_type discriminator (Polecat's answer).
+             - jasperfx#930: IDocumentReadOperations.LoadManyAsync<T>(IEnumerable<Guid|string>) and
+               IEventStoreOperations.FetchManyForWriting<T>, both default-implemented one id at a time.
+               ⚠️ Fisher's own LoadManyAsync takes a params array, which does NOT implement the
+               IEnumerable members — the non-covariance near-miss again, invisible to the compiler AND
+               to the suite, which pins the result rather than the round trips. Two explicit forwarders
+               on FisherSession give the one json_each statement; loading_many_through_the_contract
+               counts statements and fails without them. FetchManyForWriting keeps the default: Fisher's
+               FetchForWriting folds per stream, so there is no single round trip to override with.
+
+             INERT: jasperfx#931 default-implements the two 2.77 diagnostics members so OLDER stores
+             load beside a newer JasperFx — Fisher implements both explicitly. jasperfx#933 is a test-only
+             ratchet on abstract interface members. jasperfx#939 (2.79.1) stops a composite member
+             disposing the composite's shared batch inside ProjectionExecution; Fisher's own
+             CompositeIProjectionSource already declined to, and the composite suites are green.
+
+             JasperFx 2.78.0 (from 2.77.0). One change, jasperfx#928/#929: DocumentQueryOptions.AllTenants,
              an explicit all-tenants scope for IDocumentStoreDiagnostics.QueryDocumentsAsync, since a
              blank TenantId has meant the default tenant since #927. Not a compile break — the flag is
              an init property a store can ignore, which is exactly the silent narrowing the contract
@@ -150,16 +172,16 @@
              generation, which Fisher does not do — projection dispatch is source-generated.
              jasperfx#880 is XML comments on AutoCreate. jasperfx#867 is a Wolverine codegen fix and
              jasperfx#865/#866 are the publish pipeline. -->
-        <PackageVersion Include="JasperFx" Version="2.78.0" />
-        <PackageVersion Include="JasperFx.Events" Version="2.78.0" />
+        <PackageVersion Include="JasperFx" Version="2.79.1" />
+        <PackageVersion Include="JasperFx.Events" Version="2.79.1" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.78.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.78.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.79.1" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.79.1" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.78.0" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.79.1" />
 
         <!-- Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
              source. Weasel.Storage: the dialect-neutral closed-shape document + event storage

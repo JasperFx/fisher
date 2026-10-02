@@ -12,10 +12,32 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2477 tests green on net9.0 and net10.0** — 2410 in `Fisher.Tests`, 36 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 656 of
-them are shared cross-store compliance tests — 502 event sourcing and 154 document.
-On JasperFx **2.78.0** / Weasel **9.36.0**.
+**2493 tests green on net9.0 and net10.0** — 2426 in `Fisher.Tests`, 36 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 669 of
+them are shared cross-store compliance tests — 509 event sourcing and 160 document.
+On JasperFx **2.79.1** / Weasel **9.36.0**.
+
+## The JasperFx 2.79.1 bump — sub-classes in the type picker, and a batched load-many
+
+**No compile break and no new suite; four suites widened.** `DocumentLoadAndStoreCompliance`,
+`FetchForWritingCompliance` and `StringStreamIdentityCompliance` gained the load-many and fetch-many
+facts of jasperfx#930, and `DocumentStoreDiagnosticsCompliance` the two sub-class listing facts of
+jasperfx#932. Exactly one fact was red on the bump.
+
+- **jasperfx#932 — `DocumentTypesAsync` lists sub-classes.** Fisher listed mapped roots only, so
+  `document_types_list_sub_classes_under_their_root` failed. Each registered sub-class now follows its
+  root with `RootTypeName` set and the `doc_type` discriminator as its alias, which is Polecat's answer.
+- **jasperfx#930 — `LoadManyAsync<T>(IEnumerable<Guid|string>)` on the document contract.** Green on the
+  bump, and that was the warning: the default loads one id at a time, the suite pins the result rather
+  than the round trips, and Fisher's own `params` overloads do not implement the `IEnumerable` members.
+  Two explicit forwarders on `FisherSession` make it one `json_each` statement.
+  `loading_many_through_the_contract` counts statements through the session logger; mutation-verified —
+  with the forwarders compiled out the suite stays green and both local tests fail.
+  `FetchManyForWriting` keeps the default, since Fisher's `FetchForWriting` folds per stream and has no
+  single round trip to offer.
+- **Inert:** jasperfx#931 (diagnostics defaults so older stores load), jasperfx#933 (a test-only
+  ratchet), and jasperfx#939 in 2.79.1 (a composite member no longer disposes the composite's shared
+  batch inside `ProjectionExecution` — Fisher's `CompositeIProjectionSource` already declined to).
 
 ## The JasperFx 2.78.0 bump — every tenant's documents in one read
 
@@ -805,8 +827,8 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.78.0 ships 59 suites; Fisher enrolls **58 of them, 656 tests**.
-Fisher passes **656 of them, across all
+`JasperFx.Events.ComplianceTests` 2.79.1 ships 59 suites; Fisher enrolls **58 of them, 669 tests**.
+Fisher passes **669 of them, across all
 58 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
@@ -955,23 +977,23 @@ naming.
 **Green on all fifty-eight is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 58 suites, 656 tests
+### Green — 58 suites, 669 tests
 
-Event sourcing — 46 suites, 502 tests:
+Event sourcing — 46 suites, 509 tests:
 
 | Suite | Tests |
 |---|---|
 | `EventQueryCompliance` | 53 |
 | `DcbTagQueryAndConsistencyCompliance` | 28 |
 | `ProjectionScenarioCompliance` | 20 |
-| `StringStreamIdentityCompliance` | 19 |
+| `StringStreamIdentityCompliance` | 21 |
 | `EventStoreExplorerCompliance` | 18 |
 | `NaturalKeyCompliance` | 17 |
 | `StreamArchivingCompliance` | 20 |
 | `StreamStateQueryCompliance` | 15 |
 | `AggregateWriteCacheCompliance` | 14 |
 | `StrongTypedIdentityCompliance` | 14 |
-| `FetchForWritingCompliance` | 13 |
+| `FetchForWritingCompliance` | 18 |
 | `StreamQueryPlanCompliance` | 13 |
 | `FetchLatestCompliance` | 12 |
 | `AlwaysEnforceConsistencyCompliance` | 11 |
@@ -1008,15 +1030,15 @@ Event sourcing — 46 suites, 502 tests:
 | `EventProjectionRegistrationCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 12 suites, 154 tests, through `FisherDocumentComplianceFixture`:
+Documents — 12 suites, 160 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
-| `DocumentStoreDiagnosticsCompliance` | 50 |
+| `DocumentStoreDiagnosticsCompliance` | 52 |
 | `DocumentQueryCompliance` | 17 |
 | `DocumentConjoinedTenancyCompliance` | 10 |
 | `DocumentSearchCompliance` | 11 |
-| `DocumentLoadAndStoreCompliance` | 11 |
+| `DocumentLoadAndStoreCompliance` | 15 |
 | `DocumentCommitListenerCompliance` | 10 |
 | `DocumentDeleteCompliance` | 10 |
 | `NumericRevisionCompliance` | 9 |

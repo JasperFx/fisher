@@ -682,6 +682,28 @@ internal partial class FisherSession
         where T : notnull where TId : notnull
         => LoadManyByIdAsync<T, TId>(ids, token);
 
+    /// <remarks>
+    ///     jasperfx#930. ⚠️ Fisher's own <c>LoadManyAsync</c> overloads take a <c>params</c> array, which
+    ///     does not implement the contract's <c>IEnumerable</c> members — so without these two the call
+    ///     binds to the default, which is correct and loads one id at a time. That is the
+    ///     non-covariance near-miss <c>Events</c> and <c>PendingStreams</c> carry, one member over:
+    ///     delete these and Fisher still compiles and still passes, just N statements slower. Repeats
+    ///     are collapsed here because the contract says so and the <c>json_each</c> match would
+    ///     otherwise hand the same row back once per repeat.
+    /// </remarks>
+    Task<IReadOnlyList<T>> JasperFx.Events.Documents.IDocumentReadOperations.LoadManyAsync<T>(IEnumerable<Guid> ids, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        return LoadManyByIdAsync<T, Guid>(ids.Distinct().ToArray(), token);
+    }
+
+    /// <inheritdoc cref="JasperFx.Events.Documents.IDocumentReadOperations.LoadManyAsync{T}(IEnumerable{Guid},CancellationToken)" />
+    Task<IReadOnlyList<T>> JasperFx.Events.Documents.IDocumentReadOperations.LoadManyAsync<T>(IEnumerable<string> ids, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        return LoadManyByIdAsync<T, string>(ids.Distinct().ToArray(), token);
+    }
+
     private async Task<IReadOnlyList<T>> LoadManyByIdAsync<T, TId>(TId[] ids, CancellationToken token)
         where T : notnull where TId : notnull
     {
