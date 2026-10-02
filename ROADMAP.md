@@ -3,12 +3,20 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **three open issues, and none of them is feature work.** One is a bug filed on the day of
-1.15.0, one is an unreproduced intermittent kept open on evidence, and one is blocked upstream. 1.5.0
-closed both of 1.4.0's follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added
-hybrid search; 1.7.0 closed the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies
-itself and which Event Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a
-correctness wave.
+Status: **four open issues, and only one of them is feature work.** One is the batched half of a
+JasperFx 2.79 contract member, one is a bug filed on the day of 1.15.0, one is an unreproduced
+intermittent kept open on evidence, and one is blocked upstream. 1.5.0 closed both of 1.4.0's
+follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
+the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
+Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
+
+**1.16.0 takes JasperFx 2.79.1.** [#375](https://github.com/JasperFx/fisher/issues/375):
+`IDocumentStoreDiagnostics.DocumentTypesAsync` lists every sub-class registered under a hierarchy root,
+right after the root and naming it in `DocumentTypeRef.RootTypeName`, so a console's type picker can
+offer what the reads already accept. [#374](https://github.com/JasperFx/fisher/issues/374), first half:
+the store-agnostic `IDocumentReadOperations.LoadManyAsync` is one `json_each` statement rather than
+JasperFx's one-load-per-id default — Fisher's own `params` overloads never implemented it. On JasperFx
+**2.79.1** / Weasel **9.36.0**.
 
 **1.15.0 grows the document diagnostics surface into something a console can edit through, and fixes
 two reads that disagreed with themselves.** [#364](https://github.com/JasperFx/fisher/issues/364) /
@@ -160,7 +168,12 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is three items.
+What is left is four items.
+
+[#374](https://github.com/JasperFx/fisher/issues/374)'s second half is a native
+`FetchManyForWriting`: one stream-state read and one event read for every id, folded per stream. The
+JasperFx default — one `FetchForWriting` per id — is correct in the meantime, and on SQLite a statement
+on an in-process connection is far cheaper than the network round trip that motivated the member.
 
 [#372](https://github.com/JasperFx/fisher/issues/372) was filed the day 1.15.0 shipped: a LINQ
 `Contains()` over more than 32,766 values exceeds SQLite's bound-variable limit and throws, where
