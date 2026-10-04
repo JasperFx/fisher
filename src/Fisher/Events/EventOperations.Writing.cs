@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Fisher.Exceptions;
 using Fisher.Storage;
 using JasperFx.Events;
@@ -163,8 +164,10 @@ public partial class EventOperations
     /// <remarks>
     ///     <para>
     ///         In Marten and Polecat this overload is the natural-key and strong-typed-id entry point,
-    ///         and it is both here too now: fisher#14 closed the strong-typed half and fisher#40 the
-    ///         natural-key one, so nothing on <c>IEventStoreOperations</c> is partial any more.
+    ///         and it is both here too: fisher#40 closed the natural-key half, and fisher#397 the
+    ///         strong-typed one — a wrapper around the stream identity type is unwrapped. fisher#14 had
+    ///         made a wrapper work as an aggregate's identity without anything unwrapping one passed
+    ///         here, which is how this remark came to claim it early.
     ///     </para>
     ///     <para>
     ///         <b>The stream identity type wins when the two coincide.</b> A string natural key on a
@@ -181,10 +184,16 @@ public partial class EventOperations
                 => FetchForWriting<T>(guid, cancellation),
             string key when Graph.StreamIdentity == StreamIdentity.AsString
                 => FetchForWriting<T>(key, cancellation),
+            _ when IsNaturalKeyType<T, TId>() => FetchForWritingByNaturalKey<T, TId>(id, cancellation),
+            _ when TryUnwrapStreamIdentity(id, out var inner) => inner switch
+            {
+                Guid guid => FetchForWriting<T>(guid, cancellation),
+                _ => FetchForWriting<T>((string)inner, cancellation)
+            },
             _ when NaturalKeyFor<T>() is not null => FetchForWritingByNaturalKey<T, TId>(id, cancellation),
             Guid guid => FetchForWriting<T>(guid, cancellation),
             string key => FetchForWriting<T>(key, cancellation),
-            _ => throw new NotImplementedException(UnsupportedIdentityMessage(typeof(TId)))
+            _ => throw new NotSupportedException(UnsupportedIdentityMessage<T>(typeof(TId)))
         };
 
     /// <summary>
@@ -497,10 +506,16 @@ public partial class EventOperations
         {
             Guid guid when Graph.StreamIdentity == StreamIdentity.AsGuid => FetchLatest<T>(guid, cancellation),
             string key when Graph.StreamIdentity == StreamIdentity.AsString => FetchLatest<T>(key, cancellation),
+            _ when IsNaturalKeyType<T, TId>() => FetchLatestByNaturalKey<T, TId>(id, cancellation),
+            _ when TryUnwrapStreamIdentity(id, out var inner) => inner switch
+            {
+                Guid guid => FetchLatest<T>(guid, cancellation),
+                _ => FetchLatest<T>((string)inner, cancellation)
+            },
             _ when NaturalKeyFor<T>() is not null => FetchLatestByNaturalKey<T, TId>(id, cancellation),
             Guid guid => FetchLatest<T>(guid, cancellation),
             string key => FetchLatest<T>(key, cancellation),
-            _ => throw new NotImplementedException(UnsupportedIdentityMessage(typeof(TId)))
+            _ => throw new NotSupportedException(UnsupportedIdentityMessage<T>(typeof(TId)))
         };
 
     /// <summary>
@@ -782,7 +797,60 @@ public partial class EventOperations
         => await ReadStreamVersionAsync(streamId, token).ConfigureAwait(false)
            ?? throw new Fisher.Exceptions.NonExistentStreamException(streamId);
 
-    private static string UnsupportedIdentityMessage(Type idType)
-        => $"Fisher cannot fetch a stream by an identity of type '{idType.Name}'. Only the configured " +
-           "stream identity type is supported — natural keys and strongly typed ids are not implemented yet.";
+    /// <summary>
+    ///     Whether <typeparamref name="TId" /> is exactly the type <typeparamref name="T" /> declares as
+    ///     its natural key.
+    /// </summary>
+    /// <remarks>
+    ///     Checked before a strong-typed stream id is unwrapped, so a wrapper declared as the natural key
+    ///     is read as one even when it happens to wrap the stream identity type. Naming the key's own type
+    ///     is the unambiguous signal; the raw-Guid-or-string rule above it is for the case where it is not.
+    /// </remarks>
+    private bool IsNaturalKeyType<T, TId>() where TId : notnull
+        => NaturalKeyFor<T>() is { } key && key.OuterType == typeof(TId);
+
+    /// <summary>
+    ///     A strong-typed wrapper whose inner value is the configured stream identity type, unwrapped
+    ///     (fisher#397).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         An aggregate keyed on <c>PodId(Guid)</c> is the ordinary strong-typed shape, and it was
+    ///         refused here as "not implemented yet" long after fisher#14 shipped strong-typed ids
+    ///         everywhere else. The wrapper exists only in .NET; the stream id is the inner value.
+    ///     </para>
+    ///     <para>
+    ///         Discovered with <see cref="StrongTypedId.TryResolve" />, the same rule identity
+    ///         discovery uses, so a type is a wrapper here exactly when it is one on the document side.
+    ///         A wrapper around the <em>other</em> identity type is not unwrapped, and falls through to
+    ///         the refusal: converting a Guid to its string form, or the reverse, would address a stream
+    ///         the caller did not name.
+    ///     </para>
+    /// </remarks>
+    private bool TryUnwrapStreamIdentity<TId>(TId id, [NotNullWhen(true)] out object? inner) where TId : notnull
+    {
+        inner = null;
+
+        if (!StrongTypedId.TryResolve(typeof(TId), out var info))
+        {
+            return false;
+        }
+
+        var streamIdType = Graph.StreamIdentity == StreamIdentity.AsGuid ? typeof(Guid) : typeof(string);
+        if (info.SimpleType != streamIdType)
+        {
+            return false;
+        }
+
+        inner = info.ValueProperty.GetValue(id);
+        return inner is not null;
+    }
+
+    private string UnsupportedIdentityMessage<T>(Type idType)
+    {
+        var streamIdType = Graph.StreamIdentity == StreamIdentity.AsGuid ? "Guid" : "string";
+        return $"Fisher cannot fetch a stream of {typeof(T).Name} by an identity of type '{idType.Name}'. " +
+               $"This store's stream identity is {streamIdType}, so pass a {streamIdType}, a strong-typed " +
+               $"wrapper around a {streamIdType}, or the natural key {typeof(T).Name} declares.";
+    }
 }

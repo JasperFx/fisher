@@ -457,12 +457,17 @@ public class writing_to_aggregates_with_string_identity : IAsyncLifetime
         stream.Aggregate!.Members.ShouldBe(["Merry"]);
     }
 
+    /// <remarks>
+    ///     <see cref="NotSupportedException" /> since fisher#397, which unwrapped strong-typed ids here.
+    ///     It was <see cref="NotImplementedException" /> saying they were "not implemented yet" — wrong
+    ///     about the feature, and wrong about the refusal, which is a decision rather than a gap.
+    /// </remarks>
     [Fact]
     public async Task fetch_for_writing_by_generic_id_rejects_anything_else()
     {
         await using var session = _store.LightweightSession();
 
-        await Should.ThrowAsync<NotImplementedException>(
+        await Should.ThrowAsync<NotSupportedException>(
             () => session.Events.FetchForWriting<KeyedQuestParty, int>(42,
                 TestContext.Current.CancellationToken));
     }
