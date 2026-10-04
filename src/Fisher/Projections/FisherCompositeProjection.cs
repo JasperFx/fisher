@@ -119,8 +119,9 @@ public class FisherCompositeProjection : CompositeProjection<IDocumentSession, I
     /// </remarks>
     /// <remarks>
     ///     Native AOT safe for the four canonical identity types, through the same factory
-    ///     <c>Projections.Snapshot&lt;T&gt;</c> uses (fisher#398); a strong-typed id is refused by name
-    ///     in a native image.
+    ///     <c>Projections.Snapshot&lt;T&gt;</c> uses (fisher#398). A strong-typed id needs its type
+    ///     declared in a native image, with <c>Projections.Snapshot&lt;T, TId&gt;()</c> or
+    ///     <c>Projections.LiveStreamAggregation&lt;T, TId&gt;()</c> (fisher#423).
     /// </remarks>
     [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
         Justification = "See FisherProjectionOptions.Snapshot<T>: the identity member is kept by the application's source-generated JsonSerializerContext.")]
@@ -134,7 +135,7 @@ public class FisherCompositeProjection : CompositeProjection<IDocumentSession, I
         }
 
         var idType = Storage.AggregateIdentity.ResolveIdType(typeof(T), _options.EventGraph.StreamIdentity);
-        var source = SingleStreamProjectionFactory.Create<T>(idType);
+        var source = _options.EventGraph.AggregateProjections.Create<T>(idType);
 
         source.Lifecycle = ProjectionLifecycle.Async;
         source.AssembleAndAssertValidity();
@@ -142,5 +143,17 @@ public class FisherCompositeProjection : CompositeProjection<IDocumentSession, I
         _options.Schema.MappingFor(typeof(T));
 
         StageFor(stageNumber).Add((IProjectionSource<IDocumentSession, IQuerySession>)source);
+    }
+
+    /// <summary>
+    ///     <see cref="Snapshot{T}" /> for an aggregate keyed on a strong-typed id, closed statically so it
+    ///     works in a Native AOT image (fisher#423). See <c>Projections.Snapshot&lt;T, TId&gt;()</c>.
+    /// </summary>
+    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification = "See FisherProjectionOptions.Snapshot<T>: the identity member is kept by the application's source-generated JsonSerializerContext.")]
+    public void Snapshot<T, TId>(int stageNumber = 1) where T : notnull where TId : notnull
+    {
+        _options.Projections.DeclareAggregateIdentity<T, TId>();
+        Snapshot<T>(stageNumber);
     }
 }

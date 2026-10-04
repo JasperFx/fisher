@@ -68,7 +68,7 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     ///     </para>
     ///     <para>
     ///         Native AOT safe for the four canonical identity types (fisher#398). An aggregate keyed on
-    ///         a strong-typed id is refused by name in a native image until jasperfx#950 ships.
+    ///         a strong-typed id needs <see cref="Snapshot{T,TId}" /> in a native image (fisher#423).
     ///     </para>
     /// </remarks>
     /// <typeparam name="T">
@@ -83,7 +83,78 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
         // Closed over the aggregate's own identity type, not the stream identity primitive — the same
         // rule live aggregation follows, and for the same source-generator reason. See CLAUDE.md.
         var idType = Storage.AggregateIdentity.ResolveIdType(typeof(T), _events.StreamIdentity);
-        RegisterSnapshot<T>(lifecycle, SingleStreamProjectionFactory.Create<T>(idType));
+        RegisterSnapshot<T>(lifecycle, _events.AggregateProjections.Create<T>(idType));
+    }
+
+    /// <summary>
+    ///     <see cref="Snapshot{T}" /> for an aggregate keyed on a strong-typed id, naming the id type so
+    ///     the projection is closed statically — which is what a Native AOT image needs (fisher#423).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Under the JIT the one-argument form already works for a wrapper, by closing the projection
+    ///         reflectively. In a native image that has no code to run for a <c>readonly record struct</c>
+    ///         id, so the registration has to name both types while they are still generic arguments —
+    ///         the same reason a strong-typed document id is declared with <c>Identity(...)</c> (fisher#386).
+    ///     </para>
+    ///     <para>
+    ///         The declaration also serves live aggregation of <typeparamref name="T" />, so
+    ///         <c>AggregateStreamAsync</c> and <c>FetchForWriting</c> close the same way.
+    ///     </para>
+    /// </remarks>
+    /// <typeparam name="T">The self-aggregating document type.</typeparam>
+    /// <typeparam name="TId">
+    ///     <typeparamref name="T" />'s identity type, which is checked against its identity member.
+    /// </typeparam>
+    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification = "See Snapshot<T>: the identity member is kept by the application's source-generated JsonSerializerContext.")]
+    public void Snapshot<T, TId>(SnapshotLifecycle lifecycle) where T : notnull where TId : notnull
+    {
+        DeclareAggregateIdentity<T, TId>();
+        RegisterSnapshot<T>(lifecycle, new SingleStreamProjection<T, TId>());
+    }
+
+    /// <summary>
+    ///     Declare that a live-aggregated type is keyed on a strong-typed id, so live aggregation closes its
+    ///     projection statically in a Native AOT image (fisher#423).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Registers nothing that runs. A live aggregate is built on demand by
+    ///         <c>AggregateStreamAsync</c>, <c>FetchForWriting</c> and their relatives, and this only tells
+    ///         that build which identity type to close over. Needed for a strong-typed id in a native image,
+    ///         and only where the type has no <see cref="Snapshot{T,TId}" />, which declares it too.
+    ///     </para>
+    ///     <para>
+    ///         For the canonical identity types, and for any type under the JIT, it is unnecessary.
+    ///     </para>
+    /// </remarks>
+    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification = "See Snapshot<T>: the identity member is kept by the application's source-generated JsonSerializerContext.")]
+    public void LiveStreamAggregation<T, TId>() where T : notnull where TId : notnull
+        => DeclareAggregateIdentity<T, TId>();
+
+    /// <summary>
+    ///     Record <typeparamref name="TId" /> as <typeparamref name="T" />'s identity type, refusing one the
+    ///     identity member disagrees with.
+    /// </summary>
+    /// <remarks>
+    ///     The source generator keys an aggregate's dispatcher on its identity member's type, so a projection
+    ///     closed over any other type would find no dispatcher and fail far from this line.
+    /// </remarks>
+    [RequiresUnreferencedCode("Resolves T's identity member by reflection over its public properties.")]
+    internal void DeclareAggregateIdentity<T, TId>() where T : notnull where TId : notnull
+    {
+        var idType = Storage.AggregateIdentity.ResolveIdType(typeof(T), _events.StreamIdentity);
+
+        if (idType != typeof(TId))
+        {
+            throw new ArgumentException(
+                $"'{typeof(T).FullNameInCode()}' is keyed on '{idType.FullNameInCode()}', not on "
+                + $"'{typeof(TId).FullNameInCode()}'. Name the type of its identity member.");
+        }
+
+        _events.AggregateProjections.Declare<T, TId>();
     }
 
     private void RegisterSnapshot<T>(SnapshotLifecycle lifecycle, ProjectionBase source) where T : notnull

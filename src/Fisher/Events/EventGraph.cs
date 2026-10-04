@@ -26,6 +26,12 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     private readonly StoreOptions _options;
     private readonly List<ITagTypeRegistration> _tagTypes = new();
 
+    /// <summary>
+    ///     Builds each aggregate's single-stream projection, closed statically wherever it can be
+    ///     (fisher#398), including over a strong-typed id the configuration declared (fisher#423).
+    /// </summary>
+    internal Projections.SingleStreamProjectionFactory AggregateProjections { get; } = new();
+
     private object? _closedShapeEventStorage;
 
     internal EventGraph(StoreOptions options)
@@ -192,7 +198,7 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
         // works in a Native AOT image. It used to be MakeGenericType + Activator.CreateInstance, hidden
         // from ILC by this class's IL3050 suppression.
 #pragma warning disable CS8714 // TDoc is unconstrained here but SingleStreamProjection requires notnull
-        var projection = Projections.SingleStreamProjectionFactory.Create<TDoc>(idType);
+        var projection = AggregateProjections.Create<TDoc>(idType);
 #pragma warning restore CS8714
 
         projection.Lifecycle = ProjectionLifecycle.Live;
