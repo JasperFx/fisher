@@ -7,7 +7,8 @@ using JasperFx.MultiTenancy;
 namespace Fisher.Projections;
 
 /// <summary>
-///     Refuses a store whose events are conjoined but whose aggregate documents are not (fisher#335).
+///     Refuses a store whose events are conjoined but whose aggregate documents are not (fisher#335),
+///     nor a vector projection's (fisher#391).
 /// </summary>
 /// <remarks>
 ///     <para>
@@ -55,6 +56,21 @@ internal static class ProjectionTenancyGuard
 
         foreach (var source in Flatten(options.Projections.All))
         {
+            // fisher#391: a projection that is not an aggregation but still writes one document type
+            // per id it derives — a VectorProjection, wrapped in the ProjectionWrapper every bare
+            // IProjection is registered through. Its id is the map's selector, which two tenants'
+            // events can produce alike just as they can a stream id, so the same rule applies.
+            if (source is IProjectionWrapper { InnerProjection: ITenantScopedDocumentProjection writer }
+                && source.Lifecycle != ProjectionLifecycle.Live)
+            {
+                if (options.Schema.MappingFor(writer.DocumentType).TenancyStyle != TenancyStyle.Conjoined)
+                {
+                    mismatches.Add(writer.DocumentType.FullName ?? writer.DocumentType.Name);
+                }
+
+                continue;
+            }
+
             if (source is not IAggregateProjection aggregate || aggregate.Lifecycle == ProjectionLifecycle.Live)
             {
                 continue;
@@ -103,7 +119,7 @@ internal static class ProjectionTenancyGuard
         }
 
         throw new InvalidOperationException(
-            "Tenancy storage style mismatch: this store's events are Conjoined, but the aggregate "
+            "Tenancy storage style mismatch: this store's events are Conjoined, but the projected "
             + $"document type(s) {string.Join(", ", mismatches.Distinct())} are single-tenant. Two tenants "
             + "may use the same stream id, and a single-tenant document keyed on that id would hold one "
             + "row for both — each tenant's projection overwriting the other's, silently. Mark the "
@@ -130,6 +146,21 @@ internal static class ProjectionTenancyGuard
             yield return source;
         }
     }
+}
+
+/// <summary>
+///     A projection that is not an aggregation but writes one document type keyed on an id it derives
+///     from events, so <see cref="ProjectionTenancyGuard" /> can judge that type (fisher#391).
+/// </summary>
+/// <remarks>
+///     Implemented by <see cref="Vectors.VectorProjection{TDoc,TId}" />. Deliberately NOT by
+///     <see cref="EventProjection" />: what it stores is whatever its methods return, keyed however the
+///     application chose, so there is no one document type to name and no reason to assume the key is
+///     one two tenants can share.
+/// </remarks>
+internal interface ITenantScopedDocumentProjection
+{
+    Type DocumentType { get; }
 }
 
 /// <summary>
