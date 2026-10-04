@@ -136,6 +136,63 @@ public class full_text_search : IAsyncLifetime
             .ShouldBe(0);
     }
 
+    /// <summary>
+    ///     A word with no letter or digit in it is dropped rather than searched for (fisher#392).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Quoted, <c>"&amp;"</c> is not a syntax error, but it tokenizes to an empty phrase, and an
+    ///         empty phrase ANDed into a MATCH matches nothing. So <c>rock &amp; roll</c> found nothing
+    ///         where <c>rock roll</c> found the row, silently. The earlier test asserted zero on a corpus
+    ///         where zero was already the right answer, which is how this survived; every case here
+    ///         expects a row.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_word_of_only_punctuation_does_not_empty_the_result()
+    {
+        (await TitlesAsync(s =>
+            s.Query<Article>().Where(x => x.PlainTextSearch("quick & brown (")).ToListAsync(Token)))
+            .ShouldBe(["The quick brown fox"]);
+
+        (await TitlesAsync(s =>
+            s.Query<Article>().Where(x => x.PrefixSearch("womb &")).ToListAsync(Token)))
+            .ShouldBe(["Wombats of the southern hemisphere"]);
+
+        (await TitlesAsync(s =>
+            s.Query<Article>().Where(x => x.PhraseSearch("quick & brown")).ToListAsync(Token)))
+            .ShouldBe(["The quick brown fox"]);
+    }
+
+    /// <remarks>
+    ///     fisher#392 in the web-style grammar: a lone <c>-</c> is not an exclusion (there is nothing
+    ///     after it to exclude) and <c>!</c> is not a word, so both are dropped rather than ANDed in as
+    ///     empty phrases. Neither may join an <c>or</c> group either.
+    /// </remarks>
+    [Fact]
+    public async Task web_style_search_drops_tokens_of_only_punctuation()
+    {
+        (await TitlesAsync(s =>
+            s.Query<Article>().Where(x => x.WebStyleSearch("fox - !")).ToListAsync(Token)))
+            .ShouldBe(["The quick brown fox"]);
+
+        (await TitlesAsync(s =>
+            s.Query<Article>().Where(x => x.WebStyleSearch("fox or ! wombats")).ToListAsync(Token)))
+            .ShouldBe(["The quick brown fox", "Wombats of the southern hemisphere"]);
+    }
+
+    /// <remarks>
+    ///     Nothing left after the drop is the existing empty-query answer — no rows, no error.
+    /// </remarks>
+    [Fact]
+    public async Task a_term_of_nothing_but_punctuation_matches_nothing_rather_than_failing()
+    {
+        await using var session = _store.QuerySession();
+
+        (await session.Query<Article>().Where(x => x.PlainTextSearch("& ! (")).CountAsync(Token)).ShouldBe(0);
+        (await session.Query<Article>().Where(x => x.WebStyleSearch("- !")).CountAsync(Token)).ShouldBe(0);
+    }
+
     [Fact]
     public async Task phrase_search_requires_the_words_adjacent_and_in_order()
     {
