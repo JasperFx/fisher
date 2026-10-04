@@ -9,6 +9,17 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
+**1.17.0 batches `FetchManyForWriting` and closes a lost-registration gap.**
+[#374](https://github.com/JasperFx/fisher/issues/374), second half: `FetchManyForWriting` reads every
+stream's version and every stream's events in two statements in total, where JasperFx's default made
+two per id. Each handle still guards its own version. [#378](https://github.com/JasperFx/fisher/issues/378):
+an append through a `FetchForWriting` handle no longer recreates a stream that was tombstoned after the
+fetch. A missing stream row now fails a non-zero expected version, as on Polecat, so a late writer gets
+a concurrency failure instead of a stream holding only its own events.
+[#379](https://github.com/JasperFx/fisher/issues/379): `IEventStoreOperations` is pinned as the
+interface a reflective caller resolves `FetchLatest<T>` from under Native AOT. Fisher needed no new
+type; the remaining change is in Wolverine.Fisher.
+
 **1.16.0 takes JasperFx 2.79.1.** [#375](https://github.com/JasperFx/fisher/issues/375):
 `IDocumentStoreDiagnostics.DocumentTypesAsync` lists every sub-class registered under a hierarchy root,
 right after the root and naming it in `DocumentTypeRef.RootTypeName`, so a console's type picker can
