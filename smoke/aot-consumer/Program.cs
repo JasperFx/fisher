@@ -301,6 +301,9 @@ try
     Expect(typedTimeline.Steps.Select(x => x.After?.Legs).SequenceEqual([1, 2]),
         "typed projection step-through copies the state at every step");
 
+    // fisher#430: the paths that had never been measured natively.
+    await UnmeasuredPaths.RunAsync();
+
     Console.WriteLine("OK: documents and events written and read in a native image.");
     return 0;
 }

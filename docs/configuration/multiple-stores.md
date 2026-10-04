@@ -120,9 +120,42 @@ Either registration style works. Fisher sweeps both `IConfigureFisher` and the c
 interface — behaves the same way here. A contribution registered against both is still applied once.
 :::
 
+## Declaring the store as a class
+
+`AddFisherStore<T, TImplementation>()` takes a store class the application declares instead of
+building a proxy:
+
+<!-- snippet: sample_native_aot_second_store_class -->
+<a id='snippet-sample_native_aot_second_store_class'></a>
+```cs
+// A second store as a class rather than a proxy. DocumentStore already implements everything the
+// marker inherits, so the class body is empty.
+public interface ILedgerStore : IDocumentStore;
+
+public sealed class LedgerStore(StoreOptions options) : DocumentStore(options), ILedgerStore;
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L58-L64' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_second_store_class' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+<!-- snippet: sample_native_aot_second_store -->
+<a id='snippet-sample_native_aot_second_store'></a>
+```cs
+services.AddFisherStore<ILedgerStore, LedgerStore>(options =>
+{
+    options.Connection("Data Source=ledger.db");
+    options.ConfigureSerialization(configure: json => json.TypeInfoResolver = AppJsonContext.Default);
+});
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L115-L121' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_second_store' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+The registration is otherwise identical. It's required under [Native AOT](/configuration/native-aot),
+where a `DispatchProxy` can't be created, and it has one advantage anywhere: the store resolved through
+the marker *is* the store, so nothing has to reach through a proxy.
+
 ## How the marker is implemented
 
-The marker is implemented with `System.Reflection.DispatchProxy` — in the BCL, so no proxy library
+With the one-type-argument overload, the marker is implemented with `System.Reflection.DispatchProxy` — in the BCL, so no proxy library
 and no code generation. A marker interface is empty apart from what it inherits, so every call it can
 receive is one the wrapped store already implements.
 

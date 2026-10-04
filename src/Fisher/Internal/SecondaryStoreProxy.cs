@@ -26,13 +26,17 @@ internal class SecondaryStoreProxy : DispatchProxy
 
     internal static T For<T>(IDocumentStore store) where T : class, IDocumentStore
     {
-        if (!typeof(T).IsInterface)
+        AssertIsMarkerInterface<T>();
+
+        // fisher#430: a DispatchProxy emits its type at runtime, which a native image cannot do. Say so
+        // here, naming the registration that works, rather than failing inside Reflection.Emit.
+        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported)
         {
-            throw new ArgumentException(
-                $"'{typeof(T).Name}' must be an interface that extends IDocumentStore. A secondary store "
-                + "is identified by a marker interface, which is what lets the container tell two stores "
-                + "apart — a concrete type would be a second store, not a second name for one.",
-                nameof(T));
+            throw new NotSupportedException(
+                $"AddFisherStore<{typeof(T).Name}>() builds its store as a DispatchProxy, which cannot be "
+                + "created in a Native AOT image. Declare the store as a class instead — "
+                + $"'public sealed class {StoreClassNameFor<T>()}(StoreOptions options) : DocumentStore(options), {typeof(T).Name};' "
+                + $"— and register it with AddFisherStore<{typeof(T).Name}, {StoreClassNameFor<T>()}>(...).");
         }
 
         var proxy = Create<T, SecondaryStoreProxy>()!;
@@ -49,6 +53,22 @@ internal class SecondaryStoreProxy : DispatchProxy
     ///     others — so a proxy over a marker is not an <c>IEventStore</c>, the tooling surfaces being
     ///     implemented explicitly and deliberately absent from <see cref="IDocumentStore" /> (fisher#45).
     /// </remarks>
+    internal static void AssertIsMarkerInterface<T>() where T : class, IDocumentStore
+    {
+        if (!typeof(T).IsInterface)
+        {
+            throw new ArgumentException(
+                $"'{typeof(T).Name}' must be an interface that extends IDocumentStore. A secondary store "
+                + "is identified by a marker interface, which is what lets the container tell two stores "
+                + "apart — a concrete type would be a second store, not a second name for one.",
+                nameof(T));
+        }
+    }
+
+    /// <summary>The marker's name without a leading <c>I</c>, for the suggestion in the refusal.</summary>
+    private static string StoreClassNameFor<T>()
+        => typeof(T).Name is ['I', var second, ..] name && char.IsUpper(second) ? name[1..] : typeof(T).Name + "Store";
+
     internal static IDocumentStore Unwrap(IDocumentStore store)
         => (object)store is SecondaryStoreProxy proxy ? proxy._inner : store;
 

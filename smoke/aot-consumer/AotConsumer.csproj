@@ -28,6 +28,7 @@
     <ItemGroup>
         <ProjectReference Include="../../src/Fisher/Fisher.csproj" />
         <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
         <!-- fisher#398. A project reference does not carry the analyzer the Fisher package bundles, so
              the generator is referenced here as an application referencing JasperFx directly would.
              Kept in step with Directory.Packages.props by hand. -->
