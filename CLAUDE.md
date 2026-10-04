@@ -5161,12 +5161,16 @@ honest to get the state from.
     what drops a subscription from *both* halves of the answer at once — the top-level list and the
     shards inside a status — and the shared suite is shaped to catch the partial fix that filters only
     the outer list.
-- **The store-global read refuses on a multi-database store, and for a sharper reason than the stream
-  lookups above.** Those return one answer over an id unique within a database; this one *could*
-  concatenate, and `Advanced.AllProjectionProgress` does exactly that and documents why. What stops it
-  is that `ShardStatus` has no database or tenant field, so N databases' rows arrive as N entries per
-  shard with the same `ShardName` and different sequences — unattributable. `ShardState` carries a
-  `TenantId`, which is what lets the other method get away with it.
+- **The store-global read on a multi-database store answers from the registry alone** (fisher#401,
+  matching marten#5382). It used to refuse, because concatenating N databases' rows is unattributable:
+  `ShardStatus` has no database or tenant field, so N databases' rows arrive as N entries per shard
+  with the same `ShardName` and different sequences. `ShardState` carries a `TenantId`, which is what
+  lets `Advanced.AllProjectionProgress` concatenate. The registry answer keeps that reason, because it
+  reports no per-database numbers: every shard is `Unknown`, since one daemon runs per database, and
+  both sequences are zero, meaning "not read". The refusal had left "what projections does this store
+  run" unanswerable on the store shape with the most to list, and Marten answers it.
+  `store_global_projection_statuses_answer_from_the_registry_on_a_multi_database_store` gives north
+  real progress first, so leaking one database's numbers fails it.
 - **A tenant scopes to a database rather than to a predicate**, and here that is what Fisher's shard
   identity *means*: names are `(projection, shard key)` and never `(projection, tenant)`, because
   progression lives in each tenant's file (fisher#57). So under conjoined tenancy a tenant-scoped

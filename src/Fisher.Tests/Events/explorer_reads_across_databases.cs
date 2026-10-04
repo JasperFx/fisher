@@ -2,6 +2,7 @@ using JasperFx;
 using JasperFx.Descriptors;
 using JasperFx.Events;
 using JasperFx.Events.Daemon;
+using JasperFx.Events.Projections;
 using Fisher.Storage;
 using JasperFx.MultiTenancy;
 
@@ -303,31 +304,79 @@ public class explorer_reads_across_databases : IAsyncLifetime
     // ---- projection statuses (fisher#243) ----
 
     /// <summary>
-    ///     A store-global status snapshot is refused once the store spans more than one file.
+    ///     A store-global status snapshot on a multi-database store answers from the projection registry,
+    ///     claiming nothing per database (fisher#401, matching marten#5382).
     /// </summary>
     /// <remarks>
-    ///     <b>The refusal here is sharper than the stream lookups', not merely consistent with them.</b>
-    ///     Those return one answer over an id that is unique within a database; this one could in
-    ///     principle concatenate — <c>Advanced.AllProjectionProgress</c> does exactly that and documents
-    ///     why. What stops it is that <c>ShardStatus</c> has no database or tenant field, so N
-    ///     databases' rows come back as N entries per shard with the <em>same</em> ShardName and
-    ///     different sequences, which a consumer cannot attribute. <c>ShardState</c> carries a TenantId,
-    ///     which is what lets the other method get away with it.
+    ///     <para>
+    ///         It used to refuse, because <c>ShardStatus</c> has no database or tenant field and N
+    ///         databases' rows would be N unattributable entries per shard. That reason still holds and
+    ///         this answer keeps it: every shard is <c>Unknown</c> with both sequences zero. Marten answers
+    ///         the same call this way, so a console rendering a projections page for one store renders it
+    ///         for the other.
+    ///     </para>
+    ///     <para>
+    ///         North's file is given real progress first, deliberately. A store-global answer that quietly
+    ///         read one database would report it, and zero here is what says no database was picked to
+    ///         speak for the rest.
+    ///     </para>
     /// </remarks>
     [Fact]
-    public async Task store_global_projection_statuses_are_refused_on_a_multi_database_store()
+    public async Task store_global_projection_statuses_answer_from_the_registry_on_a_multi_database_store()
     {
-        var ex = await Should.ThrowAsync<NotSupportedException>(
-            () => TheExplorer.GetProjectionStatusesAsync(Token));
+        var directory = Path.Combine(Path.GetTempPath(), "fisher-registry-statuses-" + Guid.NewGuid().ToString("n")[..8]);
 
-        ex.Message.ShouldContain("StaticMultiple");
-        ex.Message.ShouldContain("tenantId");
-        ex.Message.ShouldContain("database");
+        try
+        {
+            await using var store = DocumentStore.For(options =>
+            {
+                options.AutoCreateSchemaObjects = AutoCreate.All;
+                options.MultiTenantedDatabases(databases => databases.InDirectory(directory).AddTenants("north", "south"));
+                options.Projections.Snapshot<Fisher.Tests.Configuration.SightingTally>(SnapshotLifecycle.Async);
+            });
+
+            await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+            await using (var connection = await store.Tenancy.DatabaseFor("north").OpenConnectionAsync(Token))
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = "insert into fi_event_progression (name, last_seq_id) values ('SightingTally:All', 5)";
+                await command.ExecuteNonQueryAsync(Token);
+            }
+
+            IEventStore events = store;
+
+            var status = (await events.GetProjectionStatusesAsync(Token))
+                .ShouldHaveSingleItem();
+            status.ProjectionName.ShouldBe("SightingTally");
+            status.Lifecycle.ShouldBe(ProjectionLifecycle.Async.ToString());
+
+            var shard = status.Shards.ShouldHaveSingleItem();
+            shard.ShardName.ShouldBe("SightingTally:All");
+            shard.State.ShouldBe(ShardStatusState.Unknown);
+            shard.ProcessedSequence.ShouldBe(0);
+            shard.EventStoreSequence.ShouldBe(0);
+            shard.Error.ShouldBeNull();
+
+            // The tenant-scoped read still reports north's own numbers.
+            (await events.GetProjectionStatusesAsync("north", Token))
+                .Single().Shards.Single().ProcessedSequence.ShouldBe(5);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (IOException)
+            {
+                // A tenant file still held by a pooled connection; the directory is under the temp path.
+            }
+        }
     }
 
     /// <remarks>
-    ///     And both scoped forms answer, which is what makes the refusal a signpost rather than a dead
-    ///     end. Each tenant's file has its own <c>fi_event_progression</c>, so these are not filters
+    ///     And both scoped forms answer with each database's real numbers. Each tenant's file has its own <c>fi_event_progression</c>, so these are not filters
     ///     over a store-global answer — they are the answer, once per database.
     /// </remarks>
     [Fact]
