@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text;
 using System.Text.Json;
 using Fisher.Events.Internal;
@@ -155,7 +156,7 @@ public partial class EventOperations
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.CommandTimeout = _session.Options.CommandTimeout;
-        command.Parameters.Add(new SqliteParameter("ids", JsonSerializer.Serialize(ids.Select(DatabaseStreamId)))
+        command.Parameters.Add(new SqliteParameter("ids", StreamIdsAsJsonArray(ids))
         {
             SqliteType = SqliteType.Text
         });
@@ -205,13 +206,11 @@ public partial class EventOperations
 
         sql.Append(" order by stream_id, version");
 
-        var ranges = plans.Select(x => new RangeRow(x.DatabaseId, x.FromVersion, x.Version!.Value));
-
         var connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = sql.ToString();
         command.CommandTimeout = _session.Options.CommandTimeout;
-        command.Parameters.Add(new SqliteParameter("ranges", JsonSerializer.Serialize(ranges))
+        command.Parameters.Add(new SqliteParameter("ranges", RangesAsJsonArray(plans))
         {
             SqliteType = SqliteType.Text
         });
@@ -257,10 +256,51 @@ public partial class EventOperations
     private static string DatabaseStreamId<TId>(TId id) where TId : notnull
         => id is Guid guid ? (string)SqliteStorageDialect<Guid>.ToDatabaseValue(guid) : (string)(object)id;
 
-    private sealed record RangeRow(
-        [property: System.Text.Json.Serialization.JsonPropertyName("s")] string StreamId,
-        [property: System.Text.Json.Serialization.JsonPropertyName("f")] long FromVersion,
-        [property: System.Text.Json.Serialization.JsonPropertyName("t")] long ToVersion);
+    // The two JSON parameters are written with Utf8JsonWriter rather than JsonSerializer, as
+    // SqliteStorageDialect writes its id arrays: the serializer's generic overload is reflection-based
+    // and carries RequiresDynamicCode (IL3050), which a Native AOT consumer sees as a warning against
+    // Fisher. The shapes are fixed, so there is nothing for reflection to discover.
+    private static string StreamIdsAsJsonArray<TId>(IReadOnlyList<TId> ids) where TId : notnull
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartArray();
+
+            foreach (var id in ids)
+            {
+                writer.WriteStringValue(DatabaseStreamId(id));
+            }
+
+            writer.WriteEndArray();
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string RangesAsJsonArray<T>(IReadOnlyList<FetchPlan<T>> plans) where T : class
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartArray();
+
+            foreach (var plan in plans)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("s", plan.DatabaseId);
+                writer.WriteNumber("f", plan.FromVersion);
+                writer.WriteNumber("t", plan.Version!.Value);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
 
     private sealed class FetchPlan<T>(object id, string databaseId, long? version, AggregateCacheKey cacheKey)
         where T : class
