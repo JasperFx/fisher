@@ -91,7 +91,17 @@ internal static class Fts5Query
                 text = text[1..];
             }
 
-            var quoted = Quote(text.Trim('"'));
+            text = text.Trim('"');
+
+            // fisher#392: a token with nothing searchable in it — a lone `&`, `!`, or a `-` with no
+            // word after it — tokenizes to an empty phrase, and an empty phrase ANDed into the MATCH
+            // empties the whole result. Dropped here, before it can join an `or` group or an exclusion.
+            if (!IsSearchable(text))
+            {
+                continue;
+            }
+
+            var quoted = Quote(text);
 
             if (negated)
             {
@@ -133,15 +143,47 @@ internal static class Fts5Query
     }
 
     /// <summary>
-    ///     Splits on whitespace, discarding everything else. Punctuation goes because FTS5's default
-    ///     tokenizers drop it when indexing too, so keeping it could only produce a term that cannot
-    ///     match.
+    ///     Splits on whitespace and drops any word with no letter or digit in it.
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>The drop is load-bearing, not tidying</b> (fisher#392). This summary used to say
+    ///         punctuation was discarded, and it was not: <c>rock &amp; roll</c> became
+    ///         <c>"rock" AND "&amp;" AND "roll"</c>. Quoting keeps that from being a syntax error, but
+    ///         <c>"&amp;"</c> tokenizes to an EMPTY phrase under unicode61 and porter, and an empty phrase
+    ///         ANDed into a MATCH matches nothing. So one stray symbol emptied the whole result, silently,
+    ///         where Marten at least raised a <c>to_tsquery</c> syntax error (marten#5568).
+    ///     </para>
+    ///     <para>
+    ///         Punctuation <em>inside</em> a word is kept and left to the tokenizer, which splits on it
+    ///         exactly as it did when indexing — <c>"o'brien"</c> is still a term.
+    ///     </para>
+    /// </remarks>
     private static List<string> Words(string term)
         => term.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
             .Select(x => x.Trim())
-            .Where(x => x.Length > 0)
+            .Where(IsSearchable)
             .ToList();
+
+    /// <summary>
+    ///     Whether a token holds anything a tokenizer would index: a letter or a number, in any script.
+    /// </summary>
+    /// <remarks>
+    ///     <c>char.IsNumber</c> rather than <c>char.IsDigit</c>, so the whole Unicode N category counts
+    ///     (unicode61 indexes it), matching the <c>[\p{L}\p{N}]</c> rule Marten adopted.
+    /// </remarks>
+    private static bool IsSearchable(string token)
+    {
+        foreach (var character in token)
+        {
+            if (char.IsLetter(character) || char.IsNumber(character))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     ///     Web-style tokens: a double-quoted run is one token, everything else splits on whitespace.

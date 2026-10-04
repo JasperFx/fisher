@@ -113,8 +113,10 @@ declaration named and the query does not get to pick among them:
 | `NgramSearch(term)` | anywhere inside a word | yes — needs a `Trigram` index |
 
 Everything but `Search` quotes each term before it reaches FTS5, so a search for `OR`, `*` or a
-quotation mark is a search rather than a reinterpreted query. `Search` documents the opposite: its
-syntax is yours to get right, and that is what it is for.
+quotation mark is a search rather than a reinterpreted query. A word with no letter or digit in it,
+such as the `&` in `rock & roll` or a lone `-`, is dropped, because the tokenizer indexes nothing for
+it and searching for it would empty the result. `Search` documents the opposite: its syntax is yours
+to get right, and that is what it is for.
 
 ```cs
 .Where(x => x.Search("quick AND fox"))    // boolean
