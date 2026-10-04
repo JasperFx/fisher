@@ -587,7 +587,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     ///     follows, because falling back would answer about somebody else's data.
     /// </remarks>
     private FisherDatabase DatabaseForDiagnostics(string? tenantId)
-        => tenantId is null ? Database : Tenancy.DatabaseFor(tenantId);
+        => tenantId is null ? Database : Tenancy.ExistingDatabaseFor(tenantId);
 
     private static void RefuseUnsupportedCriteria(DocumentQueryOptions options)
     {

@@ -45,6 +45,25 @@ public interface ITenancy : IAsyncDisposable, IDisposable
     /// <summary>The database holding one tenant's data.</summary>
     FisherDatabase DatabaseFor(string tenantId);
 
+    /// <summary>
+    ///     The database holding one tenant's data, only if that tenant already exists (fisher#390).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         What every diagnostic, explorer and monitoring path resolves through, where a session
+    ///         resolves through <see cref="DatabaseFor" />. The difference matters only under
+    ///         <see cref="DynamicTenancy" /> over a source that answers for any id: there
+    ///         <see cref="DatabaseFor" /> registers the tenant and its first connection creates the file
+    ///         and migrates it, which is the point for a session and a defect for a read-only call.
+    ///         An unknown tenant throws <see cref="UnknownTenantException" /> here instead.
+    ///     </para>
+    ///     <para>
+    ///         Default-implemented as <see cref="DatabaseFor" />: the fixed tenancies already refuse an
+    ///         unknown id, and this interface is public.
+    ///     </para>
+    /// </remarks>
+    FisherDatabase ExistingDatabaseFor(string tenantId) => DatabaseFor(tenantId);
+
     /// <summary>Every database this store spans.</summary>
     IReadOnlyList<FisherDatabase> AllDatabases();
 
@@ -393,6 +412,35 @@ public sealed class DynamicTenancy : ITenancy
         }
 
         if (!_source.TryFind(tenantId, out var registration))
+        {
+            throw new UnknownTenantException(tenantId, _databases.Keys);
+        }
+
+        if (!registration.IsActive)
+        {
+            throw new DisabledTenantException(tenantId);
+        }
+
+        return Register(registration);
+    }
+
+    /// <summary>
+    ///     A tenant's database without provisioning one for an id the source has never seen (fisher#390).
+    /// </summary>
+    /// <remarks>
+    ///     A tenant this store has already resolved is answered from the cache, so a tenant a session
+    ///     created a moment ago is visible at once. Otherwise the source is asked through
+    ///     <see cref="ITenantSource.TryFindExisting" />, which for the directory convention means "the
+    ///     file exists". Suspension is honoured exactly as <see cref="DatabaseFor" /> honours it.
+    /// </remarks>
+    public FisherDatabase ExistingDatabaseFor(string tenantId)
+    {
+        if (_databases.TryGetValue(tenantId, out var cached))
+        {
+            return cached;
+        }
+
+        if (!_source.TryFindExisting(tenantId, out var registration))
         {
             throw new UnknownTenantException(tenantId, _databases.Keys);
         }

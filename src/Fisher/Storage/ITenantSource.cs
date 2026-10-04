@@ -56,6 +56,28 @@ public interface ITenantSource
     ValueTask<IReadOnlyList<TenantRegistration>> AllAsync(CancellationToken token = default);
 
     /// <summary>
+    ///     Find a tenant only if it already exists — a lookup that must not bring one into being
+    ///     (fisher#390).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         What a diagnostic, explorer or monitoring read asks, where <see cref="TryFind" /> is what a
+    ///         session asks. The two differ only for a source that answers for ids nobody registered:
+    ///         <see cref="DirectoryTenantSource" /> resolves any valid id so that a new tenant works with
+    ///         no registration step, which is right for a session and wrong for a console. A typo in a
+    ///         tenant picker would otherwise create a database file, and from then on a permanent tenant
+    ///         the daemon's poller starts projecting.
+    ///     </para>
+    ///     <para>
+    ///         Default-implemented as <see cref="TryFind" />, because every other source already refuses
+    ///         an id it was not told about — and because this interface is public, so an abstract member
+    ///         would be a breaking change.
+    ///     </para>
+    /// </remarks>
+    bool TryFindExisting(string tenantId, out TenantRegistration registration)
+        => TryFind(tenantId, out registration);
+
+    /// <summary>
     ///     Set by <see cref="DynamicTenancy" />, for a source to call when a tenant stops being
     ///     routable — suspended, or dropped from the source (fisher#213).
     /// </summary>
@@ -140,6 +162,21 @@ public sealed class DirectoryTenantSource : ITenantSource
             IsActive: !_suspended.ContainsKey(tenantId));
 
         return true;
+    }
+
+    /// <summary>
+    ///     A tenant exists under this convention when its file does (fisher#390).
+    /// </summary>
+    /// <remarks>
+    ///     The same test <see cref="AllAsync" /> enumerates by, so the tenants a console can open are
+    ///     exactly the tenants the daemon's poller would find. <see cref="TenantFileName.PathFor" />
+    ///     resolves the default tenant's legacy file name too (fisher#325), and still refuses an id that
+    ///     is not a valid file name before anything touches the disk.
+    /// </remarks>
+    public bool TryFindExisting(string tenantId, out TenantRegistration registration)
+    {
+        TryFind(tenantId, out registration);
+        return File.Exists(TenantFileName.PathFor(_directory, tenantId));
     }
 
     public ValueTask<IReadOnlyList<TenantRegistration>> AllAsync(CancellationToken token = default)

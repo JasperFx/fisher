@@ -3859,6 +3859,17 @@ populates deliberately.
     not. It stays in `Fisher.Storage` beside `UnknownTenantException` rather than moving to
     `Fisher.Exceptions`: the two answer the same question, and moving either is a breaking change to
     a `using` for no behavioural gain.
+- ⚠️ **A read must not provision a tenant, and until fisher#390 every diagnostic one did.**
+  "`DirectoryTenantSource` resolves any id" is right for a session and wrong for a console: the
+  explorer, document diagnostics, projection statuses, `OpenReadOnlyEventStore(tenantId)`,
+  `Advanced`'s tenant-scoped reads and escape hatches, and `DeleteAllTenantDataAsync` all resolved
+  through `DatabaseFor`. Its first connection created the file and migrated it, so a typo in a tenant
+  picker became a permanent tenant that the poller started a daemon for. Those paths now go through
+  `ITenancy.ExistingDatabaseFor`, which asks `ITenantSource.TryFindExisting`. For the directory
+  convention that means "the file exists", which is the same test `AllAsync` enumerates by. Both are
+  default interface members falling back to the provisioning lookup, because the interfaces are
+  public and every other source already refuses an unknown id. **Sessions are unchanged**, as is
+  `BuildProjectionDaemonAsync(tenantId)`, which is an operational start rather than a read.
 - **The daemon polls for new tenants**, at `FisherDaemonHostedService.TenantPollingInterval` (one
   minute), and only under `DynamicMultiple`. Polling rather than notification because the set of
   tenants belongs to the application and Fisher is never pushed to. A new tenant's *sessions* work

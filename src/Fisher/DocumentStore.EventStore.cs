@@ -214,7 +214,7 @@ public partial class DocumentStore : IEventStore
     ///     </para>
     /// </remarks>
     private (FisherDatabase Database, string? ColumnPredicate) ResolveTenantScope(string tenantId)
-        => (Tenancy.DatabaseFor(tenantId), TenantColumnPredicate(tenantId));
+        => (Tenancy.ExistingDatabaseFor(tenantId), TenantColumnPredicate(tenantId));
 
     /// <summary>
     ///     The <c>tenant_id</c> predicate a tenant deserves in SQL, which is none unless the store is
@@ -801,6 +801,11 @@ public partial class DocumentStore : IEventStore
                 + "TenancyStyle.Conjoined before the schema is created, configure a database per tenant, "
                 + "or omit the tenant id.");
         }
+
+        // fisher#390: the tier opens a session per read, and a session resolves through DatabaseFor —
+        // which under directory tenancy would provision an unknown tenant on the first read. Resolving
+        // through the non-provisioning lookup here refuses the typo before any read can create it.
+        Tenancy.ExistingDatabaseFor(tenantId);
 
         return new Events.FisherReadOnlyEventStore(this, tenantId);
     }
