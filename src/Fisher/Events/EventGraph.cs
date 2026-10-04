@@ -19,15 +19,6 @@ namespace Fisher.Events;
 ///     Polecat's <c>EventGraph</c>. Owns event type registration, aggregate alias resolution, the
 ///     physical table names, and the cached closed-shape event storage.
 /// </summary>
-[UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
-    Justification =
-        "Class-level: extends JasperFx.Events.EventRegistry (annotated RUC) for type-aliased event construction. Event types are preserved by registration on the caller side per the AOT publishing guide.")]
-[UnconditionalSuppressMessage("Trimming", "IL2057:UnrecognizedTypeName",
-    Justification =
-        "Class-level: ResolveEventType uses Type.GetType(string) to resolve the dotnet_type name persisted on each event row. Event types are preserved by EventGraph registration on the caller side.")]
-[UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
-    Justification =
-        "Class-level: event-type registration uses Type.MakeGenericType. AOT consumers register concrete event types ahead of time.")]
 public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuerySession>
 {
     private readonly ConcurrentDictionary<string, Type> _aggregateTypes = new();
@@ -196,11 +187,12 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     IAggregatorSource<IQuerySession>? IAggregationSourceFactory<IQuerySession>.Build<TDoc>()
     {
         var idType = AggregateIdentity.ResolveIdType(typeof(TDoc), StreamIdentity);
-        var projectionType = typeof(Projections.SingleStreamProjection<,>)
-            .MakeGenericType(typeof(TDoc), idType);
 
+        // fisher#398: ordinary generic calls for the canonical identity types, so live aggregation
+        // works in a Native AOT image. It used to be MakeGenericType + Activator.CreateInstance, hidden
+        // from ILC by this class's IL3050 suppression.
 #pragma warning disable CS8714 // TDoc is unconstrained here but SingleStreamProjection requires notnull
-        var projection = (ProjectionBase)Activator.CreateInstance(projectionType)!;
+        var projection = Projections.SingleStreamProjectionFactory.Create<TDoc>(idType);
 #pragma warning restore CS8714
 
         projection.Lifecycle = ProjectionLifecycle.Live;
@@ -459,6 +451,9 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     ///         event assemblies are loaded by registration before rows naming them are read.
     ///     </para>
     /// </remarks>
+    [UnconditionalSuppressMessage("Trimming", "IL2057:UnrecognizedTypeName",
+        Justification =
+            "Resolving the dotnet_type name a row was written with is what this method is. The type is kept by the application's own registration of it (AddEventType, a projection or an append), which is also what the source-generated JsonSerializerContext a Native AOT application supplies references. A type nothing keeps resolves to null, which every read already treats as an event this deployment does not know.")]
     internal Type? ResolveEventType(string? dotNetTypeName)
         => string.IsNullOrEmpty(dotNetTypeName)
             ? null
@@ -540,9 +535,6 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
 /// <summary>
 ///     Metadata and wrapping logic for a single event type.
 /// </summary>
-[UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
-    Justification =
-        "Class-level: Wrap uses Type.MakeGenericType(typeof(Event<>), eventType) to construct Event<T> envelopes. Event types are preserved by registration on the caller side.")]
 public class FisherEventType : IEventType
 {
     public FisherEventType(Type eventType, IEventBinarySerializer? binarySerializer = null)
@@ -618,6 +610,9 @@ public class FisherEventType : IEventType
         return @event;
     }
 
+    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
+        Justification =
+            "Event<T> over a reference type T is served by Native AOT's shared canonical instantiation, so MakeGenericType finds native code for it, and Expression.Compile falls back to the interpreter. Measured in smoke/aot-consumer, which reads back and folds appended events (fisher#398). A value-type event would need its own instantiation and is not covered; was a class-level suppression until fisher#398.")]
     private static Func<object, IEvent> CompileWrapper(Type eventType)
     {
         var genericType = typeof(Event<>).MakeGenericType(eventType);

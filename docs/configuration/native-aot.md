@@ -2,7 +2,9 @@
 
 Fisher's document storage works in a Native AOT image (`PublishAot=true`): storing, loading, upserting
 and LINQ queries, over Guid, string, `int` and `long` identities, strong-typed id wrappers and document
-hierarchies. A smoke application is published natively and run in Fisher's CI on every change.
+hierarchies. So does the core of the event store: starting and appending to streams, live aggregation,
+`FetchForWriting`, and an inline `Snapshot<T>`. A smoke application is published natively and run in
+Fisher's CI on every change.
 
 Three things are different from a JIT application. Each has to be configured, because the reflection
 that works them out under the JIT isn't available in a native image.
@@ -69,7 +71,19 @@ Register each sub-class with `AddSubClass<TSub>()`. `AddSubClass(Type)` and `Add
 only know the base type at runtime, so they are refused under Native AOT, with a message naming the
 generic call.
 
+## Events and aggregates
+
+Name every event type and every aggregate in the same JSON context as your documents. A conventional
+aggregate's `Apply`/`Create` dispatch is source-generated, so nothing about it needs reflection. A
+project that references Fisher as a package gets the generator with it.
+
+An aggregate whose identity is a **strong-typed id** does not work in a native image yet. JasperFx
+compiles the wrapper's accessors with FastExpressionCompiler, which throws there
+([jasperfx#942](https://github.com/JasperFx/jasperfx/issues/942)). Fisher refuses such an aggregate by
+name rather than failing inside JasperFx. Key it on a Guid, string, `int` or `long` until that ships.
+
 ::: warning What has not been measured
-The CI smoke covers document storage through `AddFisher`. The event store, projections and the async
-daemon have not been run in a native image yet.
+The CI smoke covers document storage and the event-store paths above, through `AddFisher`. Async
+projections, the async daemon, and the LINQ operators that still serialize through reflection (cursor
+paging, `Include`, full-text extracts) have not been run in a native image.
 :::

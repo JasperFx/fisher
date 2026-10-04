@@ -303,7 +303,7 @@ public class AdvancedOperations
             var builder = new Weasel.Sqlite.CommandBuilder();
             builder.Append($"select id from {storage.TableName.QualifiedName} ");
             builder.Append("where id in (select value from json_each(");
-            builder.AppendParameter(System.Text.Json.JsonSerializer.Serialize(probe));
+            builder.AppendParameter(Storage.SqliteJsonArrays.Write(probe));
             builder.Append("))");
 
             if (conjoined)

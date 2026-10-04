@@ -1329,6 +1329,36 @@ CoreCLR and throws `missing native code` in a Native AOT image, on the first wri
   and a hierarchy too. The user-facing setup is `docs/configuration/native-aot.md`, whose sample is
   the same configuration.
 
+### Native AOT event appends and snapshots — fisher#398
+
+#384 made document storage work in a native image. The event store failed at two earlier points, and
+`smoke/aot-consumer` now starts and appends to a stream, live-aggregates it, `FetchForWriting`s it, and
+reloads an inline `Snapshot<T>`.
+
+- **`Snapshot<T>` closed `SingleStreamProjection<,>` with `MakeGenericType`**, so a store registering
+  any snapshot could not be built. Live aggregation (`EventGraph.Build<TDoc>`) and the composite
+  `Snapshot<T>` had the same shape. All three now go through `SingleStreamProjectionFactory`, which
+  uses ordinary generic calls for Guid, string, int and long while the aggregate is still a generic
+  argument. This is #384's fix one layer over.
+- **Every append serialized its stream-id list with the reflection-based `JsonSerializer`**, so a native
+  image threw "reflection-based serialization has been disabled" on the first append.
+  `SqliteJsonArrays.Write` is now the one `json_each` array writer: `Utf8JsonWriter`, fixed shape, and
+  lowercase Guids. The dialect, `FetchManyForWriting` and the bulk-insert duplicate probe use it too.
+  Reverting only the append's call reproduces the failure in the native image.
+- ⚠️ **`EventGraph`'s class-wide suppressions are gone, and were hiding exactly the bug.** Removing them
+  left one warning, IL2057 on `ResolveEventType` (`Type.GetType` over a stored name, which is
+  inherent). That now has a method-level justification. `FisherEventType.CompileWrapper`'s
+  `Event<>` closing works natively only because every event type is a reference type, served by
+  Native AOT's shared canonical instantiation. Its method-level suppression says so, and a
+  value-type event would not be covered.
+- ⚠️ **A strong-typed aggregate id cannot work natively until jasperfx#942 ships.** Closing the
+  projection statically does not help: `JasperFxSingleStreamProjectionBase`'s constructor compiles the
+  wrapper's accessors with FastExpressionCompiler, which throws there. That was measured, with a
+  `Snapshot<T, TId>` overload built and then removed because it could not achieve its purpose. The
+  factory refuses by name, naming #942. The rest is fisher#412.
+- **The smoke consumer references `JasperFx.Events.SourceGenerator` itself**, because a project
+  reference does not carry the analyzer the package bundles. Its version is kept in step by hand.
+
 ### Document write SQL
 
 `SqliteDocumentStorageDescriptorBuilder` emits four statements whose **column order and `?` order are

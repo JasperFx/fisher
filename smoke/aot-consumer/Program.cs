@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using Fisher;
 using Fisher.Linq;
 using JasperFx;
+using JasperFx.Events.Projections;
 using Microsoft.Extensions.DependencyInjection;
 
 // fisher#384 — see AotConsumer.csproj. Exits non-zero on any failure, so CI fails with it.
@@ -26,6 +27,10 @@ services.AddFisher(options =>
     options.Schema.For<Ticket>().Identity(x => x.Id);
     options.RegisterValueType<TicketId>();
     options.Schema.For<Animal>().AddSubClass<Dog>();
+
+    // fisher#398. An inline snapshot is a projection closed over (aggregate, id) — reflective unless
+    // the registration names both while they are still generic arguments.
+    options.Projections.Snapshot<Voyage>(SnapshotLifecycle.Inline);
 });
 
 await using var provider = services.BuildServiceProvider();
@@ -91,7 +96,41 @@ try
         Expect((await query.Query<Dog>().ToListAsync()).Count == 1, "a sub-class query narrows to its type");
     }
 
-    Console.WriteLine("OK: documents written and read in a native image.");
+    // ---- the event store (fisher#398) ----
+
+    var voyage = Guid.NewGuid();
+
+    await using (var session = store.LightweightSession())
+    {
+        session.Events.StartStream<Voyage>(voyage, new Departed("Hull"));
+        await session.SaveChangesAsync();
+    }
+
+    await using (var session = store.LightweightSession())
+    {
+        session.Events.Append(voyage, new Arrived("Bergen"));
+        await session.SaveChangesAsync();
+    }
+
+    await using (var session = store.LightweightSession())
+    {
+        var live = await session.Events.AggregateStreamAsync<Voyage>(voyage);
+        Expect(live is { Port: "Bergen", Legs: 2 }, "live aggregation folds the stream");
+
+        var stream = await session.Events.FetchForWriting<Voyage>(voyage);
+        Expect(stream.Aggregate is { Legs: 2 } && stream.CurrentVersion == 2, "FetchForWriting folds the stream");
+
+        stream.AppendOne(new Arrived("Tromso"));
+        await session.SaveChangesAsync();
+    }
+
+    await using (var query = store.QuerySession())
+    {
+        var snapshot = await query.LoadAsync<Voyage>(voyage);
+        Expect(snapshot is { Port: "Tromso", Legs: 3 }, "the inline snapshot was written and reloads");
+    }
+
+    Console.WriteLine("OK: documents and events written and read in a native image.");
     return 0;
 }
 catch (Exception e)
@@ -169,6 +208,28 @@ public class Dog : Animal
     public string Breed { get; set; } = "";
 }
 
+public record Departed(string Port);
+
+public record Arrived(string Port);
+
+public class Voyage
+{
+    public Guid Id { get; set; }
+    public string Port { get; set; } = "";
+    public int Legs { get; set; }
+
+    public static Voyage Create(Departed departed) => new() { Port = departed.Port, Legs = 1 };
+
+    public void Apply(Arrived arrived)
+    {
+        Port = arrived.Port;
+        Legs++;
+    }
+}
+
+[JsonSerializable(typeof(Departed))]
+[JsonSerializable(typeof(Arrived))]
+[JsonSerializable(typeof(Voyage))]
 [JsonSerializable(typeof(GuidDoc))]
 [JsonSerializable(typeof(Alert))]
 [JsonSerializable(typeof(Ticket))]

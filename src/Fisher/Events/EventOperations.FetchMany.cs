@@ -261,23 +261,7 @@ public partial class EventOperations
     // and carries RequiresDynamicCode (IL3050), which a Native AOT consumer sees as a warning against
     // Fisher. The shapes are fixed, so there is nothing for reflection to discover.
     private static string StreamIdsAsJsonArray<TId>(IReadOnlyList<TId> ids) where TId : notnull
-    {
-        var buffer = new ArrayBufferWriter<byte>();
-
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartArray();
-
-            foreach (var id in ids)
-            {
-                writer.WriteStringValue(DatabaseStreamId(id));
-            }
-
-            writer.WriteEndArray();
-        }
-
-        return Encoding.UTF8.GetString(buffer.WrittenSpan);
-    }
+        => SqliteJsonArrays.Write(ids.Select(DatabaseStreamId));
 
     private static string RangesAsJsonArray<T>(IReadOnlyList<FetchPlan<T>> plans) where T : class
     {

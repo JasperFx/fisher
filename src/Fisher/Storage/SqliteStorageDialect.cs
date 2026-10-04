@@ -126,41 +126,7 @@ internal sealed class SqliteStorageDialect<TId> : IStorageDialect
     private static SqliteParameter CreateParameter(string name, object value, SqliteType type)
         => new(name, value) { SqliteType = type };
 
-    private static string WriteIdsAsJsonArray(Array rawIds)
-    {
-        var buffer = new ArrayBufferWriter<byte>();
-
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartArray();
-
-            foreach (var id in rawIds)
-            {
-                switch (id)
-                {
-                    case Guid guid:
-                        writer.WriteStringValue(guid.ToString());
-                        break;
-                    case string text:
-                        writer.WriteStringValue(text);
-                        break;
-                    case int number:
-                        writer.WriteNumberValue(number);
-                        break;
-                    case long number:
-                        writer.WriteNumberValue(number);
-                        break;
-                    default:
-                        throw new ArgumentOutOfRangeException(nameof(rawIds),
-                            $"Unsupported raw id type {id?.GetType().FullName ?? "null"}; expected Guid, string, int, or long.");
-                }
-            }
-
-            writer.WriteEndArray();
-        }
-
-        return Encoding.UTF8.GetString(buffer.WrittenSpan);
-    }
+    private static string WriteIdsAsJsonArray(Array rawIds) => SqliteJsonArrays.Write(rawIds);
 }
 
 /// <summary>

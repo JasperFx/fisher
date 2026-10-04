@@ -477,7 +477,9 @@ internal sealed class AppendPlanner
             ? $"select id, version, is_archived from {_graph.StreamsTableName} where id in (select value from json_each(@ids))"
             : $"select id, version, is_archived from {_graph.StreamsTableName} where tenant_id = @tenant_id and id in (select value from json_each(@ids))";
 
-        command.Parameters.Add(new SqliteParameter("ids", JsonSerializer.Serialize(byDatabaseId.Keys))
+        // fisher#398: not JsonSerializer.Serialize, whose reflection-based overload failed every
+        // append in a Native AOT image. See SqliteJsonArrays.
+        command.Parameters.Add(new SqliteParameter("ids", SqliteJsonArrays.Write(byDatabaseId.Keys))
         {
             SqliteType = SqliteType.Text
         });

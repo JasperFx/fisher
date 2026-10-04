@@ -2,7 +2,9 @@
 
     <!--
       fisher#384 / #386. A document write in a Native AOT image: insert, load, upsert and a LINQ query,
-      over all four canonical identity types, strong-typed id wrappers and a document hierarchy. Every one of those works under CoreCLR, so no test project
+      over all four canonical identity types, strong-typed id wrappers and a document hierarchy — and since
+      fisher#398, the event store: starting and appending to a stream, live aggregation,
+      FetchForWriting, and an inline Snapshot<T>. Every one of those works under CoreCLR, so no test project
       here can see an AOT failure; this one is published with PublishAot and RUN, which is the only
       way to find out. The two failures #384 reported both "published clean": ILC printed only an
       assembly-level IL2104/IL3053 rollup and the first sign was a crash on the first write.
@@ -23,6 +25,10 @@
     <ItemGroup>
         <ProjectReference Include="../../src/Fisher/Fisher.csproj" />
         <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+        <!-- fisher#398. A project reference does not carry the analyzer the Fisher package bundles, so
+             the generator is referenced here as an application referencing JasperFx directly would.
+             Kept in step with Directory.Packages.props by hand. -->
+        <PackageReference Include="JasperFx.Events.SourceGenerator" Version="2.79.2" PrivateAssets="all" />
     </ItemGroup>
 
 </Project>
