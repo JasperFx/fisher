@@ -219,6 +219,7 @@ jobs:
       # compiled native code rather than quietly producing a JIT build.
       - name: A document write works in a Native AOT image
         run: |
+          sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends clang zlib1g-dev > /dev/null
           dotnet publish smoke/aot-consumer -c Release --use-current-runtime -o ./artifacts/aot \
             | tee aot-publish.log
