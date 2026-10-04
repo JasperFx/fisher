@@ -46,10 +46,22 @@ namespace Fisher.Projections.Vectors;
 /// </remarks>
 /// <typeparam name="TDoc">The document written. Must carry the four members of <see cref="IVectorized{TId}" />.</typeparam>
 /// <typeparam name="TId">The document's identity — any type Fisher can store, including a strong-typed wrapper.</typeparam>
-public abstract class VectorProjection<TDoc, TId> : IProjection, IValidatedProjection<StoreOptions>
+public abstract class VectorProjection<TDoc, TId> : IProjection, IValidatedProjection<StoreOptions>,
+    ITenantScopedDocumentProjection
     where TDoc : class, IVectorized<TId>, new()
     where TId : notnull
 {
+    /// <summary>
+    ///     What <see cref="ProjectionTenancyGuard" /> judges under conjoined events (fisher#391).
+    /// </summary>
+    /// <remarks>
+    ///     The guard looked only at aggregations, and this is a bare <see cref="IProjection" />, so a
+    ///     single-tenant <typeparamref name="TDoc" /> under conjoined events passed: two tenants' events
+    ///     mapping to one id wrote one row, each tenant loaded the other's content, and a search on the
+    ///     single-tenant type carried no tenant predicate either.
+    /// </remarks>
+    Type ITenantScopedDocumentProjection.DocumentType => typeof(TDoc);
+
     private readonly IEmbeddingProvider _provider;
     private readonly VectorProjectionMap<TId> _map = new();
 

@@ -99,6 +99,42 @@ public class projection_tenancy_guard : IAsyncLifetime
         });
     }
 
+    /// <summary>
+    ///     A vector projection over a single-tenant document is refused too (fisher#391, marten#5420).
+    /// </summary>
+    /// <remarks>
+    ///     It is a bare <see cref="IProjection" /> rather than an aggregation, so the guard skipped it and
+    ///     two tenants' <c>MemoWritten("m1", ...)</c> wrote one row that both tenants then read as their
+    ///     own. <c>conjoined_tenancy_projections</c> only passed because its store marks every document
+    ///     multi-tenanted.
+    /// </remarks>
+    [Fact]
+    public void a_vector_projection_over_a_single_tenant_document_is_refused_by_name()
+    {
+        var ex = Should.Throw<InvalidOperationException>(() => Build(options =>
+        {
+            options.Events.TenancyStyle = TenancyStyle.Conjoined;
+            options.Events.StreamIdentity = StreamIdentity.AsString;
+            options.Schema.For<MemoEmbedding>().VectorIndex(x => x.Embedding, dimensions: 3);
+            options.Projections.Add(new MemoVectors(new RecordingEmbeddings()), ProjectionLifecycle.Async);
+        }));
+
+        ex.Message.ShouldContain("Tenancy storage style mismatch");
+        ex.Message.ShouldContain(typeof(MemoEmbedding).FullName!);
+    }
+
+    [Fact]
+    public void a_vector_projection_over_a_multi_tenanted_document_is_accepted()
+    {
+        Build(options =>
+        {
+            options.Events.TenancyStyle = TenancyStyle.Conjoined;
+            options.Events.StreamIdentity = StreamIdentity.AsString;
+            options.Schema.For<MemoEmbedding>().MultiTenanted().VectorIndex(x => x.Embedding, dimensions: 3);
+            options.Projections.Add(new MemoVectors(new RecordingEmbeddings()), ProjectionLifecycle.Async);
+        });
+    }
+
     [Fact]
     public void a_single_tenant_store_is_untouched()
     {

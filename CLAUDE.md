@@ -2293,6 +2293,14 @@ ruled refuse over auto-marking.
   internal interface the inherited property satisfies; and a type stored by a projection storage
   provider (an EF Core entity), which has no Fisher mapping to judge — that half is fisher#334's.
   Composite projections are walked member by member.
+- ⚠️ **A `VectorProjection` is judged too, and was not until fisher#391** (marten#5420). The guard
+  looked only at `IAggregateProjection`, and a vector projection is a bare `IProjection` inside a
+  `ProjectionWrapper`, so a single-tenant embedding document passed. Two tenants' events mapping to
+  one id wrote one row that both then read, and a search on that type carried no tenant predicate.
+  It is reached through `IProjectionWrapper.InnerProjection` and the internal
+  `ITenantScopedDocumentProjection`. **`EventProjection` deliberately does not implement it**: what
+  one stores is whatever its methods return, keyed however the application chose, so there is no
+  single type to name and no reason to assume a key two tenants share.
 - **Only the leaking direction is refused.** Marten also refuses conjoined documents under single-tenant
   events; that is a mismatch but not a cross-tenant read, and refusing it would break stores for no
   protection.
