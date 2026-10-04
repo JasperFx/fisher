@@ -15,7 +15,15 @@ scoreboard and the things that are true right now but not obvious from either.
 **2605 tests green on net9.0 and net10.0** — 2538 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 678 of
 them are shared cross-store compliance tests — 509 event sourcing and 169 document.
-On JasperFx **2.80.2** / Weasel **9.40.0**.
+On JasperFx **2.80.2** / Weasel **9.41.0**.
+
+## The Weasel 9.41.0 bump — a Type-based identity runtime
+
+**Additive and green on the bump; nothing in Fisher changed.** weasel#689/#690 add a non-generic
+`IIdentification` facade and `Identifications.For…` factories, so a store holding only `Type`s can build
+an identity strategy in a native image, including a strong-typed id (`ReflectedValueTypeIdentification`).
+Fisher declares strong-typed ids generically (fisher#386), so it does not need them yet. Whether they let
+the reflective, convention-found wrapper path work natively is part of fisher#430.
 
 ## The Weasel 9.40.0 bump — a builder's parameter count
 

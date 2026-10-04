@@ -210,7 +210,11 @@
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
         <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.80.2" />
 
-        <!-- Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
+        <!-- Weasel 9.41.0 (from 9.40.0). Additive: weasel#689/#690's non-generic IIdentification
+             facade and Identifications.For… factories, for Type-based identity under Native AOT.
+             Fisher does not call them yet; see fisher#430.
+
+             Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
              source. Weasel.Storage: the dialect-neutral closed-shape document + event storage
              runtime extracted from Marten, which Fisher plugs a SQLite dialect into rather than
              hand-writing storage.
@@ -272,8 +276,8 @@
              advisory lock), and #615/#621/#625/#627/#628/#629 (Weasel.EntityFrameworkCore, which
              Fisher.EntityFrameworkCore does not reference — it takes
              Microsoft.EntityFrameworkCore.Relational alone). -->
-        <PackageVersion Include="Weasel.Sqlite" Version="9.40.0" />
-        <PackageVersion Include="Weasel.Storage" Version="9.40.0" />
+        <PackageVersion Include="Weasel.Sqlite" Version="9.41.0" />
+        <PackageVersion Include="Weasel.Storage" Version="9.41.0" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
