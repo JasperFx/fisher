@@ -195,6 +195,20 @@ internal sealed class SubClassFisherStorage<TDoc, TBase, TId>
 
     public Guid? VersionFor(TDoc document, IStorageSession session) => _parent.VersionFor(document, session);
 
+    /// <remarks>
+    ///     <b>Forwarded explicitly because the compiler will not make you</b> (fisher#394). Weasel
+    ///     default-implements both members to return null, so leaving them out of this wrapper compiles
+    ///     and quietly answers "no version member" for every sub-class. <c>FisherSession.SeedExpectedVersion</c>
+    ///     then seeds no expectation, and a sub-class loaded in one session failed its guard in every
+    ///     later one — fisher#245, reached through the hierarchy. The numeric one is forwarded too,
+    ///     though Fisher's base storage does not override it today, so that adopting it later cannot
+    ///     repeat this.
+    /// </remarks>
+    public Guid? MappedVersionFor(TDoc document) => _parent.MappedVersionFor(document);
+
+    /// <inheritdoc cref="MappedVersionFor" />
+    public long? MappedRevisionFor(TDoc document) => _parent.MappedRevisionFor(document);
+
     public void Eject(IStorageSession session, TDoc document) => _parent.Eject(session, document);
 
     public void EjectById(IStorageSession session, object id) => _parent.EjectById(session, id);

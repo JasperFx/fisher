@@ -2897,6 +2897,13 @@ to be checked against.
   implement the interface member, and leaves the throwing-free default returning null — so the whole
   feature silently does nothing and every test still fails in the way it did before the change. That is
   how the first cut of this went, and the only signal was the tests staying red.
+- ⚠️ **`SubClassFisherStorage` has to forward it, and it did not** (fisher#394). The
+  wrapper forwards every member to the base's storage, but `MappedVersionFor` and `MappedRevisionFor`
+  are *default interface members*, so leaving them out compiles and answers null for every sub-class —
+  a `Dog` loaded in one session failed its guard in every later one, fisher#245 again through the
+  hierarchy. Both are forwarded now; they are the only two defaults on Weasel's `IDocumentStorage<T>`,
+  so a decorator over it should be re-checked whenever Weasel adds another.
+  `cross_session_optimistic_concurrency` pins both routes through a sub-class, each with its stale twin.
 - **The `Guid.Empty` condition is carried for parity and is not observable.** Measured, not assumed:
   removing it changes no outcome in either direction, because an expectation of `Guid.Empty` matches no
   stored version — a blank version inserts over a missing row and raises `ConcurrencyException` over an

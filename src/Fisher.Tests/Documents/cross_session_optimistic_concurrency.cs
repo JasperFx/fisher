@@ -45,6 +45,13 @@ public class cross_session_optimistic_concurrency : IAsyncLifetime
             // convention, so the two arrive at the storage identically.
             options.Schema.For<MappedLedger>().UseOptimisticConcurrency(true)
                 .Metadata(m => m.Version.MapTo(x => x.Revision));
+
+            // fisher#394 — the same two routes through a hierarchy's sub-class storage.
+            options.Schema.For<VersionedVessel>().AddSubClass<VersionedTrawler>();
+            options.Schema.For<MappedVessel>().UseOptimisticConcurrency(true)
+                .Metadata(m => m.Version.MapTo(x => x.Revision))
+                .AddSubClass<MappedTrawler>();
+            options.Schema.For<RevisionedVessel>().AddSubClass<RevisionedTrawler>();
         });
 
         await _store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
@@ -236,6 +243,141 @@ public class cross_session_optimistic_concurrency : IAsyncLifetime
         (await query.LoadAsync<VersionedLedger>(id, Token))!.Entry.ShouldBe("third");
     }
 
+    // ---- a hierarchy's sub-class (fisher#394) ----
+
+    /// <summary>
+    ///     The same load-in-one-session, store-in-another flow, through a registered sub-class.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <c>Store&lt;VersionedTrawler&gt;</c> resolves <c>SubClassFisherStorage</c>, which forwards
+    ///         every member to the base type's storage — and did not forward <c>MappedVersionFor</c>, a
+    ///         default interface member that compiles happily without a forward. So the session saw
+    ///         Weasel's default <c>null</c>, seeded no expectation, and the guard refused every
+    ///         cross-session write, exactly as fisher#245 did before it was fixed for the base type.
+    ///     </para>
+    ///     <para>
+    ///         Both routes, and each with its stale twin, for fisher#245's reason: a fix that seeded
+    ///         nothing or seeded whatever the row holds passes one half and fails the other.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_versioned_sub_class_can_be_stored_through_a_later_session()
+    {
+        await AssertSubClassCrossesSessionsAsync(
+            () => new VersionedTrawler { Id = Guid.NewGuid(), Entry = "opening" },
+            x => x.Id, x => x.Version, (x, e) => x.Entry = e, x => x.Entry);
+    }
+
+    [Fact]
+    public async Task a_mapped_version_on_a_sub_class_behaves_exactly_as_the_interface_does()
+    {
+        await AssertSubClassCrossesSessionsAsync(
+            () => new MappedTrawler { Id = Guid.NewGuid(), Entry = "opening" },
+            x => x.Id, x => x.Revision, (x, e) => x.Entry = e, x => x.Entry);
+    }
+
+    /// <remarks>
+    ///     The numeric half never depended on the forward — <c>CaptureExpectedRevision</c> reads the
+    ///     document directly — so this passed before the fix. It is here because the issue asked the
+    ///     question, and an answer that is pinned beats one that is reasoned about.
+    /// </remarks>
+    [Fact]
+    public async Task a_revisioned_sub_class_crosses_sessions_and_still_refuses_a_stale_revision()
+    {
+        var id = Guid.NewGuid();
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Store(new RevisionedTrawler { Id = id, Entry = "opening" });
+            await session.SaveChangesAsync(Token);
+        }
+
+        RevisionedTrawler loaded;
+        await using (var session = _store.LightweightSession())
+        {
+            loaded = (await session.LoadAsync<RevisionedTrawler>(id, Token))!;
+        }
+
+        loaded.Version.ShouldBe(1);
+
+        await using (var session = _store.LightweightSession())
+        {
+            loaded.Entry = "amended";
+            session.UpdateRevision(loaded, loaded.Version + 1);
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using (var session = _store.LightweightSession())
+        {
+            var stale = new RevisionedTrawler { Id = id, Entry = "mine" };
+            session.UpdateRevision(stale, 1);
+            await Should.ThrowAsync<ConcurrencyException>(() => session.SaveChangesAsync(Token));
+        }
+
+        await using var query = _store.LightweightSession();
+        (await query.LoadAsync<RevisionedTrawler>(id, Token))!.Entry.ShouldBe("amended");
+    }
+
+    private async Task AssertSubClassCrossesSessionsAsync<T>(Func<T> create, Func<T, Guid> idOf,
+        Func<T, Guid> versionOf, Action<T, string> setEntry, Func<T, string> entryOf) where T : notnull
+    {
+        var created = create();
+        var id = idOf(created);
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Store(created);
+            await session.SaveChangesAsync(Token);
+        }
+
+        T loaded;
+        await using (var session = _store.LightweightSession())
+        {
+            loaded = (await session.LoadAsync<T>(id, Token))!;
+        }
+
+        versionOf(loaded).ShouldNotBe(Guid.Empty);
+        setEntry(loaded, "amended");
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Store(loaded);
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using (var query = _store.LightweightSession())
+        {
+            entryOf((await query.LoadAsync<T>(id, Token))!).ShouldBe("amended");
+        }
+
+        // ...and its stale twin is still refused.
+        T stale;
+        await using (var reader = _store.LightweightSession())
+        {
+            stale = (await reader.LoadAsync<T>(id, Token))!;
+        }
+
+        await using (var other = _store.LightweightSession())
+        {
+            var current = (await other.LoadAsync<T>(id, Token))!;
+            setEntry(current, "theirs");
+            other.Store(current);
+            await other.SaveChangesAsync(Token);
+        }
+
+        setEntry(stale, "mine");
+
+        await using (var loser = _store.LightweightSession())
+        {
+            loser.Store(stale);
+            await Should.ThrowAsync<ConcurrencyException>(() => loser.SaveChangesAsync(Token));
+        }
+
+        await using var final = _store.LightweightSession();
+        entryOf((await final.LoadAsync<T>(id, Token))!).ShouldBe("theirs");
+    }
+
     // ---- the conditions the seeding turns on ----
 
     /// <summary>
@@ -349,3 +491,30 @@ public class PlainLedger
     public Guid Id { get; set; }
     public string Entry { get; set; } = string.Empty;
 }
+
+public class VersionedVessel : IVersioned
+{
+    public Guid Id { get; set; }
+    public string Entry { get; set; } = string.Empty;
+    public Guid Version { get; set; }
+}
+
+public class VersionedTrawler : VersionedVessel;
+
+public class MappedVessel
+{
+    public Guid Id { get; set; }
+    public string Entry { get; set; } = string.Empty;
+    public Guid Revision { get; set; }
+}
+
+public class MappedTrawler : MappedVessel;
+
+public class RevisionedVessel : IRevisioned
+{
+    public Guid Id { get; set; }
+    public string Entry { get; set; } = string.Empty;
+    public int Version { get; set; }
+}
+
+public class RevisionedTrawler : RevisionedVessel;
