@@ -560,6 +560,27 @@ database — a table the caller created in a transaction they may yet roll back 
 file. **The monitoring reads do not provision**: those are fisher#332's, which answers "no results"
 instead, because a console pointed at a store must not be what changes its schema.
 
+### The full-text index is created on first use too — fisher#422
+
+**The on-demand path built its own list of schema objects, and it drifted from the migration's.**
+`FisherDatabase.applyDocumentSchemaAsync` created the document table (and Hi-Lo) only, while
+`DocumentFeatureSchema` adds a full-text index's content view, FTS5 table and three triggers. So a store
+that never ran `ApplyAllConfiguredChangesToDatabaseAsync` failed every `Search(...)` with
+`no such table: fi_fts_<alias>`, the fisher#74 asymmetry one feature over. It works on a migrated database
+and fails on a fresh one. Found by fisher#412's native smoke, which had to apply the schema to get past
+it, and it was never AOT-specific.
+
+- **`DocumentFeatureSchema.ObjectsFor(mapping)` is now the one list, and both paths call it.** That is
+  the fix rather than adding the FTS objects to the on-demand list: anything a document type gains later
+  reaches both paths with nothing to remember.
+- **Rows already in the table are indexed when the index arrives**, because `Fts5Table` runs FTS5's
+  `'rebuild'` on creation. `full_text_on_first_use.rows_written_before_the_index_existed_are_found_once_it_is_added`
+  pins it, since a missing backfill does not error. It returns fewer rows than it should.
+- **`AutoCreate.None` checks the index as well as the table**, naming both. A table applied without its
+  index would otherwise pass the check and fail the search with a raw `no such table`.
+- Every other full-text test class applies the schema in `InitializeAsync`, which is why none of them
+  could see this. `full_text_on_first_use` never does, and 4 of its 5 facts fail against the old path.
+
 ### The monitoring reads answer "no results" without a schema — fisher#332
 
 `FisherDatabase.ReadWhenStorageExistsAsync` wraps the event store's diagnostic reads — progression,
