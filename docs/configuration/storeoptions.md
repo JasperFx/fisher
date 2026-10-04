@@ -51,13 +51,32 @@ cleaning the other's rows, silently.
 
 | Value | Behaviour |
 | :--- | :--- |
-| `CreateOrUpdate` | Create missing objects and migrate existing ones. The default. |
-| `CreateOnly` | Create missing objects; never alter one that exists. |
+| `CreateOrUpdate` | Create missing objects and migrate existing ones to match the configuration, **including dropping** columns and indexes the configuration no longer declares. The default. |
+| `CreateOnly` | Create missing objects. A migration that would change an existing one fails instead. |
 | `All` | Drop and recreate. |
-| `None` | Never touch the schema. Everything must exist already. |
+| `None` | Never change the schema **implicitly**. An explicit apply still migrates — see below. |
 
 `AutoCreate.None` is honoured everywhere for free, because all DDL goes through Weasel's migrations
 rather than being issued ad hoc at call sites.
+
+::: warning `CreateOrUpdate` is not additive
+"Migrate what exists" means make it match the configuration, in both directions. Remove a
+`Duplicate(...)`, an `Index(...)` or a metadata column from your configuration, and the next migration
+drops it from the database. A dropped duplicated column or index is rebuilt from `data` if you add it
+back, but a dropped column holding values that exist nowhere else is gone. If a deployment should
+never lose a schema object, use `CreateOnly`. It refuses the migration instead of applying it, and
+[previewing the migration](/schema/migrations#previewing-a-migration) shows what would have changed.
+:::
+
+::: tip What `None` stops, and what it does not
+`None` stops the **implicit** migrations: the first-use creation of a document table on read or write,
+and of the event tables on first append. Under `None` those check, and throw naming what is missing.
+
+It does **not** stop an **explicit** apply. `ApplyAllConfiguredChangesToDatabaseAsync()`, `db-apply` and
+`resources setup` treat `None` as `CreateOrUpdate`, because calling them *is* the instruction to change
+the schema. The one exception is `ApplyAllDatabaseChangesOnStartup()`, a registration rather than a
+call, which `None` switches off.
+:::
 
 ::: warning
 Fisher normally creates a document type's table **on demand**, the first time something reads or
