@@ -3468,8 +3468,32 @@ jasperfx#930 (JasperFx 2.79.0) added `LoadManyAsync<T>(IEnumerable<Guid>)` and i
 `params` array and do not implement them, so without the two explicit forwarders on `FisherSession` the
 contract silently loads N rows in N statements — and the shared suite, which pins the result, stays green
 either way. `loading_many_through_the_contract` counts statements through the session logger and is the
-only thing that fails if they go. `FetchManyForWriting` keeps the default: `FetchForWriting` folds per
-stream, so there is no single round trip to override it with.
+only thing that fails if they go.
+
+#### `FetchManyForWriting` — two statements however many streams (fisher#374)
+
+The same jasperfx#930 added `FetchManyForWriting<T>(IReadOnlyList<Guid|string>)` to
+`IEventStoreOperations`, default-implemented as one `FetchForWriting` per id, which is two statements per
+id. `EventOperations.FetchMany.cs` does it in two statements in total: one `json_each` read of every
+stream's version, and one read of every stream's events. Each stream is then folded in memory. Four
+things in it are decisions:
+
+- **Each stream's events are bounded by the version just read.** An append committed between the two
+  statements would otherwise be folded into an aggregate labelled with the older version. The single
+  fetch has no upper bound and the same window, so this is stricter rather than different.
+- **The ranges are unpacked into a CTE, not joined from `json_each` directly.** `json_each` has its
+  own `id` and `type` columns, which collide with `fi_events`', and the canonical select list is
+  unqualified.
+- **The write cache works per stream as it does for a single fetch.** Baselines are claimed before
+  the event read, so a stream with one reads only the events after it, and the write-back is deferred
+  to the end of the unit of work in the same way.
+- **Repeated ids are refused before anything is read**, with the contract default's message.
+  `TrackForWriting` is reused, so a stream already appended to in the session keeps its pending events.
+
+The shared suites pin the results, which the default also gets right, so they pass either way.
+`fetching_many_for_writing.it_is_two_statements_however_many_streams_are_fetched` counts statements
+through SQLite's own `sqlite3_trace` hook, because event reads do not go through the session logger.
+Swapping in a per-id loop fails that test alone.
 
 #### `LoadAsync<T>(object)` — the eighth operation
 

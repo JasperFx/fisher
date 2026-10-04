@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2500 tests green on net9.0 and net10.0** — 2433 in `Fisher.Tests`, 36 in
+**2511 tests green on net9.0 and net10.0** — 2444 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 669 of
 them are shared cross-store compliance tests — 509 event sourcing and 160 document.
 On JasperFx **2.79.1** / Weasel **9.36.0**.
@@ -33,8 +33,8 @@ jasperfx#932. Exactly one fact was red on the bump.
   Two explicit forwarders on `FisherSession` make it one `json_each` statement.
   `loading_many_through_the_contract` counts statements through the session logger; mutation-verified —
   with the forwarders compiled out the suite stays green and both local tests fail.
-  `FetchManyForWriting` keeps the default, since Fisher's `FetchForWriting` folds per stream and has no
-  single round trip to offer.
+  `FetchManyForWriting` kept the default at the bump and is native since #374: two statements in total,
+  one version read and one event read across every id, folded per stream.
 - **Inert:** jasperfx#931 (diagnostics defaults so older stores load), jasperfx#933 (a test-only
   ratchet), and jasperfx#939 in 2.79.1 (a composite member no longer disposes the composite's shared
   batch inside `ProjectionExecution` — Fisher's `CompositeIProjectionSource` already declined to).
