@@ -211,3 +211,20 @@ jobs:
         run: |
           dotnet pack src/Fisher/Fisher.csproj -c Release -o ./artifacts/smoke -p:Version=0.0.0-smoke
           dotnet run --project smoke/packaged-consumer -c Release -p:FisherVersion=0.0.0-smoke
+
+      # fisher#384. A document write in a Native AOT image. Nothing else here can see an AOT failure:
+      # every test runs under CoreCLR, where reflective generic closing works, and ILC reports only an
+      # assembly-level IL2104/IL3053 rollup that names nothing. So the smoke is published natively and
+      # RUN. Native AOT on Linux needs clang and zlib; the grep makes sure the publish really
+      # compiled native code rather than quietly producing a JIT build.
+      - name: A document write works in a Native AOT image
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang zlib1g-dev > /dev/null
+          dotnet publish smoke/aot-consumer -c Release --use-current-runtime -o ./artifacts/aot \
+            | tee aot-publish.log
+          grep -q "Generating native code" aot-publish.log || {
+            echo "::error::The AOT smoke did not compile native code, so it proves nothing."
+            exit 1
+          }
+          ./artifacts/aot/AotConsumer

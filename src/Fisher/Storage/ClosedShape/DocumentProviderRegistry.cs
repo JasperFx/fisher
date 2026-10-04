@@ -11,13 +11,6 @@ namespace Fisher.Storage.ClosedShape;
 ///     The store's <see cref="IProviderGraph" />: one cached <see cref="DocumentProvider{T}" /> per
 ///     document type, each holding the four storage flavors.
 /// </summary>
-[UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
-    Justification =
-        "Closes the shared identity strategies and storage generics over runtime document/id types via MakeGenericMethod, once per document type at registration. AOT consumers register document types explicitly per the AOT publishing guide.")]
-[UnconditionalSuppressMessage("Trimming", "IL2060:MakeGenericMethod",
-    Justification = "Registration-time generic closing over registered document types.")]
-[UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
-    Justification = "Registration-time generic closing over registered document types.")]
 internal class DocumentProviderRegistry : IProviderGraph
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Type, object> _providers = new();
@@ -39,7 +32,7 @@ internal class DocumentProviderRegistry : IProviderGraph
             // discriminator says, which only type-checks against the base.
             return mapping.DocumentType != typeof(T)
                 ? BuildSubClassProviderFor<T>(mapping)
-                : BuildProviderFor(mapping);
+                : BuildProviderFor<T>(mapping);
         });
 
     /// <summary>
@@ -50,6 +43,11 @@ internal class DocumentProviderRegistry : IProviderGraph
     ///     caller named only the sub-class. Once per sub-class per store; the result is cached by the
     ///     dictionary this is called from.
     /// </remarks>
+    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
+        Justification =
+            "Document hierarchies only: the base type is a runtime value here, so this path is not Native AOT safe (fisher#384, fisher#386). A type with no sub-classes never reaches it.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2060:MakeGenericMethod",
+        Justification = "Document hierarchies only; see the IL3050 justification.")]
     private object BuildSubClassProviderFor<T>(DocumentMapping mapping) where T : notnull
         => typeof(DocumentProviderRegistry)
             .GetMethod(nameof(BuildTypedSubClassProvider), BindingFlags.NonPublic | BindingFlags.Instance)!
@@ -82,60 +80,112 @@ internal class DocumentProviderRegistry : IProviderGraph
     ///     pair resolve their sequence through <c>ISequenceSource</c>, which is <c>FisherDatabase</c>,
     ///     keyed on the document type.
     /// </remarks>
-    private object BuildProviderFor(DocumentMapping mapping)
+    /// <remarks>
+    ///     <para>
+    ///         <b>The four canonical identity types are closed statically, and that is what makes a
+    ///         document write work under Native AOT</b> (fisher#384). <typeparamref name="T" /> is
+    ///         already the document type here, so <c>BuildTypedProvider&lt;T, Guid&gt;</c> and its three
+    ///         siblings are ordinary generic calls ILC can see and compile. Closing them with
+    ///         <c>MakeGenericMethod</c>, as this used to, works under CoreCLR and throws
+    ///         <c>NotSupportedException: missing native code</c> in a native image, on the first write.
+    ///     </para>
+    ///     <para>
+    ///         A strong-typed id wrapper is still closed reflectively, because its type is a runtime
+    ///         value nothing here can name. See <see cref="BuildReflectively" />.
+    ///     </para>
+    /// </remarks>
+    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification =
+            "Weasel's identity strategies compile accessors over the identity member, which must survive trimming. Under Native AOT the application's source-generated JsonSerializerContext references every serialized property of the document, which keeps it; measured in a native image for all four identity types (fisher#384). A member it does not keep fails as 'no identity member', which names the AOT cause.")]
+    private object BuildProviderFor<T>(DocumentMapping mapping) where T : notnull
     {
-        var buildTyped = typeof(DocumentProviderRegistry)
-            .GetMethod(nameof(BuildTypedProvider), BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var idType = mapping.IdType;
 
-        object identification = mapping.IdStrategy switch
+        if (mapping.IdStrategy is null)
+        {
+            if (idType == typeof(Guid))
+            {
+                return BuildTypedProvider(mapping,
+                    new SqliteGuidIdentification<T>(new SequentialGuidIdentification<T>(mapping.IdMember)));
+            }
+
+            if (idType == typeof(string))
+            {
+                return BuildTypedProvider(mapping, new StringIdentification<T>(mapping.IdMember));
+            }
+
+            // The document type is the sequence key, which SequenceFactory then resolves to a name —
+            // so two types sharing a configured SequenceName share one allocation.
+            if (idType == typeof(int))
+            {
+                return BuildTypedProvider(mapping, new HiloIntIdentification<T>(mapping.IdMember, typeof(T)));
+            }
+
+            if (idType == typeof(long))
+            {
+                return BuildTypedProvider(mapping, new HiloLongIdentification<T>(mapping.IdMember, typeof(T)));
+            }
+        }
+        else
         {
             // A caller-supplied strategy (fisher#218). A Guid-keyed one is wrapped, never taken raw:
             // the lowercase-canonical conversion lives in the identity strategy rather than in the
             // dialect, so replacing the strategy is exactly where it could be lost -- and losing it
             // writes rows that can never be read back, silently and only for Guid-identified types.
             // See SqliteGuidIdentification.
-            not null when mapping.IdType == typeof(Guid) => Activator.CreateInstance(
-                typeof(SqliteGuidIdentification<>).MakeGenericType(mapping.DocumentType),
-                mapping.IdStrategy)!,
-            not null => mapping.IdStrategy,
-            _ => IdentificationFor(mapping)
-        };
+            switch (mapping.IdStrategy)
+            {
+                case IIdentification<T, Guid> guid:
+                    return BuildTypedProvider(mapping, new SqliteGuidIdentification<T>(guid));
+                case IIdentification<T, string> text:
+                    return BuildTypedProvider(mapping, text);
+                case IIdentification<T, int> number:
+                    return BuildTypedProvider(mapping, number);
+                case IIdentification<T, long> number:
+                    return BuildTypedProvider(mapping, number);
+            }
+        }
+
+        return BuildReflectively(mapping);
+    }
+
+    /// <summary>
+    ///     The reflective path: a strong-typed id wrapper, whose type only exists at runtime here.
+    /// </summary>
+    /// <remarks>
+    ///     <b>Not Native AOT safe, and the suppressions say so rather than claiming otherwise.</b>
+    ///     <c>MakeGenericMethod</c> over a value-type wrapper needs native code ILC never generated.
+    ///     The canonical identity types never reach this method; see
+    ///     <see cref="BuildProviderFor{T}" />.
+    /// </remarks>
+    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
+        Justification = StrongTypedIdsAreReflective)]
+    [UnconditionalSuppressMessage("Trimming", "IL2060:MakeGenericMethod",
+        Justification = StrongTypedIdsAreReflective)]
+    private object BuildReflectively(DocumentMapping mapping)
+    {
+        var buildTyped = typeof(DocumentProviderRegistry)
+            .GetMethod(nameof(BuildTypedProvider), BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        // A caller-supplied strategy for a wrapper is taken as it is: only a Guid-keyed one needs
+        // wrapping in SqliteGuidIdentification, and that case was closed statically.
+        var identification = mapping.IdStrategy
+                             ?? (StrongTypedId.TryResolve(mapping.IdType, out var info)
+                                 ? BuildStrongTyped(mapping, info)
+                                 : throw new NotSupportedException(
+                                     $"Fisher cannot store '{mapping.DocumentType.FullName}' by its " +
+                                     $"'{mapping.IdType.Name}' identity. Supported identity types are " +
+                                     $"{string.Join(", ", DocumentMapping.SupportedIdTypes.Select(x => x.Name))}, " +
+                                     "or a wrapper around one with a single gettable property and a matching " +
+                                     "constructor or static builder."));
 
         return buildTyped.MakeGenericMethod(mapping.DocumentType, mapping.IdType)
             .Invoke(this, [mapping, identification])!;
     }
 
-    /// <inheritdoc cref="BuildProviderFor" />
-    private object IdentificationFor(DocumentMapping mapping)
-        => mapping.IdType switch
-        {
-            // Wrapped so the id crosses the ADO.NET boundary as Fisher's canonical lowercase text —
-            // see SqliteGuidIdentification for what goes wrong without it.
-            var t when t == typeof(Guid) => Activator.CreateInstance(
-                typeof(SqliteGuidIdentification<>).MakeGenericType(mapping.DocumentType),
-                Activator.CreateInstance(
-                    typeof(SequentialGuidIdentification<>).MakeGenericType(mapping.DocumentType),
-                    mapping.IdMember))!,
-            var t when t == typeof(string) => Activator.CreateInstance(
-                typeof(StringIdentification<>).MakeGenericType(mapping.DocumentType), mapping.IdMember)!,
-            // The document type is the sequence key, which SequenceFactory then resolves to a name —
-            // so two types sharing a configured SequenceName share one allocation.
-            var t when t == typeof(int) => Activator.CreateInstance(
-                typeof(HiloIntIdentification<>).MakeGenericType(mapping.DocumentType),
-                mapping.IdMember, mapping.DocumentType)!,
-            var t when t == typeof(long) => Activator.CreateInstance(
-                typeof(HiloLongIdentification<>).MakeGenericType(mapping.DocumentType),
-                mapping.IdMember, mapping.DocumentType)!,
-            // A strong-typed id wrapper: the document keeps the wrapper, the column keeps the inner
-            // value, and StrongTypedIdentification is the only thing that knows the difference.
-            var t when StrongTypedId.TryResolve(t, out var info) => BuildStrongTyped(mapping, info),
-            _ => throw new NotSupportedException(
-                $"Fisher cannot store '{mapping.DocumentType.FullName}' by its '{mapping.IdType.Name}' " +
-                $"identity. Supported identity types are " +
-                $"{string.Join(", ", DocumentMapping.SupportedIdTypes.Select(x => x.Name))}, or a " +
-                "wrapper around one with a single gettable property and a matching constructor or " +
-                "static builder.")
-        };
+    private const string StrongTypedIdsAreReflective =
+        "Strong-typed id wrappers only. The four canonical identity types are closed statically in " +
+        "BuildProviderFor<T>; a wrapper's type is a runtime value, so this path is not Native AOT safe (fisher#384, fisher#386).";
 
     /// <summary>
     ///     Close <see cref="StrongTypedIdentification{TDoc,TId,TInner}" /> over the document, the
@@ -147,6 +197,10 @@ internal class DocumentProviderRegistry : IProviderGraph
     ///     string-backed wrapper gets none, because <c>StringIdentification</c> generates none either:
     ///     a string key is externally assigned.
     /// </remarks>
+    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
+        Justification = StrongTypedIdsAreReflective)]
+    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification = StrongTypedIdsAreReflective)]
     private static object BuildStrongTyped(DocumentMapping mapping, ValueTypeInfo info)
     {
         var inner = info.SimpleType;

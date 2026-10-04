@@ -1,0 +1,4 @@
+<Project>
+    <!-- Deliberately empty: stops MSBuild walking up to the repository's Directory.Build.props, so
+         this project consumes Fisher exactly as an outside application would. -->
+</Project>
