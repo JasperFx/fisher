@@ -25,6 +25,12 @@ await daemon.StartAllAsync();
 failover means several nodes competing for a leadership lease through the database, and a Fisher store
 is a file SQLite does not make safe to share across nodes. Accepting the mode and running `Solo` would
 give an application the opposite of the guarantee it asked for — every node projecting at once.
+
+The same layout reached through `Solo` is unsupported too: **one process should host the daemon for a
+given file.** Two processes each running a `Solo` daemon over the same file would both apply the same
+events. Fisher detects it rather than letting it pass silently. Every progression write is guarded on
+the position its batch started from, so the second process's batch fails, rolls back, and stops that
+shard with `ProgressionProgressOutOfOrderException`, as it would on Marten.
 :::
 
 ## WAL matters here

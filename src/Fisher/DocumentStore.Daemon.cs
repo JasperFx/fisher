@@ -258,11 +258,17 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
             Options.OpenTelemetry.RecordWriteLockWait(
                 waitedFrom, Services.OpenTelemetryOptions.RebuildHolder);
 
-            await using (var command = connection.CreateCommand())
+            // A composite's members keep progression rows of their own, and they are rebuilt with it,
+            // so they are cleared with it too. Before fisher#402 a leftover member row was simply
+            // overwritten when the replay reached it; the progression write is now guarded on the
+            // floor it started from, so a member row left at the old ceiling fails the replay's first
+            // batch as out of order.
+            foreach (var name in ProgressionNamesClearedBy(subscriptionName))
             {
+                await using var command = connection.CreateCommand();
                 command.Transaction = transaction;
                 command.CommandText = $"delete from {EventGraph.ProgressionTableName} where name like @name";
-                command.Parameters.AddWithValue("@name", subscriptionName + "%");
+                command.Parameters.AddWithValue("@name", name + "%");
                 await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
 
@@ -286,6 +292,24 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         }, token).ConfigureAwait(false);
 
         Diagnostics.DaemonTrace.Record("teardown.done", subscriptionName);
+    }
+
+    /// <summary>
+    ///     The progression row names a rebuild of <paramref name="subscriptionName" /> clears: its own, and
+    ///     every member's if it is a composite (fisher#402).
+    /// </summary>
+    private IEnumerable<string> ProgressionNamesClearedBy(string subscriptionName)
+    {
+        yield return subscriptionName;
+
+        var source = Options.Projections.All.FirstOrDefault(x => x.Name == subscriptionName);
+        if (source is JasperFx.Events.Projections.Composite.CompositeProjection<IDocumentSession, IQuerySession> composite)
+        {
+            foreach (var member in composite.AllProjections())
+            {
+                yield return member.Name;
+            }
+        }
     }
 
     /// <summary>

@@ -3125,6 +3125,22 @@ hosted services. The store is a singleton, sessions are scoped, and the returned
   store is a file that SQLite does not make safe to share across nodes. Accepting the mode and running
   Solo would give an application the opposite of the guarantee it asked for — every node projecting at
   once. `Solo` starts the daemon; `Disabled` and `ExternallyManaged` register nothing.
+- ⚠️ **Two processes each hosting `Solo` over one file is unsupported and detected** (fisher#402, the
+  ruling over documenting it only). It is the `HotCold` layout reached by another route, and the
+  progression write was an unguarded `update … where name = ?`. Both processes' batches committed,
+  so a non-idempotent projection write (a flat-table `Increment`) was applied twice with nothing to
+  say so. `ShardProgressionOperation` is now the daemon's progression write: one
+  `insert … on conflict do update … where last_seq_id = @floor returning name` for every range. When
+  no row comes back it raises `ProgressionProgressOutOfOrderException`, which rolls the batch back and
+  stops the shard, as on Marten. **One statement where Marten uses two** (an insert at floor zero, a
+  guarded update otherwise), so a missing row is inserted whatever the floor. A shard starting from
+  the present needs that. `FisherProjectionBatch.ExecuteProgressAsync` now reads the result rather than
+  executing blind, which is what lets the postprocess speak.
+  ⚠️ **It found that rebuild teardown left a composite's member progression rows behind.** They used to
+  be overwritten silently on replay. Under the guard they failed the replay as out of order, so
+  teardown now clears every member's rows with the composite's (`ProgressionNamesClearedBy`).
+  `progression_floor_guard` plants the loser's state by moving the row out of band, because two real
+  processes racing cannot be made deterministic. Removing the `where` fails it.
 - **The WAL warning moved to where somebody sees it.** `BuildProjectionDaemonAsync` has warned about a
   non-WAL journal since the daemon landed, but only a consumer building a daemon by hand ever saw it.
   The hosted service puts it in the application log at startup. Still a warning rather than a refusal:
