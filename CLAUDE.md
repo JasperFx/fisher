@@ -4122,6 +4122,16 @@ whole commit.
       the reason fisher#172 adapted onto `IDatabaseSource` rather than widening it. The empty default
       is also the safe one: a tenancy Fisher does not know about is read as sharing nothing, so the
       guard refuses nothing it cannot see.
+  - ⚠️ **A tenant id's casing is normalised to the configured spelling once the lookup matches**
+    (fisher#393, the ruling over making the lookup case-sensitive). Tenancies resolve
+    case-insensitively, so `"ACME"` reached acme's file. Rows were stamped `ACME`, though, and SQLite's
+    default collation made every tenant predicate case-sensitive, so `ACME` became a third tenant inside
+    acme's file that nobody using the configured spelling could see. `ITenancy.TenantIdFor` (a default
+    interface member that returns the id unchanged) supplies the spelling. `OpenSession`, the explorer's
+    tenant scope and the document diagnostics reads all use it. `DefaultTenancy` keeps the default,
+    because with no configured set `ACME` and `acme` are consistently two tenants there. **`ForTenant`
+    scopes are not normalised**, since a scope cannot reach the tenancy. That is part of fisher#415,
+    which suspects a larger hazard in the same place.
   - **Neither compliance arm reaches it**, which is why `sharded_tenancy_reads` exists:
     `ShardedTenancyExplorerCompliance` never asks for a *store-global* listing, and
     `DatabasePerTenantExplorerCompliance` has no co-located tenants for a file to misattribute. Five of

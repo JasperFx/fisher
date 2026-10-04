@@ -239,7 +239,11 @@ public partial class DocumentStore : IDocumentStore
         // The database is resolved per session from the tenant, which is the whole of what
         // database-per-tenant changes about the session path — under DefaultTenancy every tenant
         // resolves the one database, so nothing moves for a store that did not ask for this.
-        return new FisherSession(Options, Tenancy.DatabaseFor(options.TenantId), options);
+        var database = Tenancy.DatabaseFor(options.TenantId);
+
+        // fisher#393: once the lookup has matched case-insensitively, the session stamps and filters by
+        // the spelling the tenancy knows, so "ACME" and "acme" are one tenant all the way down.
+        return new FisherSession(Options, database, options, Tenancy.TenantIdFor(options.TenantId));
     }
 
     /// <summary>

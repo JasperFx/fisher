@@ -214,7 +214,7 @@ public partial class DocumentStore : IEventStore
     ///     </para>
     /// </remarks>
     private (FisherDatabase Database, string? ColumnPredicate) ResolveTenantScope(string tenantId)
-        => (Tenancy.ExistingDatabaseFor(tenantId), TenantColumnPredicate(tenantId));
+        => (Tenancy.ExistingDatabaseFor(tenantId), TenantColumnPredicate(Tenancy.TenantIdFor(tenantId)));
 
     /// <summary>
     ///     The <c>tenant_id</c> predicate a tenant deserves in SQL, which is none unless the store is

@@ -64,6 +64,28 @@ public interface ITenancy : IAsyncDisposable, IDisposable
     /// </remarks>
     FisherDatabase ExistingDatabaseFor(string tenantId) => DatabaseFor(tenantId);
 
+    /// <summary>
+    ///     The spelling of <paramref name="tenantId" /> this tenancy knows the tenant by — what a row is
+    ///     stamped with and what a tenant predicate matches (fisher#393).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         A tenancy resolves tenant ids case-insensitively, so <c>"ACME"</c> reaches the database
+    ///         configured for <c>acme</c>. The rows inside it are stamped and filtered by
+    ///         <c>tenant_id</c> under SQLite's case-sensitive default collation, though. So under sharded
+    ///         tenancy a session opened as <c>"ACME"</c> wrote rows that a session opened as
+    ///         <c>"acme"</c> could not see: a third tenant hiding inside acme's file. Normalising to
+    ///         the configured spelling once the lookup has matched keeps "ACME reaches acme" and makes
+    ///         it true all the way down.
+    ///     </para>
+    ///     <para>
+    ///         Default-implemented as the id unchanged, which is right for <see cref="DefaultTenancy" />.
+    ///         It has no configured set of tenants, so <c>ACME</c> and <c>acme</c> are two tenants there,
+    ///         consistently.
+    ///     </para>
+    /// </remarks>
+    string TenantIdFor(string tenantId) => tenantId;
+
     /// <summary>Every database this store spans.</summary>
     IReadOnlyList<FisherDatabase> AllDatabases();
 
@@ -180,6 +202,7 @@ public sealed class SeparateDatabaseTenancy : ITenancy
     internal SeparateDatabaseTenancy(StoreOptions options, TenantDatabases configured)
     {
         _databases = new Dictionary<string, FisherDatabase>(StringComparer.OrdinalIgnoreCase);
+        _spellings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         // ⚠️ ONE FisherDatabase PER FILE, not per tenant (fisher#252). Two tenants may name the same
         // connection string — that is *sharded* tenancy, a pool of files with tenants co-located in
@@ -231,6 +254,7 @@ public sealed class SeparateDatabaseTenancy : ITenancy
             foreach (var tenantId in tenants)
             {
                 _databases[tenantId] = database;
+                _spellings[tenantId] = tenantId;
             }
         }
 
@@ -256,6 +280,12 @@ public sealed class SeparateDatabaseTenancy : ITenancy
 
     private readonly List<FisherDatabase> _files;
     private readonly List<SharedTenantFile> _sharedFiles;
+    private readonly Dictionary<string, string> _spellings;
+
+    /// <inheritdoc cref="ITenancy.TenantIdFor" />
+    /// <remarks>The spelling the tenant was configured with, whatever casing the caller used.</remarks>
+    public string TenantIdFor(string tenantId)
+        => _spellings.TryGetValue(tenantId, out var configured) ? configured : tenantId;
 
     public DatabaseCardinality Cardinality => DatabaseCardinality.StaticMultiple;
 
@@ -423,6 +453,16 @@ public sealed class DynamicTenancy : ITenancy
 
         return Register(registration);
     }
+
+    /// <inheritdoc cref="ITenancy.TenantIdFor" />
+    /// <remarks>
+    ///     The spelling the resolved database was registered under, which is what the source answered
+    ///     with. Its cache is case-insensitive, so this is the one spelling every casing of the id shares.
+    /// </remarks>
+    public string TenantIdFor(string tenantId)
+        => _databases.TryGetValue(tenantId, out var database) && database.TenantId is { } registered
+            ? registered
+            : tenantId;
 
     /// <summary>
     ///     A tenant's database without provisioning one for an id the source has never seen (fisher#390).
