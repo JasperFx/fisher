@@ -380,6 +380,16 @@ public class StoreOptions
     internal IReadOnlyList<Storage.SharedTenantFile> SharedTenantFiles { get; set; } = [];
 
     /// <summary>
+    ///     The store's tenancy, stashed here by <see cref="DocumentStore" />'s constructor (fisher#415).
+    /// </summary>
+    /// <remarks>
+    ///     For the same reason as <see cref="SharedTenantFiles" />: a session holds the options and its
+    ///     database but not the store, and <c>ForTenant</c> has to ask which file a tenant lives in and how
+    ///     the tenancy spells it. Null only on options no store has been built from.
+    /// </remarks>
+    internal Storage.ITenancy? Tenancy { get; set; }
+
+    /// <summary>
     ///     A database file per tenant, with the set of tenants asked for rather than declared
     ///     (fisher#58).
     /// </summary>

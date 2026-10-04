@@ -286,6 +286,13 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             return _parent.ForTenant(tenantId);
         }
 
+        // The exact spelling of this session's own tenant needs no tenancy lookup; any other id has to
+        // be asked which file it is in and how it is spelled (fisher#415).
+        if (tenantId != TenantId)
+        {
+            tenantId = ResolveTenantScope(tenantId);
+        }
+
         if (tenantId == TenantId)
         {
             return this;
@@ -307,6 +314,58 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
 
             return scope;
         }
+    }
+
+    /// <summary>
+    ///     Refuse a tenant whose rows live in another file, and answer with the tenancy's spelling of
+    ///     the id (fisher#415).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>A scope shares this session's connection, so it can only ever write to this session's
+    ///         file.</b> Under database-per-tenant a tenant in another file would otherwise get its rows
+    ///         stamped with its id and written here — where its own sessions never look, and where this
+    ///         file's tenant filters them out. Silent in both directions. Making it work would need a
+    ///         transaction spanning two SQLite files, which is the one thing a scope exists to avoid.
+    ///     </para>
+    ///     <para>
+    ///         <b>Same file, not same tenancy style</b>: co-located tenants under sharded tenancy share
+    ///         one <see cref="FisherDatabase" />, and every tenant does under <see cref="DefaultTenancy" />,
+    ///         so both keep the one-transaction cross-tenant write fisher#33 built.
+    ///     </para>
+    ///     <para>
+    ///         <b><see cref="ITenancy.ExistingDatabaseFor" />, not <c>DatabaseFor</c></b>, because a refusal
+    ///         must not provision: under directory tenancy <c>DatabaseFor</c> registers any id and its file
+    ///         follows. Under database-per-tenant an id the tenancy does not know is refused by the
+    ///         tenancy's own exception, where it used to be stamped onto this file's rows like any other.
+    ///     </para>
+    ///     <para>
+    ///         The spelling is fisher#393's rule reached from here: <c>ForTenant("ACME")</c> stamps the
+    ///         configured <c>acme</c>, and shares its scope with <c>ForTenant("acme")</c>.
+    ///     </para>
+    /// </remarks>
+    private string ResolveTenantScope(string tenantId)
+    {
+        if (Options.Tenancy is not { } tenancy)
+        {
+            return tenantId;
+        }
+
+        var database = tenancy.ExistingDatabaseFor(tenantId);
+
+        if (!ReferenceEquals(database, FisherDatabase)
+            && !string.Equals(database.Identifier, FisherDatabase.Identifier, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"ForTenant(\"{tenantId}\") cannot be used from a session for tenant '{TenantId}': the two "
+                + $"tenants are in different database files (database '{database.Identifier}', not this session's "
+                + $"'{FisherDatabase.Identifier}'). A tenant scope shares its session's connection and "
+                + "transaction, so writing for a tenant in another file would need a transaction across two "
+                + "SQLite files. Open a session for that tenant instead, with "
+                + $"store.LightweightSession(\"{tenantId}\").");
+        }
+
+        return tenancy.TenantIdFor(tenantId);
     }
 
     /// <inheritdoc />

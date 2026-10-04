@@ -110,6 +110,14 @@ column describes the unit of work rather than the tenant.
 - **The scopes' [DCB boundaries](/events/dcb) are checked by the parent inside its transaction**, for
   the same reason their operations are written there: a guard checked in no transaction guards
   nothing.
+- **A tenant in another database file is refused.** A scope shares its session's connection, so it can
+  only write to that session's file. Under [database-per-tenant](/configuration/multitenancy) a scope
+  for a tenant in another file would otherwise stamp that tenant's id onto rows in *this* file, where
+  neither tenant reads them; writing there for real would need a transaction across two files. Open a
+  session for that tenant instead. Tenants co-located in one file — every tenant under conjoined
+  tenancy, and the tenants sharing a shard — keep the one-transaction write.
+- **The tenant id takes the configured spelling**, as a session's does, so `ForTenant("ACME")` writes
+  for the configured `acme` and is the same scope as `ForTenant("acme")`.
 
 ## Events
 
