@@ -440,9 +440,12 @@ internal class LinqQueryParser
 
             default:
                 throw new BadLinqExpressionException(
-                    $"Fisher cannot translate '{call.Method.Name}' to SQL yet. Supported operators are "
-                    + "Where, Select, Distinct, DistinctBy, OrderBy, OrderByDescending, ThenBy, "
-                    + "ThenByDescending, Take and Skip.");
+                    $"Fisher cannot translate '{call.Method.Name}' to SQL. Supported operators are "
+                    + "Where, Select, Distinct, DistinctBy, GroupBy, Join, GroupJoin followed by SelectMany, "
+                    + "OrderBy, OrderByDescending, ThenBy, ThenByDescending, the OrderByRelevance family, "
+                    + "Take and Skip, plus Fisher's own query operators (MaybeDeleted, IsDeleted, "
+                    + "DeletedSince/DeletedBefore, ModifiedSince/ModifiedBefore, AnyTenant, TenantIsOneOf, "
+                    + "QueryForNonStaleData, Stats and Include). " + WhereClauseParser.Alternatives);
         }
     }
 

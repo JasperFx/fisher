@@ -6,21 +6,24 @@ namespace Fisher.Exceptions;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         A plain <c>Append</c> does not throw this. It queues the events and lets the write fail at
-///         <c>SaveChangesAsync</c>, because there is nothing to read up front.
+///         A plain <c>Append</c> does not throw this: it starts a missing stream at
+///         <c>SaveChangesAsync</c>, which is the remedy the message names
+///         (<c>refusal_messages.a_plain_append_starts_a_missing_stream_as_the_remedy_says</c>). A
+///         non-zero expected version is the exception, and is refused rather than recreated
+///         (fisher#378).
 ///     </para>
 ///     <para>
 ///         Subclasses the shared <see cref="JasperFx.Events.NonExistentStreamException" /> for the
 ///         reason its sibling
-///         <see cref="ExistingStreamIdCollisionException" /> does. Fisher's message ends in a full
-///         stop where the canonical one does not, so it goes through the message-overriding
-///         constructor rather than adopting the base's wording.
+///         <see cref="ExistingStreamIdCollisionException" /> does, and takes the base's canonical
+///         message (fisher#399, jasperfx#872), which names the remedy: call <c>StartStream</c> first,
+///         or use a plain <c>Append</c>, which starts a missing stream.
 ///     </para>
 /// </remarks>
 public class NonExistentStreamException : JasperFx.Events.NonExistentStreamException
 {
     public NonExistentStreamException(object id)
-        : base($"Attempt to append to a nonexistent event stream '{id}'.", id)
+        : base(id)
     {
     }
 }
