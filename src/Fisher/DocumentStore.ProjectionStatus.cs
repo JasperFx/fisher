@@ -94,13 +94,18 @@ public partial class DocumentStore
     ///         store-global answer — correctly, rather than by accident.
     ///     </para>
     ///     <para>
-    ///         <b>The store-global read refuses on a multi-database store</b>, as fisher#240's
-    ///         single-stream lookups do, and for a sharper reason than theirs.
-    ///         <see cref="ShardStatus" /> has no database or tenant field, so concatenating N
-    ///         databases' rows yields N entries per shard with identical <see cref="ShardStatus.ShardName" />
-    ///         and different sequences, which a consumer cannot attribute. That is worse than
-    ///         <c>Advanced.AllProjectionProgress</c>, which concatenates deliberately and gets away with
-    ///         it because <see cref="ShardState" /> carries a <c>TenantId</c>.
+    ///         <b>The store-global read on a multi-database store answers from the registry alone</b>
+    ///         (fisher#401, matching marten#5382). It used to refuse, for a reason that still holds:
+    ///         <see cref="ShardStatus" /> has no database or tenant field, so concatenating N databases'
+    ///         rows yields N entries per shard with identical <see cref="ShardStatus.ShardName" /> and
+    ///         different sequences, which a consumer cannot attribute. Answering from the registry keeps
+    ///         that reason intact, because it reports no per-database numbers at all. Every shard is
+    ///         <see cref="ShardStatusState.Unknown" />, since one daemon runs per database and no single one
+    ///         can speak for the store, and both sequences are zero, meaning "not read", not "at the
+    ///         start". Reporting one database's numbers would mean it had been silently picked to speak
+    ///         for every other. What the registry does answer is "what projections does this store run",
+    ///         the question a console's projections page opens with, and the refusal left it unanswerable
+    ///         on exactly the store shape with the most projections to list.
     ///     </para>
     /// </remarks>
     private async Task<IReadOnlyList<ProjectionStatus>> ProjectionStatusesAsync(string? tenantId,
@@ -120,13 +125,7 @@ public partial class DocumentStore
             return await ProjectionStatusesForAsync(databases[0], ct).ConfigureAwait(false);
         }
 
-        throw new NotSupportedException(
-            $"Store-global GetProjectionStatusesAsync cannot answer on this Fisher store, whose "
-            + $"DatabaseCardinality is {Tenancy.Cardinality} — it spans {databases.Count} database files, each "
-            + "with its own fi_event_progression, and ShardStatus carries no database or tenant field to "
-            + "attribute a merged answer with. Name the scope: GetProjectionStatusesAsync(tenantId, ...) "
-            + "for one tenant's file, or GetProjectionStatusesAsync(database, ...) for a database from "
-            + "AllDatabases(). See fisher#243, jasperfx#810.");
+        return RegistryStatuses(shard => new ShardStatus(shard.Identity, ShardStatusState.Unknown, 0, 0, null));
     }
 
     private async Task<IReadOnlyList<ProjectionStatus>> ProjectionStatusesForAsync(FisherDatabase database,
@@ -146,6 +145,20 @@ public partial class DocumentStore
 
         var head = await HeadSequenceAsync(database, ct).ConfigureAwait(false);
         var tracker = await TrackerForAsync(database).ConfigureAwait(false);
+
+        return RegistryStatuses(shard => new ShardStatus(
+            shard.Identity,
+            StateFor(tracker, shard, daemonVisible: tracker is not null),
+            progress.GetValueOrDefault(shard.Identity),
+            head,
+            ErrorFor(tracker, shard)));
+    }
+
+    /// <summary>
+    ///     The registered projections, each with its shards described by <paramref name="describe" />.
+    /// </summary>
+    private IReadOnlyList<ProjectionStatus> RegistryStatuses(Func<ShardName, ShardStatus> describe)
+    {
 
         // The registry drives the inventory and the shards are attributed TO it, rather than the
         // shards driving the inventory. AllShards() spans asynchronous projections AND subscriptions;
@@ -170,12 +183,7 @@ public partial class DocumentStore
             var shards = shardsByProjection.TryGetValue(source.Name, out var group)
                 ? group
                     .OrderBy(x => x.Name.Identity, StringComparer.Ordinal)
-                    .Select(shard => new ShardStatus(
-                        shard.Name.Identity,
-                        StateFor(tracker, shard.Name, daemonVisible: tracker is not null),
-                        progress.GetValueOrDefault(shard.Name.Identity),
-                        head,
-                        ErrorFor(tracker, shard.Name)))
+                    .Select(shard => describe(shard.Name))
                     .ToList()
                 : [];
 
