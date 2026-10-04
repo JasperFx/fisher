@@ -583,6 +583,15 @@ reason one fails is that the schema has not been applied **yet** — the window 
   one that failed.
 - `FetchHighWaterInputsAsync` is deliberately not wrapped — it is the daemon's poll loop rather than a
   monitoring read, and the daemon ensures the event tables before it starts (fisher#333).
+- **`ReadProjectionProgressAsync` — both overloads — is wrapped too** (fisher#396). It was not
+  implemented at all before that, so the JasperFx default threw `NotSupportedException`. The
+  `(projection, tenant)` overload follows Marten's collapsing rule: it matches on the *parsed* shard
+  name, the newest version wins, and the furthest sequence breaks a tie. `agent_status` and
+  `heartbeat` are selected only under extended tracking, because naming a missing column would be a
+  `no such column` that this guard would silently turn into null for every cell.
+- **`DeleteProjectionProgressByShardNameAsync` is the one write that treats a missing table as a
+  no-op** (fisher#396, Marten's #5511). "No progress for this shard" is already true of a file with no
+  progression table, so this is not the silent-write hazard above. It does not provision the table.
 
 ### Flat-table projections
 

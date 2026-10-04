@@ -57,6 +57,37 @@ public class diagnostic_reads_without_schema : IAsyncLifetime
         (await _store.Database.FetchHighWaterStatusAsync(Token)).ShouldBeNull();
     }
 
+    /// <remarks>
+    ///     fisher#396. Both overloads used to fall through to JasperFx's default and throw
+    ///     <see cref="NotSupportedException" />; null is the meaningful "nothing observed" answer, and a
+    ///     missing table gives it just as a missing row does.
+    /// </remarks>
+    [Fact]
+    public async Task progression_cell_reads_answer_null()
+    {
+        IEventDatabase database = _store.Database;
+
+        (await database.ReadProjectionProgressAsync("SurveyTally", null, Token)).ShouldBeNull();
+        (await database.ReadProjectionProgressAsync(Shard, Token)).ShouldBeNull();
+    }
+
+    /// <remarks>
+    ///     fisher#396, Marten's #5511. "No progress for this shard" is already true of a file with no
+    ///     progression table, so the delete is the same clean no-op a missing row gives — and it must not
+    ///     create the table to get there.
+    /// </remarks>
+    [Fact]
+    public async Task deleting_progress_on_a_never_migrated_file_is_a_no_op()
+    {
+        await _store.Database.DeleteProjectionProgressByShardNameAsync(Shard.Identity, Token);
+
+        await using var connection = new SqliteConnection(_database.ConnectionString);
+        await connection.OpenAsync(Token);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select count(*) from sqlite_master where name = 'fi_event_progression'";
+        Convert.ToInt64(await command.ExecuteScalarAsync(Token)).ShouldBe(0);
+    }
+
     [Fact]
     public async Task sequence_reads_answer_nothing()
     {
