@@ -213,6 +213,71 @@ public class writing_to_aggregates : IAsyncLifetime
     }
 
     [Fact]
+    public async Task an_append_through_a_fetch_loses_to_a_tombstone_committed_in_between()
+    {
+        // fisher#378. The handle was taken at version 2; the stream is then erased. A missing row is
+        // not "nothing to compare against" — it contradicts the expected version as plainly as a
+        // different version would, and the alternative is a stream recreated holding only the late
+        // event, whose aggregate starts mid-life.
+        await using var writer = _store.LightweightSession();
+        var stream = await writer.Events.FetchForWriting<QuestParty>(_streamId,
+            TestContext.Current.CancellationToken);
+
+        await using (var eraser = _store.LightweightSession())
+        {
+            eraser.Events.TombstoneStream(_streamId);
+            await eraser.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        stream.AppendOne(new MemberJoined("Sam"));
+
+        var ex = await Should.ThrowAsync<EventStreamUnexpectedMaxEventIdException>(
+            () => writer.SaveChangesAsync(TestContext.Current.CancellationToken));
+        ex.Message.ShouldContain("expected 2 but was 0");
+
+        await using var query = _store.LightweightSession();
+        var events = await query.Events.FetchStreamAsync(_streamId,
+            token: TestContext.Current.CancellationToken);
+        events.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task an_explicit_expected_version_is_refused_against_a_stream_that_does_not_exist()
+    {
+        var streamId = Guid.NewGuid();
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.Append(streamId, 3, new MemberJoined("Sam"));
+
+            await Should.ThrowAsync<EventStreamUnexpectedMaxEventIdException>(
+                () => session.SaveChangesAsync(TestContext.Current.CancellationToken));
+        }
+
+        await using var query = _store.LightweightSession();
+        (await query.Events.FetchStreamStateAsync(streamId, TestContext.Current.CancellationToken))
+            .ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task an_expected_version_of_zero_still_creates_a_missing_stream()
+    {
+        // The other side of fisher#378: zero is what FetchForWriting records for a stream that did not
+        // exist when it was fetched, so refusing it would break the ordinary "start it if absent" shape.
+        var streamId = Guid.NewGuid();
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.Append(streamId, 0, new QuestStarted("Find the ring"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var query = _store.LightweightSession();
+        var state = await query.Events.FetchStreamStateAsync(streamId, TestContext.Current.CancellationToken);
+        state!.Version.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task append_exclusive_behaves_as_append_optimistic()
     {
         // SQLite has no row lock to take, so the exclusive variants are the optimistic ones. This
@@ -353,6 +418,32 @@ public class writing_to_aggregates_with_string_identity : IAsyncLifetime
             token: TestContext.Current.CancellationToken);
 
         party!.Members.ShouldBe(["Merry", "Pippin"]);
+    }
+
+    [Fact]
+    public async Task an_append_through_a_fetch_loses_to_a_tombstone_committed_in_between()
+    {
+        // fisher#378, in the shape CritterWatch met it: a string-keyed stream erased between a
+        // telemetry batch's fetch and its commit.
+        await using var writer = _store.LightweightSession();
+        var stream = await writer.Events.FetchForWriting<KeyedQuestParty>("quest/one",
+            TestContext.Current.CancellationToken);
+
+        await using (var eraser = _store.LightweightSession())
+        {
+            eraser.Events.TombstoneStream("quest/one");
+            await eraser.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        stream.AppendOne(new MemberJoined("Pippin"));
+
+        await Should.ThrowAsync<EventStreamUnexpectedMaxEventIdException>(
+            () => writer.SaveChangesAsync(TestContext.Current.CancellationToken));
+
+        await using var query = _store.LightweightSession();
+        var events = await query.Events.FetchStreamAsync("quest/one",
+            token: TestContext.Current.CancellationToken);
+        events.ShouldBeEmpty();
     }
 
     [Fact]
