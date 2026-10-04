@@ -66,14 +66,27 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     ///         the document mapping here is what gets the snapshot's table created with the rest of the
     ///         schema either way.
     ///     </para>
+    ///     <para>
+    ///         Native AOT safe for the four canonical identity types (fisher#398). An aggregate keyed on
+    ///         a strong-typed id is refused by name in a native image until jasperfx#942 ships.
+    ///     </para>
     /// </remarks>
     /// <typeparam name="T">
     ///     The aggregate type. It must be self-aggregating — carrying its own <c>Create</c> /
     ///     <c>Apply</c> methods. Use <c>Add</c> for a projection class.
     /// </typeparam>
-    [RequiresDynamicCode("Closes SingleStreamProjection<,> over (T, T's id type) via Type.MakeGenericType.")]
-    [RequiresUnreferencedCode("Resolves T's identity member reflectively through AggregateIdentity.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification =
+            "T's identity member is found by reflection over its public properties. Under Native AOT the application's source-generated JsonSerializerContext references every serialized property of the aggregate, which keeps it; the same argument document storage rests on (fisher#384), measured in smoke/aot-consumer (fisher#398).")]
     public void Snapshot<T>(SnapshotLifecycle lifecycle) where T : notnull
+    {
+        // Closed over the aggregate's own identity type, not the stream identity primitive — the same
+        // rule live aggregation follows, and for the same source-generator reason. See CLAUDE.md.
+        var idType = Storage.AggregateIdentity.ResolveIdType(typeof(T), _events.StreamIdentity);
+        RegisterSnapshot<T>(lifecycle, SingleStreamProjectionFactory.Create<T>(idType));
+    }
+
+    private void RegisterSnapshot<T>(SnapshotLifecycle lifecycle, ProjectionBase source) where T : notnull
     {
         if (typeof(T).CanBeCastTo<ProjectionBase>())
         {
@@ -85,12 +98,6 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
         var projectionLifecycle = lifecycle == SnapshotLifecycle.Async
             ? ProjectionLifecycle.Async
             : ProjectionLifecycle.Inline;
-
-        // Closed over the aggregate's own identity type, not the stream identity primitive — the same
-        // rule live aggregation follows, and for the same source-generator reason. See CLAUDE.md.
-        var idType = Storage.AggregateIdentity.ResolveIdType(typeof(T), _events.StreamIdentity);
-        var source = typeof(SingleStreamProjection<,>)
-            .CloseAndBuildAs<ProjectionBase>(typeof(T), idType);
 
         source.Lifecycle = projectionLifecycle;
         source.AssembleAndAssertValidity();

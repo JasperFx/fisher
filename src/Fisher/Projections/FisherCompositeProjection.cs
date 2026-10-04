@@ -117,8 +117,13 @@ public class FisherCompositeProjection : CompositeProjection<IDocumentSession, I
     ///     source-generator reason. Registering the mapping is what puts the snapshot's table in the
     ///     schema.
     /// </remarks>
-    [RequiresDynamicCode("Closes SingleStreamProjection<,> over (T, T's id type) via Type.MakeGenericType.")]
-    [RequiresUnreferencedCode("Resolves T's identity member reflectively through AggregateIdentity.")]
+    /// <remarks>
+    ///     Native AOT safe for the four canonical identity types, through the same factory
+    ///     <c>Projections.Snapshot&lt;T&gt;</c> uses (fisher#398); a strong-typed id is refused by name
+    ///     in a native image.
+    /// </remarks>
+    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification = "See FisherProjectionOptions.Snapshot<T>: the identity member is kept by the application's source-generated JsonSerializerContext.")]
     public void Snapshot<T>(int stageNumber = 1) where T : notnull
     {
         if (typeof(T).CanBeCastTo<ProjectionBase>())
@@ -129,7 +134,7 @@ public class FisherCompositeProjection : CompositeProjection<IDocumentSession, I
         }
 
         var idType = Storage.AggregateIdentity.ResolveIdType(typeof(T), _options.EventGraph.StreamIdentity);
-        var source = typeof(SingleStreamProjection<,>).CloseAndBuildAs<ProjectionBase>(typeof(T), idType);
+        var source = SingleStreamProjectionFactory.Create<T>(idType);
 
         source.Lifecycle = ProjectionLifecycle.Async;
         source.AssembleAndAssertValidity();
