@@ -849,6 +849,19 @@ Six things that are decisions rather than mechanics:
   `EventStoreOptions.HighWaterLivenessInterval` bounds it (five seconds; zero turns it off and leaves
   the health check on the gap heuristic alone).
 
+- ⚠️ **Extended progression tracking created its columns and wrote none of them until fisher#395.**
+  JasperFx's `ExtendedProgressionWriter` returns early unless `IEventStore.ExtendedProgressionEnabled`
+  is true, and Fisher left that at the interface's `false` default. Behind that gate,
+  `WriteExtendedProgressionAsync` was the interface's no-op too. So `agent_status`, `pause_reason`,
+  `running_on_node` and `failure_*` stayed null, and a console reading them saw a store that never
+  paused or failed. Both halves are implemented now, and each fails tests on its own when removed.
+  The write is Polecat's: update-only (never an insert, and never `last_seq_id`), one autocommit
+  statement per row, an `IS NOT` guard so unchanged telemetry is a zero-row update, and jasperfx#565's
+  rule for the failure columns. The guard against row-lock convoys has no SQLite equivalent, since
+  every write takes the file lock. One statement per row still keeps each hold of that lock to one row.
+  ⚠️ **A shard that fails on its very first event records nothing**, because it never committed a row
+  to decorate. That is the contract, and it is why the end-to-end test processes a good event first.
+
 **A non-stale timeout says what each lagging agent last reported** (fisher#329). The wait used to name
 the lagging shard and add "the daemon may not be running" — which, in the one CI failure #329 has, sat
 beside a sibling shard at the head: the daemon *was* running, and the only thing that could have told a

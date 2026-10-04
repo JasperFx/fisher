@@ -2,6 +2,7 @@ using JasperFx.Descriptors;
 using JasperFx.Events;
 using JasperFx.Events.Daemon;
 using JasperFx.Events.Projections;
+using Microsoft.Data.Sqlite;
 
 namespace Fisher.Storage;
 
@@ -243,6 +244,130 @@ public partial class FisherDatabase : IEventDatabase
         {
             // Nothing to delete — see the remarks.
         }
+    }
+
+    /// <summary>
+    ///     Persist one shard's extended progression telemetry onto its progression row (fisher#395).
+    /// </summary>
+    /// <inheritdoc cref="WriteExtendedProgressionAsync(IReadOnlyList{ShardState},CancellationToken)" />
+    public Task WriteExtendedProgressionAsync(ShardState state, CancellationToken token = default)
+        => WriteExtendedProgressionAsync([state], token);
+
+    /// <summary>
+    ///     Persist a batch of shards' extended progression telemetry — agent status, pause reason,
+    ///     heartbeat, running node and the classified failure — onto their progression rows, on one
+    ///     connection (fisher#395).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Missing until fisher#395</b>, so the interface's no-op default answered for it: the
+    ///         extended columns were created and never written. Ported from Polecat's, which is Marten's
+    ///         <c>mt_mark_event_progression_extended</c> in a different dialect.
+    ///     </para>
+    ///     <para>
+    ///         <b>Telemetry only: an UPDATE of an existing row, never an INSERT, and never
+    ///         <c>last_seq_id</c> or <c>last_updated</c>.</b> The row belongs to the projection batch's
+    ///         commit; inserting one here would race that commit's own upsert, and touching the sequence
+    ///         from a throttled heartbeat could move committed progress backwards. A shard with no row
+    ///         yet matches nothing, which is the "missing row is a no-op" the contract asks for — and
+    ///         JasperFx replays a transition that landed before the first commit.
+    ///     </para>
+    ///     <para>
+    ///         <b>The four <c>failure_*</c> columns follow a different rule</b> (jasperfx#565): written
+    ///         when the state carries a <see cref="ShardFailure" />, cleared when a
+    ///         <see cref="ShardAction.Started" /> arrives without one, and otherwise left alone. The last
+    ///         case matters: an agent publishes a plain <c>Stopped</c> right behind a <c>Paused</c>, and
+    ///         an unconditional write would erase the reason as soon as it was recorded. The category is
+    ///         stored by enum NAME, so reordering the enum cannot relabel older rows.
+    ///     </para>
+    ///     <para>
+    ///         <b>One autocommit statement per row, on one connection</b>, as the contract requires.
+    ///         Its reason is a PostgreSQL row-lock convoy (marten#5167), and SQLite has no row locks — every
+    ///         write takes the file's — so the hazard here is smaller and different. Folding the batch
+    ///         into one transaction would hold the write lock across every row; one statement each holds
+    ///         it for one row and lets a projection batch in between. The guard makes replaying
+    ///         unchanged telemetry a zero-row UPDATE, using <c>IS NOT</c> so NULLs compare as equal.
+    ///     </para>
+    ///     <para>
+    ///         A store without extended tracking has none of these columns, so the call returns without
+    ///         touching the database rather than failing on <c>no such column</c>. The writer never calls
+    ///         it in that case; a direct caller might.
+    ///     </para>
+    /// </remarks>
+    public async Task WriteExtendedProgressionAsync(IReadOnlyList<ShardState> states,
+        CancellationToken token = default)
+    {
+        if (states.Count == 0 || !_events.EnableExtendedProgressionTracking)
+        {
+            return;
+        }
+
+        // The writer hands these over sorted already; a direct caller need not.
+        var ordered = states.OrderBy(x => x.ShardName, StringComparer.Ordinal).ToArray();
+
+        await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+
+            const string category = "case when @touch_failure = 1 then @failure_category else failure_category end";
+            const string sequence = "case when @touch_failure = 1 then @failure_sequence else failure_event_sequence end";
+            const string eventType = "case when @touch_failure = 1 then @failure_event_type else failure_event_type end";
+            const string tenant = "case when @touch_failure = 1 then @failure_tenant_id else failure_event_tenant_id end";
+
+            command.CommandText = $"""
+                                   update {_events.ProgressionTableName}
+                                   set heartbeat = @heartbeat,
+                                       agent_status = @status,
+                                       pause_reason = @reason,
+                                       running_on_node = @node,
+                                       failure_category = {category},
+                                       failure_event_sequence = {sequence},
+                                       failure_event_type = {eventType},
+                                       failure_event_tenant_id = {tenant}
+                                   where name = @name
+                                     and (heartbeat is not @heartbeat
+                                          or agent_status is not @status
+                                          or pause_reason is not @reason
+                                          or running_on_node is not @node
+                                          or failure_category is not {category}
+                                          or failure_event_sequence is not {sequence}
+                                          or failure_event_type is not {eventType}
+                                          or failure_event_tenant_id is not {tenant})
+                                   """;
+
+            var name = command.Parameters.Add("@name", SqliteType.Text);
+            var heartbeat = command.Parameters.Add("@heartbeat", SqliteType.Text);
+            var status = command.Parameters.Add("@status", SqliteType.Text);
+            var reason = command.Parameters.Add("@reason", SqliteType.Text);
+            var node = command.Parameters.Add("@node", SqliteType.Integer);
+            var touchFailure = command.Parameters.Add("@touch_failure", SqliteType.Integer);
+            var failureCategory = command.Parameters.Add("@failure_category", SqliteType.Text);
+            var failureSequence = command.Parameters.Add("@failure_sequence", SqliteType.Integer);
+            var failureEventType = command.Parameters.Add("@failure_event_type", SqliteType.Text);
+            var failureTenantId = command.Parameters.Add("@failure_tenant_id", SqliteType.Text);
+
+            foreach (var state in ordered)
+            {
+                var failure = state.Failure;
+
+                name.Value = state.ShardName;
+                heartbeat.Value = state.LastHeartbeat is { } beat
+                    ? SqliteTimestamp.ToDatabaseValue(beat)
+                    : DBNull.Value;
+                status.Value = (object?)state.AgentStatus ?? DBNull.Value;
+                reason.Value = (object?)state.PauseReason ?? DBNull.Value;
+                node.Value = (object?)state.RunningOnNode ?? DBNull.Value;
+
+                touchFailure.Value = failure is not null || state.Action == ShardAction.Started ? 1 : 0;
+                failureCategory.Value = (object?)failure?.Category.ToString() ?? DBNull.Value;
+                failureSequence.Value = (object?)failure?.Event?.Sequence ?? DBNull.Value;
+                failureEventType.Value = (object?)failure?.Event?.EventTypeName ?? DBNull.Value;
+                failureTenantId.Value = (object?)failure?.Event?.TenantId ?? DBNull.Value;
+
+                await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+        }, token).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -118,6 +118,20 @@ public partial class DocumentStore : IEventStore
            || Options.Projections.IsActive();
 
     /// <summary>
+    ///     Whether the daemon should persist agent status, pause reasons and failures onto
+    ///     <c>fi_event_progression</c> — the store's own opt-in (fisher#395).
+    /// </summary>
+    /// <remarks>
+    ///     <b>The interface default is <see langword="false" />, and Fisher never overrode it</b>, so
+    ///     JasperFx's <c>ExtendedProgressionWriter</c>, which returns early unless this is true, never
+    ///     wrote. <c>EnableExtendedProgressionTracking</c> — and fisher#141's host-level
+    ///     <c>JasperFxOptions.EnableAdvancedTracking</c>, which sets it — created the columns and left
+    ///     them null forever, so a console reading them saw a store that never paused or failed.
+    ///     Read live, as the writer expects, so a runtime flip is honoured.
+    /// </remarks>
+    bool IEventStore.ExtendedProgressionEnabled => Options.Events.EnableExtendedProgressionTracking;
+
+    /// <summary>
     ///     Whether this store partitions data by tenant at all, either way it can.
     /// </summary>
     /// <remarks>
