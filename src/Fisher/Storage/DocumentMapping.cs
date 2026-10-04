@@ -947,6 +947,12 @@ public class DocumentMapping
     ///     the flatly untrue "you have no Id".
     /// </remarks>
     private static InvalidOperationException DescribeMissingIdentity(Type documentType)
+        => DescribeMissingIdentity(documentType, System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported);
+
+    /// <inheritdoc cref="DescribeMissingIdentity(Type)" />
+    /// <param name="documentType">The document type with no usable identity.</param>
+    /// <param name="dynamicCodeSupported">False in a Native AOT image; a parameter so a test can say so.</param>
+    internal static InvalidOperationException DescribeMissingIdentity(Type documentType, bool dynamicCodeSupported)
     {
         var supported = string.Join(", ", SupportedIdTypes.Select(x => x.Name));
         var anyIdMember = DocumentIdentity.FindIdMember(documentType, _ => true);
@@ -961,9 +967,22 @@ public class DocumentMapping
                 "property's type.");
         }
 
-        return new InvalidOperationException(
+        var message =
             $"Document type '{documentType.FullName}' has no identity member. Fisher needs a public " +
-            $"property or field named 'Id', or one marked with [Identity], of type {supported}.");
+            $"property or field named 'Id', or one marked with [Identity], of type {supported}.";
+
+        // Under Native AOT the likeliest cause is not a missing member but a trimmed one (fisher#384),
+        // and the plain message sends the reader looking for an Id they can see is there.
+        if (!dynamicCodeSupported)
+        {
+            message +=
+                " This is a Native AOT image, so the member may exist and have been trimmed. Include the " +
+                "type in the source-generated JsonSerializerContext passed to " +
+                "StoreOptions.ConfigureSerialization(configure: x => x.TypeInfoResolver = ...), which " +
+                "Native AOT requires for serialization anyway and which keeps the type's properties.";
+        }
+
+        return new InvalidOperationException(message);
     }
 
     /// <summary>

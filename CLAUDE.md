@@ -1264,6 +1264,32 @@ own, and `FisherDocumentStorage<TDoc,TId>` is Fisher's. Around it:
 - The read layout is a contract with the shared selectors: writeable flavors read `id` at column 0 and
   `data` at 1 with metadata from 2; the query-only selectors omit `id` and read `data` at 0.
 
+### Native AOT document writes — fisher#384
+
+`DocumentProviderRegistry.BuildProviderFor<T>` builds the four canonical identity types (Guid,
+string, int, long) with ordinary generic calls, because `StorageFor<T>` already knows the document
+type. It used to close `BuildTypedProvider<TDoc, TId>` with `MakeGenericMethod`. That works under
+CoreCLR and throws `missing native code` in a Native AOT image, on the first write.
+
+- ⚠️ **A class-wide suppression hid it.** The registry carried `[UnconditionalSuppressMessage]` for
+  IL3050/IL2060/IL2026 on the whole class, justified by an "AOT publishing guide" that did not
+  exist. So ILC printed only an assembly-level IL2104/IL3053 rollup and never named the method.
+  The suppressions are now per method, each on a path it describes accurately. Do not reintroduce
+  a class-wide one.
+- **Still reflective, and not AOT safe:** strong-typed id wrappers (`BuildReflectively`) and
+  document hierarchies (`BuildSubClassProviderFor`). Their types are runtime values here; fisher#386.
+- **The application supplies a source-generated `JsonSerializerContext`** through
+  `ConfigureSerialization(configure: x => x.TypeInfoResolver = ...)`. Native AOT disables
+  reflection-based System.Text.Json, so this is required anyway. Measured: it also keeps each
+  document's properties from being trimmed, which is what Weasel's identity strategies need. That
+  is the justification for the IL2026 suppression on `BuildProviderFor<T>`.
+- **The trimmed-identity error says so under AOT.** `DocumentMapping.DescribeMissingIdentity`
+  appends the AOT cause and the fix when `RuntimeFeature.IsDynamicCodeSupported` is false. Without
+  that hint the message sends the reader looking for an `Id` they can see is there.
+- **`smoke/aot-consumer` is the only guard**, published natively and run by the `package` CI job.
+  Nothing under CoreCLR can see an AOT failure. Against the old registry it fails with exactly
+  #384's stage-2 error.
+
 ### Document write SQL
 
 `SqliteDocumentStorageDescriptorBuilder` emits four statements whose **column order and `?` order are

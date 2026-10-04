@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!--
+      fisher#384. A document write in a Native AOT image: insert, load, upsert and a LINQ query, over
+      all four canonical identity types. Every one of those works under CoreCLR, so no test project
+      here can see an AOT failure; this one is published with PublishAot and RUN, which is the only
+      way to find out. The two failures #384 reported both "published clean": ILC printed only an
+      assembly-level IL2104/IL3053 rollup and the first sign was a crash on the first write.
+
+      A project reference rather than the package: the question is Fisher's code, not its packaging,
+      which smoke/packaged-consumer covers. Not in fisher.slnx on purpose — a native publish is slow
+      and needs a C toolchain. See the `package` job in .github/workflows/fisher.yml.
+    -->
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <PublishAot>true</PublishAot>
+        <InvariantGlobalization>true</InvariantGlobalization>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../src/Fisher/Fisher.csproj" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+    </ItemGroup>
+
+</Project>
