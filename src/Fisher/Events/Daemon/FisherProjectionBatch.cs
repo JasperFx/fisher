@@ -91,16 +91,18 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
     ///     Record how far the shard reached, to commit alongside the projection's own writes.
     /// </summary>
     /// <remarks>
-    ///     A floor of zero means the progression row may not exist yet, so the write upserts; past that
-    ///     the row is known to be there and a plain update suffices.
+    ///     Guarded on the range's floor (fisher#402): the write fails the batch if another agent has
+    ///     already moved this shard, rather than letting two daemons over one file both apply the range.
+    ///     See <see cref="Storage.ShardProgressionOperation" />.
     /// </remarks>
     public ValueTask RecordProgress(EventRange range)
     {
         Diagnostics.DaemonTrace.Record("batch.progress", range.ShardName.Identity,
             range.SequenceFloor, range.SequenceCeiling);
 
-        _progress.Enqueue(_events.UpdateProgressOperation(range.ShardName.Identity, range.SequenceCeiling,
-            upsert: range.SequenceFloor == 0));
+        _progress.Enqueue(new Storage.ShardProgressionOperation(_events.ProgressionTableName,
+            range.ShardName.Identity, range.SequenceFloor, range.SequenceCeiling,
+            _events.EnableExtendedProgressionTracking));
 
         return ValueTask.CompletedTask;
     }
@@ -286,7 +288,18 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
             command.Transaction = transaction;
             command.CommandTimeout = _store.Options.CommandTimeout;
 
-            await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            // Read rather than executed blind, so the operation's postprocess can say whether its guard
+            // matched — the progression write is guarded on the range's floor (fisher#402).
+            var exceptions = new List<Exception>();
+            await using (var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false))
+            {
+                await operation.PostprocessAsync(reader, exceptions, token).ConfigureAwait(false);
+            }
+
+            if (exceptions.Count > 0)
+            {
+                throw exceptions.Count == 1 ? exceptions[0] : new AggregateException(exceptions);
+            }
         }
         finally
         {
