@@ -9,6 +9,13 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
+**1.19.0 measures the last paths Native AOT had never run, and fixes the one that failed.**
+[#430](https://github.com/JasperFx/fisher/issues/430): the hosted daemon, subscriptions, messages and
+events raised from a projection, and raw SQL all run in a native image unchanged. A second store did not:
+`AddFisherStore<T>()` builds its marker as a `DispatchProxy`, which a native image cannot create. The new
+`AddFisherStore<T, TImplementation>()` takes an empty `DocumentStore` subclass the application declares
+instead, and the one-argument overload refuses by name under Native AOT. On Weasel **9.41.0**.
+
 **1.18.0 finishes Native AOT for the event store and fixes two silent cross-file and first-use gaps.**
 [#412](https://github.com/JasperFx/fisher/issues/412): the async daemon, keyset cursor paging,
 `Include()`, full-text ranking and projection step-through run in a native image, and so does an
