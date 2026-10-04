@@ -91,6 +91,66 @@ public class multi_store_registration : IAsyncLifetime
         await host.StopAsync(Token);
     }
 
+    // ---- a declared store class (fisher#430) ----
+
+    /// <remarks>
+    ///     The Native AOT-safe registration: a class the application declares instead of a DispatchProxy.
+    ///     Same isolation as the proxy form, and the store resolved through the marker IS the declared
+    ///     class, so there is nothing for the tooling registrations to unwrap.
+    /// </remarks>
+    [Fact]
+    public async Task a_declared_store_class_is_an_independent_store()
+    {
+        using var host = await Host.CreateDefaultBuilder()
+            .ConfigureServices(services =>
+            {
+                services.AddFisher(options =>
+                    {
+                        options.ConnectionString = _first.ConnectionString;
+                        options.AutoCreateSchemaObjects = AutoCreate.All;
+                        options.Schema.For<Chart>();
+                    })
+                    .ApplyAllDatabaseChangesOnStartup();
+
+                services.AddFisherStore<IArchiveStore, ArchiveStore>(options =>
+                    {
+                        options.ConnectionString = _second.ConnectionString;
+                        options.AutoCreateSchemaObjects = AutoCreate.All;
+                        options.Schema.For<Chart>();
+                    })
+                    .ApplyAllDatabaseChangesOnStartup();
+            })
+            .StartAsync(Token);
+
+        var archive = host.Services.GetRequiredService<IArchiveStore>();
+        archive.ShouldBeOfType<ArchiveStore>();
+        archive.Options.StoreName.ShouldBe(nameof(IArchiveStore));
+
+        var id = Guid.NewGuid();
+        await using (var session = archive.LightweightSession())
+        {
+            session.Store(new Chart { Id = id, Name = "Admiralty 1" });
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using (var reading = archive.LightweightSession())
+        {
+            (await reading.LoadAsync<Chart>(id, Token)).ShouldNotBeNull();
+        }
+
+        await using (var reading = host.Services.GetRequiredService<IDocumentStore>().LightweightSession())
+        {
+            (await reading.LoadAsync<Chart>(id, Token)).ShouldBeNull();
+        }
+
+        // The monitoring registrations resolve to the declared store itself.
+        host.Services.GetServices<JasperFx.Events.IEventStore>().ShouldContain(x => ReferenceEquals(x, archive));
+        host.Services.GetServices<JasperFx.Documents.IDocumentStoreDiagnostics>()
+            .ShouldContain(x => ReferenceEquals(x, archive));
+
+        await host.StopAsync(Token);
+    }
+
     /// <remarks>
     ///     The supported same-file shape: two logical stores isolated by the table prefix
     ///     <c>FisherTableNaming</c> folds the schema name into.
@@ -589,6 +649,8 @@ public class multi_store_registration : IAsyncLifetime
 }
 
 public interface IArchiveStore : IDocumentStore;
+
+public sealed class ArchiveStore(StoreOptions options) : DocumentStore(options), IArchiveStore;
 
 public interface IAuditStore : IDocumentStore;
 

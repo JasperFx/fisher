@@ -1456,6 +1456,35 @@ compares a `DateOnly`, and runs both projection step-through methods — all nat
   (`MessagePublishing`, `AdvancedSqlResultReader`, `SecondaryStoreProxy`, `EnumMember` and others).
   ILC reports some of them as reachable from the smoke, and none of them failed when it ran.
 
+### Native AOT: the hosted daemon, subscriptions, side effects, raw SQL and a second store — fisher#430
+
+The five paths `native-aot.md` listed as never measured. `smoke/aot-consumer/UnmeasuredPaths.cs` runs each
+natively, on a store and file of its own so a failure names the path.
+
+- **Four of the five needed nothing.** The hosted daemon (`AddAsyncDaemon()`), a subscription, a message
+  a projection publishes and an event it raises (both from `RaiseSideEffects`), and `AdvancedSql` /
+  `QueueSqlCommand` all ran natively on the first measurement. `MessagePublishing` and
+  `AdvancedSqlResultReader` still carry IL warnings; under Native AOT `Expression.Compile()` falls back
+  to the interpreter, which is what the smoke shows working.
+- ⚠️ **`AddFisherStore<T>()` cannot work natively, and that is a property of `DispatchProxy`, not of
+  Fisher.** The proxy emits its type at runtime (`AssemblyBuilder.DefineDynamicAssembly`), which throws
+  `PlatformNotSupportedException` in a native image. So the answer is a store the application declares —
+  `class ArchiveStore(StoreOptions o) : DocumentStore(o), IArchiveStore;` — registered with the new
+  `AddFisherStore<T, TImplementation>()`. `DocumentStore` already implements every member a marker
+  inherits, so the class body is empty.
+  - **Everything downstream needed no change**, because every consumer of the marker already unwrapped
+    through `SecondaryStoreProxy.Unwrap`, which returns a non-proxy store as-is. A declared class *is*
+    an `IEventStore` and the document tooling interfaces, so the casts that had to reach through the
+    proxy now simply succeed.
+  - **The one-argument overload refuses by name in a native image**, before Reflection.Emit is reached,
+    naming the class to declare and the overload to call. The smoke asserts the refusal natively.
+  - **Constructed with `Activator.CreateInstance` over a `[DynamicallyAccessedMembers(PublicConstructors)]`
+    type parameter**, which is trim-safe and works natively for a reference type. A factory delegate
+    would have been a second spelling of the same thing at every call site.
+- **`dotnet run` on the smoke runs with dynamic code off**, because the project sets `PublishAot`. So
+  it reproduces AOT-only failures in seconds without a native publish. A native publish is still what
+  counts, and what CI runs.
+
 ### Document write SQL
 
 `SqliteDocumentStorageDescriptorBuilder` emits four statements whose **column order and `?` order are
@@ -4305,6 +4334,9 @@ registration surface was missing.
   `ExceptionDispatchInfo`, or every exception from a secondary store arrives wrapped and the proxy
   leaks into the application's catch blocks. **The proxy class cannot be `sealed`** — `DispatchProxy`
   derives from it at runtime and says so.
+- **`AddFisherStore<T, TImplementation>()` takes a declared store class instead** (fisher#430): an
+  empty `DocumentStore` subclass implementing the marker. It is the only shape that works under Native
+  AOT, where a `DispatchProxy` cannot be created, and the one-argument overload refuses there by name.
 - **A proxy is not an `IEventStore`.** `DispatchProxy` implements the interfaces it was asked for and no
   others, and the tooling surfaces are implemented explicitly and deliberately absent from
   `IDocumentStore` (fisher#45) — so the `IEventStore` registration reaches *through* the proxy to the

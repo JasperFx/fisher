@@ -203,6 +203,62 @@ public static class FisherServiceCollectionExtensions
     public static FisherStoreConfigurationExpression<T> AddFisherStore<T>(this IServiceCollection services,
         Func<IServiceProvider, StoreOptions> optionSource)
         where T : class, IDocumentStore
+        => services.AddFisherStore<T>(optionSource, options => SecondaryStoreProxy.For<T>(new DocumentStore(options)));
+
+    /// <summary>
+    ///     Register a second store as a class the application declares, rather than as a proxy over a
+    ///     marker interface — which is what a Native AOT image needs (fisher#430).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <c>public sealed class ArchiveStore(StoreOptions options) : DocumentStore(options), IArchiveStore;</c>
+    ///         is the whole of the class: <see cref="DocumentStore" /> already implements every member the
+    ///         marker inherits. The one-argument overload builds the marker as a <c>DispatchProxy</c>,
+    ///         which emits a type at runtime and so cannot exist in a native image.
+    ///     </para>
+    ///     <para>
+    ///         Everything else is the same registration, and it works the same under the JIT. A declared
+    ///         class is also a better tooling citizen: it <em>is</em> the store, so the monitoring and
+    ///         command-line registrations have nothing to unwrap.
+    ///     </para>
+    /// </remarks>
+    /// <typeparam name="T">The marker interface the store is resolved through.</typeparam>
+    /// <typeparam name="TImplementation">
+    ///     A <see cref="DocumentStore" /> subclass implementing <typeparamref name="T" />, with a public
+    ///     constructor taking <see cref="StoreOptions" />.
+    /// </typeparam>
+    public static FisherStoreConfigurationExpression<T> AddFisherStore<T,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TImplementation>(
+        this IServiceCollection services, Action<StoreOptions> configure)
+        where T : class, IDocumentStore
+        where TImplementation : DocumentStore, T
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        return services.AddFisherStore<T, TImplementation>(_ =>
+        {
+            var options = new StoreOptions { StoreName = typeof(T).Name };
+            configure(options);
+            return options;
+        });
+    }
+
+    /// <inheritdoc cref="AddFisherStore{T,TImplementation}(IServiceCollection,Action{StoreOptions})" />
+    public static FisherStoreConfigurationExpression<T> AddFisherStore<T,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TImplementation>(
+        this IServiceCollection services, Func<IServiceProvider, StoreOptions> optionSource)
+        where T : class, IDocumentStore
+        where TImplementation : DocumentStore, T
+        => services.AddFisherStore<T>(optionSource, options =>
+        {
+            SecondaryStoreProxy.AssertIsMarkerInterface<T>();
+
+            return (T)Activator.CreateInstance(typeof(TImplementation), options)!;
+        });
+
+    private static FisherStoreConfigurationExpression<T> AddFisherStore<T>(this IServiceCollection services,
+        Func<IServiceProvider, StoreOptions> optionSource, Func<StoreOptions, T> build)
+        where T : class, IDocumentStore
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(optionSource);
@@ -212,11 +268,11 @@ public static class FisherServiceCollectionExtensions
         services.AddSingleton(sp =>
         {
             var options = Configured(sp, optionSource(sp), typeof(T));
-            var store = new DocumentStore(options);
+            var store = build(options);
 
             sp.GetRequiredService<FisherStoreRegistry>().Register(typeof(T), options);
 
-            return SecondaryStoreProxy.For<T>(store);
+            return store;
         });
 
         // Discoverable by monitoring tools alongside the primary store, which is the whole reason a

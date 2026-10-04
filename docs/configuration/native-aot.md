@@ -32,7 +32,7 @@ services.AddFisher(options =>
     options.Schema.For<Vessel>().AddSubClass<Trawler>();
 });
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L71-L89' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_configuration' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L79-L97' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_configuration' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 ## Supply a source-generated JSON context
@@ -51,7 +51,7 @@ you store:
 [JsonSerializable(typeof(Trawler))]
 internal partial class AppJsonContext : JsonSerializerContext;
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L58-L65' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_json_context' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L66-L73' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_json_context' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 The context also keeps each document's properties from being trimmed, which is how Fisher finds the
@@ -94,7 +94,7 @@ options.Projections.Snapshot<Berth, BerthId>(SnapshotLifecycle.Inline);
 // One that is only ever aggregated live is declared the same way.
 options.Projections.LiveStreamAggregation<Tide, TideId>();
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L94-L102' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_strong_typed_aggregates' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L102-L110' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_strong_typed_aggregates' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 A strong-typed aggregate that is not registered either way is refused by name in a native image, rather
@@ -104,12 +104,41 @@ than failing inside JasperFx. This needs JasperFx 2.80.2 or later
 ## Async projections and the daemon
 
 Async projections need nothing extra. Name the projected document types in the JSON context, as you
-do for any document. The CI smoke builds the daemon with `BuildProjectionDaemonAsync()`, starts it,
-and waits for it to catch up, all in the native image.
+do for any document. The CI smoke runs the daemon both ways in the native image: built with
+`BuildProjectionDaemonAsync()`, and hosted with `AddAsyncDaemon()`. Subscriptions, messages a
+projection publishes, and events it raises all work under the hosted daemon, and so does raw SQL
+through `AdvancedSql` and `QueueSqlCommand`.
 
-::: warning What has not been measured
-The CI smoke covers the paths above, through `AddFisher`. It does not cover the hosted daemon
-(`AddAsyncDaemon()`), although that starts the same daemon. Nor does it cover subscriptions, event
-publishing from projections, raw SQL (`AdvancedSql`), or a second store registered with
-`AddFisherStore<T>`. Fisher's build still reports trimming and AOT warnings on some of those paths.
-:::
+## A second store
+
+`AddFisherStore<T>()` implements the marker interface as a `DispatchProxy`, which emits a type at
+runtime and so can't exist in a native image. Declare the store as a class instead:
+
+<!-- snippet: sample_native_aot_second_store_class -->
+<a id='snippet-sample_native_aot_second_store_class'></a>
+```cs
+// A second store as a class rather than a proxy. DocumentStore already implements everything the
+// marker inherits, so the class body is empty.
+public interface ILedgerStore : IDocumentStore;
+
+public sealed class LedgerStore(StoreOptions options) : DocumentStore(options), ILedgerStore;
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L58-L64' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_second_store_class' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+and register it with both types:
+
+<!-- snippet: sample_native_aot_second_store -->
+<a id='snippet-sample_native_aot_second_store'></a>
+```cs
+services.AddFisherStore<ILedgerStore, LedgerStore>(options =>
+{
+    options.Connection("Data Source=ledger.db");
+    options.ConfigureSerialization(configure: json => json.TypeInfoResolver = AppJsonContext.Default);
+});
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L115-L121' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_second_store' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+The one-type-argument overload is refused by name in a native image, naming this one. Under the JIT
+both work the same way.

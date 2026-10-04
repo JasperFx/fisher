@@ -55,6 +55,14 @@ public class Tide
     public void Apply(TideTurned _) => Turns++;
 }
 
+#region sample_native_aot_second_store_class
+// A second store as a class rather than a proxy. DocumentStore already implements everything the
+// marker inherits, so the class body is empty.
+public interface ILedgerStore : IDocumentStore;
+
+public sealed class LedgerStore(StoreOptions options) : DocumentStore(options), ILedgerStore;
+#endregion
+
 #region sample_native_aot_json_context
 // Native AOT turns off reflection-based System.Text.Json, so the application supplies a
 // source-generated context naming every document type it stores.
@@ -99,6 +107,17 @@ public static class native_aot_samples
 
         // One that is only ever aggregated live is declared the same way.
         options.Projections.LiveStreamAggregation<Tide, TideId>();
+        #endregion
+    }
+
+    public static void register_a_second_store(IServiceCollection services)
+    {
+        #region sample_native_aot_second_store
+        services.AddFisherStore<ILedgerStore, LedgerStore>(options =>
+        {
+            options.Connection("Data Source=ledger.db");
+            options.ConfigureSerialization(configure: json => json.TypeInfoResolver = AppJsonContext.Default);
+        });
         #endregion
     }
 }
