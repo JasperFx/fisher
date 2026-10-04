@@ -4571,6 +4571,15 @@ before every test.
 cross-store compliance suites route everything through, so declaring it is what makes
 `EventStoreComplianceFixture.EventsFor(session)` possible at all.
 
+**It is also the interface a downstream reflective caller should resolve against, and Fisher needs
+no store-specific one** (fisher#379). Under Native AOT, `MakeGenericMethod` on an open generic
+method works reliably only when the method is declared on an interface. Wolverine's
+`UpdatedAggregate` frames resolve `FetchLatest<T>` that way, and for Marten they use this exact
+interface. Polecat's `IEventOperations` only extends it, so a Fisher-local copy would add nothing.
+What has to hold is that the class's own public members implement it *implicitly*, so a call
+through the interface `MethodInfo` reaches Fisher's `FetchLatest` and not a default interface
+implementation. `event_operations_through_the_shared_interface` pins that.
+
 Everything reachable without document storage is real: `FetchForWriting` rebuilds the aggregate by
 live aggregation, `WriteToAggregate` is fetch + callback + `SaveChangesAsync`, and `ProjectLatest`
 folds the session's pending events on top of the committed state.
