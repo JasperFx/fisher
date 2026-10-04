@@ -533,6 +533,19 @@ public class DocumentMapping
     internal List<SubClassMapping> SubClasses { get; } = [];
 
     /// <summary>
+    ///     Builds this type's storage with its identity type closed statically, when the configuration
+    ///     named that type as a generic argument (fisher#386).
+    /// </summary>
+    /// <remarks>
+    ///     Set by <c>Identity&lt;TValue&gt;(...)</c> and <c>IdStrategy&lt;TId&gt;(...)</c> for a
+    ///     strong-typed id wrapper, the one identity type the registry cannot name: it only exists at
+    ///     runtime there, and closing generics over it reflectively has no native code under Native AOT.
+    ///     Null for the canonical identity types, which the registry closes itself. Returns null if the
+    ///     mapping no longer has the identity type the factory was captured for.
+    /// </remarks>
+    internal Func<ClosedShape.DocumentProviderRegistry, DocumentMapping, object?>? ProviderFactory { get; set; }
+
+    /// <summary>
     ///     Whether rows of this type carry a <c>doc_type</c> discriminator.
     /// </summary>
     /// <remarks>

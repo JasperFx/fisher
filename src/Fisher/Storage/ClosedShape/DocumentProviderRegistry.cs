@@ -49,10 +49,59 @@ internal class DocumentProviderRegistry : IProviderGraph
     [UnconditionalSuppressMessage("Trimming", "IL2060:MakeGenericMethod",
         Justification = "Document hierarchies only; see the IL3050 justification.")]
     private object BuildSubClassProviderFor<T>(DocumentMapping mapping) where T : notnull
-        => typeof(DocumentProviderRegistry)
+    {
+        // Registered through AddSubClass<TSub>(), which knew the base type statically (fisher#386).
+        if (mapping.SubClasses.FirstOrDefault(x => x.DocumentType == typeof(T))?.ProviderFactory is { } factory)
+        {
+            return factory(this, mapping);
+        }
+
+        AssertReflectionIsAvailable(typeof(T),
+            $"it was registered as a sub-class of '{mapping.DocumentType.Name}' by Type (AddSubClass(Type) " +
+            $"or AddSubClassHierarchy()). Register it with Schema.For<{mapping.DocumentType.Name}>()" +
+            $".AddSubClass<{typeof(T).Name}>() instead");
+
+        return typeof(DocumentProviderRegistry)
             .GetMethod(nameof(BuildTypedSubClassProvider), BindingFlags.NonPublic | BindingFlags.Instance)!
             .MakeGenericMethod(typeof(T), mapping.DocumentType, mapping.StoredIdType)
             .Invoke(this, [mapping])!;
+    }
+
+    /// <summary>
+    ///     A sub-class's provider with every type closed statically, for <c>AddSubClass&lt;TSub&gt;()</c>.
+    /// </summary>
+    /// <remarks>
+    ///     The stored identity type is always one of the four canonical ones (a wrapper stores its inner
+    ///     value), so this switch is complete.
+    /// </remarks>
+    internal object BuildSubClassProvider<TSub, TBase>(DocumentMapping mapping)
+        where TSub : notnull, TBase
+        where TBase : notnull
+    {
+        var idType = mapping.StoredIdType;
+
+        if (idType == typeof(Guid)) return BuildTypedSubClassProvider<TSub, TBase, Guid>(mapping);
+        if (idType == typeof(string)) return BuildTypedSubClassProvider<TSub, TBase, string>(mapping);
+        if (idType == typeof(int)) return BuildTypedSubClassProvider<TSub, TBase, int>(mapping);
+        if (idType == typeof(long)) return BuildTypedSubClassProvider<TSub, TBase, long>(mapping);
+
+        throw new NotSupportedException(
+            $"Fisher cannot store '{typeof(TSub).FullName}' by a stored identity of type '{idType.Name}'.");
+    }
+
+    /// <summary>
+    ///     Refuse a reflective path by name in a Native AOT image, where it would otherwise fail with
+    ///     "missing native code" and nothing about the configuration that would avoid it.
+    /// </summary>
+    private static void AssertReflectionIsAvailable(Type documentType, string reason)
+    {
+        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported)
+        {
+            throw new NotSupportedException(
+                $"Fisher cannot build storage for '{documentType.FullName}' in a Native AOT image, because " +
+                $"{reason}. See fisher#386.");
+        }
+    }
 
     private DocumentProvider<TDoc> BuildTypedSubClassProvider<TDoc, TBase, TId>(DocumentMapping mapping)
         where TDoc : notnull, TBase
@@ -146,7 +195,75 @@ internal class DocumentProviderRegistry : IProviderGraph
             }
         }
 
+        // A strong-typed id named through Identity<TValue>(...) or IdStrategy<TId>(...) (fisher#386).
+        if (mapping.ProviderFactory?.Invoke(this, mapping) is { } provider)
+        {
+            return provider;
+        }
+
+        AssertReflectionIsAvailable(typeof(T),
+            $"its '{idType.Name}' identity is a strong-typed wrapper Fisher found by convention. Name it " +
+            $"with Schema.For<{typeof(T).Name}>().Identity(x => x.{mapping.IdMember.Name}) so its type is " +
+            "known without reflection");
+
         return BuildReflectively(mapping);
+    }
+
+    /// <summary>
+    ///     A strong-typed id document's provider with the document, the wrapper and its inner type all
+    ///     closed statically, for <c>Identity&lt;TValue&gt;(...)</c> and <c>IdStrategy&lt;TId&gt;(...)</c>.
+    /// </summary>
+    /// <remarks>
+    ///     The same strategies <see cref="BuildStrongTyped" /> builds reflectively, with the inner type
+    ///     switched over instead of reflected on: version-7 Guid, the document type's Hi-Lo sequence, or
+    ///     no generator for a string. A caller-supplied strategy wins, as it does on the other paths.
+    ///     Null when the mapping's identity is no longer <typeparamref name="TId" />, so the caller falls
+    ///     through rather than building storage for a member that is not the identity any more.
+    /// </remarks>
+    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification =
+            "StrongTypedIdentification compiles accessors over the identity member and the wrapper's value property; the application's source-generated JsonSerializerContext keeps both. Measured in a native image (fisher#386).")]
+    internal object? BuildStrongTypedProvider<TDoc, TId>(DocumentMapping mapping)
+        where TDoc : notnull
+        where TId : notnull
+    {
+        if (mapping.IdType != typeof(TId) || !StrongTypedId.TryResolve(typeof(TId), out var info))
+        {
+            return null;
+        }
+
+        if (mapping.IdStrategy is IIdentification<TDoc, TId> custom)
+        {
+            return BuildTypedProvider(mapping, custom);
+        }
+
+        var inner = info.SimpleType;
+        var member = mapping.IdMember;
+
+        if (inner == typeof(Guid))
+        {
+            return BuildTypedProvider(mapping, new StrongTypedIdentification<TDoc, TId, Guid>(info, member,
+                _ => Guid.CreateVersion7()));
+        }
+
+        if (inner == typeof(string))
+        {
+            return BuildTypedProvider(mapping, new StrongTypedIdentification<TDoc, TId, string>(info, member, null));
+        }
+
+        if (inner == typeof(int))
+        {
+            return BuildTypedProvider(mapping, new StrongTypedIdentification<TDoc, TId, int>(info, member,
+                s => s.SequenceFor(typeof(TDoc)).NextInt()));
+        }
+
+        if (inner == typeof(long))
+        {
+            return BuildTypedProvider(mapping, new StrongTypedIdentification<TDoc, TId, long>(info, member,
+                s => s.SequenceFor(typeof(TDoc)).NextLong()));
+        }
+
+        return null;
     }
 
     /// <summary>

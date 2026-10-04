@@ -1276,8 +1276,23 @@ CoreCLR and throws `missing native code` in a Native AOT image, on the first wri
   exist. So ILC printed only an assembly-level IL2104/IL3053 rollup and never named the method.
   The suppressions are now per method, each on a path it describes accurately. Do not reintroduce
   a class-wide one.
-- **Still reflective, and not AOT safe:** strong-typed id wrappers (`BuildReflectively`) and
-  document hierarchies (`BuildSubClassProviderFor`). Their types are runtime values here; fisher#386.
+- **Strong-typed ids and hierarchies need their types named in configuration** (fisher#386). The
+  registry sees a wrapper or a sub-class's base only as a runtime value, so the generic configuration
+  call records a factory while the type is still a generic argument: `Identity<TValue>(...)` /
+  `IdStrategy<TId>(...)` set `DocumentMapping.ProviderFactory`, `AddSubClass<TSub>()` sets
+  `SubClassMapping.ProviderFactory`, and `RegisterValueType<T>()` records a statically closed
+  converter. The registry and the converter factory use those first.
+  - **The Type-based paths stay reflective**: a wrapper found by convention, `AddSubClass(Type)`,
+    `AddSubClassHierarchy()` and `RegisterValueType(Type)`. Under the JIT they work as before. Under
+    Native AOT they throw `NotSupportedException` naming the generic call to use, instead of
+    "missing native code".
+  - ⚠️ **`ValueTypeDelegates` is a local workaround for jasperfx#942.** JasperFx's
+    `ValueTypeInfo.CreateWrapper`/`UnWrapper` compile with FastExpressionCompiler unconditionally,
+    which throws in a native image. The workaround falls back to reflection invoke there and is
+    exactly the JasperFx call under the JIT. Delete it when #942 ships.
+  - `strong_typed_identities_declared` re-runs every strong-typed id test through the declared path,
+    and asserts the factory was captured. Otherwise a capture that silently stopped would leave those
+    tests passing on the reflective path.
 - **The application supplies a source-generated `JsonSerializerContext`** through
   `ConfigureSerialization(configure: x => x.TypeInfoResolver = ...)`. Native AOT disables
   reflection-based System.Text.Json, so this is required anyway. Measured: it also keeps each
@@ -1288,7 +1303,9 @@ CoreCLR and throws `missing native code` in a Native AOT image, on the first wri
   that hint the message sends the reader looking for an `Id` they can see is there.
 - **`smoke/aot-consumer` is the only guard**, published natively and run by the `package` CI job.
   Nothing under CoreCLR can see an AOT failure. Against the old registry it fails with exactly
-  #384's stage-2 error.
+  #384's stage-2 error. Since #386 it covers strong-typed ids (Guid- and int-backed, one registered)
+  and a hierarchy too. The user-facing setup is `docs/configuration/native-aot.md`, whose sample is
+  the same configuration.
 
 ### Document write SQL
 
