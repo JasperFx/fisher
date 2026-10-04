@@ -119,6 +119,15 @@ the write transaction, so no lost update); what differs is that a loser gets
 `FisherSession` a session-scoped transaction, which `SaveChangesAsync` would then have to join rather
 than open.
 
+**A missing stream row fails a non-zero expected version, and does not get recreated** (fisher#378).
+`AppendPlanner.PlanStream` used to treat "no row" as "create it" and drop the expected version.
+So a `FetchForWriting` handle taken at version 2 could commit after a tombstone and recreate the
+stream with only the late events. Its aggregate then started mid-life, which is how CritterWatch's
+evicted services came back without a registration event. Polecat reads a missing row as version 0
+and refuses, and so does Fisher now. **Zero is not refused**: it is what `FetchForWriting` records
+for a stream that did not exist yet, so "start it if absent" still works.
+`writing_to_aggregates.an_expected_version_of_zero_still_creates_a_missing_stream` pins that side.
+
 **Losing the *file's* write lock is a different failure from losing a version guard, and it now has
 the Critter Stack's vocabulary** (fisher#306). Contention is still retried by
 `StoreOptions.ResiliencePipeline` and still recorded on the span and on `fisher.write_lock.retries`;

@@ -246,6 +246,22 @@ internal sealed class AppendPlanner
 
         if (currentVersion is null)
         {
+            // An expected version above zero is a claim that the stream exists at that version, and a
+            // missing row contradicts it as plainly as a different version would (fisher#378). This
+            // used to be dropped: FetchForWriting at version 2, a tombstone committed in between, and
+            // the append then recreated the stream holding only the late events, so its aggregate
+            // started mid-life with nothing to say why. Polecat compares a missing row as version 0
+            // and refuses; so does this. Zero is still "not created yet", which is what FetchForWriting
+            // records for a stream that did not exist when it was fetched.
+            if (stream.ExpectedVersionOnServer is { } expectedOnMissing and not 0)
+            {
+                throw new EventStreamUnexpectedMaxEventIdException(
+                    stream.Key is not null ? stream.Key : stream.Id,
+                    stream.AggregateType,
+                    expectedOnMissing,
+                    0);
+            }
+
             // Appending to a stream that does not exist yet creates it, matching Marten and Polecat:
             // Append is not an assertion that the stream is already there.
             AssignVersions(stream, 0);
