@@ -12,10 +12,21 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2567 tests green on net9.0 and net10.0** — 2500 in `Fisher.Tests`, 36 in
+**2568 tests green on net9.0 and net10.0** — 2501 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 669 of
 them are shared cross-store compliance tests — 509 event sourcing and 160 document.
-On JasperFx **2.79.2** / Weasel **9.36.0**.
+On JasperFx **2.79.2** / Weasel **9.40.0**.
+
+## The Weasel 9.40.0 bump — a builder's parameter count
+
+**From 9.36.0, spanning 9.37–9.39, and green on the bump.** The one change Fisher acts on is weasel#675:
+`ICommandBuilder.ParameterCount`, default-implemented as `UnknownParameterCount` (-1) so that a builder
+compiled against an older Weasel still loads (weasel#682). `LiteralRenderingCommandBuilder` renders
+values as literals rather than binding them, so its honest answer is a definite 0. Inheriting the
+default would have sent a caller sizing a value list down a conservative path for no reason
+(fisher#389). Also in the span, and inert for Fisher: creation scripts in dependency order with guarded
+foreign keys (weasel#677/#681), a `TableDelta` for a table that does not exist answering instead of
+throwing (weasel#658), and the migration lock released when an apply fails (weasel#659).
 
 ## The JasperFx 2.79.2 bump — the generated evolver survives Native AOT
 
