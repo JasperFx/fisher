@@ -28,7 +28,7 @@ public class native_aot_event_paths
 
     /// <remarks>
     ///     A strong-typed wrapper still works under the JIT through the reflective fallback. In a native
-    ///     image it is refused by name (jasperfx#942), which this process cannot exercise.
+    ///     image it is refused by name (jasperfx#950), which this process cannot exercise.
     /// </remarks>
     [Fact]
     public void a_strong_typed_identity_still_works_under_the_jit()

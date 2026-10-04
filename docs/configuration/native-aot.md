@@ -80,9 +80,10 @@ aggregate's `Apply`/`Create` dispatch is source-generated, so nothing about it n
 project that references Fisher as a package gets the generator with it.
 
 An aggregate whose identity is a **strong-typed id** does not work in a native image yet. JasperFx
-compiles the wrapper's accessors with FastExpressionCompiler, which throws there
-([jasperfx#942](https://github.com/JasperFx/jasperfx/issues/942)). Fisher refuses such an aggregate by
+compiles a wrapper-keyed aggregate's identity sources with FastExpressionCompiler, which throws there
+([jasperfx#950](https://github.com/JasperFx/jasperfx/issues/950)). Fisher refuses such an aggregate by
 name rather than failing inside JasperFx. Key it on a Guid, string, `int` or `long` until that ships.
+A strong-typed *document* id works, declared as described above.
 
 ## Async projections and the daemon
 

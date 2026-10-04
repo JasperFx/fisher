@@ -142,6 +142,27 @@ try
         Expect(snapshot is { Port: "Tromso", Legs: 3 }, "the inline snapshot was written and reloads");
     }
 
+    // ---- a strong-typed aggregate id is refused by name (fisher#423) ----
+
+    // JasperFx 2.80.0 fixed ValueTypeInfo's wrappers (jasperfx#942), which is what the strong-typed
+    // document ids above need. Its single-stream projection base still compiles a wrapper-keyed
+    // aggregate's identity sources with FastExpressionCompiler (jasperfx#950), so Fisher refuses the
+    // aggregate by name rather than letting it fail inside JasperFx.
+    try
+    {
+        await using var refused = DocumentStore.For(options =>
+        {
+            options.Connection($"Data Source={path}");
+            options.ConfigureSerialization(configure: json => json.TypeInfoResolver = SmokeJson.Default);
+            options.Projections.Snapshot<Pod>(SnapshotLifecycle.Inline);
+        });
+
+        throw new Exception("Expected: a strong-typed aggregate id is refused in a native image");
+    }
+    catch (NotSupportedException e) when (e.Message.Contains("jasperfx#950"))
+    {
+    }
+
     // ---- the async daemon (fisher#412) ----
 
     var ledger = Guid.NewGuid();
@@ -348,6 +369,18 @@ public class Voyage
     }
 }
 
+public readonly record struct PodId(Guid Value);
+
+public record PeaAdded;
+
+public class Pod
+{
+    public PodId Id { get; set; }
+    public int Peas { get; set; }
+
+    public void Apply(PeaAdded _) => Peas++;
+}
+
 public record Deposited(decimal Amount);
 
 public record Withdrawn(decimal Amount);
@@ -406,6 +439,8 @@ public class Note
     public string Body { get; set; } = "";
 }
 
+[JsonSerializable(typeof(Pod))]
+[JsonSerializable(typeof(PeaAdded))]
 [JsonSerializable(typeof(Deposited))]
 [JsonSerializable(typeof(Withdrawn))]
 [JsonSerializable(typeof(Ledger))]

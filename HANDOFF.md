@@ -12,10 +12,10 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2580 tests green on net9.0 and net10.0** — 2513 in `Fisher.Tests`, 36 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 669 of
-them are shared cross-store compliance tests — 509 event sourcing and 160 document.
-On JasperFx **2.79.2** / Weasel **9.40.0**.
+**2589 tests green on net9.0 and net10.0** — 2522 in `Fisher.Tests`, 36 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 678 of
+them are shared cross-store compliance tests — 509 event sourcing and 169 document.
+On JasperFx **2.80.1** / Weasel **9.40.0**.
 
 ## The Weasel 9.40.0 bump — a builder's parameter count
 
@@ -27,6 +27,26 @@ default would have sent a caller sizing a value list down a conservative path fo
 (fisher#389). Also in the span, and inert for Fisher: creation scripts in dependency order with guarded
 foreign keys (weasel#677/#681), a `TableDelta` for a table that does not exist answering instead of
 throwing (weasel#658), and the migration lock released when an apply fails (weasel#659).
+
+## The JasperFx 2.80.1 bump — jasperfx#942's workaround goes, and five skipped facts run
+
+**No compile break and no new suite; two document suites widened, by nine facts.** fisher#423.
+
+- **jasperfx#942 — `ValueTypeInfo.CreateWrapper`/`UnWrapper` fall back to reflection in a native
+  image.** Fisher's local copy of that fallback is deleted. `smoke/aot-consumer` shows it is the
+  upstream one now doing the work: pinned back to 2.79.2 with the copy deleted, the native run fails at
+  `ValueTypeInfo.CreateWrapper`.
+- ⚠️ **A strong-typed *aggregate* id still cannot run natively** — jasperfx#950, filed from this bump.
+  `JasperFxSingleStreamProjectionBase`'s identity sources `CompileFast()` unconditionally. Fisher keeps
+  refusing it by name, now naming #950, and the smoke asserts the refusal. The one open item of #412.
+- ⚠️ **jasperfx#943 — five `GuidOptimisticConcurrencyCompliance` facts over a mapped version member
+  were SKIPPED on the bump, not red.** They gate on `SupportsMappedConcurrencyMember`, default false.
+  Fisher has the route (fisher#245), so the fixture now replays `MappedVersionMembers` and opts in; all
+  five pass, and dropping the replay fails four.
+- **jasperfx#944 — four `DocumentSearchCompliance` hierarchy facts**, green on the bump alone: Fisher's
+  search has gone through `Query<T>()`'s `doc_type` filter since fisher#285.
+- jasperfx#948 (2.80.1) — `ResilientEventLoader` really wraps a load failure in `EventLoaderException`
+  now. Nothing in Fisher matches on that type, and the dead-letter and skip suites are unchanged.
 
 ## The JasperFx 2.79.2 bump — the generated evolver survives Native AOT
 
@@ -845,8 +865,8 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.79.2 ships 59 suites; Fisher enrolls **58 of them, 669 tests**.
-Fisher passes **669 of them, across all
+`JasperFx.Events.ComplianceTests` 2.80.1 ships 59 suites; Fisher enrolls **58 of them, 678 tests**.
+Fisher passes **678 of them, across all
 58 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
@@ -995,7 +1015,7 @@ naming.
 **Green on all fifty-eight is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 58 suites, 669 tests
+### Green — 58 suites, 678 tests
 
 Event sourcing — 46 suites, 509 tests:
 
@@ -1048,14 +1068,14 @@ Event sourcing — 46 suites, 509 tests:
 | `EventProjectionRegistrationCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 12 suites, 160 tests, through `FisherDocumentComplianceFixture`:
+Documents — 12 suites, 169 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
 | `DocumentStoreDiagnosticsCompliance` | 52 |
 | `DocumentQueryCompliance` | 17 |
 | `DocumentConjoinedTenancyCompliance` | 10 |
-| `DocumentSearchCompliance` | 11 |
+| `DocumentSearchCompliance` | 15 |
 | `DocumentLoadAndStoreCompliance` | 15 |
 | `DocumentCommitListenerCompliance` | 10 |
 | `DocumentDeleteCompliance` | 10 |
@@ -1063,7 +1083,7 @@ Documents — 12 suites, 160 tests, through `FisherDocumentComplianceFixture`:
 | `PendingStreamActionsCompliance` | 9 |
 | `DocumentSessionCompliance` | 7 |
 | `DocumentSessionEventsCompliance` | 5 |
-| `GuidOptimisticConcurrencyCompliance` | 5 |
+| `GuidOptimisticConcurrencyCompliance` | 10 |
 
 ### Nothing in the fixture throws any more
 

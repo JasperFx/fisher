@@ -1308,10 +1308,11 @@ CoreCLR and throws `missing native code` in a Native AOT image, on the first wri
     `AddSubClassHierarchy()` and `RegisterValueType(Type)`. Under the JIT they work as before. Under
     Native AOT they throw `NotSupportedException` naming the generic call to use, instead of
     "missing native code".
-  - ⚠️ **`ValueTypeDelegates` is a local workaround for jasperfx#942.** JasperFx's
-    `ValueTypeInfo.CreateWrapper`/`UnWrapper` compile with FastExpressionCompiler unconditionally,
-    which throws in a native image. The workaround falls back to reflection invoke there and is
-    exactly the JasperFx call under the JIT. Delete it when #942 ships.
+  - **`ValueTypeDelegates` is gone** (fisher#423). It was a local copy of the reflection fallback
+    jasperfx#942 put into `ValueTypeInfo.CreateWrapper`/`UnWrapper` in JasperFx 2.80.0, and
+    `StrongTypedIdentification` now calls those directly. The smoke is what shows it: pinned back to
+    JasperFx 2.79.2 with the workaround deleted, the native run fails at `ValueTypeInfo.CreateWrapper`
+    from `StrongTypedIdentification`'s constructor, and on 2.80.1 it passes. Do not reintroduce it.
   - `strong_typed_identities_declared` re-runs every strong-typed id test through the declared path,
     and asserts the factory was captured. Otherwise a capture that silently stopped would leave those
     tests passing on the reflective path.
@@ -1351,11 +1352,20 @@ reloads an inline `Snapshot<T>`.
   `Event<>` closing works natively only because every event type is a reference type, served by
   Native AOT's shared canonical instantiation. Its method-level suppression says so, and a
   value-type event would not be covered.
-- ⚠️ **A strong-typed aggregate id cannot work natively until jasperfx#942 ships.** Closing the
-  projection statically does not help: `JasperFxSingleStreamProjectionBase`'s constructor compiles the
-  wrapper's accessors with FastExpressionCompiler, which throws there. That was measured, with a
-  `Snapshot<T, TId>` overload built and then removed because it could not achieve its purpose. The
-  factory refuses by name, naming #942. It is the one item of fisher#412 still open.
+- ⚠️ **A strong-typed aggregate id cannot work natively until jasperfx#950 ships.** Closing the
+  projection statically does not help: `JasperFxSingleStreamProjectionBase`'s constructor builds its
+  identity sources with `IEvent.CreateAggregateIdentitySource<TId>()` and
+  `StreamAction.CreateAggregateIdentitySource<TId>()`, which `CompileFast()` unconditionally for any
+  wrapper. That was measured twice, with a `Snapshot<T, TId>` overload built and then removed both
+  times: once against #942 (#398), and again on JasperFx 2.80.1 after #942 shipped (fisher#423).
+  #942 fixed `ValueTypeInfo`, which is what strong-typed *document* ids needed, and not these two.
+  The factory refuses by name, naming #950, and the smoke asserts that refusal natively. It is the one
+  item of fisher#412 still open.
+  - **The static-closing half is built and parked** on the local branch
+    `wip-412-strong-typed-aggregates`: `Projections.Snapshot<T, TId>()`, a composite twin and
+    `Projections.LiveStreamAggregation<T, TId>()`, recording a factory on the event graph that live
+    aggregation, `Snapshot<T>` and composites all consult. When #950 ships it is that branch plus
+    removing the refusal.
 - **The smoke consumer references `JasperFx.Events.SourceGenerator` itself**, because a project
   reference does not carry the analyzer the package bundles. Its version is kept in step by hand.
 
@@ -1409,7 +1419,7 @@ compares a `DateOnly`, and runs both projection step-through methods — all nat
   instead. Do not inline it back. The remaining `MakeGenericMethod` is inherent (the interface leaves
   `TState` unconstrained, or names it only as a `Type`). It carries a method-level suppression, and the
   smoke runs it natively.
-- **What #412 did not touch:** strong-typed aggregate ids (jasperfx#942, above), and the IL warnings
+- **What #412 did not touch:** strong-typed aggregate ids (jasperfx#950, above), and the IL warnings
   outside the five paths the issue named. `dotnet build` still lists about twenty against Fisher
   (`MessagePublishing`, `AdvancedSqlResultReader`, `SecondaryStoreProxy`, `EnumMember` and others).
   ILC reports some of them as reachable from the smoke, and none of them failed when it ran.
@@ -3079,6 +3089,15 @@ whether the marker is itself the opt-in or merely supplies the member to guard o
 *is* the opt-in — `DocumentMetadata`'s conventions turn it on, as Marten's `VersionedPolicy` does — so
 dropping the loop leaves all five facts passing and nothing announcing that the config was ignored.
 Verified by dropping it.
+
+⚠️ **The mapped half of the suite (jasperfx#943, JasperFx 2.80.0) skips unless the fixture opts in, and
+Fisher's did not until fisher#423.** Five facts reach the guard through a member the configuration names
+(`MapVersionTo<T>(memberName)`) rather than through `IVersioned`, gated on
+`SupportsMappedConcurrencyMember`, which defaults false. So the bump left them *skipped*, not red, over a
+route Fisher had supported since fisher#245 — the silent direction. The fixture now replays
+`MappedVersionMembers` onto `MappingFor(type).Metadata.Version.MapTo(member)`, the same `MetadataColumn`
+the DSL reaches, and flips the flag. Unlike the marker replay above, **this one is load-bearing on
+Fisher**: dropping it fails 4 of the 5 facts. Count skipped facts on a compliance bump, not only red ones.
 
 **`UpdateExpectedVersion<T>(T, Guid)` is still absent**, where Marten has it as the Guid counterpart of
 `UpdateRevision`. Not needed for the above — seeding off the document covers the ordinary flow — and

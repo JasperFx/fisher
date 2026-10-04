@@ -53,9 +53,10 @@ internal sealed class StrongTypedIdentification<TDoc, TId, TInner> : IIdentifica
     {
         _getter = LambdaBuilder.Getter<TDoc, TId>(idMember)!;
         _setter = TrySetter(idMember);
-        // Not info.CreateWrapper / UnWrapper directly: those throw in a Native AOT image (jasperfx#942).
-        _wrap = ValueTypeDelegates.WrapperFor<TId, TInner>(info);
-        _unwrap = ValueTypeDelegates.UnwrapperFor<TId, TInner>(info);
+        // Safe in a Native AOT image since JasperFx 2.80.0, which falls back to reflection where it
+        // cannot compile (jasperfx#942). Fisher carried that fallback locally until then (fisher#423).
+        _wrap = info.CreateWrapper<TId, TInner>();
+        _unwrap = info.UnWrapper<TId, TInner>();
         _generate = generate;
     }
 
