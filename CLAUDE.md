@@ -4728,6 +4728,14 @@ closed the second half and fisher#40 the first. **The stream identity type wins 
 coincide** — a string id on a string-identity store is read as the stream key — because which reading
 applies must not depend on whichever aggregate types happen to declare a key.
 `FetchForWritingByNaturalKey` / `FetchLatestByNaturalKey` are the unambiguous spellings.
+⚠️ **The strong-typed half was claimed here before it was true** (fisher#397). fisher#14 made a
+wrapper work as an aggregate's *identity*, but nothing unwrapped one passed as the *stream id*, so
+`FetchForWriting<Pod, PodId>` threw `NotImplementedException` saying strong-typed ids were "not
+implemented yet". A wrapper whose inner type is the configured stream identity type is now unwrapped
+and dispatched. A wrapper that is exactly the aggregate's declared natural-key type is read as the
+natural key first, because naming the key's own type is the unambiguous signal. A wrapper around the
+other identity type is refused with `NotSupportedException`, because converting a Guid to text (or
+the reverse) would address a stream the caller did not name.
 
 One Fisher-specific hazard in this area: pending streams are tracked in a **dictionary keyed by
 identity**, where Polecat uses a list. `FetchForWriting` must therefore reuse an already-tracked
