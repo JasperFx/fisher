@@ -140,6 +140,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
 
         var tenantId = DocumentQueryOptions.NormalizeTenantId(options.TenantId);
         var database = DatabaseForDiagnostics(tenantId);
+        tenantId = tenantId is null ? null : Tenancy.TenantIdFor(tenantId); // fisher#393
 
         await using var connection = await database.OpenConnectionAsync(token).ConfigureAwait(false);
 
@@ -338,6 +339,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
 
         tenantId = DocumentQueryOptions.NormalizeTenantId(tenantId);
         var database = DatabaseForDiagnostics(tenantId);
+        tenantId = tenantId is null ? null : Tenancy.TenantIdFor(tenantId); // fisher#393
 
         await using var connection = await database.OpenConnectionAsync(token).ConfigureAwait(false);
 
@@ -468,6 +470,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     {
         tenantId = DocumentQueryOptions.NormalizeTenantId(tenantId);
         var database = DatabaseForDiagnostics(tenantId);
+        tenantId = tenantId is null ? null : Tenancy.TenantIdFor(tenantId); // fisher#393
 
         // Before the transaction, because it is a migration on its own connection — the enlisted
         // session asserts rather than creating for exactly that reason, and would otherwise refuse a

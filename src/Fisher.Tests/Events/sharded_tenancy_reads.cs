@@ -65,6 +65,8 @@ public class sharded_tenancy_reads : IAsyncLifetime
                 .AddTenant("acme", _shardOne.ConnectionString)
                 .AddTenant("globex", _shardOne.ConnectionString)
                 .AddTenant("initech", _shardTwo.ConnectionString));
+
+            options.Schema.For<ShardedNote>().MultiTenanted();
         });
 
         await _store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
@@ -198,6 +200,63 @@ public class sharded_tenancy_reads : IAsyncLifetime
         streams.Select(x => x.StreamId).ShouldContain(_acme.ToString());
         streams.Select(x => x.StreamId).ShouldNotContain(_globex.ToString());
         streams.Select(x => x.StreamId).ShouldNotContain(_initech.ToString());
+    }
+
+    /// <summary>
+    ///     A tenant id's casing selects the configured tenant all the way down, not only the file
+    ///     (fisher#393).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The lookup was case-insensitive, so <c>"ACME"</c> reached acme's file, but the rows were
+    ///         stamped <c>tenant_id = 'ACME'</c> and every tenant predicate is case-sensitive. So a session
+    ///         opened as <c>"acme"</c> saw neither the document nor the stream: a third tenant hiding in
+    ///         acme's file, visible to nobody using the configured spelling. Ruled: normalise to the
+    ///         configured spelling.
+    ///     </para>
+    ///     <para>
+    ///         Checked on the stored column as well as through a read, because a fix that normalised only
+    ///         the reads would pass the read half and leave the rows written wrong.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_differently_cased_tenant_id_is_the_configured_tenant()
+    {
+        var note = Guid.NewGuid();
+        var stream = Guid.NewGuid();
+
+        await using (var session = _store.LightweightSession("ACME"))
+        {
+            session.Store(new ShardedNote { Id = note, Text = "shouted" });
+            session.Events.StartStream<Quest>(stream, new QuestStarted("Chart the Wash"));
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using (var query = _store.LightweightSession("acme"))
+        {
+            (await query.LoadAsync<ShardedNote>(note, Token)).ShouldNotBeNull();
+            (await query.Events.FetchStreamStateAsync(stream, Token)).ShouldNotBeNull();
+        }
+
+        await using (var connection = await _store.Tenancy.DatabaseFor("acme").OpenConnectionAsync(Token))
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "select tenant_id from fi_streams where id = @id";
+            command.Parameters.AddWithValue("@id", stream.ToString());
+            (await command.ExecuteScalarAsync(Token)).ShouldBe("acme");
+        }
+
+        // And the explorer, asked in either casing, attributes it to the configured spelling.
+        (await TheExplorer.GetRecentStreamsAsync(100, "ACME", Token))
+            .Single(x => x.StreamId == stream.ToString()).TenantId.ShouldBe("acme");
+    }
+
+    [Fact]
+    public void the_configured_spelling_is_reported_for_any_casing()
+    {
+        _store.Tenancy.TenantIdFor("ACME").ShouldBe("acme");
+        _store.Tenancy.TenantIdFor("Globex").ShouldBe("globex");
+        _store.Tenancy.TenantIdFor("not-configured").ShouldBe("not-configured");
     }
 
     /// <summary>

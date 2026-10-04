@@ -179,14 +179,19 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     {
     }
 
-    public FisherSession(StoreOptions options, FisherDatabase database, SessionOptions sessionOptions)
+    /// <param name="tenantId">
+    ///     The tenant id as the tenancy spells it (fisher#393), when it differs from what the caller passed
+    ///     in <paramref name="sessionOptions" />. The caller's options object is left untouched.
+    /// </param>
+    public FisherSession(StoreOptions options, FisherDatabase database, SessionOptions sessionOptions,
+        string? tenantId = null)
     {
         sessionOptions.AssertValid();
 
         Options = options;
         FisherDatabase = database;
         SessionOptions = sessionOptions;
-        TenantId = sessionOptions.TenantId;
+        TenantId = tenantId ?? sessionOptions.TenantId;
 
         _operations = [];
         _operationsLock = new System.Threading.Lock();
