@@ -168,6 +168,19 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
                 options.Schema.MappingFor(type).UseOptimisticConcurrency = true;
             }
 
+            // jasperfx#943. The mapped route to the same guard: a member the configuration names through
+            // Metadata(m => m.Version.MapTo(...)), resolved here by name onto the same MetadataColumn the
+            // DSL reaches. Fisher has carried that route since fisher#245; this is the replay
+            // SupportsMappedConcurrencyMember requires, and the flag below is what turns the facts on.
+            foreach (var declaration in config.MappedVersionMembers)
+            {
+                var member = declaration.DocumentType.GetProperty(declaration.MemberName)
+                    ?? throw new InvalidOperationException(
+                        $"{declaration.DocumentType.Name} has no property named {declaration.MemberName}.");
+
+                options.Schema.MappingFor(declaration.DocumentType).Metadata.Version.MapTo(member);
+            }
+
             // No suite populates this one — jasperfx#819 §2 was written, run against Fisher, and
             // withdrawn, because the declared route has no document member to name a revision on or
             // read one back off. Replayed anyway: it costs nothing, and it is the half of the
@@ -231,6 +244,17 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
     ///     pair at configuration time — but the store supports both, and each suite names its own type.
     /// </remarks>
     public override bool SupportsOptimisticConcurrency => true;
+
+    /// <summary>
+    ///     The version guard reached through a member named by <c>Metadata(m =&gt; m.Version.MapTo(...))</c>
+    ///     rather than through <c>IVersioned</c> (fisher#245, jasperfx#943).
+    /// </summary>
+    /// <remarks>
+    ///     Both routes land on the same <c>MetadataColumn</c>, and <c>MappedVersionFor</c> reads one member
+    ///     for both, which is why fisher#245 asserted every cross-session fact for both routes. Requires the
+    ///     <c>MappedVersionMembers</c> replay above.
+    /// </remarks>
+    public override bool SupportsMappedConcurrencyMember => true;
 
     /// <summary>
     ///     Vector search — <c>IDocumentSearchOperations.VectorSearchWithScoresAsync</c>, reached

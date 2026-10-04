@@ -68,7 +68,7 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     ///     </para>
     ///     <para>
     ///         Native AOT safe for the four canonical identity types (fisher#398). An aggregate keyed on
-    ///         a strong-typed id is refused by name in a native image until jasperfx#942 ships.
+    ///         a strong-typed id is refused by name in a native image until jasperfx#950 ships.
     ///     </para>
     /// </remarks>
     /// <typeparam name="T">
