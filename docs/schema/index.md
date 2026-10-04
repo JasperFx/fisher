@@ -56,12 +56,23 @@ opts.AutoCreateSchemaObjects = AutoCreate.CreateOrUpdate;
 
 | Value | Behaviour |
 | :--- | :--- |
-| `CreateOrUpdate` | Create what is missing, migrate what exists. The default. |
-| `CreateOnly` | Create what is missing; never alter. |
+| `CreateOrUpdate` | Create what is missing, and make what exists match the configuration, **including dropping** columns and indexes it no longer declares. The default. |
+| `CreateOnly` | Create what is missing. A migration that would change an existing object fails instead. |
 | `All` | Drop and recreate. |
-| `None` | Never touch the schema. |
+| `None` | Never change the schema implicitly. An explicit apply still migrates. |
+
+::: warning
+**`CreateOrUpdate` drops.** Removing a `Duplicate(...)`, `Index(...)` or metadata column from the
+configuration removes it from the database on the next migration. Use `CreateOnly` where a deployment
+must never lose a schema object. It refuses the migration rather than applying it.
+:::
 
 ::: tip
+**`None` stops implicit migrations, not explicit ones.** The first-use creation of a document table or
+of the event tables checks and throws under `None`. But `ApplyAllConfiguredChangesToDatabaseAsync()`,
+`db-apply` and `resources setup` treat `None` as `CreateOrUpdate`, because calling them is the
+instruction to apply.
+
 `AutoCreate.None` **wins over** `ApplyAllDatabaseChangesOnStartup()`. The hosted service starts and
 does nothing, rather than the registration quietly overriding your policy.
 :::
