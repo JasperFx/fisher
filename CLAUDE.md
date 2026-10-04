@@ -1389,8 +1389,15 @@ reloads an inline `Snapshot<T>`.
   - **The declared id type is checked against the identity member**, because the source generator keys
     the dispatcher on the member's type and a mismatch would fail at the first event, far from the
     registration.
-  - ⚠️ **Live aggregation leaves a strong-typed `Id` at its default** — fisher#426, pre-existing and not
-    AOT-specific (it reproduces under the JIT on 2.80.1). The smoke asserts the folded state only.
+  - **Live aggregation stamps a strong-typed `Id` too, since fisher#426.** `AggregateIdentity.TrySetIdentity`
+    backfills the stream id onto an aggregate whose `Create` did not set it, and it assigned only a value
+    the member could hold as-is — a raw `Guid` is never a `KilnId`, so every wrapper was skipped and came
+    back at its default from live aggregation, `FetchForWriting`, `FetchManyForWriting` and `ProjectLatest`.
+    Not AOT-specific: it reproduced under the JIT. It now wraps through `StrongTypedId.Wrap`, and only a
+    wrapper around the stream id's own type, which is the rule `FetchForWriting<T, TId>` refuses by.
+    `strong_typed_aggregate_identity` fails 5 of 7 against the old backfill. The inline snapshot never had
+    the bug (it goes through the projection's identity setter), and that test pins it. The smoke asserts
+    the ids natively.
 - **The smoke consumer references `JasperFx.Events.SourceGenerator` itself**, because a project
   reference does not carry the analyzer the package bundles. Its version is kept in step by hand.
 

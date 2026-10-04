@@ -115,9 +115,19 @@ internal static class AggregateIdentity
     ///     settable identity member of a compatible type.
     /// </summary>
     /// <remarks>
-    ///     Live aggregation folds events without ever consulting the aggregate's own id, so an
-    ///     aggregate whose <c>Create</c> method does not set <c>Id</c> would otherwise come back with a
-    ///     default one. Marten and Polecat both backfill it here rather than in the aggregator.
+    ///     <para>
+    ///         Live aggregation folds events without ever consulting the aggregate's own id, so an
+    ///         aggregate whose <c>Create</c> method does not set <c>Id</c> would otherwise come back with a
+    ///         default one. Marten and Polecat both backfill it here rather than in the aggregator.
+    ///     </para>
+    ///     <para>
+    ///         <b>A strong-typed id is wrapped first</b> (fisher#426). The stream id is a raw Guid or
+    ///         string, which a wrapper member cannot hold as-is, so it used to be skipped and the aggregate
+    ///         came back with a default id from live aggregation, <c>FetchForWriting</c>,
+    ///         <c>FetchManyForWriting</c> and <c>ProjectLatest</c> alike. Only a wrapper around the stream
+    ///         id's own type is built, so a Guid is never turned into a string-backed id or the reverse —
+    ///         the rule <c>FetchForWriting&lt;T, TId&gt;</c> refuses by.
+    ///     </para>
     /// </remarks>
     internal static void TrySetIdentity(object aggregate, object streamId)
     {
@@ -125,14 +135,31 @@ internal static class AggregateIdentity
 
         switch (member)
         {
-            case PropertyInfo { CanWrite: true } property when property.PropertyType.IsInstanceOfType(streamId):
-                property.SetValue(aggregate, streamId);
+            case PropertyInfo { CanWrite: true } property when IdentityValueFor(property.PropertyType, streamId) is { } value:
+                property.SetValue(aggregate, value);
                 break;
 
-            case FieldInfo { IsInitOnly: false } field when field.FieldType.IsInstanceOfType(streamId):
-                field.SetValue(aggregate, streamId);
+            case FieldInfo { IsInitOnly: false } field when IdentityValueFor(field.FieldType, streamId) is { } value:
+                field.SetValue(aggregate, value);
                 break;
         }
+    }
+
+    /// <summary>
+    ///     The stream id as a value an identity member of <paramref name="memberType" /> can hold, or null.
+    /// </summary>
+    private static object? IdentityValueFor(Type memberType, object streamId)
+    {
+        if (memberType.IsInstanceOfType(streamId))
+        {
+            return streamId;
+        }
+
+        var target = Nullable.GetUnderlyingType(memberType) ?? memberType;
+
+        return StrongTypedId.TryResolve(target, out var wrapper) && wrapper.SimpleType == streamId.GetType()
+            ? StrongTypedId.Wrap(wrapper, streamId)
+            : null;
     }
 
     /// <summary>
