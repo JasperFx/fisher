@@ -67,6 +67,7 @@ const config: UserConfig<DefaultTheme.Config> = {
             { text: 'Resiliency Policies', link: '/configuration/retries' },
             { text: 'Multi-Tenancy', link: '/configuration/multitenancy' },
             { text: 'Multiple Stores', link: '/configuration/multiple-stores' },
+            { text: 'Native AOT', link: '/configuration/native-aot' },
           ]
         },
         {

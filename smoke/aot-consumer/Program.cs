@@ -18,6 +18,14 @@ services.AddFisher(options =>
     // source-generated context. That context also keeps each document's properties from being
     // trimmed, which is what Fisher's identity discovery needs.
     options.ConfigureSerialization(configure: json => json.TypeInfoResolver = SmokeJson.Default);
+
+    // fisher#386. A strong-typed id and a sub-class are runtime types to Fisher's storage registry,
+    // so a native image needs them named where they are still generic arguments: Identity(...) for
+    // the wrapper, AddSubClass<TSub>() for the hierarchy, RegisterValueType<T>() for the converter.
+    options.Schema.For<Alert>().Identity(x => x.Id);
+    options.Schema.For<Ticket>().Identity(x => x.Id);
+    options.RegisterValueType<TicketId>();
+    options.Schema.For<Animal>().AddSubClass<Dog>();
 });
 
 await using var provider = services.BuildServiceProvider();
@@ -55,6 +63,32 @@ try
 
         var hits = await query.Query<GuidDoc>().Where(x => x.Name == "two").ToListAsync();
         Expect(hits.Count == 1, "a LINQ query finds the document");
+    }
+
+    var alertId = new AlertId(Guid.NewGuid());
+    var ticket = new Ticket { Subject = "printer" };
+
+    await using (var session = store.LightweightSession())
+    {
+        session.Store(new Alert { Id = alertId, Text = "hot" });
+        session.Store(ticket);
+        session.Store(new Dog { Id = id, Name = "Rex", Breed = "lab" });
+        await session.SaveChangesAsync();
+
+        Expect(ticket.Id.Value > 0, "a Hi-Lo id was assigned through an int-backed wrapper");
+    }
+
+    await using (var query = store.QuerySession())
+    {
+        Expect((await query.LoadAsync<Alert, AlertId>(alertId))?.Text == "hot", "a Guid-backed wrapper round-trips");
+        Expect((await query.LoadAsync<Ticket, TicketId>(ticket.Id))?.Subject == "printer", "an int-backed wrapper round-trips");
+
+        var tickets = await query.Query<Ticket>().Where(x => x.Id == ticket.Id).ToListAsync();
+        Expect(tickets.Count == 1, "a LINQ query on a registered wrapper finds the document");
+
+        Expect(await query.LoadAsync<Animal>(id) is Dog { Breed: "lab" }, "a sub-class loads as itself through its base");
+        Expect((await query.LoadAsync<Dog>(id))?.Breed == "lab", "a sub-class loads directly");
+        Expect((await query.Query<Dog>().ToListAsync()).Count == 1, "a sub-class query narrows to its type");
     }
 
     Console.WriteLine("OK: documents written and read in a native image.");
@@ -108,7 +142,38 @@ public class LongDoc
     public string Name { get; set; } = "";
 }
 
+public readonly record struct AlertId(Guid Value);
+
+public class Alert
+{
+    public AlertId Id { get; set; }
+    public string Text { get; set; } = "";
+}
+
+public readonly record struct TicketId(int Value);
+
+public class Ticket
+{
+    public TicketId Id { get; set; }
+    public string Subject { get; set; } = "";
+}
+
+public class Animal
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = "";
+}
+
+public class Dog : Animal
+{
+    public string Breed { get; set; } = "";
+}
+
 [JsonSerializable(typeof(GuidDoc))]
+[JsonSerializable(typeof(Alert))]
+[JsonSerializable(typeof(Ticket))]
+[JsonSerializable(typeof(Animal))]
+[JsonSerializable(typeof(Dog))]
 [JsonSerializable(typeof(StringDoc))]
 [JsonSerializable(typeof(IntDoc))]
 [JsonSerializable(typeof(LongDoc))]

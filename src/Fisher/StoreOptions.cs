@@ -603,7 +603,19 @@ public class StoreOptions
     ///     store as an identity.
     /// </exception>
     public JasperFx.Core.Reflection.ValueTypeInfo RegisterValueType<TValueType>() where TValueType : notnull
-        => RegisterValueType(typeof(TValueType));
+    {
+        var info = RegisterValueType(typeof(TValueType));
+
+        // The converter closed statically while the wrapper type is still a generic argument, so a
+        // Native AOT image never has to close it by reflection (fisher#386). The Type overload cannot,
+        // and is reflective.
+        _valueTypeConverters[typeof(TValueType)] =
+            () => new Serialization.ValueTypeJsonConverter<TValueType>(info);
+
+        return info;
+    }
+
+    private readonly Dictionary<Type, Func<System.Text.Json.Serialization.JsonConverter>> _valueTypeConverters = new();
 
     /// <summary>
     ///     Register a strong-typed identifier by <see cref="Type" />. See
@@ -666,7 +678,7 @@ public class StoreOptions
                 + "serializer whose options no other code has serialized with.");
         }
 
-        stj.Options.Converters.Add(new Serialization.ValueTypeJsonConverterFactory(_valueTypes));
+        stj.Options.Converters.Add(new Serialization.ValueTypeJsonConverterFactory(_valueTypes, _valueTypeConverters));
     }
 
     internal void AssertValid()

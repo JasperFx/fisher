@@ -32,6 +32,18 @@ internal sealed class SubClassMapping
     internal string Alias { get; }
 
     /// <summary>
+    ///     Builds this sub-class's storage with its hierarchy's base type closed statically, when it was
+    ///     registered through <c>AddSubClass&lt;TSub&gt;()</c> (fisher#386).
+    /// </summary>
+    /// <remarks>
+    ///     The registry knows the sub-class from the caller and the base only as a runtime value, which
+    ///     reflection can close under CoreCLR and Native AOT cannot. The generic registration knows both.
+    ///     Null for a sub-class registered by <see cref="Type" />, including by
+    ///     <c>AddSubClassHierarchy()</c>.
+    /// </remarks>
+    internal Func<ClosedShape.DocumentProviderRegistry, DocumentMapping, object>? ProviderFactory { get; set; }
+
+    /// <summary>
     ///     <c>SuperUser</c> becomes <c>superuser</c>.
     /// </summary>
     /// <remarks>

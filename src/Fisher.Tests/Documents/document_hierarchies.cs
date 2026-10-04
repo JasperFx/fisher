@@ -286,6 +286,26 @@ public class document_hierarchies : IAsyncLifetime
     }
 
     /// <summary>
+    ///     fisher#386. Only the generic registration knows the base type statically, so only it can build
+    ///     the sub-class's storage without reflection, which is what a Native AOT image needs. The
+    ///     hierarchy tests above all register generically, so they run the static path under the JIT;
+    ///     <c>configuration_parity</c>'s <c>AddSubClassHierarchy()</c> tests still run the reflective one.
+    /// </summary>
+    [Fact]
+    public void only_a_generic_registration_captures_a_statically_closed_provider()
+    {
+        var options = new StoreOptions { ConnectionString = _database.ConnectionString };
+
+        var mapping = options.Schema.For<FlyPattern>()
+            .AddSubClass<DryFly>()
+            .AddSubClass(typeof(WetFly))
+            .Mapping;
+
+        mapping.SubClasses.Single(x => x.DocumentType == typeof(DryFly)).ProviderFactory.ShouldNotBeNull();
+        mapping.SubClasses.Single(x => x.DocumentType == typeof(WetFly)).ProviderFactory.ShouldBeNull();
+    }
+
+    /// <summary>
     ///     Throws rather than falling back to the base. A row written by a deployment that knew a
     ///     sub-class this one does not is a real configuration gap, and deserializing it as the base
     ///     would hand back an object quietly missing whatever the sub-class added.

@@ -331,7 +331,10 @@ public class DocumentMappingExpression<T> where T : notnull
     /// </remarks>
     public DocumentMappingExpression<T> AddSubClass<TSub>(string? alias = null) where TSub : T
     {
-        Mapping.AddSubClass(typeof(TSub), alias);
+        // Both types are static here and nowhere later, which is what lets a Native AOT image build the
+        // sub-class's storage without reflection (fisher#386).
+        Mapping.AddSubClass(typeof(TSub), alias).ProviderFactory =
+            static (registry, mapping) => registry.BuildSubClassProvider<TSub, T>(mapping);
         return this;
     }
 
@@ -519,7 +522,31 @@ public class DocumentMappingExpression<T> where T : notnull
         }
 
         Mapping.UseIdentityMember(chain[0]);
+        CaptureStrongTypedIdentity<TValue>();
         return this;
+    }
+
+    /// <summary>
+    ///     When <typeparamref name="TId" /> is a strong-typed id wrapper, record a factory that builds
+    ///     the storage with it closed statically (fisher#386).
+    /// </summary>
+    /// <remarks>
+    ///     The registry can close the four canonical identity types itself; a wrapper is a runtime value
+    ///     there, so this configuration call is the last point where it can be named without reflection.
+    ///     Under CoreCLR the registry's reflective path would serve as well; under Native AOT it has no
+    ///     native code to run.
+    /// </remarks>
+    private void CaptureStrongTypedIdentity<TId>()
+    {
+        if (DocumentMapping.SupportedIdTypes.Contains(typeof(TId))
+            || !StrongTypedId.TryResolve(typeof(TId), out _))
+        {
+            return;
+        }
+
+#pragma warning disable CS8714 // a resolved wrapper is never null; the notnull constraint is nullability only
+        Mapping.ProviderFactory = static (registry, mapping) => registry.BuildStrongTypedProvider<T, TId>(mapping);
+#pragma warning restore CS8714
     }
 
     /// <summary>
@@ -571,6 +598,7 @@ public class DocumentMappingExpression<T> where T : notnull
         }
 
         Mapping.IdStrategy = strategy;
+        CaptureStrongTypedIdentity<TId>();
         return this;
     }
 

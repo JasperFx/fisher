@@ -52,10 +52,13 @@ namespace Fisher.Serialization;
 internal sealed class ValueTypeJsonConverterFactory : JsonConverterFactory
 {
     private readonly IReadOnlyDictionary<Type, ValueTypeInfo> _valueTypes;
+    private readonly IReadOnlyDictionary<Type, Func<JsonConverter>> _converters;
 
-    public ValueTypeJsonConverterFactory(IReadOnlyDictionary<Type, ValueTypeInfo> valueTypes)
+    public ValueTypeJsonConverterFactory(IReadOnlyDictionary<Type, ValueTypeInfo> valueTypes,
+        IReadOnlyDictionary<Type, Func<JsonConverter>>? converters = null)
     {
         _valueTypes = valueTypes;
+        _converters = converters ?? new Dictionary<Type, Func<JsonConverter>>();
     }
 
     public override bool CanConvert(Type typeToConvert)
@@ -64,6 +67,21 @@ internal sealed class ValueTypeJsonConverterFactory : JsonConverterFactory
 
     public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
     {
+        // Closed statically by RegisterValueType<T>(), which is what works in a Native AOT image
+        // (fisher#386). A type registered by Type falls through to the reflective close below.
+        if (_converters.TryGetValue(typeToConvert, out var build))
+        {
+            return build();
+        }
+
+        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported)
+        {
+            throw new NotSupportedException(
+                $"Fisher cannot serialize '{typeToConvert.FullName}' as its primitive value in a Native AOT " +
+                $"image, because it was registered with RegisterValueType(Type). Register it with " +
+                $"RegisterValueType<{typeToConvert.Name}>() instead. See fisher#386.");
+        }
+
         var info = _valueTypes[typeToConvert];
         var converterType = typeof(ValueTypeJsonConverter<>).MakeGenericType(typeToConvert);
 

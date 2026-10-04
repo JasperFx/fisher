@@ -63,10 +63,7 @@ public class strong_typed_identities : IAsyncLifetime
             options.ConnectionString = _database.ConnectionString;
             options.AutoCreateSchemaObjects = AutoCreate.All;
 
-            options.Schema.For<TaggedRod>();
-            options.Schema.For<Swivel>();
-            options.Schema.For<Hook>();
-            options.Schema.For<Spoon>();
+            Declare(options);
         });
 
         await _store.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
@@ -77,6 +74,19 @@ public class strong_typed_identities : IAsyncLifetime
         await _store.DisposeAsync();
         _database.Dispose();
     }
+
+    /// <summary>
+    ///     The identities found by convention. Under the JIT that is the reflective storage path.
+    /// </summary>
+    protected virtual void Declare(StoreOptions options)
+    {
+        options.Schema.For<TaggedRod>();
+        options.Schema.For<Swivel>();
+        options.Schema.For<Hook>();
+        options.Schema.For<Spoon>();
+    }
+
+    protected DocumentStore Store => _store;
 
     [Fact]
     public async Task a_guid_backed_id_round_trips()
@@ -241,4 +251,45 @@ public class strong_typed_identities : IAsyncLifetime
 public class Tippet
 {
     public Uri Id { get; set; } = new("urn:tippet");
+}
+
+/// <summary>
+///     fisher#386. Every test above again, with the identities declared through
+///     <c>Identity(x =&gt; x.Id)</c>.
+/// </summary>
+/// <remarks>
+///     A declared wrapper builds its storage with the document, the wrapper and the inner type closed
+///     statically, which is what works in a Native AOT image. <c>smoke/aot-consumer</c> proves the native
+///     half; this proves the static path behaves exactly like the reflective one under the JIT, including
+///     each inner type's id generation.
+/// </remarks>
+public class strong_typed_identities_declared : strong_typed_identities
+{
+    protected override void Declare(StoreOptions options)
+    {
+        options.Schema.For<TaggedRod>().Identity(x => x.Id);
+        options.Schema.For<Swivel>().Identity(x => x.Id);
+        options.Schema.For<Hook>().Identity(x => x.Id);
+        options.Schema.For<Spoon>().Identity(x => x.Id);
+    }
+
+    [Fact]
+    public void a_declared_wrapper_captures_a_statically_closed_provider()
+    {
+        // Without this, a capture that silently stopped happening would leave every test above passing
+        // on the reflective path, and only a native image would notice.
+        foreach (var type in new[] { typeof(TaggedRod), typeof(Swivel), typeof(Hook), typeof(Spoon) })
+        {
+            Store.Options.Schema.MappingFor(type).ProviderFactory.ShouldNotBeNull(type.Name);
+        }
+    }
+
+    [Fact]
+    public void a_canonical_identity_captures_nothing()
+    {
+        var options = new StoreOptions();
+        options.Schema.For<Fisher.Tests.Events.QuestParty>().Identity(x => x.Id);
+
+        options.Schema.MappingFor(typeof(Fisher.Tests.Events.QuestParty)).ProviderFactory.ShouldBeNull();
+    }
 }
