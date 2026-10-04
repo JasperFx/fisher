@@ -15,7 +15,14 @@ scoreboard and the things that are true right now but not obvious from either.
 **2551 tests green on net9.0 and net10.0** — 2484 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 669 of
 them are shared cross-store compliance tests — 509 event sourcing and 160 document.
-On JasperFx **2.79.1** / Weasel **9.36.0**.
+On JasperFx **2.79.2** / Weasel **9.36.0**.
+
+## The JasperFx 2.79.2 bump — the generated evolver survives Native AOT
+
+**One upstream change, jasperfx#940, and no suite or count moved.** The source generator now keeps the
+evolver constructors it emits under Native AOT, so ILC no longer trims a conventional aggregate's
+generated dispatcher. Nothing in the managed suite can see that. It is the floor fisher#398's
+event-store AOT work builds on, and `smoke/aot-consumer` is what will exercise it.
 
 ## The JasperFx 2.79.1 bump — sub-classes in the type picker, and a batched load-many
 
@@ -827,7 +834,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.79.1 ships 59 suites; Fisher enrolls **58 of them, 669 tests**.
+`JasperFx.Events.ComplianceTests` 2.79.2 ships 59 suites; Fisher enrolls **58 of them, 669 tests**.
 Fisher passes **669 of them, across all
 58 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
