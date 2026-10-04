@@ -9,6 +9,20 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
+**1.18.0 finishes Native AOT for the event store and fixes two silent cross-file and first-use gaps.**
+[#412](https://github.com/JasperFx/fisher/issues/412): the async daemon, keyset cursor paging,
+`Include()`, full-text ranking and projection step-through run in a native image, and so does an
+aggregate keyed on a strong-typed id, through the new `Projections.Snapshot<T, TId>()` and
+`Projections.LiveStreamAggregation<T, TId>()`. That last part needed two JasperFx fixes, jasperfx#942 and
+jasperfx#950, the second written from here. [#415](https://github.com/JasperFx/fisher/issues/415):
+`ForTenant` refuses a tenant whose database is another file, where under database-per-tenant it used to
+write that tenant's rows into the session's own file. [#422](https://github.com/JasperFx/fisher/issues/422):
+a full-text index is created on first use like its table, so `Search()` works on a store that never ran
+the full migration. [#426](https://github.com/JasperFx/fisher/issues/426): live aggregation stamps a
+strong-typed aggregate id instead of leaving it at its default. [#423](https://github.com/JasperFx/fisher/issues/423):
+on JasperFx **2.80.2**, with five previously skipped mapped-version compliance facts now running (678 in
+all).
+
 **1.17.0 batches `FetchManyForWriting` and closes a lost-registration gap.**
 [#374](https://github.com/JasperFx/fisher/issues/374), second half: `FetchManyForWriting` reads every
 stream's version and every stream's events in two statements in total, where JasperFx's default made
