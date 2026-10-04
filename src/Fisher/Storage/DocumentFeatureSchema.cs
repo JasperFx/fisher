@@ -23,18 +23,33 @@ internal class DocumentFeatureSchema : FeatureSchemaBase
 
     public override Type StorageType => _mapping.DocumentType;
 
-    /// <remarks>
-    ///     The table first, then anything that depends on it. A full-text index adds a content view,
-    ///     the FTS5 virtual table and three triggers — all of which name the document table, so the
-    ///     order is load-bearing rather than tidy. See <see cref="FullText.FullTextSchema" />.
-    /// </remarks>
-    protected override IEnumerable<ISchemaObject> schemaObjects()
-    {
-        yield return _mapping.BuildTable();
+    protected override IEnumerable<ISchemaObject> schemaObjects() => ObjectsFor(_mapping);
 
-        if (_mapping.FullTextIndex is not null)
+    /// <summary>
+    ///     Every schema object one document type owns, for the full migration and for the on-demand path
+    ///     alike.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The table first, then anything that depends on it. A full-text index adds a content view,
+    ///         the FTS5 virtual table and three triggers — all of which name the document table, so the
+    ///         order is load-bearing rather than tidy. See <see cref="FullText.FullTextSchema" />.
+    ///     </para>
+    ///     <para>
+    ///         ⚠️ <b>One list, two callers, on purpose</b> (fisher#422). <c>FisherDatabase</c>'s on-demand
+    ///         path used to build its own list, the table alone, and the two drifted: a store that never
+    ///         ran the full migration had a document table and no full-text index, so every
+    ///         <c>Search(...)</c> failed with <c>no such table</c> — on a fresh database only. Anything a
+    ///         document type gains here reaches both paths.
+    ///     </para>
+    /// </remarks>
+    internal static IEnumerable<ISchemaObject> ObjectsFor(DocumentMapping mapping)
+    {
+        yield return mapping.BuildTable();
+
+        if (mapping.FullTextIndex is not null)
         {
-            foreach (var schemaObject in FullText.FullTextSchema.ObjectsFor(_mapping))
+            foreach (var schemaObject in FullText.FullTextSchema.ObjectsFor(mapping))
             {
                 yield return schemaObject;
             }

@@ -352,10 +352,21 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
         {
             await AssertDocumentTableExistsAsync(documentType, mapping.TableName.Name, token)
                 .ConfigureAwait(false);
+
+            // fisher#422: the index too, or a table applied without it passes this check and the first
+            // Search(...) fails with a raw `no such table` about a name the caller never wrote.
+            if (mapping.FullTextIndex is not null)
+            {
+                await AssertDocumentTableExistsAsync(documentType,
+                    FullText.FullTextSchema.TableNameFor(mapping).Name, token).ConfigureAwait(false);
+            }
+
             return;
         }
 
-        var objects = new List<ISchemaObject> { mapping.BuildTable() };
+        // The same objects the full migration's DocumentFeatureSchema creates for the type, from the same
+        // method (fisher#422) — this path used to build its own list, and left the full-text index out.
+        var objects = new List<ISchemaObject>(DocumentFeatureSchema.ObjectsFor(mapping));
 
         // The same condition BuildFeatureSchemas uses to include the Hi-Lo feature. HiloSequence
         // creates the table for itself — an id is assigned at Store, long before any commit-time

@@ -198,9 +198,8 @@ try
 
     var boat = Guid.NewGuid();
 
-    // The full-text index's FTS5 table and triggers are created by the migration and not by the
-    // on-demand path that creates a document table at first write, so the schema is applied here.
-    await store.ApplyAllConfiguredChangesToDatabaseAsync();
+    // No ApplyAllConfiguredChangesToDatabaseAsync here: since fisher#422 the on-demand path creates the
+    // full-text index with the table, which is what this section's Search() now relies on.
 
     await using (var session = store.LightweightSession())
     {
