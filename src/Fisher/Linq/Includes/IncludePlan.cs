@@ -51,9 +51,20 @@ internal sealed class IncludePlan<TParent, TInclude> : IIncludePlan where TInclu
     /// </remarks>
     private const int ChunkSize = 500;
 
-    private static readonly MethodInfo ContainsMethod = typeof(Enumerable)
-        .GetMethods(BindingFlags.Public | BindingFlags.Static)
-        .Single(x => x.Name == nameof(Enumerable.Contains) && x.GetParameters().Length == 2);
+    /// <summary>
+    ///     <c>Enumerable.Contains&lt;object&gt;</c>, closed statically rather than over the member's type.
+    /// </summary>
+    /// <remarks>
+    ///     fisher#412. The predicate is never compiled — Fisher's where parser translates it to an
+    ///     <c>in (…)</c> — so all it needs is a shape <see cref="Parsing.Methods.EnumerableContains" />
+    ///     recognises: a constant collection and a document member, with any <c>Convert</c> around the
+    ///     member stripped. Closing <c>Contains</c> over the member's runtime type was a
+    ///     <c>MakeGenericMethod</c> and an <c>Array.CreateInstance</c>, neither of which Native AOT can
+    ///     promise for a value type. The values keep their own types inside the <c>object[]</c>, and each
+    ///     still goes through the member's <c>ConvertValue</c>, so a Guid still binds as lowercase text.
+    /// </remarks>
+    private static readonly MethodInfo ContainsMethod =
+        new Func<IEnumerable<object>, object, bool>(Enumerable.Contains).Method;
 
     private readonly Action<TInclude> _callback;
     private readonly Expression<Func<TInclude, bool>>? _filter;
@@ -90,12 +101,12 @@ internal sealed class IncludePlan<TParent, TInclude> : IIncludePlan where TInclu
 
         for (var start = 0; start < values.Count; start += ChunkSize)
         {
-            var chunk = Slice(values, elementType, start, Math.Min(ChunkSize, values.Count - start));
+            var chunk = values.GetRange(start, Math.Min(ChunkSize, values.Count - start)).ToArray();
 
             var predicate = Expression.Lambda<Func<TInclude, bool>>(
-                Expression.Call(ContainsMethod.MakeGenericMethod(elementType),
-                    Expression.Constant(chunk, typeof(IEnumerable<>).MakeGenericType(elementType)),
-                    matchBody),
+                Expression.Call(ContainsMethod,
+                    Expression.Constant(chunk, typeof(IEnumerable<object>)),
+                    Expression.Convert(matchBody, typeof(object))),
                 parameter);
 
             var query = session.Query<TInclude>().Where(predicate);
@@ -196,26 +207,6 @@ internal sealed class IncludePlan<TParent, TInclude> : IIncludePlan where TInclu
         }
 
         return values;
-    }
-
-    /// <summary>
-    ///     A typed array of one chunk of the identity values.
-    /// </summary>
-    /// <remarks>
-    ///     Typed rather than <c>object[]</c> because <c>Enumerable.Contains&lt;T&gt;</c> is closed over
-    ///     the member's type, and the constant has to be an <c>IEnumerable&lt;T&gt;</c> of it for the
-    ///     expression to be well-formed.
-    /// </remarks>
-    private static Array Slice(List<object> values, Type elementType, int start, int length)
-    {
-        var array = Array.CreateInstance(elementType, length);
-
-        for (var i = 0; i < length; i++)
-        {
-            array.SetValue(values[start + i], i);
-        }
-
-        return array;
     }
 
     /// <summary>

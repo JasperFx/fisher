@@ -4,7 +4,10 @@
       fisher#384 / #386. A document write in a Native AOT image: insert, load, upsert and a LINQ query,
       over all four canonical identity types, strong-typed id wrappers and a document hierarchy — and since
       fisher#398, the event store: starting and appending to a stream, live aggregation,
-      FetchForWriting, and an inline Snapshot<T>. Every one of those works under CoreCLR, so no test project
+      FetchForWriting, and an inline Snapshot<T> — and since fisher#412, the async daemon projecting an
+      async snapshot and a multi-stream projection, keyset paging, Include() over a strong-typed id,
+      full-text relevance ordering, a DateOnly comparison and projection step-through. Every one of
+      those works under CoreCLR, so no test project
       here can see an AOT failure; this one is published with PublishAot and RUN, which is the only
       way to find out. The two failures #384 reported both "published clean": ILC printed only an
       assembly-level IL2104/IL3053 rollup and the first sign was a crash on the first write.

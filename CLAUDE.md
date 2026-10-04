@@ -1355,9 +1355,64 @@ reloads an inline `Snapshot<T>`.
   projection statically does not help: `JasperFxSingleStreamProjectionBase`'s constructor compiles the
   wrapper's accessors with FastExpressionCompiler, which throws there. That was measured, with a
   `Snapshot<T, TId>` overload built and then removed because it could not achieve its purpose. The
-  factory refuses by name, naming #942. The rest is fisher#412.
+  factory refuses by name, naming #942. It is the one item of fisher#412 still open.
 - **The smoke consumer references `JasperFx.Events.SourceGenerator` itself**, because a project
   reference does not carry the analyzer the package bundles. Its version is kept in step by hand.
+
+### Native AOT: the daemon, LINQ and step-through — fisher#412
+
+`smoke/aot-consumer` now runs the async daemon over an async `Snapshot<T>` and a multi-stream
+projection, walks a keyset cursor, `Include()`s by a strong-typed id, orders by full-text relevance,
+compares a `DateOnly`, and runs both projection step-through methods — all natively.
+
+- **The async daemon needed no Fisher change.** It ran natively the first time it was measured. A
+  run with only the cursor fix reverted fails at the cursor walk, which comes after the daemon
+  section, so the daemon passing is a fact rather than an inference. It is built by hand in the
+  smoke; `AddAsyncDaemon()` reaches the same `BuildProjectionDaemonsAsync`.
+- ⚠️ **The keyset cursor is a fixed-shape `Utf8JsonWriter` and stays byte-identical to the old
+  `JsonSerializer` output.** A cursor goes to a client and comes back to a possibly newer deployment,
+  and Polecat shares the format. `cursor_encoding` pins the exact string. It was captured from the old
+  implementation over every key type the provider reads back: string with escapes, every integer
+  width, float, double, decimal, bool, null, `DBNull`, Guid, `DateTimeOffset`, `DateTime`, enum,
+  `DateOnly`, `TimeOnly`, `TimeSpan` and char. A key type outside that list is refused by name rather
+  than guessed at. Decoding is `JsonDocument`.
+  - **A strong-typed identity is carried as its inner value**, which fixed a bug nobody had filed. The
+    reflection serializer wrote the wrapper as `{"Value":…}`, which `ConvertSlot` could never bind
+    back, so the second page of any keyset walk over a wrapper-keyed document failed.
+    `a_cursor_walk_over_a_strong_typed_identity` fails against the old code.
+- **`Include()` builds `Enumerable.Contains<object>` over an `object[]`**, closed statically, where it
+  used to close `Contains` and `Array.CreateInstance` over the member's runtime type. The predicate is
+  translated and never compiled, and `EnumerableContains` strips the `Convert` around the member.
+  ⚠️ This one was a real native failure, not just a warning: over a strong-typed id it threw
+  "`TicketId[]` is missing native code". A Guid member happened to work, because something else
+  closes those instantiations.
+- **The marker methods are closed through a delegate** (`new Func<…>(OrderByRelevance).Method`), which
+  is how `System.Linq.Queryable` does it. `OrderByRelevance` and its siblings, and `Include`'s marker,
+  used to look up the method by name and close it with `MakeGenericMethod`. Over reference types that
+  happened to work natively. The change removes the warning, and the smoke does not tell the two
+  versions apart.
+- **`DateMember` renders through `options.GetTypeInfo(type)`**, which asks the configured resolver.
+  It produces the same text as before. The old call worked natively too, because the application's
+  context covers a document's member types, so this removes the warning only.
+- ⚠️ **Step-through renders every state through the store's serializer, a visible change.**
+  `RunProjectionByNameAsync` used `JsonSerializer`'s default options. A console therefore saw
+  `Loaded` where the store persists `loaded`, and the call threw natively. It now reads the store's
+  `Stream` overloads, the unannotated contract every document read already uses. It also reads no
+  step property by reflection: a generic hop returns `ProjectionTimelineRaw` directly.
+  `replay_by_name_renders_state_through_the_stores_serializer` pins agreement with the typed path.
+  A consumer that keyed on the PascalCase names sees camelCase, so this belongs in the release notes.
+- ⚠️ **The step-through's `MakeGenericMethod` lives in a non-generic helper, because ILC 10.0.1 crashed
+  on the old spelling.** `MakeGenericMethod(typeof(TState))` inside the generic interface method made
+  ILC throw `IndexOutOfRangeException` from `MakeGenericMethodSite.InstantiateDependencies` as soon as
+  the method was reachable. So no native publish of an application calling either step-through method
+  produced a binary. `InvokeReplay(string, Type, …)` hands the analyzer a plain `Type`, and it warns
+  instead. Do not inline it back. The remaining `MakeGenericMethod` is inherent (the interface leaves
+  `TState` unconstrained, or names it only as a `Type`). It carries a method-level suppression, and the
+  smoke runs it natively.
+- **What #412 did not touch:** strong-typed aggregate ids (jasperfx#942, above), and the IL warnings
+  outside the five paths the issue named. `dotnet build` still lists about twenty against Fisher
+  (`MessagePublishing`, `AdvancedSqlResultReader`, `SecondaryStoreProxy`, `EnumMember` and others).
+  ILC reports some of them as reachable from the smoke, and none of them failed when it ran.
 
 ### Document write SQL
 

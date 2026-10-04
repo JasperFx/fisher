@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using JasperFx.Descriptors;
 using JasperFx.Events;
@@ -23,21 +24,21 @@ namespace Fisher;
 ///     <para>
 ///         The fold itself is JasperFx's, reached through <c>EventGraph.AggregatorFor&lt;T&gt;</c> and
 ///         <c>ISteppableAggregation</c> — the same seam every live aggregation goes through, which is
-///         what makes a replay agree with what the daemon would produce for the same events. Ported
-///         from Polecat's, with its AOT annotations, because Fisher has no AOT story of its own to
-///         protect here.
+///         what makes a replay agree with what the daemon would produce for the same events.
+///     </para>
+///     <para>
+///         ⚠️ <b>Every state crosses the wire through the store's own serializer</b> (fisher#412). The
+///         by-name path used to render state with <c>JsonSerializer</c>'s <em>default</em> options, so a
+///         console saw <c>Loaded</c> where the store persists <c>loaded</c> — and the reflection those
+///         defaults reach for is disabled in a Native AOT image, so the call threw there. The store's
+///         serializer is what a document write uses, so it carries the application's naming policy, its
+///         converters and, in a native image, its source-generated context. Its <see cref="Stream" />
+///         overloads are the ones read here, being the unannotated shared contract every document read
+///         already goes through.
 ///     </para>
 /// </remarks>
 public partial class DocumentStore
 {
-    [UnconditionalSuppressMessage("Trimming", "IL2091:DynamicallyAccessedMembers",
-        Justification = "Forwards to ReplayReferenceTypeAsync<TState> via MakeGenericMethod. Projection step-through is a diagnostic IEventStore surface; AOT consumers avoid it or supply a source-generated dispatcher.")]
-    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
-        Justification = "MakeGenericMethod is what satisfies the aggregator's `class, new()` constraint without changing the public IEventStore.RunProjectionAsync<TState> contract.")]
-    [UnconditionalSuppressMessage("Trimming", "IL2075:DynamicallyAccessedMembers",
-        Justification = "Reads Task<T>.Result reflectively; Task<T> is a framework type whose Result is intrinsically preserved.")]
-    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
-        Justification = "Calls ReplayReferenceTypeAsync<TState>, which is annotated. The explicit implementation cannot propagate the requirement because the interface does not declare it.")]
     async Task<ProjectionTimeline<TState>> IEventStore.RunProjectionAsync<TState>(
         string projectionName, object identity, IReadOnlyList<EventRecord> events,
         TState? startingState, CancellationToken ct) where TState : default
@@ -47,32 +48,62 @@ public partial class DocumentStore
 
         AssertProjectionExists(projectionName);
 
-        // The interface leaves TState unconstrained; the aggregator graph requires a reference type
-        // with a parameterless constructor. Named rather than surfaced as a constraint failure from
-        // inside MakeGenericMethod, which would name a type parameter and not the projection.
-        if (typeof(TState).IsValueType)
+        // The constrained method returns exactly this type, so the result is cast rather than read off
+        // Task<T>.Result by reflection.
+        return await ((Task<ProjectionTimeline<TState>>)InvokeReplay(nameof(ReplayReferenceTypeAsync),
+            typeof(TState), [events, startingState, ct])).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Reach a replay method constrained to a reference-typed state, from a caller that has the state
+    ///     only as an unconstrained generic argument or as a <see cref="Type" />.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         ⚠️ <b>Deliberately non-generic</b> (fisher#412). The obvious spelling,
+    ///         <c>MakeGenericMethod(typeof(TState))</c> inside the generic interface method, crashes ILC
+    ///         10.0.1 outright once the method is reachable — an <c>IndexOutOfRangeException</c> from
+    ///         <c>MakeGenericMethodSite.InstantiateDependencies</c> while it tries to instantiate the call
+    ///         site over the caller's own type parameter — so a native publish of any application calling
+    ///         either step-through method failed before producing a binary. Handed a plain
+    ///         <see cref="Type" />, the analyzer warns rather than instantiating, which the suppressions
+    ///         below answer.
+    ///     </para>
+    /// </remarks>
+    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
+        Justification = "IEventStore leaves the state unconstrained (or names it only by Type) while the aggregator graph needs a reference type, so the constrained replay is reached with one MakeGenericMethod. A value type is refused first, and Native AOT serves a reference-typed instantiation from the shared canonical form — smoke/aot-consumer runs both step-through methods natively.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2060:MakeGenericMethod",
+        Justification = "The only requirement of either target is the `class` constraint, checked first.")]
+    private Task InvokeReplay(string method, Type stateType, object?[] arguments)
+    {
+        AssertReferenceTypedState(stateType);
+
+        var replay = typeof(DocumentStore)
+            .GetMethod(method, BindingFlags.NonPublic | BindingFlags.Instance)!
+            .MakeGenericMethod(stateType);
+
+        return (Task)replay.Invoke(this, arguments)!;
+    }
+
+    /// <summary>
+    ///     The interface leaves <c>TState</c> unconstrained; the aggregator graph requires a reference
+    ///     type. Named rather than surfaced as a constraint failure from inside <c>MakeGenericMethod</c>,
+    ///     which would name a type parameter and not the projection.
+    /// </summary>
+    private static void AssertReferenceTypedState(Type stateType)
+    {
+        if (stateType.IsValueType)
         {
             throw new NotSupportedException(
-                $"RunProjectionAsync needs a reference-typed aggregate state, and '{typeof(TState).Name}' "
+                $"RunProjectionAsync needs a reference-typed aggregate state, and '{stateType.Name}' "
                 + "is a value type. Fisher's aggregation is JasperFx's, which builds an aggregate by "
                 + "constructing and mutating it.");
         }
-
-        var generic = typeof(DocumentStore)
-            .GetMethod(nameof(ReplayReferenceTypeAsync), BindingFlags.NonPublic | BindingFlags.Instance)!
-            .MakeGenericMethod(typeof(TState));
-
-        var task = (Task)generic.Invoke(this, [events, startingState, ct])!;
-        await task.ConfigureAwait(false);
-
-        return (ProjectionTimeline<TState>)task.GetType().GetProperty("Result")!.GetValue(task)!;
     }
 
-    [RequiresUnreferencedCode("Routes events through the aggregator graph and reflective deserialization; TState's members must survive trimming.")]
-    [RequiresDynamicCode("ISerializer.FromJson uses System.Text.Json's runtime code generation.")]
     private async Task<ProjectionTimeline<TState>> ReplayReferenceTypeAsync<TState>(
         IReadOnlyList<EventRecord> events, TState? startingState, CancellationToken ct)
-        where TState : class, new()
+        where TState : class
     {
         var aggregator = Options.Projections.AggregatorFor<TState>();
 
@@ -125,17 +156,9 @@ public partial class DocumentStore
     /// <summary>
     ///     A detached copy of an aggregate, through the store's own serializer.
     /// </summary>
-    [RequiresUnreferencedCode("Round-trips TState through ISerializer.")]
-    [RequiresDynamicCode("ISerializer uses System.Text.Json's runtime code generation.")]
     private TState? Copy<TState>(TState? state) where TState : class
-        => state is null ? null : Options.Serializer.FromJson<TState>(Options.Serializer.ToJson(state));
+        => state is null ? null : Options.Serializer.FromJson<TState>(Utf8(Options.Serializer.ToJson(state)));
 
-    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
-        Justification = "MakeGenericMethod over the projection's published state type, to dispatch into the strong-typed replay.")]
-    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
-        Justification = "System.Text.Json over the projection's published state type. Diagnostic surface only.")]
-    [UnconditionalSuppressMessage("Trimming", "IL2075:DynamicallyAccessedMembers",
-        Justification = "Reads closed-generic Task / ProjectionTimeline properties reflectively; both are preserved by this class' own use of them.")]
     async Task<ProjectionTimelineRaw> IEventStore.RunProjectionByNameAsync(
         string projectionName, object identity, IReadOnlyList<EventRecord> events,
         JsonElement? startingState, CancellationToken ct)
@@ -151,40 +174,45 @@ public partial class DocumentStore
                             + "nothing to show per step. A flat-table projection or a subscription is the "
                             + "usual case — neither produces a document.");
 
-        var generic = typeof(IEventStore).GetMethod(nameof(IEventStore.RunProjectionAsync))!
-            .MakeGenericMethod(stateType);
+        // One hop into a method generic over the state, which then reaches the typed replay with
+        // ordinary generic calls and hands back the untyped timeline — so nothing reads a step's
+        // properties by reflection on the way out.
+        return await ((Task<ProjectionTimelineRaw>)InvokeReplay(nameof(ReplayAsJsonAsync), stateType,
+            [events, startingState, ct])).ConfigureAwait(false);
+    }
 
+    private async Task<ProjectionTimelineRaw> ReplayAsJsonAsync<TState>(IReadOnlyList<EventRecord> events,
+        JsonElement? startingState, CancellationToken ct) where TState : class
+    {
         var typedStart = startingState.HasValue
-            ? JsonSerializer.Deserialize(startingState.Value.GetRawText(), stateType)
+            ? Options.Serializer.FromJson<TState>(Utf8(startingState.Value.GetRawText()))
             : null;
 
-        var task = (Task)generic.Invoke(this, [projectionName, identity, events, typedStart, ct])!;
-        await task.ConfigureAwait(false);
+        var timeline = await ReplayReferenceTypeAsync(events, typedStart, ct).ConfigureAwait(false);
 
-        var timeline = task.GetType().GetProperty("Result")!.GetValue(task)!;
-        var typedSteps = (System.Collections.IEnumerable)timeline.GetType().GetProperty("Steps")!.GetValue(timeline)!;
-        var final = timeline.GetType().GetProperty("FinalState")!.GetValue(timeline);
+        var raw = timeline.Steps
+            .Select(step => new ProjectionStepResultRaw(step.Event, ToElement(step.Before), ToElement(step.After),
+                step.Elapsed, step.Error?.Message!))
+            .ToList();
 
-        var raw = new List<ProjectionStepResultRaw>(events.Count);
+        return new ProjectionTimelineRaw(raw, ToElement(timeline.FinalState));
+    }
 
-        foreach (var step in typedSteps)
+    /// <summary>
+    ///     A state as the JSON the store would persist for it.
+    /// </summary>
+    private JsonElement? ToElement(object? state)
+    {
+        if (state is null)
         {
-            var type = step.GetType();
-            var record = (EventRecord)type.GetProperty("Event")!.GetValue(step)!;
-            var before = type.GetProperty("Before")!.GetValue(step);
-            var after = type.GetProperty("After")!.GetValue(step);
-            var elapsed = (TimeSpan)type.GetProperty("Elapsed")!.GetValue(step)!;
-            var error = (Exception?)type.GetProperty("Error")!.GetValue(step);
-
-            raw.Add(new ProjectionStepResultRaw(record,
-                before is null ? null : JsonSerializer.SerializeToElement(before, stateType),
-                after is null ? null : JsonSerializer.SerializeToElement(after, stateType),
-                elapsed, error?.Message!));
+            return null;
         }
 
-        return new ProjectionTimelineRaw(raw,
-            final is null ? null : JsonSerializer.SerializeToElement(final, stateType));
+        using var document = JsonDocument.Parse(Options.Serializer.ToJson(state));
+        return document.RootElement.Clone();
     }
+
+    private static MemoryStream Utf8(string json) => new(Encoding.UTF8.GetBytes(json), writable: false);
 
     /// <remarks>
     ///     The multi-stream form, which drives the projection's real slice → group → enrich → fold path
@@ -192,10 +220,6 @@ public partial class DocumentStore
     ///     identity the events touch, and a single-stream one produces exactly one. The fold lives in
     ///     JasperFx on <c>JasperFxAggregationProjectionBase</c>, so this is a thin adapter.
     /// </remarks>
-    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
-        Justification = "Calls ToDomainEvent (annotated) and System.Text.Json over the store serializer's output. The explicit implementation cannot propagate the requirement.")]
-    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
-        Justification = "ToDomainEvent and JsonSerializer both use runtime code generation. Diagnostic surface only.")]
     async Task<MultiAggregateProjectionResult> IEventStore.RunMultiStreamProjectionAsync(
         string projectionName, IReadOnlyList<EventRecord> events, CancellationToken ct)
     {
@@ -230,10 +254,7 @@ public partial class DocumentStore
 
         await using var session = QuerySession();
 
-        return await steppable.BuildTimelinesAsync(domainEvents, session,
-            state => state is null
-                ? null
-                : JsonSerializer.Deserialize<JsonElement>(Options.Serializer.ToJson(state)),
+        return await steppable.BuildTimelinesAsync(domainEvents, session, ToElement,
             e => recordFor[e], observer: null, ct).ConfigureAwait(false);
     }
 
@@ -256,14 +277,12 @@ public partial class DocumentStore
     ///     be pointed at a deployment that knows fewer types than the store holds, and one unknown
     ///     event should not blank the whole timeline.
     /// </remarks>
-    [RequiresUnreferencedCode("Resolves an event type name to a CLR type and deserializes through ISerializer.")]
-    [RequiresDynamicCode("ISerializer.FromJson uses System.Text.Json's runtime code generation.")]
     private IEvent? ToDomainEvent(EventRecord record)
     {
         var clrType = EventGraph.AllKnownEventTypes()
             .FirstOrDefault(x => x.EventTypeName == record.EventTypeName)?.EventType;
 
-        if (clrType is null || Options.Serializer.FromJson(clrType, record.Data.GetRawText()) is not { } body)
+        if (clrType is null || Options.Serializer.FromJson(clrType, Utf8(record.Data.GetRawText())) is not { } body)
         {
             return null;
         }

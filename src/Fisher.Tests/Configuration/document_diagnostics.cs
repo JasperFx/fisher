@@ -341,7 +341,31 @@ public class document_diagnostics : IAsyncLifetime
             nameof(CargoTally), streamId, records, startingState: null, Token);
 
         timeline.Steps.Count.ShouldBe(2);
-        timeline.FinalState!.Value.GetProperty("Loaded").GetInt32().ShouldBe(2);
+        timeline.FinalState!.Value.GetProperty("loaded").GetInt32().ShouldBe(2);
+    }
+
+    /// <summary>
+    ///     fisher#412. The by-name path used to render state with System.Text.Json's default options —
+    ///     PascalCase where the store persists camelCase, and reflection a native image disables. A
+    ///     console reading a step should see the JSON the store would have written for it.
+    /// </summary>
+    [Fact]
+    public async Task replay_by_name_renders_state_through_the_stores_serializer()
+    {
+        var streamId = Guid.NewGuid();
+        var records = ToRecords(streamId, new CrateLoaded("A"), new CrateLoaded("B"));
+
+        var start = JsonSerializer.Deserialize<JsonElement>(
+            _store.Options.Serializer.ToJson(new CargoTally { Id = streamId, Loaded = 10 }));
+
+        var raw = await Explorer.RunProjectionByNameAsync(
+            nameof(CargoTally), streamId, records, start, Token);
+        var typed = await Explorer.RunProjectionAsync<CargoTally>(
+            nameof(CargoTally), streamId, records, new CargoTally { Id = streamId, Loaded = 10 }, Token);
+
+        raw.FinalState!.Value.GetRawText().ShouldBe(_store.Options.Serializer.ToJson(typed.FinalState!));
+        raw.Steps[0].Before!.Value.GetRawText().ShouldBe(_store.Options.Serializer.ToJson(typed.Steps[0].Before!));
+        raw.Steps[1].After!.Value.GetProperty("loaded").GetInt32().ShouldBe(12);
     }
 
     [Fact]
