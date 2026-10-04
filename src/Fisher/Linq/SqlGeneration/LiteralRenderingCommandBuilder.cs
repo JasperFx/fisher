@@ -47,6 +47,18 @@ internal sealed class LiteralRenderingCommandBuilder : ICommandBuilder
 
     public string? LastParameterName => null;
 
+    /// <summary>
+    ///     Always zero, and that is a definite answer rather than the interface's "unknown" default
+    ///     (fisher#389, weasel#675).
+    /// </summary>
+    /// <remarks>
+    ///     Values are rendered as literals rather than bound, which is this builder's whole purpose, so
+    ///     the command carries no parameters at all. The default, <c>UnknownParameterCount</c>, would
+    ///     tell a caller sizing a value list against the per-command parameter budget to fall back to a
+    ///     conservative path. The honest answer is that none of the budget is spent.
+    /// </remarks>
+    public int ParameterCount => 0;
+
     public override string ToString() => _sql.ToString();
 
     public void Append(string sql) => _sql.Append(sql);

@@ -200,6 +200,14 @@
              DecrementMemberMap into line with fisher#183; Fisher does not use that DSL yet, but the
              agreement is what makes adopting it later cost nothing.
 
+             9.40.0 (from 9.36.0, spanning 9.37–9.39). The change Fisher acts on is weasel#675:
+             ICommandBuilder.ParameterCount, which LiteralRenderingCommandBuilder answers with a
+             definite 0 rather than inheriting the "unknown" default (fisher#389). Also in the span:
+             creation scripts written in dependency order with guarded foreign keys (weasel#677/#681),
+             a TableDelta for a table that does not exist yet answering instead of throwing
+             (weasel#658), and the migration lock released when an apply fails (weasel#659).
+             JasperFx floor still 2.76.0.
+
              9.36.0 (from 9.35.2) is a drift release whose SQLite half is migration behaviour, and
              it takes JasperFx 2.76.0 as its floor — which is why the two move together here:
              weasel#546 — delete-all with resetIdentity no longer fails at prepare time on a file with
@@ -242,8 +250,8 @@
              advisory lock), and #615/#621/#625/#627/#628/#629 (Weasel.EntityFrameworkCore, which
              Fisher.EntityFrameworkCore does not reference — it takes
              Microsoft.EntityFrameworkCore.Relational alone). -->
-        <PackageVersion Include="Weasel.Sqlite" Version="9.36.0" />
-        <PackageVersion Include="Weasel.Storage" Version="9.36.0" />
+        <PackageVersion Include="Weasel.Sqlite" Version="9.40.0" />
+        <PackageVersion Include="Weasel.Storage" Version="9.40.0" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
