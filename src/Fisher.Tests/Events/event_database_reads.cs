@@ -1,3 +1,4 @@
+using Fisher.Storage;
 using Fisher.Tests.Events;
 using Fisher.Tests.Projections;
 using JasperFx;
@@ -138,6 +139,117 @@ public class event_database_reads : IAsyncLifetime
     ///     <c>SqliteTimestamp</c>'s fixed-width UTC format is an instant comparison, which is the whole
     ///     point of that format.
     /// </summary>
+    // ---- one progression cell (fisher#396) ----
+
+    [Fact]
+    public async Task reading_one_cell_by_identity_returns_its_row()
+    {
+        var name = new ShardName("tally");
+        await WriteProgressAsync(name.Identity, 7);
+
+        var row = await TheDatabase.ReadProjectionProgressAsync(name, TestContext.Current.CancellationToken);
+
+        row.ShouldNotBeNull();
+        row.ProjectionName.ShouldBe("tally");
+        row.TenantId.ShouldBeNull();
+        row.Sequence.ShouldBe(7);
+        row.LastUpdated.ShouldNotBeNull();
+
+        // Extended tracking is off on this store, so the two columns it adds are not even selected.
+        row.AgentStatus.ShouldBeNull();
+        row.LastHeartbeat.ShouldBeNull();
+    }
+
+    /// <remarks>
+    ///     Null rather than a throw, and rather than a zero row: "never observed" is the answer the
+    ///     interface reserves null for, which is why its default throws instead of borrowing it.
+    /// </remarks>
+    [Fact]
+    public async Task an_unknown_cell_is_null_by_either_overload()
+    {
+        var token = TestContext.Current.CancellationToken;
+
+        (await TheDatabase.ReadProjectionProgressAsync(new ShardName("never_registered"), token)).ShouldBeNull();
+        (await TheDatabase.ReadProjectionProgressAsync("never_registered", null, token)).ShouldBeNull();
+    }
+
+    /// <remarks>
+    ///     Marten's collapsing rule: every version and shard key of the projection is a candidate, the
+    ///     newest version wins, and the furthest sequence breaks a tie. The higher sequence on the OLDER
+    ///     version is what tells "newest version" apart from "highest sequence".
+    /// </remarks>
+    [Fact]
+    public async Task the_projection_overload_takes_the_newest_version()
+    {
+        await WriteProgressAsync(new ShardName("tally", "All", 1).Identity, 50);
+        await WriteProgressAsync(new ShardName("tally", "All", 2).Identity, 10);
+        await WriteProgressAsync(new ShardName("tally", "Other", 2).Identity, 12);
+
+        var row = await TheDatabase.ReadProjectionProgressAsync("tally", null, TestContext.Current.CancellationToken);
+
+        row.ShouldNotBeNull();
+        row.Sequence.ShouldBe(12);
+    }
+
+    /// <remarks>
+    ///     Matched on the parsed name, not on a prefix: <c>tally</c> must not answer for a projection
+    ///     whose name merely starts with it, and a tenant's cell is not the store-global one.
+    /// </remarks>
+    [Fact]
+    public async Task the_projection_overload_matches_the_name_and_tenant_exactly()
+    {
+        await WriteProgressAsync(new ShardName("tallyHistory").Identity, 9);
+        await WriteProgressAsync(new ShardName("tally", "All", 1, "north").Identity, 4);
+
+        var token = TestContext.Current.CancellationToken;
+
+        (await TheDatabase.ReadProjectionProgressAsync("tally", null, token)).ShouldBeNull();
+
+        var north = await TheDatabase.ReadProjectionProgressAsync("tally", "north", token);
+        north.ShouldNotBeNull();
+        north.TenantId.ShouldBe("north");
+        north.Sequence.ShouldBe(4);
+    }
+
+    /// <remarks>
+    ///     With extended tracking on, the persisted agent status and heartbeat come back. Written by hand
+    ///     here, because what writes them in production is fisher#395's to fix.
+    /// </remarks>
+    [Fact]
+    public async Task extended_tracking_returns_the_agent_status_and_heartbeat()
+    {
+        var token = TestContext.Current.CancellationToken;
+        using var database = TemporaryDatabase.Create("eventdb-extended");
+
+        await using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = database.ConnectionString;
+            options.Events.EnableExtendedProgressionTracking = true;
+        });
+
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(token);
+
+        var name = new ShardName("tally");
+        var heartbeat = new DateTimeOffset(2026, 10, 4, 12, 30, 0, TimeSpan.Zero);
+
+        await using (var connection = await store.Database.OpenConnectionAsync(token))
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                "insert into fi_event_progression (name, last_seq_id, agent_status, heartbeat) " +
+                "values (@name, 3, 'Paused', @heartbeat)";
+            command.Parameters.AddWithValue("@name", name.Identity);
+            command.Parameters.AddWithValue("@heartbeat", SqliteTimestamp.ToDatabaseValue(heartbeat));
+            await command.ExecuteNonQueryAsync(token);
+        }
+
+        var row = await ((IEventDatabase)store.Database).ReadProjectionProgressAsync(name, token);
+
+        row.ShouldNotBeNull();
+        row.AgentStatus.ShouldBe("Paused");
+        row.LastHeartbeat.ShouldBe(heartbeat);
+    }
+
     [Fact]
     public async Task the_event_store_floor_at_a_time_bounds_by_timestamp()
     {

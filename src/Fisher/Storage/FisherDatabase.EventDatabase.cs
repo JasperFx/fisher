@@ -216,18 +216,150 @@ public partial class FisherDatabase : IEventDatabase
     ///     Exact equality rather than a prefix match, so ejecting <c>tally:All</c> cannot also drop
     ///     <c>tally:AllOther</c>. A missing row is a clean no-op — the abstraction deliberately targets
     ///     orphaned shards that may never have been registered.
+    /// <para>
+    ///     <b>A missing table is the same no-op as a missing row</b> (fisher#396, Marten's #5511). On a
+    ///     file whose schema has not been applied there is no row to drop, so the delete answers the way
+    ///     it would for an absent row rather than throwing <c>no such table</c>. That is not the
+    ///     "a write that silently did nothing" hazard <see cref="ReadWhenStorageExistsAsync{T}" /> warns
+    ///     about: what the caller asked for — no progress recorded for this shard — is true either way.
+    ///     Deliberately does not provision the table, for fisher#332's reason.
+    /// </para>
     /// </remarks>
     public async Task DeleteProjectionProgressByShardNameAsync(string shardIdentity,
         CancellationToken token = default)
     {
-        await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        try
+        {
+            await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+            {
+                await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+                await using var command = connection.CreateCommand();
+                command.CommandText = $"delete from {_events.ProgressionTableName} where name = @name";
+                command.Parameters.AddWithValue("@name", shardIdentity);
+                await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }, token).ConfigureAwait(false);
+        }
+        catch (Exception e) when (SqliteSchemaErrors.IsMissingStorage(e))
+        {
+            // Nothing to delete — see the remarks.
+        }
+    }
+
+    /// <summary>
+    ///     One (projection, tenant) progression cell, collapsed across versions and shard keys, or null
+    ///     when nothing has been recorded for it (fisher#396).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Marten's semantics, so a console polling one cell reads the same answer from either store:
+    ///         every row whose name parses as a shard of <paramref name="projectionName" /> for
+    ///         <paramref name="tenantId" /> is a candidate, the newest version wins, and the furthest
+    ///         sequence breaks a tie. Matched on the PARSED name rather than a prefix, so <c>Orders</c>
+    ///         cannot answer for <c>OrdersHistory:All</c>, and a row whose name does not parse is skipped
+    ///         rather than string-compared (marten#5161).
+    ///     </para>
+    ///     <para>
+    ///         Null is the meaningful "not observed" answer, which is why the interface's default throws
+    ///         rather than borrowing it. A missing table gives the same null, for fisher#332's reason —
+    ///         this is a monitoring read, and the likeliest reason the table is missing is that the
+    ///         schema has not been applied <em>yet</em>.
+    ///     </para>
+    /// </remarks>
+    public async ValueTask<ProjectionProgressRow?> ReadProjectionProgressAsync(string projectionName,
+        string? tenantId, CancellationToken token)
+    {
+        return await ReadWhenStorageExistsAsync(async ct =>
         {
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
-            command.CommandText = $"delete from {_events.ProgressionTableName} where name = @name";
-            command.Parameters.AddWithValue("@name", shardIdentity);
-            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        }, token).ConfigureAwait(false);
+
+            // instr rather than LIKE: '_' is a LIKE wildcard and projection names may contain one. The
+            // trailing ':' is a cheap pre-filter only; the parse below is what decides.
+            command.CommandText =
+                $"select name, {ProgressRowColumns} from {_events.ProgressionTableName} where instr(name, @prefix) = 1";
+            command.Parameters.AddWithValue("@prefix", projectionName + ":");
+
+            ShardName? best = null;
+            ProjectionProgressRow? bestRow = null;
+
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                if (!ShardName.TryParse(reader.GetString(0), out var shard) || shard is null ||
+                    shard.Name != projectionName || shard.TenantId != tenantId)
+                {
+                    continue;
+                }
+
+                var row = ReadProgressRow(reader, 1, projectionName, tenantId);
+                if (best is null || shard.Version > best.Version ||
+                    (shard.Version == best.Version && row.Sequence > bestRow!.Sequence))
+                {
+                    best = shard;
+                    bestRow = row;
+                }
+            }
+
+            return bestRow;
+        }, (ProjectionProgressRow?)null, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     The progression row whose name is exactly <paramref name="name" />'s identity, or null when
+    ///     there is none (fisher#396).
+    /// </summary>
+    /// <remarks>
+    ///     No collapsing — the caller already holds the full identity, so a version, a shard key and a
+    ///     tenant partition each address their own row. Same missing-table answer as the other overload.
+    /// </remarks>
+    public async ValueTask<ProjectionProgressRow?> ReadProjectionProgressAsync(ShardName name,
+        CancellationToken token)
+    {
+        return await ReadWhenStorageExistsAsync(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                $"select {ProgressRowColumns} from {_events.ProgressionTableName} where name = @name";
+            command.Parameters.AddWithValue("@name", name.Identity);
+
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            return await reader.ReadAsync(ct).ConfigureAwait(false)
+                ? ReadProgressRow(reader, 0, name.Name, name.TenantId)
+                : null;
+        }, (ProjectionProgressRow?)null, token).ConfigureAwait(false);
+    }
+
+    /// <remarks>
+    ///     <c>agent_status</c> and <c>heartbeat</c> exist only under extended progression tracking, so
+    ///     they are selected only then — naming one the table lacks is <c>no such column</c>, which the
+    ///     missing-storage guard would turn into a silent null for every cell. Off, both stay null, which
+    ///     is the "this store does not persist it" answer the record documents.
+    /// </remarks>
+    private string ProgressRowColumns => _events.EnableExtendedProgressionTracking
+        ? "last_seq_id, last_updated, agent_status, heartbeat"
+        : "last_seq_id, last_updated";
+
+    private ProjectionProgressRow ReadProgressRow(System.Data.Common.DbDataReader reader, int first, string projectionName,
+        string? tenantId)
+    {
+        string? agentStatus = null;
+        DateTimeOffset? heartbeat = null;
+
+        if (_events.EnableExtendedProgressionTracking)
+        {
+            agentStatus = reader.IsDBNull(first + 2) ? null : reader.GetString(first + 2);
+            heartbeat = reader.IsDBNull(first + 3)
+                ? null
+                : SqliteTimestamp.FromDatabaseValue(reader.GetString(first + 3));
+        }
+
+        return new ProjectionProgressRow(projectionName, tenantId, reader.GetInt64(first), agentStatus, heartbeat)
+        {
+            LastUpdated = reader.IsDBNull(first + 1)
+                ? null
+                : SqliteTimestamp.FromDatabaseValue(reader.GetString(first + 1))
+        };
     }
 
     /// <summary>
