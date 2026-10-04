@@ -163,7 +163,7 @@ try
     await using (var session = store.LightweightSession())
     {
         var live = await session.Events.AggregateStreamAsync<Pod>(pod);
-        Expect(live is { Bed: "garden", Peas: 1 }, "a strong-typed aggregate folds live");
+        Expect(live is { Bed: "garden", Peas: 1 } && live.Id == new PodId(pod), "a strong-typed aggregate folds live and carries its id");
 
         var stream = await session.Events.FetchForWriting<Pod, PodId>(new PodId(pod));
         Expect(stream.Aggregate is { Peas: 1 } && stream.CurrentVersion == 2, "FetchForWriting by a strong-typed id");
@@ -189,7 +189,7 @@ try
     await using (var session = store.LightweightSession())
     {
         var stream = await session.Events.FetchForWriting<Shoal>(shoal);
-        Expect(stream.Aggregate is { Fish: 2 },
+        Expect(stream.Aggregate is { Fish: 2 } && stream.Aggregate.Id == new ShoalId(shoal),
             "a live-only strong-typed aggregate folds through its declared identity");
     }
 
