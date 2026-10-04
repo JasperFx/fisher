@@ -32,7 +32,7 @@ services.AddFisher(options =>
     options.Schema.For<Vessel>().AddSubClass<Trawler>();
 });
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L46-L64' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_configuration' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L71-L89' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_configuration' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 ## Supply a source-generated JSON context
@@ -51,7 +51,7 @@ you store:
 [JsonSerializable(typeof(Trawler))]
 internal partial class AppJsonContext : JsonSerializerContext;
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L33-L40' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_json_context' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L58-L65' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_json_context' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 The context also keeps each document's properties from being trimmed, which is how Fisher finds the
@@ -79,11 +79,27 @@ Name every event type and every aggregate in the same JSON context as your docum
 aggregate's `Apply`/`Create` dispatch is source-generated, so nothing about it needs reflection. A
 project that references Fisher as a package gets the generator with it.
 
-An aggregate whose identity is a **strong-typed id** does not work in a native image yet. JasperFx
-compiles a wrapper-keyed aggregate's identity sources with FastExpressionCompiler, which throws there
-([jasperfx#950](https://github.com/JasperFx/jasperfx/issues/950)). Fisher refuses such an aggregate by
-name rather than failing inside JasperFx. Key it on a Guid, string, `int` or `long` until that ships.
-A strong-typed *document* id works, declared as described above.
+An aggregate whose identity is a **strong-typed id** needs its id type named when it is registered.
+Under the JIT Fisher works the type out by reflection. A native image cannot close the projection over a
+type it only meets at runtime, least of all a `readonly record struct`. Register it like this:
+
+<!-- snippet: sample_native_aot_strong_typed_aggregates -->
+<a id='snippet-sample_native_aot_strong_typed_aggregates'></a>
+```cs
+// A snapshotted aggregate keyed on a strong-typed id names the id type too, so its
+// projection is closed while both types are still generic arguments.
+options.Schema.For<Berth>().Identity(x => x.Id);
+options.Projections.Snapshot<Berth, BerthId>(SnapshotLifecycle.Inline);
+
+// One that is only ever aggregated live is declared the same way.
+options.Projections.LiveStreamAggregation<Tide, TideId>();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L94-L102' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_strong_typed_aggregates' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+A strong-typed aggregate that is not registered either way is refused by name in a native image, rather
+than failing inside JasperFx. This needs JasperFx 2.80.2 or later
+([jasperfx#950](https://github.com/JasperFx/jasperfx/issues/950)).
 
 ## Async projections and the daemon
 

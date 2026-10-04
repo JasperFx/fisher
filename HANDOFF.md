@@ -12,10 +12,10 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2594 tests green on net9.0 and net10.0** — 2527 in `Fisher.Tests`, 36 in
+**2598 tests green on net9.0 and net10.0** — 2531 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 678 of
 them are shared cross-store compliance tests — 509 event sourcing and 169 document.
-On JasperFx **2.80.1** / Weasel **9.40.0**.
+On JasperFx **2.80.2** / Weasel **9.40.0**.
 
 ## The Weasel 9.40.0 bump — a builder's parameter count
 
@@ -27,6 +27,14 @@ default would have sent a caller sizing a value list down a conservative path fo
 (fisher#389). Also in the span, and inert for Fisher: creation scripts in dependency order with guarded
 foreign keys (weasel#677/#681), a `TableDelta` for a table that does not exist answering instead of
 throwing (weasel#658), and the migration lock released when an apply fails (weasel#659).
+
+## The JasperFx 2.80.2 bump — strong-typed aggregate ids in a native image
+
+**One upstream change, jasperfx#950, and no suite or count moved from the bump itself.** It finishes
+what jasperfx#942 started: `JasperFxSingleStreamProjectionBase`'s identity sources no longer
+`CompileFast()` for a wrapper id, so `Projections.Snapshot<T, TId>()` and
+`Projections.LiveStreamAggregation<T, TId>()` (fisher#412) run in a native image. The fix was written
+from this repository and verified against `smoke/aot-consumer` before it shipped. It closes fisher#412.
 
 ## The JasperFx 2.80.1 bump — jasperfx#942's workaround goes, and five skipped facts run
 
@@ -865,7 +873,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.80.1 ships 59 suites; Fisher enrolls **58 of them, 678 tests**.
+`JasperFx.Events.ComplianceTests` 2.80.2 ships 59 suites; Fisher enrolls **58 of them, 678 tests**.
 Fisher passes **678 of them, across all
 58 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed

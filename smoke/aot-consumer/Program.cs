@@ -36,6 +36,14 @@ services.AddFisher(options =>
     // the registration names both while they are still generic arguments.
     options.Projections.Snapshot<Voyage>(SnapshotLifecycle.Inline);
 
+    // fisher#412. An aggregate keyed on a readonly record struct. A value-typed wrapper has no shared
+    // instantiation for Native AOT to fall back on, so the projection is closed while both types are
+    // still generic arguments: Snapshot<T, TId>() for a snapshotted aggregate, and
+    // LiveStreamAggregation<T, TId>() for one that is only ever aggregated live.
+    options.Schema.For<Pod>().Identity(x => x.Id);
+    options.Projections.Snapshot<Pod, PodId>(SnapshotLifecycle.Inline);
+    options.Projections.LiveStreamAggregation<Shoal, ShoalId>();
+
     // fisher#412. The async daemon: an async snapshot and a multi-stream projection, both projected by
     // a daemon running in the native image.
     options.Projections.Snapshot<Ledger>(SnapshotLifecycle.Async);
@@ -142,25 +150,47 @@ try
         Expect(snapshot is { Port: "Tromso", Legs: 3 }, "the inline snapshot was written and reloads");
     }
 
-    // ---- a strong-typed aggregate id is refused by name (fisher#423) ----
+    // ---- strong-typed aggregate identities (fisher#412) ----
 
-    // JasperFx 2.80.0 fixed ValueTypeInfo's wrappers (jasperfx#942), which is what the strong-typed
-    // document ids above need. Its single-stream projection base still compiles a wrapper-keyed
-    // aggregate's identity sources with FastExpressionCompiler (jasperfx#950), so Fisher refuses the
-    // aggregate by name rather than letting it fail inside JasperFx.
-    try
+    var pod = Guid.NewGuid();
+
+    await using (var session = store.LightweightSession())
     {
-        await using var refused = DocumentStore.For(options =>
-        {
-            options.Connection($"Data Source={path}");
-            options.ConfigureSerialization(configure: json => json.TypeInfoResolver = SmokeJson.Default);
-            options.Projections.Snapshot<Pod>(SnapshotLifecycle.Inline);
-        });
-
-        throw new Exception("Expected: a strong-typed aggregate id is refused in a native image");
+        session.Events.StartStream<Pod>(pod, new PodPlanted("garden"), new PeaAdded());
+        await session.SaveChangesAsync();
     }
-    catch (NotSupportedException e) when (e.Message.Contains("jasperfx#950"))
+
+    await using (var session = store.LightweightSession())
     {
+        var live = await session.Events.AggregateStreamAsync<Pod>(pod);
+        Expect(live is { Bed: "garden", Peas: 1 }, "a strong-typed aggregate folds live");
+
+        var stream = await session.Events.FetchForWriting<Pod, PodId>(new PodId(pod));
+        Expect(stream.Aggregate is { Peas: 1 } && stream.CurrentVersion == 2, "FetchForWriting by a strong-typed id");
+
+        stream.AppendOne(new PeaAdded());
+        await session.SaveChangesAsync();
+    }
+
+    await using (var query = store.QuerySession())
+    {
+        Expect((await query.LoadAsync<Pod, PodId>(new PodId(pod)))?.Peas == 2,
+            "the inline snapshot of a strong-typed aggregate was written and reloads");
+    }
+
+    var shoal = Guid.NewGuid();
+
+    await using (var session = store.LightweightSession())
+    {
+        session.Events.StartStream<Shoal>(shoal, new FishJoined(), new FishJoined());
+        await session.SaveChangesAsync();
+    }
+
+    await using (var session = store.LightweightSession())
+    {
+        var stream = await session.Events.FetchForWriting<Shoal>(shoal);
+        Expect(stream.Aggregate is { Fish: 2 },
+            "a live-only strong-typed aggregate folds through its declared identity");
     }
 
     // ---- the async daemon (fisher#412) ----
@@ -370,14 +400,31 @@ public class Voyage
 
 public readonly record struct PodId(Guid Value);
 
+public record PodPlanted(string Bed);
+
 public record PeaAdded;
 
 public class Pod
 {
     public PodId Id { get; set; }
+    public string Bed { get; set; } = "";
     public int Peas { get; set; }
 
+    public static Pod Create(PodPlanted planted) => new() { Bed = planted.Bed };
+
     public void Apply(PeaAdded _) => Peas++;
+}
+
+public readonly record struct ShoalId(Guid Value);
+
+public record FishJoined;
+
+public class Shoal
+{
+    public ShoalId Id { get; set; }
+    public int Fish { get; set; }
+
+    public void Apply(FishJoined _) => Fish++;
 }
 
 public record Deposited(decimal Amount);
@@ -439,7 +486,10 @@ public class Note
 }
 
 [JsonSerializable(typeof(Pod))]
+[JsonSerializable(typeof(PodPlanted))]
 [JsonSerializable(typeof(PeaAdded))]
+[JsonSerializable(typeof(Shoal))]
+[JsonSerializable(typeof(FishJoined))]
 [JsonSerializable(typeof(Deposited))]
 [JsonSerializable(typeof(Withdrawn))]
 [JsonSerializable(typeof(Ledger))]

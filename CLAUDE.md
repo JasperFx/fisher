@@ -1373,20 +1373,24 @@ reloads an inline `Snapshot<T>`.
   `Event<>` closing works natively only because every event type is a reference type, served by
   Native AOT's shared canonical instantiation. Its method-level suppression says so, and a
   value-type event would not be covered.
-- ⚠️ **A strong-typed aggregate id cannot work natively until jasperfx#950 ships.** Closing the
-  projection statically does not help: `JasperFxSingleStreamProjectionBase`'s constructor builds its
-  identity sources with `IEvent.CreateAggregateIdentitySource<TId>()` and
-  `StreamAction.CreateAggregateIdentitySource<TId>()`, which `CompileFast()` unconditionally for any
-  wrapper. That was measured twice, with a `Snapshot<T, TId>` overload built and then removed both
-  times: once against #942 (#398), and again on JasperFx 2.80.1 after #942 shipped (fisher#423).
-  #942 fixed `ValueTypeInfo`, which is what strong-typed *document* ids needed, and not these two.
-  The factory refuses by name, naming #950, and the smoke asserts that refusal natively. It is the one
-  item of fisher#412 still open.
-  - **The static-closing half is built and parked** on the local branch
-    `wip-412-strong-typed-aggregates`: `Projections.Snapshot<T, TId>()`, a composite twin and
-    `Projections.LiveStreamAggregation<T, TId>()`, recording a factory on the event graph that live
-    aggregation, `Snapshot<T>` and composites all consult. When #950 ships it is that branch plus
-    removing the refusal.
+- **A strong-typed aggregate id works natively once its type is named** (fisher#412, JasperFx 2.80.2).
+  `Projections.Snapshot<T, TId>()`, its composite twin and `Projections.LiveStreamAggregation<T, TId>()`
+  record a statically closed factory on the event graph (`SingleStreamProjectionFactory.Declare`), and
+  live aggregation, `Snapshot<T>` and composites all consult it before falling back to
+  `MakeGenericType`. That is #386's answer for documents, one layer over.
+  - ⚠️ **It took two JasperFx fixes, and the first looked like enough.** jasperfx#942 (2.80.0) fixed
+    `ValueTypeInfo`, which is what strong-typed *document* ids needed. `JasperFxSingleStreamProjectionBase`'s
+    constructor also calls `IEvent`/`StreamAction.CreateAggregateIdentitySource<TId>()`, which
+    `CompileFast()`ed unconditionally for any wrapper. That was jasperfx#950, fixed in 2.80.2 by
+    composing `ValueTypeInfo.CreateWrapper`. Both were measured in the native smoke, and the overload was
+    built and pulled twice (#398, #423) before the second fix landed.
+  - **An undeclared wrapper is still refused by name in a native image.** A `readonly record struct` is
+    a value type, so Native AOT has no shared instantiation for `MakeGenericType` to fall back on.
+  - **The declared id type is checked against the identity member**, because the source generator keys
+    the dispatcher on the member's type and a mismatch would fail at the first event, far from the
+    registration.
+  - ⚠️ **Live aggregation leaves a strong-typed `Id` at its default** — fisher#426, pre-existing and not
+    AOT-specific (it reproduces under the JIT on 2.80.1). The smoke asserts the folded state only.
 - **The smoke consumer references `JasperFx.Events.SourceGenerator` itself**, because a project
   reference does not carry the analyzer the package bundles. Its version is kept in step by hand.
 
@@ -1440,7 +1444,7 @@ compares a `DateOnly`, and runs both projection step-through methods — all nat
   instead. Do not inline it back. The remaining `MakeGenericMethod` is inherent (the interface leaves
   `TState` unconstrained, or names it only as a `Type`). It carries a method-level suppression, and the
   smoke runs it natively.
-- **What #412 did not touch:** strong-typed aggregate ids (jasperfx#950, above), and the IL warnings
+- **What #412 did not touch:** the IL warnings
   outside the five paths the issue named. `dotnet build` still lists about twenty against Fisher
   (`MessagePublishing`, `AdvancedSqlResultReader`, `SecondaryStoreProxy`, `EnumMember` and others).
   ILC reports some of them as reachable from the smoke, and none of them failed when it ran.
