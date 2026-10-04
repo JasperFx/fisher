@@ -39,9 +39,6 @@ namespace Fisher.Linq.Includes;
 /// </remarks>
 public static class IncludeExtensions
 {
-    private static readonly MethodInfo MarkerMethod = typeof(IncludeExtensions)
-        .GetMethod(nameof(IncludeMarker), BindingFlags.NonPublic | BindingFlags.Static)!;
-
     // ---- identity direction: the parent member holds the included document's id ----
 
     /// <summary>
@@ -239,8 +236,12 @@ public static class IncludeExtensions
                 "Include() is only supported on a Fisher query started from session.Query<T>().");
         }
 
+        // The marker is closed through a delegate while T is still a generic argument (fisher#412),
+        // not looked up by name and closed with MakeGenericMethod, which Native AOT cannot promise.
+        var marker = new Func<IQueryable<T>, IIncludePlan, IQueryable<T>>(IncludeMarker).Method;
+
         return queryable.Provider.CreateQuery<T>(
-            Expression.Call(MarkerMethod.MakeGenericMethod(typeof(T)), queryable.Expression,
+            Expression.Call(marker, queryable.Expression,
                 Expression.Constant(plan, typeof(IIncludePlan))));
     }
 

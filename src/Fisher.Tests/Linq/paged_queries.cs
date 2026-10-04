@@ -232,6 +232,41 @@ public class paged_queries : IAsyncLifetime
         seen.ShouldBe([7, 6, 5, 4, 3, 2, 1]);
     }
 
+    /// <summary>
+    ///     fisher#412. The terminal key is the identity, so a document keyed by a strong-typed wrapper
+    ///     carries the wrapper in every cursor. The reflection-based serializer wrote it as an object
+    ///     the decoder could never bind back, so the second page always failed.
+    /// </summary>
+    [Fact]
+    public async Task a_cursor_walk_over_a_strong_typed_identity()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            for (var i = 1; i <= 5; i++)
+            {
+                session.Store(new Netted { Id = new NettedId(Guid.NewGuid()), Weight = i });
+            }
+
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using var query = Session();
+
+        var seen = new List<int>();
+        string? cursor = null;
+
+        do
+        {
+            var page = await query.Query<Netted>().OrderBy(x => x.Weight).ThenBy(x => x.Id)
+                .ToCursorPageAsync(2, cursor, Token);
+
+            seen.AddRange(page.Items.Select(x => x.Weight));
+            cursor = page.NextCursor;
+        } while (cursor is not null);
+
+        seen.ShouldBe([1, 2, 3, 4, 5]);
+    }
+
     [Fact]
     public async Task a_cursor_page_respects_a_where()
     {
@@ -286,5 +321,13 @@ public class paged_queries : IAsyncLifetime
         public Guid Id { get; set; }
         public int Weight { get; set; }
         public string Species { get; set; } = "";
+    }
+
+    public readonly record struct NettedId(Guid Value);
+
+    public class Netted
+    {
+        public NettedId Id { get; set; }
+        public int Weight { get; set; }
     }
 }

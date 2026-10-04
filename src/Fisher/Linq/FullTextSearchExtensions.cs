@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using System.Reflection;
 namespace Fisher.Linq;
 
 /// <summary>
@@ -136,25 +137,30 @@ public static class FullTextSearchExtensions
     /// </remarks>
     public static IOrderedQueryable<T> OrderByRelevance<T>(this IQueryable<T> source,
         params double[] columnWeights)
-        => Rank(source, nameof(OrderByRelevance), columnWeights);
+        => Rank(source, new Func<IQueryable<T>, double[], IOrderedQueryable<T>>(OrderByRelevance).Method,
+            columnWeights);
 
     /// <inheritdoc cref="OrderByRelevance{T}" />
     /// <summary>Worst match first. The inverse of <see cref="OrderByRelevance{T}" />.</summary>
     public static IOrderedQueryable<T> OrderByRelevanceDescending<T>(this IQueryable<T> source,
         params double[] columnWeights)
-        => Rank(source, nameof(OrderByRelevanceDescending), columnWeights);
+        => Rank(source, new Func<IQueryable<T>, double[], IOrderedQueryable<T>>(OrderByRelevanceDescending).Method,
+            columnWeights);
 
     /// <inheritdoc cref="OrderByRelevance{T}" />
     /// <summary>Break an existing ordering's ties by relevance.</summary>
     public static IOrderedQueryable<T> ThenByRelevance<T>(this IOrderedQueryable<T> source,
         params double[] columnWeights)
-        => Rank(source, nameof(ThenByRelevance), columnWeights);
+        => Rank(source, new Func<IOrderedQueryable<T>, double[], IOrderedQueryable<T>>(ThenByRelevance).Method,
+            columnWeights);
 
     /// <inheritdoc cref="OrderByRelevance{T}" />
     /// <summary>Break an existing ordering's ties by relevance, worst match first.</summary>
     public static IOrderedQueryable<T> ThenByRelevanceDescending<T>(this IOrderedQueryable<T> source,
         params double[] columnWeights)
-        => Rank(source, nameof(ThenByRelevanceDescending), columnWeights);
+        => Rank(source,
+            new Func<IOrderedQueryable<T>, double[], IOrderedQueryable<T>>(ThenByRelevanceDescending).Method,
+            columnWeights);
 
     /// <summary>
     ///     The matching fragment of the indexed text, with the matched terms marked — FTS5's
@@ -219,12 +225,16 @@ public static class FullTextSearchExtensions
     ///     Rebuilds the call as an expression node the provider's parser sees, which is what makes
     ///     these ordinary members of the ordering chain rather than a terminal that has to be last.
     /// </summary>
-    private static IOrderedQueryable<T> Rank<T>(IQueryable<T> source, string method, double[] weights)
+    /// <remarks>
+    ///     The caller hands over its own closed <see cref="MethodInfo" />, taken from a delegate over the
+    ///     method while <typeparamref name="T" /> is still a generic argument (fisher#412) — the shape
+    ///     <c>System.Linq.Queryable</c> uses for the same job. Looking the method up by name and closing it
+    ///     over <c>typeof(T)</c> is a <c>MakeGenericMethod</c> Native AOT cannot promise to have compiled.
+    /// </remarks>
+    private static IOrderedQueryable<T> Rank<T>(IQueryable<T> source, MethodInfo method, double[] weights)
     {
         var call = Expression.Call(
-            typeof(FullTextSearchExtensions),
             method,
-            [typeof(T)],
             source.Expression,
             Expression.Constant(weights ?? []));
 

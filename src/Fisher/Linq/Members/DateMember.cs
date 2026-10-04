@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 
 namespace Fisher.Linq.Members;
 
@@ -49,6 +50,14 @@ internal class DateMember : IQueryableMember
     ///     format by hand instead would mean reproducing STJ's trailing-zero trimming, which no single
     ///     format string does.
     /// </summary>
+    /// <remarks>
+    ///     Through the options' own <see cref="JsonTypeInfo" /> rather than
+    ///     <c>JsonSerializer.Serialize(object, Type, options)</c> (fisher#412). The two produce the same
+    ///     text, but only the first is open to Native AOT: it asks the configured resolver — in a native
+    ///     image, the application's source-generated context — instead of reaching for reflection. The
+    ///     resolver covers the type because it covers the document, and this is a member of the document:
+    ///     a source-generated context emits metadata for every member type it reaches.
+    /// </remarks>
     public object? ConvertValue(object? value)
     {
         if (value == null)
@@ -56,7 +65,7 @@ internal class DateMember : IQueryableMember
             return null;
         }
 
-        var json = JsonSerializer.Serialize(value, value.GetType(), _serializerOptions);
+        var json = JsonSerializer.Serialize(value, _serializerOptions.GetTypeInfo(value.GetType()));
         return json.Length >= 2 && json[0] == '"' && json[^1] == '"'
             ? json[1..^1]
             : json;

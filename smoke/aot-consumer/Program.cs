@@ -1,7 +1,11 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Fisher;
 using Fisher.Linq;
+using Fisher.Linq.Includes;
 using JasperFx;
+using JasperFx.Descriptors;
+using JasperFx.Events;
 using JasperFx.Events.Projections;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -31,6 +35,14 @@ services.AddFisher(options =>
     // fisher#398. An inline snapshot is a projection closed over (aggregate, id) — reflective unless
     // the registration names both while they are still generic arguments.
     options.Projections.Snapshot<Voyage>(SnapshotLifecycle.Inline);
+
+    // fisher#412. The async daemon: an async snapshot and a multi-stream projection, both projected by
+    // a daemon running in the native image.
+    options.Projections.Snapshot<Ledger>(SnapshotLifecycle.Async);
+    options.Projections.Add(new PortVisitsProjection(), ProjectionLifecycle.Async);
+
+    // fisher#412. The LINQ paths that used to serialize or close generics by reflection.
+    options.Schema.For<Note>().FullTextIndex(x => x.Body);
 });
 
 await using var provider = services.BuildServiceProvider();
@@ -130,6 +142,115 @@ try
         Expect(snapshot is { Port: "Tromso", Legs: 3 }, "the inline snapshot was written and reloads");
     }
 
+    // ---- the async daemon (fisher#412) ----
+
+    var ledger = Guid.NewGuid();
+
+    await using (var session = store.LightweightSession())
+    {
+        session.Events.StartStream<Ledger>(ledger, new Deposited(100), new Withdrawn(30));
+        await session.SaveChangesAsync();
+    }
+
+    var daemon = await store.BuildProjectionDaemonAsync();
+    try
+    {
+        await daemon.StartAllAsync();
+        await daemon.WaitForNonStaleData(TimeSpan.FromSeconds(60));
+    }
+    finally
+    {
+        await daemon.StopAllAsync();
+        daemon.Dispose();
+    }
+
+    await using (var query = store.QuerySession())
+    {
+        Expect((await query.LoadAsync<Ledger>(ledger))?.Balance == 70, "the async snapshot was projected by the daemon");
+
+        var visits = await query.LoadAsync<PortVisits>("Bergen");
+        Expect(visits?.Count == 1, "the multi-stream projection was projected by the daemon");
+        Expect((await query.LoadAsync<PortVisits>("Tromso"))?.Count == 1, "the multi-stream projection grouped by port");
+    }
+
+    // ---- LINQ and the step-through (fisher#412) ----
+
+    var boat = Guid.NewGuid();
+
+    // The full-text index's FTS5 table and triggers are created by the migration and not by the
+    // on-demand path that creates a document table at first write, so the schema is applied here.
+    await store.ApplyAllConfiguredChangesToDatabaseAsync();
+
+    await using (var session = store.LightweightSession())
+    {
+        session.Store(new Boat { Id = boat, Name = "Belle" });
+
+        for (var i = 1; i <= 5; i++)
+        {
+            session.Store(new Catch
+            {
+                Id = Guid.NewGuid(), Weight = i, BoatId = boat, Landed = new DateOnly(2026, 8, i)
+            });
+        }
+
+        session.Store(new Escalation { Id = Guid.NewGuid(), TicketId = ticket.Id });
+        session.Store(new Note { Id = Guid.NewGuid(), Body = "corrosion on the hull" });
+        session.Store(new Note { Id = Guid.NewGuid(), Body = "corrosion corrosion corrosion everywhere" });
+        await session.SaveChangesAsync();
+    }
+
+    await using (var query = store.QuerySession())
+    {
+        // Keyset paging: the cursor payload used to be JsonSerializer over an object?[].
+        var weights = new List<int>();
+        string? cursor = null;
+        do
+        {
+            var page = await query.Query<Catch>().OrderBy(x => x.Weight).ThenBy(x => x.Id)
+                .ToCursorPageAsync(2, cursor);
+            weights.AddRange(page.Items.Select(x => x.Weight));
+            cursor = page.NextCursor;
+        } while (cursor is not null);
+
+        Expect(weights.SequenceEqual([1, 2, 3, 4, 5]), "a keyset cursor walk covers every row once");
+
+        // A DateOnly comparison value is rendered through the store's serializer.
+        var late = await query.Query<Catch>().Where(x => x.Landed >= new DateOnly(2026, 8, 4)).ToListAsync();
+        Expect(late.Count == 2, "a DateOnly comparison finds the documents");
+
+        // Include() closed Enumerable.Contains over the member's runtime type.
+        var boats = new List<Boat>();
+        var catches = await query.Query<Catch>().Include(x => x.BoatId, boats).ToListAsync();
+        Expect(catches.Count == 5 && boats.Count == 1 && boats[0].Name == "Belle", "Include fetches the related document");
+
+        // ...over a member whose type is a value type nothing else closes Contains over.
+        var related = new List<Ticket>();
+        await query.Query<Escalation>().Include(x => x.TicketId, related).ToListAsync();
+        Expect(related.Count == 1 && related[0].Subject == "printer", "Include fetches by a strong-typed identity");
+
+        // OrderByRelevance closed its own marker method over T by name.
+        var ranked = await query.Query<Note>().Where(x => x.Search("corrosion")).OrderByRelevance().ToListAsync();
+        Expect(ranked.Count == 2 && ranked[0].Body.StartsWith("corrosion corrosion"), "a full-text query ranks by relevance");
+    }
+
+    // Projection step-through rendered state with JsonSerializer's default options.
+    var records = new[] { (object)new Departed("Hull"), new Arrived("Bergen") }
+        .Select((body, index) => new EventRecord(Guid.NewGuid(), index + 1, index + 1, voyage.ToString(),
+            store.Options.EventGraph.EventMappingFor(body.GetType()).EventTypeName,
+            JsonDocument.Parse(store.Options.Serializer.ToJson(body)).RootElement, null,
+            DateTimeOffset.UtcNow, null, null))
+        .ToList();
+
+    var timeline = await ((IEventStore)store).RunProjectionByNameAsync(nameof(Voyage), voyage, records, null,
+        CancellationToken.None);
+    Expect(timeline.Steps.Count == 2 && timeline.FinalState?.GetProperty("legs").GetInt32() == 2,
+        "projection step-through renders each state through the store's serializer");
+
+    var typedTimeline = await ((IEventStore)store).RunProjectionAsync<Voyage>(nameof(Voyage), voyage, records,
+        null, CancellationToken.None);
+    Expect(typedTimeline.Steps.Select(x => x.After?.Legs).SequenceEqual([1, 2]),
+        "typed projection step-through copies the state at every step");
+
     Console.WriteLine("OK: documents and events written and read in a native image.");
     return 0;
 }
@@ -227,6 +348,72 @@ public class Voyage
     }
 }
 
+public record Deposited(decimal Amount);
+
+public record Withdrawn(decimal Amount);
+
+public class Ledger
+{
+    public Guid Id { get; set; }
+    public decimal Balance { get; set; }
+
+    public static Ledger Create(Deposited deposited) => new() { Balance = deposited.Amount };
+
+    public void Apply(Deposited deposited) => Balance += deposited.Amount;
+
+    public void Apply(Withdrawn withdrawn) => Balance -= withdrawn.Amount;
+}
+
+public class PortVisits
+{
+    public string Id { get; set; } = "";
+    public int Count { get; set; }
+}
+
+public partial class PortVisitsProjection : Fisher.Projections.MultiStreamProjection<PortVisits, string>
+{
+    public PortVisitsProjection()
+    {
+        Identity<Arrived>(x => x.Port);
+    }
+
+    public void Apply(Arrived _, PortVisits visits) => visits.Count++;
+}
+
+public class Boat
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = "";
+}
+
+public class Catch
+{
+    public Guid Id { get; set; }
+    public int Weight { get; set; }
+    public Guid BoatId { get; set; }
+    public DateOnly Landed { get; set; }
+}
+
+public class Escalation
+{
+    public Guid Id { get; set; }
+    public TicketId TicketId { get; set; }
+}
+
+public class Note
+{
+    public Guid Id { get; set; }
+    public string Body { get; set; } = "";
+}
+
+[JsonSerializable(typeof(Deposited))]
+[JsonSerializable(typeof(Withdrawn))]
+[JsonSerializable(typeof(Ledger))]
+[JsonSerializable(typeof(PortVisits))]
+[JsonSerializable(typeof(Boat))]
+[JsonSerializable(typeof(Catch))]
+[JsonSerializable(typeof(Note))]
+[JsonSerializable(typeof(Escalation))]
 [JsonSerializable(typeof(Departed))]
 [JsonSerializable(typeof(Arrived))]
 [JsonSerializable(typeof(Voyage))]

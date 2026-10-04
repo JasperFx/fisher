@@ -2,9 +2,11 @@
 
 Fisher's document storage works in a Native AOT image (`PublishAot=true`): storing, loading, upserting
 and LINQ queries, over Guid, string, `int` and `long` identities, strong-typed id wrappers and document
-hierarchies. So does the core of the event store: starting and appending to streams, live aggregation,
-`FetchForWriting`, and an inline `Snapshot<T>`. A smoke application is published natively and run in
-Fisher's CI on every change.
+hierarchies. So does the event store: starting and appending to streams, live aggregation,
+`FetchForWriting`, inline snapshots, and the async daemon running async snapshots and multi-stream
+projections. So do keyset paging (`ToCursorPageAsync`), `Include()`, full-text search with relevance
+ordering, and projection step-through. A smoke application exercising all of these is published
+natively and run in Fisher's CI on every change.
 
 Three things are different from a JIT application. Each has to be configured, because the reflection
 that works them out under the JIT isn't available in a native image.
@@ -82,8 +84,15 @@ compiles the wrapper's accessors with FastExpressionCompiler, which throws there
 ([jasperfx#942](https://github.com/JasperFx/jasperfx/issues/942)). Fisher refuses such an aggregate by
 name rather than failing inside JasperFx. Key it on a Guid, string, `int` or `long` until that ships.
 
+## Async projections and the daemon
+
+Async projections need nothing extra. Name the projected document types in the JSON context, as you
+do for any document. The CI smoke builds the daemon with `BuildProjectionDaemonAsync()`, starts it,
+and waits for it to catch up, all in the native image.
+
 ::: warning What has not been measured
-The CI smoke covers document storage and the event-store paths above, through `AddFisher`. Async
-projections, the async daemon, and the LINQ operators that still serialize through reflection (cursor
-paging, `Include`, full-text extracts) have not been run in a native image.
+The CI smoke covers the paths above, through `AddFisher`. It does not cover the hosted daemon
+(`AddAsyncDaemon()`), although that starts the same daemon. Nor does it cover subscriptions, event
+publishing from projections, raw SQL (`AdvancedSql`), or a second store registered with
+`AddFisherStore<T>`. Fisher's build still reports trimming and AOT warnings on some of those paths.
 :::

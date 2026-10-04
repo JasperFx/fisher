@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Fisher.Linq.Members;
@@ -67,11 +69,124 @@ internal static class CursorPagination
         }
     }
 
+    /// <remarks>
+    ///     <para>
+    ///         <b>A fixed-shape <see cref="Utf8JsonWriter" />, not <c>JsonSerializer</c></b> (fisher#412).
+    ///         The payload is a heterogeneous array of scalars, which the reflection-based serializer
+    ///         handled by inspecting each element's runtime type — and Native AOT disables that, so the
+    ///         first full page of a keyset query threw in a native image. Each value is written with the
+    ///         same <see cref="Utf8JsonWriter" /> call System.Text.Json's own converter for its type
+    ///         makes, under the same default encoder.
+    ///     </para>
+    ///     <para>
+    ///         ⚠️ <b>The output is byte-identical to what <c>JsonSerializer.Serialize(object?[])</c>
+    ///         wrote</b>, and <c>cursor_encoding</c> pins the exact string. A cursor is handed to a client
+    ///         and comes back on a later request, possibly to a newer deployment, and the format is
+    ///         shared with Polecat — so a change of spelling here invalidates every cursor in flight.
+    ///     </para>
+    /// </remarks>
     public static string Encode(IReadOnlyList<object?> keyValues)
     {
-        var json = JsonSerializer.Serialize(keyValues.Select(Normalize).ToArray());
+        var buffer = new ArrayBufferWriter<byte>();
 
-        return Version + Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartArray();
+
+            foreach (var value in keyValues)
+            {
+                WriteKey(writer, Normalize(value));
+            }
+
+            writer.WriteEndArray();
+        }
+
+        return Version + Convert.ToBase64String(buffer.WrittenSpan);
+    }
+
+    /// <summary>
+    ///     One key, written exactly as System.Text.Json's built-in converter for its type writes it.
+    /// </summary>
+    /// <remarks>
+    ///     An enum is its number, as STJ's default <c>EnumConverter</c> writes it. <see cref="TimeOnly" />
+    ///     and <see cref="TimeSpan" /> are the TimeSpan constant (<c>"c"</c>) format, which is what STJ's
+    ///     converters for both emit. Anything else is refused by name: no ordering key the provider reads
+    ///     back is another type, and a guess at its spelling would be a cursor nobody could decode.
+    /// </remarks>
+    private static void WriteKey(Utf8JsonWriter writer, object? value)
+    {
+        switch (value)
+        {
+            case null:
+                writer.WriteNullValue();
+                break;
+            case string text:
+                writer.WriteStringValue(text);
+                break;
+            case bool flag:
+                writer.WriteBooleanValue(flag);
+                break;
+            case Enum enumValue
+                when Type.GetTypeCode(Enum.GetUnderlyingType(enumValue.GetType())) == TypeCode.UInt64:
+                writer.WriteNumberValue(Convert.ToUInt64(enumValue, CultureInfo.InvariantCulture));
+                break;
+            case Enum enumValue:
+                writer.WriteNumberValue(Convert.ToInt64(enumValue, CultureInfo.InvariantCulture));
+                break;
+            case int number:
+                writer.WriteNumberValue(number);
+                break;
+            case long number:
+                writer.WriteNumberValue(number);
+                break;
+            case short number:
+                writer.WriteNumberValue(number);
+                break;
+            case byte number:
+                writer.WriteNumberValue(number);
+                break;
+            case sbyte number:
+                writer.WriteNumberValue(number);
+                break;
+            case uint number:
+                writer.WriteNumberValue(number);
+                break;
+            case ulong number:
+                writer.WriteNumberValue(number);
+                break;
+            case ushort number:
+                writer.WriteNumberValue(number);
+                break;
+            case double number:
+                writer.WriteNumberValue(number);
+                break;
+            case float number:
+                writer.WriteNumberValue(number);
+                break;
+            case decimal number:
+                writer.WriteNumberValue(number);
+                break;
+            case char character:
+                writer.WriteStringValue(character.ToString());
+                break;
+            case DateTime timestamp:
+                writer.WriteStringValue(timestamp);
+                break;
+            case DateOnly date:
+                writer.WriteStringValue(date.ToString("O", CultureInfo.InvariantCulture));
+                break;
+            case TimeOnly time:
+                writer.WriteStringValue(time.ToTimeSpan().ToString("c", CultureInfo.InvariantCulture));
+                break;
+            case TimeSpan span:
+                writer.WriteStringValue(span.ToString("c", CultureInfo.InvariantCulture));
+                break;
+            default:
+                throw new NotSupportedException(
+                    $"Keyset pagination cannot carry an ordering key of type '{value.GetType().Name}' in a "
+                    + "cursor. Order by members holding a string, a number, a Guid, a timestamp, a date or "
+                    + "a time, ending with the document identity.");
+        }
     }
 
     public static object?[] Decode(string cursor, IReadOnlyList<IQueryableMember?> members)
@@ -86,8 +201,18 @@ internal static class CursorPagination
 
         try
         {
+            // JsonDocument rather than JsonSerializer.Deserialize<JsonElement[]> (fisher#412): the same
+            // parse, with nothing for Native AOT to refuse. A JSON null reads as no keys, as the
+            // serializer read it, and anything else that is not an array is malformed.
             var json = Encoding.UTF8.GetString(Convert.FromBase64String(cursor[Version.Length..]));
-            slots = JsonSerializer.Deserialize<JsonElement[]>(json) ?? [];
+            using var document = JsonDocument.Parse(json);
+
+            slots = document.RootElement.ValueKind switch
+            {
+                JsonValueKind.Null => [],
+                JsonValueKind.Array => document.RootElement.EnumerateArray().Select(x => x.Clone()).ToArray(),
+                _ => throw new JsonException("A cursor payload is a JSON array.")
+            };
         }
         catch (Exception e) when (e is FormatException or JsonException)
         {
@@ -164,8 +289,18 @@ internal static class CursorPagination
     ///     The value to put in the cursor for a key read back out of the row.
     /// </summary>
     /// <remarks>
-    ///     A Guid and a timestamp become strings — the same encodings Fisher stores — so the round trip
-    ///     through JSON is lossless and the decoded value compares against the column as written.
+    ///     <para>
+    ///         A Guid and a timestamp become strings — the same encodings Fisher stores — so the round
+    ///         trip through JSON is lossless and the decoded value compares against the column as written.
+    ///     </para>
+    ///     <para>
+    ///         A strong-typed identity is carried as the value it wraps (fisher#412). The terminal key is
+    ///         the identity, so this is the ordinary case for a document keyed by a wrapper — and the
+    ///         reflection-based serializer wrote the wrapper as an object (<c>{"Value":…}</c>) that
+    ///         <see cref="ConvertSlot" /> could never bind back, so the second page of such a walk
+    ///         always failed. The id column holds the inner value, which is what the seek compares
+    ///         against.
+    ///     </para>
     /// </remarks>
     private static object? Normalize(object? value)
         => value switch
@@ -173,6 +308,8 @@ internal static class CursorPagination
             DBNull => null,
             Guid guid => guid.ToString(),
             DateTimeOffset timestamp => SqliteTimestamp.ToDatabaseValue(timestamp),
+            not null when StrongTypedId.TryResolve(value.GetType(), out var wrapper)
+                => Normalize(wrapper.ValueProperty.GetValue(value)),
             _ => value
         };
 
@@ -184,6 +321,11 @@ internal static class CursorPagination
         }
 
         var target = Nullable.GetUnderlyingType(memberType) ?? memberType;
+
+        if (StrongTypedId.TryResolve(target, out var wrapper))
+        {
+            target = wrapper.SimpleType;
+        }
 
         if (target == typeof(Guid))
         {
