@@ -2394,6 +2394,28 @@ here for free.
   returns without touching the shared connection, so `await using` out of habit does no harm.
 - The scopes' DCB boundaries are checked by the parent inside its transaction, for the same reason
   their operations are written there: a guard checked in no transaction guards nothing.
+- ⚠️ **A scope for a tenant in another database FILE is refused** (fisher#415). A scope shares its
+  session's connection, so it can only ever write to that file — and under database-per-tenant
+  nothing used to ask which file the scope's tenant lived in. From a `north` session,
+  `ForTenant("south").Store(doc)` committed a `tenant_id = 'south'` row into **north's** file, where no
+  `south` session looks and every `north` session filters it out. Silent in both directions, and
+  confirmed by a test before anything was changed.
+  - **Same file, not same tenancy style**, compared by `FisherDatabase` reference or `Identifier`.
+    Every tenant shares the one file under `DefaultTenancy`, and co-located tenants share one
+    `FisherDatabase` under sharded tenancy (fisher#252), so both keep fisher#33's one-transaction
+    write. Writing across files would need a transaction spanning two SQLite files.
+  - **Resolved through `ExistingDatabaseFor`, never `DatabaseFor`**, because a refusal must not
+    provision: under directory tenancy `DatabaseFor` registers any id and its file follows. So a
+    tenant whose file does not exist yet is refused as unknown, and one whose file does as a
+    different file — both are refusals, and neither leaves a tenant behind.
+  - **The tenant id takes the tenancy's spelling** (fisher#393 from this entry point), before the
+    scope cache is consulted, so `ForTenant("ACME")` and `ForTenant("acme")` are one scope.
+  - **The exact spelling of the session's own tenant skips the lookup**, which keeps the common
+    `ForTenant(session.TenantId)` free and leaves its behaviour exactly as it was.
+  - `StoreOptions.Tenancy` is stashed by `DocumentStore`'s constructor for `SharedTenantFiles`' reason:
+    a session holds the options and its database but not the store.
+  - `tenant_scopes_across_databases` fails 6 of 7 against the previous build; the co-located fact is
+    the regression guard and passes either way.
 
 ### Raw SQL
 
@@ -4146,8 +4168,8 @@ whole commit.
     interface member that returns the id unchanged) supplies the spelling. `OpenSession`, the explorer's
     tenant scope and the document diagnostics reads all use it. `DefaultTenancy` keeps the default,
     because with no configured set `ACME` and `acme` are consistently two tenants there. **`ForTenant`
-    scopes are not normalised**, since a scope cannot reach the tenancy. That is part of fisher#415,
-    which suspects a larger hazard in the same place.
+    scopes are normalised too since fisher#415**, through `StoreOptions.Tenancy` — see "Cross-tenant
+    writes".
   - **Neither compliance arm reaches it**, which is why `sharded_tenancy_reads` exists:
     `ShardedTenancyExplorerCompliance` never asks for a *store-global* listing, and
     `DatabasePerTenantExplorerCompliance` has no co-located tenants for a file to misattribute. Five of

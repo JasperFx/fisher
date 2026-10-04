@@ -34,6 +34,7 @@ public partial class DocumentStore : IDocumentStore
         Database = Tenancy.Default;
         options.StorageDatabase = Database;
         options.SharedTenantFiles = Tenancy.SharedFiles();
+        options.Tenancy = Tenancy;
 
         // Register the self-aggregating types whose evolvers the source generator emitted, so
         // Projections.AllAggregateTypes() reports an aggregate that was never registered by hand.
