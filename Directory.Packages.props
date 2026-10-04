@@ -7,7 +7,12 @@
         <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
              carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
              transitively. -->
-        <!-- JasperFx 2.79.1 (from 2.78.0, spanning 2.79.0). No compile break and no new suite; four
+        <!-- JasperFx 2.79.2 (from 2.79.1). One change, jasperfx#940: the source generator keeps the
+             evolver constructors it emits under Native AOT, so ILC no longer trims a conventional
+             aggregate's generated dispatcher away. No suite changed and no test count moved; this is
+             the floor fisher#398's event-store AOT work builds on.
+
+             JasperFx 2.79.1 (from 2.78.0, spanning 2.79.0). No compile break and no new suite; four
              existing suites widened, and two of the changes needed Fisher work:
 
              - jasperfx#932: DocumentTypesAsync lists every sub-class registered under a mapped root,
@@ -172,16 +177,16 @@
              generation, which Fisher does not do — projection dispatch is source-generated.
              jasperfx#880 is XML comments on AutoCreate. jasperfx#867 is a Wolverine codegen fix and
              jasperfx#865/#866 are the publish pipeline. -->
-        <PackageVersion Include="JasperFx" Version="2.79.1" />
-        <PackageVersion Include="JasperFx.Events" Version="2.79.1" />
+        <PackageVersion Include="JasperFx" Version="2.79.2" />
+        <PackageVersion Include="JasperFx.Events" Version="2.79.2" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.79.1" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.79.1" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.79.2" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.79.2" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.79.1" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.79.2" />
 
         <!-- Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
              source. Weasel.Storage: the dialect-neutral closed-shape document + event storage
