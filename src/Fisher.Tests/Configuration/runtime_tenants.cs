@@ -2,6 +2,7 @@ using Fisher.Linq;
 using Fisher.Storage;
 using JasperFx;
 using JasperFx.Descriptors;
+using JasperFx.Events;
 using JasperFx.Events.Projections;
 using Microsoft.Data.Sqlite;
 
@@ -349,6 +350,103 @@ public class runtime_tenants : IAsyncLifetime
                 daemon.Dispose();
             }
         }
+    }
+
+    // ---- a read for a tenant that does not exist (fisher#390) ----
+
+    /// <summary>
+    ///     A diagnostic, explorer or monitoring read for a tenant nobody has used does not create it.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Every one of these resolved through <c>DatabaseFor</c>, which under the directory
+    ///         convention answers for any valid id. Its first connection then created the file and
+    ///         migrated it, so a typo in a console's tenant picker left <c>never-seen.db</c> behind,
+    ///         and from then on a real tenant that <c>RefreshAsync</c>, <c>db-apply</c> and the daemon's
+    ///         poller all picked up.
+    ///     </para>
+    ///     <para>
+    ///         Each asserts the refusal AND the absence of the file, because a call that threw after the
+    ///         migration had already run would satisfy the first half alone.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task a_read_for_an_unknown_tenant_does_not_create_it()
+    {
+        await using var store = StoreFor();
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        IEventStore events = store;
+        var diagnostics = (JasperFx.Documents.IDocumentStoreDiagnostics)store;
+        const string never = "never-seen";
+
+        await Should.ThrowAsync<UnknownTenantException>(() => events.GetProjectionStatusesAsync(never, Token));
+        await Should.ThrowAsync<UnknownTenantException>(() => events.GetRecentStreamsAsync(10, never, Token));
+        await Should.ThrowAsync<UnknownTenantException>(
+            () => events.GetStreamMetadataAsync(Guid.NewGuid().ToString(), never, Token));
+        await Should.ThrowAsync<UnknownTenantException>(async () =>
+        {
+            await foreach (var _ in events.ReadStreamAsync(Guid.NewGuid().ToString(), never, Token))
+            {
+            }
+        });
+        Should.Throw<UnknownTenantException>(() => events.OpenReadOnlyEventStore(never));
+        await Should.ThrowAsync<UnknownTenantException>(() => diagnostics.QueryDocumentsAsync(
+            typeof(Sighting).FullName!, new JasperFx.Documents.DocumentQueryOptions(1, 10) { TenantId = never },
+            Token));
+        await Should.ThrowAsync<UnknownTenantException>(() => store.Advanced.AllProjectionProgress(never, Token));
+        await Should.ThrowAsync<UnknownTenantException>(() => store.Advanced.DeleteAllTenantDataAsync(never, Token));
+
+        File.Exists(Path.Combine(_directory, $"{never}.db")).ShouldBeFalse();
+        store.Tenancy.AllDatabases().Select(x => x.TenantId).ShouldNotContain(never);
+
+        await ((DynamicTenancy)store.Tenancy).RefreshAsync(Token);
+        store.Tenancy.AllDatabases().Select(x => x.TenantId).ShouldNotContain(never);
+    }
+
+    /// <summary>
+    ///     The guard half: a tenant whose file exists still resolves for those reads, including one this
+    ///     store instance has never resolved.
+    /// </summary>
+    [Fact]
+    public async Task a_read_for_a_tenant_whose_file_exists_still_resolves()
+    {
+        await using (var writer = StoreFor())
+        {
+            await writer.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+            await using var session = writer.LightweightSession("existing");
+            session.Events.StartStream(Guid.NewGuid(), new SightingLogged("Manta"));
+            await session.SaveChangesAsync(Token);
+        }
+
+        // A second store, so the tenant is not already in this one's cache.
+        await using var store = StoreFor();
+        IEventStore events = store;
+
+        (await events.GetRecentStreamsAsync(10, "existing", Token)).ShouldHaveSingleItem();
+        (await events.GetProjectionStatusesAsync("existing", Token)).ShouldNotBeEmpty();
+        events.OpenReadOnlyEventStore("existing").ShouldNotBeNull();
+    }
+
+    /// <remarks>
+    ///     A session is unaffected: naming a new tenant still creates it, which is the point of the
+    ///     directory convention. Only the read-only paths stopped provisioning.
+    /// </remarks>
+    [Fact]
+    public async Task a_session_still_creates_a_new_tenant()
+    {
+        await using var store = StoreFor();
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        await using (var session = store.LightweightSession("brand-new"))
+        {
+            session.Store(new Sighting { Id = Guid.NewGuid(), Species = "Orca" });
+            await session.SaveChangesAsync(Token);
+        }
+
+        File.Exists(Path.Combine(_directory, "brand-new.db")).ShouldBeTrue();
+        (await ((IEventStore)store).GetRecentStreamsAsync(10, "brand-new", Token)).ShouldBeEmpty();
     }
 
     private string PathFor(string tenantId)

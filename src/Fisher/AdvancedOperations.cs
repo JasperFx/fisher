@@ -458,7 +458,7 @@ public class AdvancedOperations
 
         await _store.RefreshTenantsAsync(token).ConfigureAwait(false);
 
-        return await _store.Tenancy.DatabaseFor(tenantId).CreateMigrationAsync(token).ConfigureAwait(false);
+        return await _store.Tenancy.ExistingDatabaseFor(tenantId).CreateMigrationAsync(token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -600,7 +600,7 @@ public class AdvancedOperations
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
 
-        return DetectorFor(_store.Tenancy.DatabaseFor(tenantId)).AdvanceHighWaterMarkToLatestAsync(token);
+        return DetectorFor(_store.Tenancy.ExistingDatabaseFor(tenantId)).AdvanceHighWaterMarkToLatestAsync(token);
     }
 
     /// <summary>
@@ -642,7 +642,7 @@ public class AdvancedOperations
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
 
-        return DetectorFor(_store.Tenancy.DatabaseFor(tenantId)).TryCorrectProgressInDatabaseAsync(token);
+        return DetectorFor(_store.Tenancy.ExistingDatabaseFor(tenantId)).TryCorrectProgressInDatabaseAsync(token);
     }
 
     /// <summary>
@@ -667,7 +667,7 @@ public class AdvancedOperations
     {
         if (tenantId is not null)
         {
-            return await _store.Tenancy.DatabaseFor(tenantId).AllProjectionProgress(token).ConfigureAwait(false);
+            return await _store.Tenancy.ExistingDatabaseFor(tenantId).AllProjectionProgress(token).ConfigureAwait(false);
         }
 
         await _store.RefreshTenantsAsync(token).ConfigureAwait(false);
@@ -705,7 +705,7 @@ public class AdvancedOperations
 
         if (tenantId is not null)
         {
-            return await _store.Tenancy.DatabaseFor(tenantId).ProjectionProgressFor(name, token)
+            return await _store.Tenancy.ExistingDatabaseFor(tenantId).ProjectionProgressFor(name, token)
                 .ConfigureAwait(false);
         }
 

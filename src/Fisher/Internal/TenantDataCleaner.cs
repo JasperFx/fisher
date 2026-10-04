@@ -43,7 +43,7 @@ internal sealed class TenantDataCleaner
         // Resolves through the tenancy, so an unknown or suspended tenant is refused by name here
         // exactly as it would be by a session — a wipe that silently landed on the default tenant's
         // file is the one outcome database-per-tenant exists to make impossible.
-        var database = _store.Tenancy.DatabaseFor(_tenantId);
+        var database = _store.Tenancy.ExistingDatabaseFor(_tenantId);
 
         var events = _store.Options.EventGraph;
 

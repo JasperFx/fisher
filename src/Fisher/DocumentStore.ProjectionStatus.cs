@@ -108,7 +108,7 @@ public partial class DocumentStore
     {
         if (tenantId is not null)
         {
-            return await ProjectionStatusesForAsync(Tenancy.DatabaseFor(tenantId), ct).ConfigureAwait(false);
+            return await ProjectionStatusesForAsync(Tenancy.ExistingDatabaseFor(tenantId), ct).ConfigureAwait(false);
         }
 
         await RefreshTenantsAsync(ct).ConfigureAwait(false);
