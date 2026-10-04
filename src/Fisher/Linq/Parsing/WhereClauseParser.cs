@@ -60,8 +60,23 @@ internal class WhereClauseParser
             MemberExpression member when IsBooleanMember(member) => ParseBooleanMember(member, true),
             ConstantExpression { Value: bool boolValue } => new WhereFragment(boolValue ? "1=1" : "1=0"),
             _ => throw new BadLinqExpressionException(
-                $"Unsupported expression in a where clause: {expression.NodeType} ({expression.GetType().Name})")
+                $"Unsupported expression in a where clause: {expression.NodeType} ({expression.GetType().Name}). "
+                + Alternatives)
         };
+
+    /// <summary>
+    ///     The ways forward, named in every generic refusal (fisher#399, marten#5481).
+    /// </summary>
+    /// <remarks>
+    ///     A refusal that names only what failed leaves the caller to guess whether anything would
+    ///     work. These three always do: <c>MatchesSql</c> composes a raw fragment into the same
+    ///     statement, so the implicit tenant, soft-delete and hierarchy filters still apply;
+    ///     <c>AdvancedSql</c> is the whole statement in the caller's hands; and filtering in memory is
+    ///     correct for any predicate at the cost of reading the rows.
+    /// </remarks>
+    internal const string Alternatives =
+        "To express it anyway, use MatchesSql(\"<sql fragment>\", values) for a raw SQL condition, "
+        + "query with session.AdvancedSql.QueryAsync(...), or materialize the results and filter them in memory.";
 
     private ISqlFragment ParseMethodCall(MethodCallExpression expression)
     {
@@ -79,7 +94,7 @@ internal class WhereClauseParser
         var parser = MethodCallParserRegistry.FindParser(expression)
                      ?? throw new BadLinqExpressionException(
                          $"Unsupported method call in a where clause: "
-                         + $"{expression.Method.DeclaringType?.Name}.{expression.Method.Name}");
+                         + $"{expression.Method.DeclaringType?.Name}.{expression.Method.Name}. " + Alternatives);
 
         return parser.Parse(_memberFactory, expression);
     }
@@ -101,7 +116,8 @@ internal class WhereClauseParser
             return ParseComparison(binary, op);
         }
 
-        throw new BadLinqExpressionException($"Unsupported binary operator in a where clause: {binary.NodeType}");
+        throw new BadLinqExpressionException(
+            $"Unsupported binary operator in a where clause: {binary.NodeType}. " + Alternatives);
     }
 
     private ISqlFragment ParseComparison(BinaryExpression binary, string op)
@@ -150,7 +166,7 @@ internal class WhereClauseParser
             return BuildComparisonFilter(member!, value, ReverseOperator(op));
         }
 
-        throw new BadLinqExpressionException($"Cannot translate the comparison '{binary}' to SQL.");
+        throw new BadLinqExpressionException($"Cannot translate the comparison '{binary}' to SQL. " + Alternatives);
     }
 
     private bool TryParseMethodTransform(Expression methodSide, Expression valueSide, string op,

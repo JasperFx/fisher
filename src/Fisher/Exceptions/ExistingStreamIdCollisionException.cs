@@ -14,9 +14,19 @@ namespace Fisher.Exceptions;
 ///         available — forwarding needs the same fully qualified name and the namespaces differ.
 ///     </para>
 ///     <para>
-///         The message is already the canonical wording, so the base's two-argument constructor would
-///         produce the same text; it goes through the message-overriding one anyway so that a later
-///         change to the canonical wording cannot silently move Fisher's.
+///         <b>The message is the base's canonical wording, remedy included</b> (fisher#399,
+///         jasperfx#872): <c>StartStream</c> needs a new id, so use <c>Append</c> or
+///         <c>FetchForWriting</c> for an existing stream. Fisher used to pass its own text through the
+///         message-overriding constructor, so that a later change to the canonical wording could not
+///         silently move Fisher's. That worked as designed and was the problem: when the remedy was
+///         added upstream, Fisher kept the old text without it. Fisher's semantics match the remedy, so
+///         adopting it costs nothing.
+///     </para>
+///     <para>
+///         <b>One Fisher-specific case the message does not name: <c>StartStream</c> over an
+///         ARCHIVED id raises this, not <see cref="ArchivedStreamException" />.</b> An archived id is
+///         still an id in use, and "that id is taken" is the more useful answer to a start than "that
+///         stream is archived".
 ///     </para>
 ///     <para>
 ///         The shared type's <c>AggregateType</c> is Marten's addition and stays null here: Fisher
@@ -27,7 +37,7 @@ namespace Fisher.Exceptions;
 public class ExistingStreamIdCollisionException : JasperFx.Events.ExistingStreamIdCollisionException
 {
     public ExistingStreamIdCollisionException(object id)
-        : base($"Stream with id '{id}' already exists.", id, null)
+        : base(id, null)
     {
     }
 }
