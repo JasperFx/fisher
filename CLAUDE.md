@@ -4617,11 +4617,22 @@ JasperFx 2.77.0 (jasperfx#870) made `IDocumentStoreDiagnostics.Subject` and `Loa
 defined the semantics the three stores used to disagree on, and added `IDocumentStoreDiagnosticsWriter`.
 `DocumentStoreDiagnosticsCompliance` pins it, and Fisher is enrolled.
 
-- **`Where` / `OrderBy` are refused with `DocumentCriteriaNotSupportedException`, before the type is
-  resolved.** They are Dynamic LINQ text for `Query<T>()` (jasperfx#869, still open). Splicing them into
-  this hand-built SQL would add a fifth filter path with none of LINQ's member resolution. Returning the
-  unfiltered page is the one answer the contract forbids.
-  `SupportsDocumentDiagnosticCriteria` should flip only once they go through `Query<T>()`.
+- **`Where` / `OrderBy` go through `Query<T>()`, never into the hand-built SQL (jasperfx#869).** They
+  were refused until JasperFx 2.84.0 shipped the Dynamic LINQ translation. Now
+  `DocumentQueryOptions.ApplyCriteriaTo` composes them onto `Query<T>()` for the requested type,
+  `FisherQueryProvider.DiagnosticStatement` hands back the provider's unexecuted `Statement`, and the
+  read swaps in the stored-row select list (`StoredRowLayout`, shared with the hand-built read) and adds
+  `DiagnosticFilter.RequestedTerms()` — the id and metadata equalities — to the same statement. One
+  statement carries every predicate, so page, order and total agree; "LINQ for the ids, then the row
+  read" would apply the metadata filters after paging. `SupportsDocumentDiagnosticCriteria` is true.
+- **`CriteriaShapeRules` refuses the shapes Fisher's provider gets SILENTLY WRONG** — measured against a
+  LINQ-to-objects oracle by `document_diagnostics_criteria.no_criteria_shape_is_silently_wrong`, which is
+  also the pin that the rule set is complete. Date/time parts (`PlacedAt.Year`, `.Date`, `TimeSpan.TotalHours`
+  — the typed `Query<T>()` renders `$.placedAt.year` too, so it is a provider gap) and `.Value` off a
+  `Nullable<T>`; and `<>` / `not` over a comparison on a member that can be null (SQL's three-valued logic
+  drops the null rows), unless the text guards the null case. Nullability is read from the member's
+  nullable-reference annotations, so a non-nullable `string` is not refused. Remove a rule when the
+  provider learns the shape; the matrix test says whether it did.
 - **Tenant → `DocumentQueryOptions.NormalizeTenantId`, then `Tenancy.DatabaseFor`.** The read used
   `Database` unconditionally, so database-per-tenant answered every tenant from the default file.
 - **`AllTenants` fans out, and fisher#368 said it would not need to** (jasperfx#928, JasperFx 2.78.0).
@@ -4632,7 +4643,8 @@ defined the semantics the three stores used to disagree on, and added `IDocument
   reads only the segments the page overlaps, each `order by id`. One path serves one file, a file per
   tenant, and several tenants sharing a file — whose tenants interleave with other files' in tenant
   order, which is what `all_tenants_orders_by_tenant_across_shared_and_separate_files` pins.
-  `AssertValidTenantScope()` runs before the criteria refusal; `LoadDocumentAsync` stays single-tenant.
+  `AssertValidTenantScope()` runs first; `LoadDocumentAsync` stays single-tenant. With criteria, the same
+  segment shape counts each (file, tenant) through a session pinned to that file.
 - **A load by id includes soft-deleted rows, flagged; a page excludes them unless asked.**
 - ⚠️ **The version token has three sources, and the third is a hash.** It is `guid_version`, rendered
   through `Guid` because Weasel's version binder stores it UPPERCASE. Otherwise it is the numeric

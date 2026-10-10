@@ -17,6 +17,18 @@ scoreboard and the things that are true right now but not obvious from either.
 them are shared cross-store compliance tests — 509 event sourcing and 169 document.
 On JasperFx **2.80.2** / Weasel **9.41.0**.
 
+## jasperfx#869 — Dynamic LINQ criteria in the document diagnostics (needs JasperFx 2.84.0)
+
+`IDocumentStoreDiagnostics.QueryDocumentsAsync` applies `Where` / `OrderBy` / `Arguments`, and
+`SupportsDocumentDiagnosticCriteria` is true: every criteria-filtering fact in
+`DocumentStoreDiagnosticsCompliance` runs, and the criteria-*refusal* fact skips in their place. The text
+goes through `Query<T>()`; the read takes the provider's statement and selects the stored row from it — see
+the remarks on `DocumentStore.DocumentDiagnostics.cs`. `CriteriaShapeRules` refuses the shapes the provider
+answers wrongly without saying so (date/time parts, `Nullable<T>.Value`, null-blind `<>` / `not`), each
+measured against a LINQ-to-objects oracle by `document_diagnostics_criteria`. The date-part one is a real
+provider gap: typed `x.PlacedAt.Year == 2026` renders `json_extract(data, '$.placedAt.year')` and matches
+nothing. fisher#304's decimal comparison is fixed — all eight decimal shapes match the oracle.
+
 ## The Weasel 9.41.0 bump — a Type-based identity runtime
 
 **Additive and green on the bump; nothing in Fisher changed.** weasel#689/#690 add a non-generic
