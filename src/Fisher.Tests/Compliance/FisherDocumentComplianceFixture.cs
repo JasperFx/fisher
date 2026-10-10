@@ -324,10 +324,11 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
     /// </summary>
     public override bool SupportsDocumentDiagnosticAllTenants => true;
 
-    // SupportsDocumentDiagnosticCriteria stays false, deliberately: Where / OrderBy are Dynamic LINQ
-    // text for the store's own IQueryable<T>, and the translation is jasperfx#869, still open. Left
-    // false, the suite does not skip the criteria facts — it asserts they are REFUSED with
-    // DocumentCriteriaNotSupportedException, which is the contract for a store that cannot apply them.
+    /// <summary>
+    ///     <c>DocumentQueryOptions.Where</c> / <c>OrderBy</c> (jasperfx#869): Dynamic LINQ composed onto
+    ///     <c>Query&lt;T&gt;()</c>, with the stored row read from the statement the provider builds.
+    /// </summary>
+    public override bool SupportsDocumentDiagnosticCriteria => true;
 
     /// <summary>
     ///     The two deliberate escapes from tenant scoping — <c>AnyTenant()</c> and

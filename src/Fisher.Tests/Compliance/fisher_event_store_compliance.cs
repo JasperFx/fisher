@@ -601,9 +601,10 @@ public class document_conjoined_tenancy_compliance
  * suite pins the defined semantics. Setup goes through the session contract and assertions through the
  * diagnostics one, which is the point: a console reads what an application wrote.
  *
- * Fisher runs every fact but the five criteria-FILTERING ones, which skip because
- * SupportsDocumentDiagnosticCriteria stays false until jasperfx#869 ships a Dynamic LINQ translation.
- * The criteria-REFUSAL fact runs in their place and is green.
+ * jasperfx#869 (JasperFx 2.84.0) — Where / OrderBy are applied, so SupportsDocumentDiagnosticCriteria is
+ * true and every criteria-FILTERING fact runs; the criteria-REFUSAL fact is the one that skips in their
+ * place. The shapes Fisher's provider would translate silently wrong are refused by
+ * DocumentStore.CriteriaPolicy and pinned in document_diagnostics_criteria.
  *
  * jasperfx#928 (JasperFx 2.78.0), fisher#368 — DocumentQueryOptions.AllTenants. Fisher honours it, so
  * SupportsDocumentDiagnosticAllTenants is true and the all-tenants facts run; the all-tenants REFUSAL
