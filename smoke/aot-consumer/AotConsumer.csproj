@@ -32,7 +32,7 @@
         <!-- fisher#398. A project reference does not carry the analyzer the Fisher package bundles, so
              the generator is referenced here as an application referencing JasperFx directly would.
              Kept in step with Directory.Packages.props by hand. -->
-        <PackageReference Include="JasperFx.Events.SourceGenerator" Version="2.80.2" PrivateAssets="all" />
+        <PackageReference Include="JasperFx.Events.SourceGenerator" Version="2.84.0" PrivateAssets="all" />
     </ItemGroup>
 
 </Project>
