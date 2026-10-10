@@ -4630,7 +4630,8 @@ defined the semantics the three stores used to disagree on, and added `IDocument
   also the pin that the rule set is complete. Date/time parts (`PlacedAt.Year`, `.Date`, `TimeSpan.TotalHours`
   — the typed `Query<T>()` renders `$.placedAt.year` too, so it is a provider gap) and `.Value` off a
   `Nullable<T>`; and `<>` / `not` over a comparison on a member that can be null (SQL's three-valued logic
-  drops the null rows), unless the text guards the null case. Nullability is read from the member's
+  drops the null rows), unless the text guards the null case — that one is JasperFx's shared
+  `DynamicQueryShapeRules.SqlNullSemantics()`, found here and lifted after Marten and Polecat measured the same. Nullability is read from the member's
   nullable-reference annotations, so a non-nullable `string` is not refused. Remove a rule when the
   provider learns the shape; the matrix test says whether it did.
 - **Tenant → `DocumentQueryOptions.NormalizeTenantId`, then `Tenancy.DatabaseFor`.** The read used
