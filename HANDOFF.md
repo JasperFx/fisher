@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2646 tests green on net9.0 and net10.0** — 2579 in `Fisher.Tests`, 36 in
+**2650 tests green on net9.0 and net10.0** — 2583 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 692 of
 them are shared cross-store compliance tests — 509 event sourcing and 183 document.
 On JasperFx **2.84.0** / Weasel **9.41.0**.
@@ -28,6 +28,14 @@ answers wrongly without saying so (date/time parts, `Nullable<T>.Value`, null-bl
 measured against a LINQ-to-objects oracle by `document_diagnostics_criteria`. The date-part one is a real
 provider gap: typed `x.PlacedAt.Year == 2026` renders `json_extract(data, '$.placedAt.year')` and matches
 nothing. fisher#304's decimal comparison is fixed — all eight decimal shapes match the oracle.
+
+**The same bump carries jasperfx#953, adopted as fisher#434.** A stopping subscription's drain is
+bounded by `DaemonSettings.StopAndDrainTimeout` (5 s), cancelling the range in flight at the timeout.
+Checked against Fisher's runner with `subscription_drain_cancellation`: a cancellation before the commit
+rolls back writes and progression together, leaves the file intact and frees the write lock at once — that
+was already true. A cancellation **after** the commit was not handled: the post-commit listener got the
+cancelled token and a listener honouring it lost its work for good, since the progression had committed.
+Post-commit work (listener, participants, outbox flush) now runs on a token the drain does not cancel.
 
 ## The Weasel 9.41.0 bump — a Type-based identity runtime
 
