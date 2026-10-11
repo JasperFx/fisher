@@ -5,6 +5,7 @@ using Fisher.Linq;
 using Fisher.Linq.Includes;
 using JasperFx;
 using JasperFx.Descriptors;
+using JasperFx.Documents;
 using JasperFx.Events;
 using JasperFx.Events.Projections;
 using Microsoft.Extensions.DependencyInjection;
@@ -300,6 +301,25 @@ try
         null, CancellationToken.None);
     Expect(typedTimeline.Steps.Select(x => x.After?.Legs).SequenceEqual([1, 2]),
         "typed projection step-through copies the state at every step");
+
+    // jasperfx#869. Diagnostics criteria are Dynamic LINQ — runtime code generation — so a native image
+    // has to refuse them by name rather than crash in the reflective hop, and a page without them still
+    // has to read.
+    var diagnostics = (IDocumentStoreDiagnostics)store;
+    var animals = await diagnostics.QueryDocumentsAsync(typeof(Animal).FullName!, new DocumentQueryOptions(1, 10),
+        CancellationToken.None);
+    Expect(animals.TotalCount > 0, "a diagnostics page reads without criteria");
+
+    try
+    {
+        await diagnostics.QueryDocumentsAsync(typeof(Animal).FullName!,
+            new DocumentQueryOptions(1, 10) { Where = "Name = @0", Arguments = ["x"] }, CancellationToken.None);
+        Expect(false, "diagnostics criteria are refused in a native image");
+    }
+    catch (DocumentCriteriaNotSupportedException e)
+    {
+        Expect(e.Message.Contains("Native AOT"), "diagnostics criteria are refused in a native image, by name");
+    }
 
     // fisher#430: the paths that had never been measured natively.
     await UnmeasuredPaths.RunAsync();

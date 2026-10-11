@@ -87,6 +87,46 @@ canonical shape, so Polecat's local `IChangeListener` is the older spelling of t
 code should not copy it.
 :::
 
+## Stopping a subscription: `StopAndDrainTimeout`
+
+When a subscription's shard stops — the host shutting down, or the daemon handing the shard over — it
+**finishes the page in flight and skips the pages still queued**. Those are not lost: the progression row
+says how far the shard got, and whoever runs it next starts from there.
+
+The wait for the page in flight is bounded by `StopAndDrainTimeout`, **5 seconds by default** (JasperFx
+2.84.0, jasperfx#953 — before that the drain ran every queued page, so in practice it was unbounded). A
+page still running when the timeout expires is cancelled: its transaction — the subscription's own writes
+and the progression row together — rolls back, and the page is processed again by the next run.
+
+<!-- snippet: sample_subscription_stop_and_drain_timeout -->
+<a id='snippet-sample_subscription_stop_and_drain_timeout'></a>
+```cs
+var store = DocumentStore.For(options =>
+{
+    options.ConnectionString = connectionString;
+
+    // The default is 5 seconds. A subscription whose pages can take longer than this is cancelled
+    // part-way through a page on every shutdown, and that page is processed again next time.
+    options.DaemonSettings.StopAndDrainTimeout = TimeSpan.FromSeconds(30);
+});
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/subscription_samples.cs#L15-L24' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_subscription_stop_and_drain_timeout' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+::: warning
+**A subscription whose pages are slower than the timeout will see more redelivery.** Such a page is
+cancelled on every shutdown and processed again, so the same events reach `ProcessEventsAsync` twice.
+Delivery was always at-least-once; now the duplicates are more frequent for slow pages. Writes through the
+supplied session roll back with the page, but anything `ProcessEventsAsync` did **outside** it — an HTTP
+call, a send that bypasses the outbox — does not. If your pages are slow, raise `StopAndDrainTimeout`.
+:::
+
+What the drain bounds is the **wait**, not the work Fisher owes a committed page. A page that committed
+before the timeout still gets its post-commit listener, run on a token the stop does not cancel — the
+progression row is already durable, so a listener skipped here would never be asked again (fisher#434).
+On SQLite the cancelled transaction releases the file's single write lock as it rolls back, so a stopping
+subscription does not hold up the next writer.
+
 ## Naming a subscription
 
 Daemon progression is keyed on the subscription's name. The default is derived from the type name;

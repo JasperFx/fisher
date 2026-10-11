@@ -307,9 +307,21 @@ the container for the main store and for each ancillary store. What the contract
   `guid_version`. For numeric revisions it is the revision number. For a type with neither, it is a
   hash of `last_modified` and the stored JSON. That token still changes on every write, so a console's
   guarded edit is guarded even for a type that did not opt into concurrency.
-- **`Where` and `OrderBy` are refused** with `DocumentCriteriaNotSupportedException`. They are Dynamic
-  LINQ text for the store's own `IQueryable<T>`, and that translation (jasperfx#869) has not shipped.
-  Returning the unfiltered page would look like a filter that matched every row.
+- **`Where` and `OrderBy` are applied** (jasperfx#869, JasperFx 2.84.0) — Dynamic LINQ text, composed
+  onto `Query<T>()` for the requested type, so member casing, enums, decimals and dates are translated
+  exactly as in an application's own query. `Arguments` binds `@0`, `@1`, …. The total counts what the
+  criteria select, a given ordering is tie-broken by the id, and every other option — tenant,
+  `AllTenants` (tenant first, then the ordering), soft deletes, the hierarchy, `IdEquals` and the metadata
+  filters — still applies. Text that does not parse, a member the type does not have, and a shape the
+  store cannot translate are refused with `DocumentCriteriaNotSupportedException`, never ignored. Under
+  Native AOT criteria are refused, since they need runtime code generation.
+- **Some shapes are refused because Fisher would answer them wrongly**, not because they fail to parse.
+  Reading a *part* of a date or time (`PlacedAt.Year`, `DueDate.Date`, `Window.TotalHours`) and `.Value`
+  off a nullable member: Fisher renders those as a path into the stored value and matches nothing —
+  compare the whole value against a range instead. And `<>`, or `not` over a comparison, on a member that
+  can be null: SQL leaves the null rows out where the text, read as C#, keeps them. Say what null should
+  do — `Note <> "x" or Note = null`, or `Note != null and Note <> "x"` — and it runs. A member the
+  document declares non-nullable is not affected.
 
 The writer saves or deletes through an ordinary session, so versions move, metadata is stamped and a
 soft-deleted type is soft-deleted. It checks `ExpectedVersion` inside Fisher's own write transaction,
@@ -327,10 +339,14 @@ Several things in that surface are worth knowing:
   so the field has a value — *none* — rather than being unknown.
 - **A DDL failure is reported as a SQL comment, not thrown.** One bad mapping should not take the whole
   store's description with it.
-- **`QueryDocumentsAsync` is hand-built SQL, and a fourth caller of the three implicit filters.** It
-  cannot go through `Query<T>()`: a console names its type as a *string* and filters on *columns* that
-  are not document members. Each filter is composed from the one place that owns it rather than
-  re-spelled.
+- **Without criteria, `QueryDocumentsAsync` is hand-built SQL, and a fourth caller of the three implicit
+  filters.** A console names its type as a *string*, filters on *columns* that are not document members,
+  and wants the stored row back rather than a document. Each filter is composed from the one place that
+  owns it rather than re-spelled.
+- **With criteria, the LINQ provider builds the statement and the read only chooses its columns.** The
+  provider's own tenant, soft-delete and hierarchy passes apply; the read swaps in the same stored-row
+  select list (so the JSON is still byte-exact and the metadata is still there) and adds the id and
+  metadata filters to the same statement, so the page, its order and the total always agree.
 - **A table that does not exist reports an empty page**, because SQLite resolves a table name at
   prepare time and a count against a never-created table fails before any guard could run.
 - **A sub-class name resolves to its base's mapping plus a `doc_type` filter**, since a registered
