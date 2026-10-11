@@ -15,7 +15,7 @@ scoreboard and the things that are true right now but not obvious from either.
 **2650 tests green on net9.0 and net10.0** — 2583 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 692 of
 them are shared cross-store compliance tests — 509 event sourcing and 183 document.
-On JasperFx **2.84.0** / Weasel **9.41.0**.
+On JasperFx **2.84.0** / Weasel **9.42.0**.
 
 ## The JasperFx 2.84.0 bump — jasperfx#869, Dynamic LINQ criteria in the document diagnostics
 
@@ -36,6 +36,12 @@ rolls back writes and progression together, leaves the file intact and frees the
 was already true. A cancellation **after** the commit was not handled: the post-commit listener got the
 cancelled token and a listener honouring it lost its work for good, since the progression had committed.
 Post-commit work (listener, participants, outbox flush) now runs on a token the drain does not cancel.
+
+## The Weasel 9.42.0 bump — nothing for Fisher to act on
+
+**Additive and green on the bump.** weasel#695 is SQL Server's advisory lock, weasel#696/#698 PostgreSQL
+table storage parameters, and weasel#697 roots the `Identifications` factories for Native AOT, which
+Fisher does not call (it declares strong-typed ids generically, fisher#386). No count moved.
 
 ## The Weasel 9.41.0 bump — a Type-based identity runtime
 

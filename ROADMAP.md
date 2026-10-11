@@ -9,6 +9,9 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
+**1.20.1 takes Weasel 9.42.0**, which carries nothing Fisher acts on: SQL Server advisory locks,
+PostgreSQL storage parameters, and Native AOT rooting for an identity factory Fisher does not call.
+
 **1.20.0 lets a console filter and order documents by their properties.**
 [jasperfx#869](https://github.com/JasperFx/jasperfx/issues/869): `IDocumentStoreDiagnostics.QueryDocumentsAsync`
 applies `Where` / `OrderBy` text through `Query<T>()` instead of refusing it, reading the stored row —
