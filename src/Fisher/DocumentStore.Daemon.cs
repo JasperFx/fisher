@@ -650,6 +650,16 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     ///         had already committed — the same property fisher#4 established for the message outbox
     ///         and fisher#12 for the batch's own input.
     ///     </para>
+    ///     <para>
+    ///         <b>And on a token the drain does not cancel (fisher#434).</b> Since jasperfx#953 a
+    ///         stopping subscription cancels <paramref name="token" /> when <c>StopAndDrainTimeout</c>
+    ///         expires, and that can land after the commit. Handed the cancelled token, a listener that
+    ///         honours it — an HTTP call, a publish — gives up, and nothing ever asks again: the
+    ///         progression row committed with the range, so the next owner of the shard starts after it.
+    ///         The write is durable, so the listener is owed its run. The drain stays bounded regardless,
+    ///         because it waits on its own timeout rather than on this method.
+    ///         <c>subscription_drain_cancellation</c> pins both halves.
+    ///     </para>
     /// </remarks>
     async Task ISubscriptionRunner<Subscriptions.ISubscription>.ExecuteAsync(
         Subscriptions.ISubscription subscription, IEventDatabase database, EventRange range,
@@ -670,7 +680,8 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
 
         if (listener is not null and not NullDaemonChangeListener)
         {
-            await listener.AfterCommitAsync(token).ConfigureAwait(false);
+            // Committed: see the remarks for why this is no longer the drain's to cancel.
+            await listener.AfterCommitAsync(CancellationToken.None).ConfigureAwait(false);
         }
     }
 }

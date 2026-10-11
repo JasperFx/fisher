@@ -196,16 +196,24 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
         // Outside the resilience pipeline: a retried SQLITE_BUSY re-runs the whole delegate, and a
         // post-commit publish that ran inside it would fire again for a transaction that already
         // committed. There is nothing to retry here anyway — the write is durable.
+        //
+        // And not on `token` (fisher#434). A stopping shard cancels it when its drain times out
+        // (jasperfx#953), and that can land after the commit above. The progression row is already
+        // durable, so whoever runs the shard next starts after this range: post-commit work skipped
+        // here is skipped for good. The drain does not wait on this — it is bounded by its own
+        // timeout — so letting committed work finish costs it nothing.
+        var afterCommit = CancellationToken.None;
+
         if (_messageBatch is not null)
         {
-            await _messageBatch.AfterCommitAsync(token).ConfigureAwait(false);
+            await _messageBatch.AfterCommitAsync(afterCommit).ConfigureAwait(false);
         }
 
         // Same position and the same reason — a participant holding its work replayable across
         // attempts is told once that the write is durable.
         foreach (var participant in participants)
         {
-            await participant.AfterCommitAsync(token).ConfigureAwait(false);
+            await participant.AfterCommitAsync(afterCommit).ConfigureAwait(false);
         }
     }
 

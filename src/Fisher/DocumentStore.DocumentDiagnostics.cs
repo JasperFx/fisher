@@ -1,4 +1,5 @@
 using System.Data;
+using System.Data.Common;
 using System.Globalization;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
@@ -6,12 +7,16 @@ using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
 using Fisher.Internal;
+using Fisher.Linq;
+using Fisher.Linq.SoftDeletes;
+using Fisher.Linq.SqlGeneration;
 using Fisher.Storage;
 using JasperFx;
 using JasperFx.Core.Reflection;
 using JasperFx.Descriptors;
 using JasperFx.Documents;
 using JasperFx.Events;
+using JasperFx.Linq;
 using Microsoft.Data.Sqlite;
 
 namespace Fisher;
@@ -27,23 +32,53 @@ namespace Fisher;
 ///         not crowd <see cref="IDocumentStore" />.
 ///     </para>
 ///     <para>
-///         <b>This is a hand-built read, and that makes it a fourth caller of the three implicit
-///         filters</b> — the shape fisher#51 warns about. It cannot go through <c>Query&lt;T&gt;()</c>:
-///         the console names a type as a string and filters on <em>columns</em> (correlation id,
-///         causation id, last-modified-by) that are not document members, so there is no expression
-///         tree to build. The mitigation is that each filter is composed from the single place that
-///         owns it — <see cref="SoftDelete.NotDeletedSql" />,
+///         <b>Without criteria this is a hand-built read, and that makes it a fourth caller of the three
+///         implicit filters</b> — the shape fisher#51 warns about. The console names a type as a string
+///         and filters on <em>columns</em> (correlation id, causation id, last-modified-by) that are not
+///         document members, and it wants the stored row back — byte-exact <c>data</c> plus every
+///         metadata column — rather than a materialized document. The mitigation is that each filter is
+///         composed from the single place that owns it — <see cref="SoftDelete.NotDeletedSql" />,
 ///         <see cref="DocumentHierarchy.FilterSqlFor" />, the tenant column — rather than re-spelled
 ///         here, and <c>diagnostics_reads_carry_the_implicit_filters</c> pins all three.
 ///     </para>
 ///     <para>
-///         ⚠️ <b>That is also why <see cref="DocumentQueryOptions.Where" /> and
-///         <see cref="DocumentQueryOptions.OrderBy" /> are refused</b> rather than applied. They are
-///         Dynamic LINQ text meant for the store's own <c>IQueryable&lt;T&gt;</c> (jasperfx#869, still
-///         open), and splicing them into this SQL would be a fifth filter path with none of the member
-///         resolution, enum storage or decimal handling <c>Query&lt;T&gt;()</c> has. Returning the
-///         unfiltered page instead is the one answer the contract forbids: a console cannot tell it
-///         from a filter that matched every row.
+///         <b>With <see cref="DocumentQueryOptions.Where" /> or <see cref="DocumentQueryOptions.OrderBy" />
+///         (jasperfx#869) the LINQ provider builds the statement and this read only chooses its
+///         columns.</b> The text is Dynamic LINQ composed onto <c>Query&lt;T&gt;()</c> for the requested
+///         type by <see cref="DocumentQueryCriteria.ApplyCriteriaTo{T}" /> — never spliced into SQL —
+///         so member casing, enum storage, decimal binding and dates are translated exactly as an
+///         application's own query is, and a sub-class name narrows through the provider's own
+///         hierarchy pass. The provider hands back its <c>Statement</c> unexecuted
+///         (<c>FisherQueryProvider.DiagnosticStatement</c>); the read then
+///     </para>
+///     <list type="bullet">
+///         <item>replaces the select list with the same stored-row columns the hand-built read selects
+///         (<see cref="StoredRowLayout" />), so the JSON is still byte-exact and the metadata is
+///         still there;</item>
+///         <item>adds <see cref="DocumentQueryOptions.IdEquals" /> and the three metadata filters as
+///         parameterised terms from the same <see cref="DiagnosticFilter" /> the hand-built read renders,
+///         so there is one list of "what the console asked for" and two renderings of it;</item>
+///         <item>breaks ties in a given ordering by the identity, and orders by <c>id</c> when the text
+///         gave no ordering, so a page is a page either way;</item>
+///         <item>counts with the same statement, select list replaced by <c>count(*)</c>, so the total
+///         reflects the criteria.</item>
+///     </list>
+///     <para>
+///         <b>Why not "LINQ for the ids, then the row read for those ids"</b>, the other obvious shape:
+///         the metadata filters would then apply <em>after</em> paging, so a page could come back short
+///         and the total would count rows the filters exclude. One statement carrying every predicate is
+///         the only way the page, the order and the total agree. And why not the provider's own operators
+///         for everything: soft deletes are (<c>MaybeDeleted()</c>), but there is no LINQ operator for the
+///         correlation, causation or last-modified-by columns, and adding three public ones to serve one
+///         tooling read would be the wrong trade.
+///     </para>
+///     <para>
+///         The three implicit filters on this path are the provider's statement-level passes rather than
+///         this file's — the same single owners, reached the way every <c>Query&lt;T&gt;()</c> reaches
+///         them — and <c>criteria_reads_carry_the_implicit_filters</c> pins them beside the hand-built
+///         read's test. A shape the provider renders <em>silently wrong</em> is refused up front by
+///         <see cref="CriteriaPolicy" />; a shape it cannot translate throws when the statement is built,
+///         and that becomes the contract's <see cref="DocumentCriteriaNotSupportedException" />.
 ///     </para>
 /// </remarks>
 public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDiagnosticsWriter
@@ -107,10 +142,14 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     ///         reason.
     ///     </para>
     ///     <para>
-    ///         The criteria are refused <em>first</em>, before the type is resolved, so an unknown type
-    ///         with a predicate is still a refusal rather than an empty page that looks like an answer.
-    ///         <see cref="DocumentQueryOptions.AllTenants" /> with a named tenant goes before even that:
-    ///         a read cannot be scoped to one tenant and to all of them, and the store must not pick.
+    ///         <see cref="DocumentQueryOptions.AllTenants" /> with a named tenant is refused before
+    ///         anything else: a read cannot be scoped to one tenant and to all of them, and the store
+    ///         must not pick. An unknown type is an empty page with or without criteria — there is no
+    ///         type to parse the text against, and the reference implementation answers the same.
+    ///     </para>
+    ///     <para>
+    ///         Criteria go down their own path (<see cref="QueryWithCriteriaAsync" />); the path below is
+    ///         the hand-built read and is unchanged by them.
     ///     </para>
     /// </remarks>
     async Task<DocumentQueryResult> IDocumentStoreDiagnostics.QueryDocumentsAsync(
@@ -119,7 +158,6 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         ArgumentNullException.ThrowIfNull(options);
 
         options.AssertValidTenantScope();
-        RefuseUnsupportedCriteria(options);
 
         var pageNumber = Math.Max(1, options.PageNumber);
         var pageSize = Math.Max(1, options.PageSize);
@@ -130,6 +168,12 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         if (mapping is null || queriedType is null)
         {
             return empty;
+        }
+
+        if (options.HasCriteria())
+        {
+            return await QueryWithCriteriaAsync(mapping, queriedType, options, pageNumber, pageSize, token)
+                .ConfigureAwait(false);
         }
 
         if (options.AllTenants)
@@ -311,6 +355,325 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         }
 
         return new DocumentQueryResult(documents, total, pageNumber, pageSize);
+    }
+
+    // ------------------------------------------------------------------ criteria (jasperfx#869)
+
+    /// <summary>
+    ///     A page read with <see cref="DocumentQueryOptions.Where" /> / <see cref="DocumentQueryOptions.OrderBy" />
+    ///     — see the class remarks for the mechanism and why it is this one.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>The text is composed and the statement built before anything is read</b>, so a parse
+    ///         failure, an allow-list or <see cref="CriteriaPolicy" /> refusal, or a shape the provider
+    ///         cannot translate is a refusal whether or not the type has a table or any rows. Neither step
+    ///         touches a connection.
+    ///     </para>
+    ///     <para>
+    ///         <b><see cref="DocumentQueryOptions.AllTenants" /> keeps the segment shape of
+    ///         <see cref="QueryEveryTenantAsync" /></b> rather than one statement ordered by tenant: the
+    ///         criteria read is one session, and a session is one tenant in one file. So each file's tenants
+    ///         are counted with the criteria one session at a time, the segments are ordered by tenant
+    ///         ordinally exactly as without criteria, and only the segments the page overlaps are read, each
+    ///         in the criteria's own order. Tenant first, then the ordering, then the id — the contract's
+    ///         order — falls out of that with no ordering of our own beyond the tie-break.
+    ///     </para>
+    /// </remarks>
+    private async Task<DocumentQueryResult> QueryWithCriteriaAsync(DocumentMapping mapping, Type queriedType,
+        DocumentQueryOptions options, int pageNumber, int pageSize, CancellationToken token)
+    {
+        var empty = new DocumentQueryResult(Array.Empty<StoredDocument>(), 0, pageNumber, pageSize);
+
+        if (!options.AllTenants)
+        {
+            var tenantId = DocumentQueryOptions.NormalizeTenantId(options.TenantId);
+            var database = DatabaseForDiagnostics(tenantId);
+            tenantId = tenantId is null ? null : Tenancy.TenantIdFor(tenantId); // fisher#393
+
+            await using var read = await OpenCriteriaReadAsync(database, tenantId, mapping, queriedType, options)
+                .ConfigureAwait(false);
+
+            if (!await TableExistsAsync(database, mapping, token).ConfigureAwait(false))
+            {
+                return empty;
+            }
+
+            var total = await read.CountAsync(token).ConfigureAwait(false);
+            var documents = total == 0
+                ? []
+                : await read.PageAsync(pageSize, (long)(pageNumber - 1) * pageSize, token).ConfigureAwait(false);
+
+            return new DocumentQueryResult(documents, total, pageNumber, pageSize);
+        }
+
+        // Refused, if it is going to be, before the fan-out rather than once per tenant.
+        await (await OpenCriteriaReadAsync(Database, null, mapping, queriedType, options).ConfigureAwait(false))
+            .DisposeAsync().ConfigureAwait(false);
+
+        IReadOnlyList<FisherDatabase> databases;
+        if (Tenancy.Cardinality == DatabaseCardinality.Single)
+        {
+            databases = [Database];
+        }
+        else
+        {
+            await RefreshTenantsAsync(token).ConfigureAwait(false);
+            databases = Tenancy.AllDatabases();
+        }
+
+        var segments = new List<(FisherDatabase Database, string Tenant, long Count)>();
+
+        foreach (var database in databases)
+        {
+            if (!await TableExistsAsync(database, mapping, token).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            var tenants = mapping.IsConjoined
+                ? await TenantsInAsync(database, mapping, token).ConfigureAwait(false)
+                : [database.TenantId ?? StorageConstants.DefaultTenantId];
+
+            foreach (var tenant in tenants)
+            {
+                await using var read = await OpenCriteriaReadAsync(database, tenant, mapping, queriedType, options)
+                    .ConfigureAwait(false);
+
+                var count = await read.CountAsync(token).ConfigureAwait(false);
+                if (count > 0)
+                {
+                    segments.Add((database, tenant, count));
+                }
+            }
+        }
+
+        segments.Sort((x, y) =>
+        {
+            var byTenant = string.CompareOrdinal(x.Tenant, y.Tenant);
+            return byTenant != 0 ? byTenant : string.CompareOrdinal(x.Database.Identifier, y.Database.Identifier);
+        });
+
+        var all = segments.Sum(x => x.Count);
+        var skip = (long)(pageNumber - 1) * pageSize;
+        var remaining = pageSize;
+        var page = new List<StoredDocument>();
+
+        foreach (var segment in segments)
+        {
+            if (remaining == 0)
+            {
+                break;
+            }
+
+            if (skip >= segment.Count)
+            {
+                skip -= segment.Count;
+                continue;
+            }
+
+            await using var read = await OpenCriteriaReadAsync(segment.Database, segment.Tenant, mapping,
+                queriedType, options).ConfigureAwait(false);
+
+            var rows = await read.PageAsync(remaining, skip, token).ConfigureAwait(false);
+
+            page.AddRange(rows);
+            remaining -= rows.Count;
+            skip = 0;
+        }
+
+        return new DocumentQueryResult(page, all, pageNumber, pageSize);
+    }
+
+    private static async Task<bool> TableExistsAsync(FisherDatabase database, DocumentMapping mapping,
+        CancellationToken token)
+    {
+        await using var connection = await database.OpenConnectionAsync(token).ConfigureAwait(false);
+        return await TableExistsAsync(connection, mapping, token).ConfigureAwait(false);
+    }
+
+    /// <summary>Every tenant a conjoined table in <paramref name="database" /> holds rows for.</summary>
+    private static async Task<List<string>> TenantsInAsync(FisherDatabase database, DocumentMapping mapping,
+        CancellationToken token)
+    {
+        await using var connection = await database.OpenConnectionAsync(token).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            $"select distinct {StorageConstants.TenantIdColumn} from {mapping.QuotedTableName}";
+
+        var tenants = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
+        {
+            tenants.Add(reader.GetString(0));
+        }
+
+        return tenants;
+    }
+
+    /// <summary>
+    ///     A session pinned to <paramref name="database" /> and scoped to <paramref name="tenantId" />, with
+    ///     the criteria composed onto <c>Query&lt;T&gt;()</c> for the requested type.
+    /// </summary>
+    /// <remarks>
+    ///     Pinned to the file rather than resolved from the tenant, as <c>OpenSessionOn</c> is for the
+    ///     daemon: an all-tenants segment is a (file, tenant) pair, and under fisher#252's shared files the
+    ///     tenant alone does not have to name the file the segment was counted in.
+    /// </remarks>
+    private async Task<CriteriaRead> OpenCriteriaReadAsync(FisherDatabase database, string? tenantId,
+        DocumentMapping mapping, Type queriedType, DocumentQueryOptions options)
+    {
+        var session = new FisherSession(Options, database,
+            new SessionOptions { TenantId = tenantId ?? StorageConstants.DefaultTenantId });
+
+        try
+        {
+            var composed = (IQueryable)InvokeClosed(ComposeCriteriaMethod, queriedType, null!,
+                [session, options, mapping.IsSoftDeleted && options.IncludeSoftDeleted, mapping.IdMember.Name])!;
+
+            var read = new CriteriaRead(composed, mapping, FilterFor(mapping, queriedType, tenantId, options),
+                tenantId, options, session);
+
+            // The provider refuses a shape it cannot translate while it builds the statement, which needs
+            // no connection — so that refusal, too, comes before the table is looked for.
+            read.Validate();
+
+            return read;
+        }
+        catch
+        {
+            await session.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>
+    ///     The Dynamic LINQ shapes Fisher's provider would translate SILENTLY WRONG, refused before they run —
+    ///     see <see cref="CriteriaShapeRules" />.
+    /// </summary>
+    internal static DynamicQueryPolicy CriteriaPolicy => CriteriaShapeRules.Policy;
+
+    private static readonly MethodInfo ComposeCriteriaMethod =
+        typeof(DocumentStore).GetMethod(nameof(ComposeCriteria), BindingFlags.NonPublic | BindingFlags.Static)!;
+
+    /// <summary>
+    ///     <c>Query&lt;T&gt;()</c> with the criteria composed onto it — nothing executed.
+    /// </summary>
+    /// <remarks>
+    ///     <c>Query&lt;T&gt;()</c> for the requested type, not the root, so a sub-class name narrows through
+    ///     the provider's own hierarchy pass and the text can name the sub-class's own members.
+    ///     <see cref="DocumentQueryOptions.IncludeSoftDeleted" /> is the provider's
+    ///     <c>MaybeDeleted()</c>, which drops its own <c>is_deleted = 0</c> term.
+    /// </remarks>
+    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification =
+            "Applies console text to a mapped document type through Dynamic LINQ, which resolves the type's members reflectively. Mapped types are preserved by their registration on the caller side per the AOT publishing guide. Under Native AOT ApplyCriteriaTo refuses with DocumentCriteriaNotSupportedException before it closes or emits anything.")]
+    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
+        Justification = "See the trimming justification above.")]
+    private static IQueryable ComposeCriteria<T>(FisherSession session, DocumentQueryOptions options,
+        bool maybeDeleted, string tieBreaker) where T : notnull
+    {
+        var source = session.Query<T>();
+
+        if (maybeDeleted)
+        {
+            source = source.MaybeDeleted();
+        }
+
+        return options.ApplyCriteriaTo(source, tieBreaker, CriteriaPolicy);
+    }
+
+    /// <summary>
+    ///     One criteria-bearing read: the composed query, the session it belongs to, and the console's
+    ///     requested terms to add to whatever statement it builds.
+    /// </summary>
+    private sealed class CriteriaRead(IQueryable composed, DocumentMapping mapping, DiagnosticFilter filter,
+        string? tenantId, DocumentQueryOptions options, FisherSession session) : IAsyncDisposable
+    {
+        private FisherQueryProvider Provider => (FisherQueryProvider)composed.Provider;
+
+        /// <summary>How many rows the criteria and the console's terms select — the page's total.</summary>
+        public async Task<long> CountAsync(CancellationToken token)
+        {
+            var statement = Build();
+            statement.SelectColumns = "count(*)";
+            statement.OrderBys.Clear();
+
+            return await TranslatedAsync(() => Provider.ExecuteDiagnosticCountAsync(statement, token))
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        ///     <paramref name="take" /> stored rows after <paramref name="skip" />, in the criteria's order
+        ///     tie-broken by the identity, or by the identity alone without an ordering.
+        /// </summary>
+        public async Task<List<StoredDocument>> PageAsync(int take, long skip, CancellationToken token)
+        {
+            var layout = new StoredRowLayout(mapping);
+
+            var statement = Build();
+            statement.SelectColumns = layout.Columns;
+
+            // The criteria's ordering already ends in the identity (the tie-breaker handed to
+            // ApplyCriteriaTo); a Where with no ordering is ordered by it here, as the hand-built read is.
+            if (statement.OrderBys.Count == 0)
+            {
+                statement.OrderBys.Add(("id", false));
+            }
+
+            statement.Limit = take;
+            statement.Offset = checked((int)skip);
+
+            await using var reader = await TranslatedAsync(() => Provider.ExecuteDiagnosticReaderAsync(statement, token))
+                .ConfigureAwait(false);
+
+            return await layout.ReadAllAsync(reader, tenantId, token).ConfigureAwait(false);
+        }
+
+        /// <summary>Build the statement and throw it away: the provider's own refusal, without a read.</summary>
+        public void Validate() => Build();
+
+        public ValueTask DisposeAsync() => session.DisposeAsync();
+
+        private Statement Build()
+        {
+            var statement = Translated(() => Provider.DiagnosticStatement(composed.Expression));
+
+            foreach (var (column, value) in filter.RequestedTerms())
+            {
+                statement.Wheres.Add(new ComparisonFilter(column, "=", value));
+            }
+
+            return statement;
+        }
+
+        /// <summary>
+        ///     The provider refusing a shape — when the statement is built, or when its parameters are bound
+        ///     — becomes the contract's refusal. A database failure is not one, and propagates as itself.
+        /// </summary>
+        private T Translated<T>(Func<T> action)
+        {
+            try
+            {
+                return action();
+            }
+            catch (Exception e) when (DocumentQueryCriteria.IsTranslationFailure(e))
+            {
+                throw options.Untranslatable(e);
+            }
+        }
+
+        private async Task<T> TranslatedAsync<T>(Func<Task<T>> action)
+        {
+            try
+            {
+                return await action().ConfigureAwait(false);
+            }
+            catch (Exception e) when (DocumentQueryCriteria.IsTranslationFailure(e))
+            {
+                throw options.Untranslatable(e);
+            }
+        }
     }
 
     /// <remarks>
@@ -592,24 +955,6 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     private FisherDatabase DatabaseForDiagnostics(string? tenantId)
         => tenantId is null ? Database : Tenancy.ExistingDatabaseFor(tenantId);
 
-    private static void RefuseUnsupportedCriteria(DocumentQueryOptions options)
-    {
-        const string reason =
-            "Fisher's IDocumentStoreDiagnostics does not apply Dynamic LINQ criteria yet — they need the "
-            + "string-to-IQueryable translation tracked as jasperfx#869. Page without it, or narrow with "
-            + "IdEquals and the metadata filters.";
-
-        if (!string.IsNullOrWhiteSpace(options.Where))
-        {
-            throw new DocumentCriteriaNotSupportedException(nameof(DocumentQueryOptions.Where), reason);
-        }
-
-        if (!string.IsNullOrWhiteSpace(options.OrderBy))
-        {
-            throw new DocumentCriteriaNotSupportedException(nameof(DocumentQueryOptions.OrderBy), reason);
-        }
-    }
-
     private async Task<StoredDocument?> LoadStoredDocumentAsync(SqliteConnection connection,
         SqliteTransaction? transaction, DocumentMapping mapping, Type queriedType, string? tenantId, string id,
         bool includeSoftDeleted, CancellationToken token)
@@ -639,79 +984,119 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         SqliteTransaction? transaction, DocumentMapping mapping, string? tenantId, string where,
         Action<SqliteCommand> bindWhere, string tail, Action<SqliteCommand> bindTail, CancellationToken token)
     {
-        var metadata = mapping.Metadata;
-        var columns = new List<string> { "id", "data", metadata.LastModified.Name };
-
-        int Add(bool present, string column)
-        {
-            if (!present) return -1;
-            columns.Add(column);
-            return columns.Count - 1;
-        }
-
-        var versionOrdinal = Add(mapping.UseOptimisticConcurrency, metadata.Version.Name);
-        var revisionOrdinal = Add(mapping.UseNumericRevisions, metadata.Revision.Name);
-        var createdOrdinal = Add(metadata.CreatedAt.Enabled, metadata.CreatedAt.Name);
-        var tenantOrdinal = Add(mapping.IsConjoined, StorageConstants.TenantIdColumn);
-        var deletedOrdinal = Add(mapping.IsSoftDeleted, SoftDelete.IsDeletedColumn);
-        var deletedAtOrdinal = Add(mapping.IsSoftDeleted, SoftDelete.DeletedAtColumn);
-        var docTypeOrdinal = Add(mapping.IsHierarchy, DocumentHierarchy.DocTypeColumn);
+        var layout = new StoredRowLayout(mapping);
 
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = $"select {string.Join(", ", columns)} from {mapping.QuotedTableName}{where}{tail}";
+        command.CommandText = $"select {layout.Columns} from {mapping.QuotedTableName}{where}{tail}";
         bindWhere(command);
         bindTail(command);
 
-        // A single-tenanted type reports the tenant the read was for — the file's own tenant under
-        // database-per-tenant — or the default, which is what the contract says a single-tenanted row
-        // belongs to.
-        var readTenant = tenantId ?? StorageConstants.DefaultTenantId;
-
-        var documents = new List<StoredDocument>();
-
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
-        while (await reader.ReadAsync(token).ConfigureAwait(false))
+        return await layout.ReadAllAsync(reader, tenantId, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     The columns a <see cref="StoredDocument" /> is read from, and the read — one definition for the
+    ///     hand-built read and the criteria read alike, so the two cannot disagree about what a row is.
+    /// </summary>
+    private sealed class StoredRowLayout
+    {
+        private readonly DocumentMapping _mapping;
+        private readonly int _versionOrdinal;
+        private readonly int _revisionOrdinal;
+        private readonly int _createdOrdinal;
+        private readonly int _tenantOrdinal;
+        private readonly int _deletedOrdinal;
+        private readonly int _deletedAtOrdinal;
+        private readonly int _docTypeOrdinal;
+
+        public StoredRowLayout(DocumentMapping mapping)
+        {
+            _mapping = mapping;
+
+            var metadata = mapping.Metadata;
+            var columns = new List<string> { "id", "data", metadata.LastModified.Name };
+
+            int Add(bool present, string column)
+            {
+                if (!present) return -1;
+                columns.Add(column);
+                return columns.Count - 1;
+            }
+
+            _versionOrdinal = Add(mapping.UseOptimisticConcurrency, metadata.Version.Name);
+            _revisionOrdinal = Add(mapping.UseNumericRevisions, metadata.Revision.Name);
+            _createdOrdinal = Add(metadata.CreatedAt.Enabled, metadata.CreatedAt.Name);
+            _tenantOrdinal = Add(mapping.IsConjoined, StorageConstants.TenantIdColumn);
+            _deletedOrdinal = Add(mapping.IsSoftDeleted, SoftDelete.IsDeletedColumn);
+            _deletedAtOrdinal = Add(mapping.IsSoftDeleted, SoftDelete.DeletedAtColumn);
+            _docTypeOrdinal = Add(mapping.IsHierarchy, DocumentHierarchy.DocTypeColumn);
+
+            Columns = string.Join(", ", columns);
+        }
+
+        /// <summary>The select list, unqualified — a diagnostics read never joins.</summary>
+        public string Columns { get; }
+
+        /// <param name="tenantId">
+        ///     The tenant the read was for. A single-tenanted type reports it — the file's own tenant
+        ///     under database-per-tenant — or the default, which is what the contract says a
+        ///     single-tenanted row belongs to.
+        /// </param>
+        public async Task<List<StoredDocument>> ReadAllAsync(DbDataReader reader, string? tenantId,
+            CancellationToken token)
+        {
+            var readTenant = tenantId ?? StorageConstants.DefaultTenantId;
+            var documents = new List<StoredDocument>();
+
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                documents.Add(Read(reader, readTenant));
+            }
+
+            return documents;
+        }
+
+        private StoredDocument Read(DbDataReader reader, string readTenant)
         {
             // Byte-exact, as fisher#28's JSON reads are and for the same reason: data holds precisely
             // what the serializer wrote, so a console shows the document rather than a re-rendering.
             var json = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
             var lastModified = reader.IsDBNull(2) ? null : reader.GetString(2);
 
-            var docType = docTypeOrdinal >= 0 && !reader.IsDBNull(docTypeOrdinal)
-                ? reader.GetString(docTypeOrdinal)
+            var docType = _docTypeOrdinal >= 0 && !reader.IsDBNull(_docTypeOrdinal)
+                ? reader.GetString(_docTypeOrdinal)
                 : null;
 
-            documents.Add(new StoredDocument(
-                FisherSession.InvariantText(reader.GetValue(0)), json)
+            return new StoredDocument(FisherSession.InvariantText(reader.GetValue(0)), json)
             {
                 // guid_version is rendered through Guid rather than returned as stored: Weasel's version
                 // binder writes the raw Guid, which Microsoft.Data.Sqlite spells UPPERCASE, while every
                 // other Guid a console sees from Fisher is lowercase canonical. An opaque token is still
                 // one a console will display and paste back.
-                Version = versionOrdinal >= 0 && !reader.IsDBNull(versionOrdinal)
-                    ? CanonicalVersion(reader.GetString(versionOrdinal))
-                    : revisionOrdinal >= 0 && !reader.IsDBNull(revisionOrdinal)
-                        ? reader.GetInt64(revisionOrdinal).ToString(CultureInfo.InvariantCulture)
+                Version = _versionOrdinal >= 0 && !reader.IsDBNull(_versionOrdinal)
+                    ? CanonicalVersion(reader.GetString(_versionOrdinal))
+                    : _revisionOrdinal >= 0 && !reader.IsDBNull(_revisionOrdinal)
+                        ? reader.GetInt64(_revisionOrdinal).ToString(CultureInfo.InvariantCulture)
                         : ContentVersion(lastModified, json),
                 LastModified = lastModified is null ? null : SqliteTimestamp.FromDatabaseValue(lastModified),
-                Created = TimestampAt(reader, createdOrdinal),
-                TenantId = tenantOrdinal >= 0 && !reader.IsDBNull(tenantOrdinal)
-                    ? reader.GetString(tenantOrdinal)
+                Created = TimestampAt(reader, _createdOrdinal),
+                TenantId = _tenantOrdinal >= 0 && !reader.IsDBNull(_tenantOrdinal)
+                    ? reader.GetString(_tenantOrdinal)
                     : readTenant,
-                IsDeleted = deletedOrdinal >= 0 && !reader.IsDBNull(deletedOrdinal) && reader.GetInt64(deletedOrdinal) != 0,
-                DeletedAt = TimestampAt(reader, deletedAtOrdinal),
-                DocumentType = (TypeForAlias(mapping, docType) ?? mapping.DocumentType).FullNameInCode()
-            });
+                IsDeleted = _deletedOrdinal >= 0 && !reader.IsDBNull(_deletedOrdinal)
+                                                 && reader.GetInt64(_deletedOrdinal) != 0,
+                DeletedAt = TimestampAt(reader, _deletedAtOrdinal),
+                DocumentType = (TypeForAlias(_mapping, docType) ?? _mapping.DocumentType).FullNameInCode()
+            };
         }
-
-        return documents;
     }
 
     private static string CanonicalVersion(string stored)
         => Guid.TryParse(stored, out var version) ? version.ToString("D") : stored;
 
-    private static DateTimeOffset? TimestampAt(SqliteDataReader reader, int ordinal)
+    private static DateTimeOffset? TimestampAt(DbDataReader reader, int ordinal)
         => ordinal >= 0 && !reader.IsDBNull(ordinal) ? SqliteTimestamp.FromDatabaseValue(reader.GetString(ordinal)) : null;
 
     /// <summary>
@@ -851,28 +1236,11 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
 
             // ---- what the console asked for ----
 
-            if (IdEquals is { } id)
+            var requested = 0;
+            foreach (var (column, value) in RequestedTerms())
             {
-                // Converted through the mapping's identity type rather than bound as the raw string. A
-                // console hands an id over as text, and comparing that against the id column directly is
-                // the uppercase-Guid trap — fi_doc_*.id holds the lowercase canonical form and SQLite's
-                // default collation is case-sensitive, so the raw string would match nothing.
-                terms.Add("id = $id");
-                binders.Add(command => command.Parameters.AddWithValue("$id", ConvertIdentity(mapping, id)));
-            }
-
-            AddMetadataFilter(mapping.Metadata.CorrelationId, CorrelationId, "$correlation");
-            AddMetadataFilter(mapping.Metadata.CausationId, CausationId, "$causation");
-            AddMetadataFilter(mapping.Metadata.LastModifiedBy, LastModifiedBy, "$user");
-
-            void AddMetadataFilter(Storage.Metadata.MetadataColumn column, string? value, string parameter)
-            {
-                if (value is null || !column.Enabled)
-                {
-                    return;
-                }
-
-                terms.Add($"{column.Name} = {parameter}");
+                var parameter = $"$requested{requested++}";
+                terms.Add($"{column} = {parameter}");
                 binders.Add(command => command.Parameters.AddWithValue(parameter, value));
             }
 
@@ -885,6 +1253,40 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                     binder(command);
                 }
             });
+        }
+
+        /// <summary>
+        ///     What the console asked for beyond the implicit filters — the id and the three metadata
+        ///     columns — as column/value equalities. Rendered as SQL by <see cref="Build" /> and as
+        ///     statement predicates by the criteria read, so both reads narrow by exactly the same list.
+        /// </summary>
+        /// <remarks>
+        ///     A metadata filter is honoured only where the type persists the column, and ignored
+        ///     otherwise: a filter on a disabled column is <c>no such column</c>, not an empty result.
+        /// </remarks>
+        public IEnumerable<(string Column, object Value)> RequestedTerms()
+        {
+            if (IdEquals is { } id)
+            {
+                // Converted through the mapping's identity type rather than bound as the raw string. A
+                // console hands an id over as text, and comparing that against the id column directly is
+                // the uppercase-Guid trap — fi_doc_*.id holds the lowercase canonical form and SQLite's
+                // default collation is case-sensitive, so the raw string would match nothing.
+                yield return ("id", ConvertIdentity(mapping, id));
+            }
+
+            foreach (var (column, value) in new[]
+                     {
+                         (mapping.Metadata.CorrelationId, CorrelationId),
+                         (mapping.Metadata.CausationId, CausationId),
+                         (mapping.Metadata.LastModifiedBy, LastModifiedBy)
+                     })
+            {
+                if (value is not null && column.Enabled)
+                {
+                    yield return (column.Name, value);
+                }
+            }
         }
     }
 

@@ -324,17 +324,66 @@ public class document_diagnostics_contract : IAsyncLifetime
 
     // ---------------------------------------------------------------- criteria
 
+    /// <remarks>
+    ///     jasperfx#869 retired the refusal this used to pin. With criteria applied there is no type to
+    ///     parse the text against, so an unknown type is the empty page it is without criteria — the
+    ///     reference implementation's answer too.
+    /// </remarks>
     [Fact]
-    public async Task criteria_are_refused_even_for_a_type_the_store_does_not_have()
+    public async Task criteria_against_a_type_the_store_does_not_have_is_an_empty_page()
     {
-        // Refused first, so a predicate against an unknown type is not an empty page that reads as an
-        // answer to it.
         IDocumentStoreDiagnostics diagnostics = _store;
 
-        var refused = await Should.ThrowAsync<DocumentCriteriaNotSupportedException>(() =>
-            diagnostics.QueryDocumentsAsync("No.Such.Type", new DocumentQueryOptions(1, 10) { Where = "x > 1" }, Token));
+        var result = await diagnostics.QueryDocumentsAsync("No.Such.Type",
+            new DocumentQueryOptions(1, 10) { Where = "x > 1" }, Token);
 
-        refused.Criterion.ShouldBe(nameof(DocumentQueryOptions.Where));
+        result.TotalCount.ShouldBe(0);
+        result.Documents.ShouldBeEmpty();
+    }
+
+    /// <remarks>
+    ///     The database-per-tenant arm of jasperfx#869: a tenant's Where reads that tenant's file, and the
+    ///     all-tenants fan-out counts and pages each file's tenant through the criteria.
+    /// </remarks>
+    [Fact]
+    public async Task criteria_read_the_tenants_own_database_and_fan_out_across_every_file()
+    {
+        await using (var session = _perTenant.LightweightSession())
+        {
+            session.Store(new Lighthouse { Id = Guid.NewGuid(), Name = "Eddystone", Code = "E1", Keeper = "ann" });
+            session.Store(new Lighthouse { Id = Guid.NewGuid(), Name = "Bishop Rock", Code = "B1", Keeper = "bo" });
+            await session.SaveChangesAsync(Token);
+        }
+
+        var north = await StoreInNorthAsync(); // keeper "ann"
+        await using (var session = _perTenant.LightweightSession("north"))
+        {
+            session.Store(new Lighthouse { Id = Guid.NewGuid(), Name = "Skerries", Code = "S1", Keeper = "cy" });
+            await session.SaveChangesAsync(Token);
+        }
+
+        IDocumentStoreDiagnostics diagnostics = _perTenant;
+        var byAnn = new DocumentQueryOptions(1, 10) { Where = "Keeper = @0", Arguments = ["ann"] };
+
+        var inNorth = await diagnostics.QueryDocumentsAsync(LighthouseType, byAnn with { TenantId = "north" }, Token);
+        inNorth.TotalCount.ShouldBe(1);
+        inNorth.Documents.ShouldHaveSingleItem().Id.ShouldBe(north.Id.ToString());
+        inNorth.Documents.Single().TenantId.ShouldBe("north");
+
+        var everywhere = await diagnostics.QueryDocumentsAsync(LighthouseType,
+            byAnn with { AllTenants = true, OrderBy = "Name desc" }, Token);
+        everywhere.TotalCount.ShouldBe(2);
+        everywhere.Documents.Select(x => (x.TenantId, x.Id))
+            .ShouldBe([
+                (StorageConstants.DefaultTenantId, everywhere.Documents[0].Id),
+                ("north", north.Id.ToString())
+            ]);
+
+        // Page two of one-row pages is the north file's row: tenant first, across files.
+        var pageTwo = await diagnostics.QueryDocumentsAsync(LighthouseType,
+            byAnn with { AllTenants = true, PageNumber = 2, PageSize = 1 }, Token);
+        pageTwo.TotalCount.ShouldBe(2);
+        pageTwo.Documents.ShouldHaveSingleItem().Id.ShouldBe(north.Id.ToString());
     }
 
     // ---------------------------------------------------------------- descriptors (§5)

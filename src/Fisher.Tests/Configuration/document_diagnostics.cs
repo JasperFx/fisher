@@ -284,6 +284,108 @@ public class document_diagnostics : IAsyncLifetime
             new DocumentQueryOptions(1, 10), Token)).TotalCount.ShouldBe(1);
     }
 
+    /// <remarks>
+    ///     jasperfx#869's twin of the test above. With criteria the statement is the LINQ provider's, so the
+    ///     three implicit filters are its statement-level passes rather than this read's — and a Where that
+    ///     matches every row is exactly the case where losing one of them would go unnoticed.
+    /// </remarks>
+    [Fact]
+    public async Task criteria_reads_carry_the_implicit_filters()
+    {
+        // Soft delete: the deleted crate matches the Where, and is still not a live document.
+        var doomed = Guid.NewGuid();
+        await using (var session = _store.LightweightSession())
+        {
+            session.Store(new Crate { Id = doomed, Label = "Doomed" }, new Crate { Id = Guid.NewGuid(), Label = "Kept" });
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using (var deleting = _store.LightweightSession())
+        {
+            deleting.Delete<Crate>(doomed);
+            await deleting.SaveChangesAsync(Token);
+        }
+
+        var anyLabel = new DocumentQueryOptions(1, 10) { Where = "Label != null" };
+
+        var crates = await Diagnostics.QueryDocumentsAsync(typeof(Crate).FullName!, anyLabel, Token);
+        crates.TotalCount.ShouldBe(1);
+        crates.Documents.ShouldHaveSingleItem().IsDeleted.ShouldBeFalse();
+
+        (await Diagnostics.QueryDocumentsAsync(typeof(Crate).FullName!, anyLabel with { IncludeSoftDeleted = true },
+            Token)).TotalCount.ShouldBe(2);
+
+        // Tenancy, in both directions.
+        await using (var north = _store.LightweightSession("north"))
+        {
+            north.Store(new Vessel { Id = Guid.NewGuid(), Name = "Northern Star" });
+            await north.SaveChangesAsync(Token);
+        }
+
+        var anyName = new DocumentQueryOptions(1, 10) { Where = "Name.StartsWith(@0)", Arguments = ["N"] };
+
+        var inNorth = await Diagnostics.QueryDocumentsAsync(typeof(Vessel).FullName!, anyName with { TenantId = "north" }, Token);
+        inNorth.TotalCount.ShouldBe(1);
+        inNorth.Documents.ShouldHaveSingleItem().TenantId.ShouldBe("north");
+
+        (await Diagnostics.QueryDocumentsAsync(typeof(Vessel).FullName!, anyName with { TenantId = "south" }, Token))
+            .TotalCount.ShouldBe(0);
+
+        // The hierarchy discriminator: the base reads both, a sub-class name narrows.
+        await using (var session = _store.LightweightSession())
+        {
+            session.Store<Container>(new ReeferContainer { Id = Guid.NewGuid(), Code = "R1" });
+            session.Store<Container>(new TankContainer { Id = Guid.NewGuid(), Code = "T1" });
+            await session.SaveChangesAsync(Token);
+        }
+
+        var anyCode = new DocumentQueryOptions(1, 10) { Where = "Code != null", OrderBy = "Code" };
+
+        (await Diagnostics.QueryDocumentsAsync(typeof(Container).FullName!, anyCode, Token)).TotalCount.ShouldBe(2);
+
+        var tanks = await Diagnostics.QueryDocumentsAsync(typeof(TankContainer).FullName!, anyCode, Token);
+        tanks.TotalCount.ShouldBe(1);
+        tanks.Documents.ShouldHaveSingleItem().DocumentType.ShouldBe(typeof(TankContainer).FullNameInCode());
+    }
+
+    /// <remarks>
+    ///     A criteria read against a type nothing has written yet: bad text is still refused — parse,
+    ///     policy and provider refusals all come before the table is looked for — good text is an empty
+    ///     page, and the read provisions nothing. <c>Query&lt;T&gt;()</c> creates a missing table on
+    ///     demand (fisher#74), so this is the read never reaching it rather than the store being lucky.
+    /// </remarks>
+    [Fact]
+    public async Task criteria_against_a_type_whose_table_was_never_created()
+    {
+        // Its own store, never migrated: the class's store applies every mapping's table at startup.
+        using var database = TemporaryDatabase.Create("doc-diagnostics-untouched");
+        await using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = database.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Schema.For<Warehouse>();
+        });
+
+        IDocumentStoreDiagnostics diagnostics = store;
+        var warehouse = typeof(Warehouse).FullName!;
+
+        (await Should.ThrowAsync<DocumentCriteriaNotSupportedException>(() => diagnostics.QueryDocumentsAsync(
+            warehouse, new DocumentQueryOptions(1, 10) { Where = "Heft > 1" }, Token))).Position.ShouldNotBeNull();
+
+        await Should.ThrowAsync<DocumentCriteriaNotSupportedException>(() => diagnostics.QueryDocumentsAsync(
+            warehouse, new DocumentQueryOptions(1, 10) { Where = "Name.Length * 2 > 1" }, Token));
+
+        var result = await diagnostics.QueryDocumentsAsync(warehouse,
+            new DocumentQueryOptions(1, 10) { Where = "Name = @0", Arguments = ["Depot"], OrderBy = "Name" }, Token);
+        result.TotalCount.ShouldBe(0);
+
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(database.ConnectionString);
+        await connection.OpenAsync(Token);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select count(*) from sqlite_master where type = 'table' and name like '%warehouse%'";
+        Convert.ToInt64(await command.ExecuteScalarAsync(Token)).ShouldBe(0);
+    }
+
     [Fact]
     public async Task an_unknown_type_is_an_empty_page_rather_than_a_throw()
     {

@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -107,6 +108,38 @@ def open_issues() -> set[int]:
     return {int(x["number"]) for x in json.loads(result.stdout)}
 
 
+def issues_closed_by(pr: int) -> set[int]:
+    """Issues pull request `pr` closes when it merges (its `Closes #n` references).
+
+    Release prep runs ON the release's pull request, before the merge. An issue the release finishes is
+    still open on the tracker at that moment, but ROADMAP -- which is written for after the merge --
+    rightly no longer lists it as outstanding. Without this the check would demand the release claim
+    work it is in the act of closing (fisher#434 was the first to hit it).
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "view", str(pr), "--repo", REPO, "--json", "closingIssuesReferences"],
+            capture_output=True, text=True, check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        sys.exit(f"`gh pr view {pr}` failed:\n{e.stderr.strip()}")
+
+    return {int(x["number"]) for x in json.loads(result.stdout)["closingIssuesReferences"]}
+
+
+def pull_request_number(explicit: int | None) -> int | None:
+    """`--pr`, or the pull request this workflow run was triggered by, or None."""
+    if explicit is not None:
+        return explicit
+
+    event_path = os.environ.get("GITHUB_EVENT_PATH")
+    if not event_path or not Path(event_path).exists():
+        return None
+
+    event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+    return (event.get("pull_request") or {}).get("number")
+
+
 def marked_region(text: str) -> str:
     if OPEN_START not in text or OPEN_END not in text:
         sys.exit(
@@ -128,11 +161,22 @@ def marked_region(text: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=".")
+    parser.add_argument("--pr", type=int, default=None,
+                        help="Count the issues this pull request closes as closed. Read from the "
+                             "triggering event when run by release-prep.yml.")
     args = parser.parse_args()
 
     text = (Path(args.root).resolve() / ROADMAP).read_text(encoding="utf-8")
 
     actual = open_issues()
+
+    pr = pull_request_number(args.pr)
+    if pr is not None:
+        closing = issues_closed_by(pr)
+        if closing & actual:
+            print(f"Counting {', '.join(f'#{n}' for n in sorted(closing & actual))} as closed: "
+                  f"pull request #{pr} closes {'it' if len(closing & actual) == 1 else 'them'} on merge.")
+        actual -= closing
     claimed = {int(n) for n in re.findall(rf"{re.escape(REPO)}/issues/(\d+)", marked_region(text))}
 
     failures: list[str] = []

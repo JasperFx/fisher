@@ -12,10 +12,30 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2606 tests green on net9.0 and net10.0** — 2539 in `Fisher.Tests`, 36 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 678 of
-them are shared cross-store compliance tests — 509 event sourcing and 169 document.
-On JasperFx **2.80.2** / Weasel **9.41.0**.
+**2650 tests green on net9.0 and net10.0** — 2583 in `Fisher.Tests`, 36 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 692 of
+them are shared cross-store compliance tests — 509 event sourcing and 183 document.
+On JasperFx **2.84.0** / Weasel **9.41.0**.
+
+## The JasperFx 2.84.0 bump — jasperfx#869, Dynamic LINQ criteria in the document diagnostics
+
+`IDocumentStoreDiagnostics.QueryDocumentsAsync` applies `Where` / `OrderBy` / `Arguments`, and
+`SupportsDocumentDiagnosticCriteria` is true: every criteria-filtering fact in
+`DocumentStoreDiagnosticsCompliance` runs, and the criteria-*refusal* fact skips in their place. The text
+goes through `Query<T>()`; the read takes the provider's statement and selects the stored row from it — see
+the remarks on `DocumentStore.DocumentDiagnostics.cs`. `CriteriaShapeRules` refuses the shapes the provider
+answers wrongly without saying so (date/time parts, `Nullable<T>.Value`, null-blind `<>` / `not`), each
+measured against a LINQ-to-objects oracle by `document_diagnostics_criteria`. The date-part one is a real
+provider gap: typed `x.PlacedAt.Year == 2026` renders `json_extract(data, '$.placedAt.year')` and matches
+nothing. fisher#304's decimal comparison is fixed — all eight decimal shapes match the oracle.
+
+**The same bump carries jasperfx#953, adopted as fisher#434.** A stopping subscription's drain is
+bounded by `DaemonSettings.StopAndDrainTimeout` (5 s), cancelling the range in flight at the timeout.
+Checked against Fisher's runner with `subscription_drain_cancellation`: a cancellation before the commit
+rolls back writes and progression together, leaves the file intact and frees the write lock at once — that
+was already true. A cancellation **after** the commit was not handled: the post-commit listener got the
+cancelled token and a listener honouring it lost its work for good, since the progression had committed.
+Post-commit work (listener, participants, outbox flush) now runs on a token the drain does not cancel.
 
 ## The Weasel 9.41.0 bump — a Type-based identity runtime
 
@@ -881,8 +901,8 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.80.2 ships 59 suites; Fisher enrolls **58 of them, 678 tests**.
-Fisher passes **678 of them, across all
+`JasperFx.Events.ComplianceTests` 2.84.0 ships 59 suites; Fisher enrolls **58 of them, 692 tests**.
+Fisher passes **692 of them, across all
 58 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
@@ -1031,7 +1051,7 @@ naming.
 **Green on all fifty-eight is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 58 suites, 678 tests
+### Green — 58 suites, 692 tests
 
 Event sourcing — 46 suites, 509 tests:
 
@@ -1084,11 +1104,11 @@ Event sourcing — 46 suites, 509 tests:
 | `EventProjectionRegistrationCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 12 suites, 169 tests, through `FisherDocumentComplianceFixture`:
+Documents — 12 suites, 183 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
-| `DocumentStoreDiagnosticsCompliance` | 52 |
+| `DocumentStoreDiagnosticsCompliance` | 66 |
 | `DocumentQueryCompliance` | 17 |
 | `DocumentConjoinedTenancyCompliance` | 10 |
 | `DocumentSearchCompliance` | 15 |

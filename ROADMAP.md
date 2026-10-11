@@ -9,6 +9,27 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
+**1.20.0 lets a console filter and order documents by their properties.**
+[jasperfx#869](https://github.com/JasperFx/jasperfx/issues/869): `IDocumentStoreDiagnostics.QueryDocumentsAsync`
+applies `Where` / `OrderBy` text through `Query<T>()` instead of refusing it, reading the stored row —
+byte-exact JSON and its metadata — from the statement Fisher's LINQ provider builds, so the page, its
+order and the total come from one statement. Shapes the provider would answer wrongly without saying so
+are refused by name: parts of a date or time, `.Value` off a nullable member, and `<>` or `not` on a
+member that can be null unless the text says what null should do. fisher#304's decimal comparison was
+re-measured and is right.
+
+**1.20.0 also bounds a stopping subscription, and changes when it redelivers.** On JasperFx **2.84.0**,
+which carries jasperfx#953: a subscription's shard stopping — shutdown or a hand-over — finishes the page
+in flight and leaves the queued pages to the next run, and waits for that page only as long as
+`DaemonSettings.StopAndDrainTimeout` (**5 seconds** by default). A page still running then is cancelled;
+its writes and its progression roll back together and it is processed again, so **a subscription whose
+pages are slower than the timeout sees more redelivery — raise the timeout.**
+[#434](https://github.com/JasperFx/fisher/issues/434) checked Fisher's runner against that and found one
+real gap: a drain timing out after the commit cancelled the post-commit listener's token, and a listener
+that honoured it gave up for good, because the committed progression meant nothing would ask again. The
+post-commit listener, transaction participants and the outbox flush now run on a token the drain does not
+cancel; a drain cancelled before the commit was already safe, and is now pinned.
+
 **1.19.0 measures the last paths Native AOT had never run, and fixes the one that failed.**
 [#430](https://github.com/JasperFx/fisher/issues/430): the hosted daemon, subscriptions, messages and
 events raised from a projection, and raw SQL all run in a native image unchanged. A second store did not:
