@@ -10,8 +10,10 @@
         <!-- JasperFx 2.84.0 (from 2.80.2, spanning 2.81–2.83). Carries jasperfx#869: Dynamic LINQ text to
              IQueryable (JasperFx.Linq.DynamicQuery, DocumentQueryOptions.ApplyCriteriaTo) and the shared
              SqlNullSemantics shape rule. IDocumentStoreDiagnostics.QueryDocumentsAsync now applies Where /
-             OrderBy through Query<T>(), so the fixture sets SupportsDocumentDiagnosticCriteria and the
-             twelve criteria facts DocumentStoreDiagnosticsCompliance gained run green.
+             OrderBy through Query<T>(), so the fixture sets SupportsDocumentDiagnosticCriteria and
+             DocumentStoreDiagnosticsCompliance runs its criteria facts (52 tests to 66). The span also
+             carries jasperfx#953 — subscription drains bounded by StopAndDrainTimeout — whose release
+             note and docs are fisher#434.
 
              JasperFx 2.80.2 (from 2.80.1). fisher#412. One change, jasperfx#950/#951:
              IEvent / StreamAction.CreateAggregateIdentitySource<TId> compose ValueTypeInfo.CreateWrapper

@@ -12,12 +12,12 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2606 tests green on net9.0 and net10.0** — 2539 in `Fisher.Tests`, 36 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 678 of
-them are shared cross-store compliance tests — 509 event sourcing and 169 document.
-On JasperFx **2.80.2** / Weasel **9.41.0**.
+**2646 tests green on net9.0 and net10.0** — 2579 in `Fisher.Tests`, 36 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 692 of
+them are shared cross-store compliance tests — 509 event sourcing and 183 document.
+On JasperFx **2.84.0** / Weasel **9.41.0**.
 
-## jasperfx#869 — Dynamic LINQ criteria in the document diagnostics (needs JasperFx 2.84.0)
+## The JasperFx 2.84.0 bump — jasperfx#869, Dynamic LINQ criteria in the document diagnostics
 
 `IDocumentStoreDiagnostics.QueryDocumentsAsync` applies `Where` / `OrderBy` / `Arguments`, and
 `SupportsDocumentDiagnosticCriteria` is true: every criteria-filtering fact in
@@ -893,8 +893,8 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.80.2 ships 59 suites; Fisher enrolls **58 of them, 678 tests**.
-Fisher passes **678 of them, across all
+`JasperFx.Events.ComplianceTests` 2.84.0 ships 59 suites; Fisher enrolls **58 of them, 692 tests**.
+Fisher passes **692 of them, across all
 58 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
@@ -1043,7 +1043,7 @@ naming.
 **Green on all fifty-eight is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 58 suites, 678 tests
+### Green — 58 suites, 692 tests
 
 Event sourcing — 46 suites, 509 tests:
 
@@ -1096,11 +1096,11 @@ Event sourcing — 46 suites, 509 tests:
 | `EventProjectionRegistrationCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 12 suites, 169 tests, through `FisherDocumentComplianceFixture`:
+Documents — 12 suites, 183 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
-| `DocumentStoreDiagnosticsCompliance` | 52 |
+| `DocumentStoreDiagnosticsCompliance` | 66 |
 | `DocumentQueryCompliance` | 17 |
 | `DocumentConjoinedTenancyCompliance` | 10 |
 | `DocumentSearchCompliance` | 15 |
