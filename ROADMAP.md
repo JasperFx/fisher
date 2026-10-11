@@ -3,11 +3,21 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **three open issues, and none of them is feature work.** One is a bug filed on the day of
-1.15.0, one is an unreproduced intermittent kept open on evidence, and one is blocked upstream. 1.5.0 closed both of 1.4.0's
+Status: **four open issues, and none of them is feature work.** One is a bug filed on the day of
+1.15.0, one is an unreproduced intermittent kept open on evidence, one is blocked upstream, and one is
+the release note and docs for a JasperFx daemon change this release's pin already carries. 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
+
+**1.20.0 lets a console filter and order documents by their properties.**
+[jasperfx#869](https://github.com/JasperFx/jasperfx/issues/869): `IDocumentStoreDiagnostics.QueryDocumentsAsync`
+applies `Where` / `OrderBy` text through `Query<T>()` instead of refusing it, reading the stored row —
+byte-exact JSON and its metadata — from the statement Fisher's LINQ provider builds, so the page, its
+order and the total come from one statement. Shapes the provider would answer wrongly without saying so
+are refused by name: parts of a date or time, `.Value` off a nullable member, and `<>` or `not` on a
+member that can be null unless the text says what null should do. fisher#304's decimal comparison was
+re-measured and is right. On JasperFx **2.84.0**, which also carries jasperfx#953 — see #434.
 
 **1.19.0 measures the last paths Native AOT had never run, and fixes the one that failed.**
 [#430](https://github.com/JasperFx/fisher/issues/430): the hosted daemon, subscriptions, messages and
@@ -199,7 +209,12 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is three items.
+What is left is four items.
+
+[#434](https://github.com/JasperFx/fisher/issues/434) adopts jasperfx#953: a subscription's
+`StopAndDrainAsync` is now bounded by `StopAndDrainTimeout` (default 5 seconds), so a page slower than
+that is cancelled and re-processed on shutdown. The JasperFx 2.84.0 pin already carries the change; what
+is left is the release note, the docs, and two checks on Fisher's subscription runner.
 
 [#372](https://github.com/JasperFx/fisher/issues/372) was filed the day 1.15.0 shipped: a LINQ
 `Contains()` over more than 32,766 values exceeds SQLite's bound-variable limit and throws, where
