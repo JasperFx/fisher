@@ -90,6 +90,41 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     ValueTask<IReadOnlyList<IEventDatabase>> IEventStore.AllDatabases()
         => ValueTask.FromResult<IReadOnlyList<IEventDatabase>>(Tenancy.AllDatabases().Cast<IEventDatabase>().ToList());
 
+    /// <summary>
+    ///     The one database holding a tenant's events, so a caller waiting on or querying a single
+    ///     tenant reaches that tenant's file rather than every file (fisher#437).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         JasperFx's default answers only for a single-database store, so under database-per-tenant
+    ///         it said null and Bobcat's <c>AfterAsyncDaemonsCatchUpAsync(tenantId)</c> and Wolverine's
+    ///         correlation-id query fell back to <see cref="IEventStore.AllDatabases" />. Under conjoined
+    ///         tenancy every tenant answers with the one database, as before.
+    ///     </para>
+    ///     <para>
+    ///         <b>A lookup, never a provisioning.</b> It resolves through
+    ///         <see cref="ITenancy.ExistingDatabaseFor" />, not <see cref="ITenancy.DatabaseFor" />, for
+    ///         the reason fisher#390 gave: under the directory convention <c>DatabaseFor</c> answers for
+    ///         any id and its first connection creates and migrates the file. A tenant the tenancy does
+    ///         not know, or has suspended, is null, which the contract reads as "fall back".
+    ///     </para>
+    /// </remarks>
+    ValueTask<IEventDatabase?> IEventStore.FindDatabaseForTenantAsync(string tenantId, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(tenantId);
+
+        try
+        {
+            return ValueTask.FromResult<IEventDatabase?>(Tenancy.ExistingDatabaseFor(tenantId));
+        }
+        // The shared base type rather than Fisher's own, so a custom ITenancy refusing with it is read
+        // the same way. DisabledTenantException derives from it, so a suspended tenant lands here too.
+        catch (JasperFx.MultiTenancy.UnknownTenantIdException)
+        {
+            return ValueTask.FromResult<IEventDatabase?>(null);
+        }
+    }
+
     // ---- sessions and loaders ----
 
     /// <summary>
