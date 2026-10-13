@@ -7,7 +7,13 @@
         <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
              carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
              transitively. -->
-        <!-- JasperFx 2.84.0 (from 2.80.2, spanning 2.81–2.83). Carries jasperfx#869: Dynamic LINQ text to
+        <!-- JasperFx 2.86.0 (from 2.84.0, spanning 2.85.x). fisher#437. jasperfx#1005 added
+             IEventStore.FindDatabaseForTenantAsync as a default interface member that only answers for
+             a single-database store, so a database-per-tenant Fisher store answered null and Bobcat's
+             AfterAsyncDaemonsCatchUpAsync(tenantId) waited on every tenant's file. DocumentStore now
+             overrides it through ITenancy.ExistingDatabaseFor: the tenant's file, never provisioned.
+
+             JasperFx 2.84.0 (from 2.80.2, spanning 2.81–2.83). Carries jasperfx#869: Dynamic LINQ text to
              IQueryable (JasperFx.Linq.DynamicQuery, DocumentQueryOptions.ApplyCriteriaTo) and the shared
              SqlNullSemantics shape rule. IDocumentStoreDiagnostics.QueryDocumentsAsync now applies Where /
              OrderBy through Query<T>(), so the fixture sets SupportsDocumentDiagnosticCriteria and
@@ -207,16 +213,16 @@
              generation, which Fisher does not do — projection dispatch is source-generated.
              jasperfx#880 is XML comments on AutoCreate. jasperfx#867 is a Wolverine codegen fix and
              jasperfx#865/#866 are the publish pipeline. -->
-        <PackageVersion Include="JasperFx" Version="2.84.0" />
-        <PackageVersion Include="JasperFx.Events" Version="2.84.0" />
+        <PackageVersion Include="JasperFx" Version="2.86.0" />
+        <PackageVersion Include="JasperFx.Events" Version="2.86.0" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.84.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.84.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.86.0" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.86.0" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.84.0" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.86.0" />
 
         <!-- Weasel 9.42.0 (from 9.41.0). Nothing for Fisher to act on: weasel#695 (SQL Server advisory
              locks end with their session), weasel#696/#698 (PostgreSQL table storage parameters) and
