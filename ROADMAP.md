@@ -9,6 +9,12 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
+**1.20.2 answers `IEventStore.FindDatabaseForTenantAsync` from Fisher's own tenancy.**
+[#437](https://github.com/JasperFx/fisher/issues/437), over JasperFx **2.86.0** (jasperfx#1005): a known
+tenant under database-per-tenant resolves to its own file, and every tenant resolves to the one database
+under conjoined or default tenancy. An unknown or suspended tenant answers `null` without provisioning
+anything, through fisher#390's lookup-only path, so asking never creates or migrates a file.
+
 **1.20.1 takes Weasel 9.42.0**, which carries nothing Fisher acts on: SQL Server advisory locks,
 PostgreSQL storage parameters, and Native AOT rooting for an identity factory Fisher does not call.
 
