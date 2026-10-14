@@ -32,8 +32,10 @@
              gains three facts for it (9 to 12), all green, and rebuild_mode_start_resumes_after_a_failure
              pins restarting a failed Rebuild-mode run against fi_event_progression.
              jasperfx#1013 (2.87.1) adds IEventStore.TryDescribeDatabasesAsync, a default interface member
-             that falls back to TryCreateUsage()?.Database, so Fisher answers correctly without an
-             override; overriding it from the tenancy is an optimisation only. jasperfx#1011 (2.87.0) is
+             that falls back to TryCreateUsage()?.Database, so Fisher answered correctly without an
+             override. DocumentStore overrides it from DescribeDatabases() anyway (JasperFx/wolverine#5002),
+             because Wolverine asks on every leader heartbeat and the full usage describes every
+             projection, subscription, event type and tag type. jasperfx#1011 (2.87.0) is
              the model command's spec manifest, which Fisher does not reach.
 
              JasperFx 2.86.0 (from 2.84.0, spanning 2.85.x). fisher#437. jasperfx#1005 added
