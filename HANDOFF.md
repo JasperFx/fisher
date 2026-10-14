@@ -12,10 +12,21 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2655 tests green on net9.0 and net10.0** — 2588 in `Fisher.Tests`, 36 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 692 of
-them are shared cross-store compliance tests — 509 event sourcing and 183 document.
-On JasperFx **2.86.0** / Weasel **9.42.0**.
+**2659 tests green on net9.0 and net10.0** — 2592 in `Fisher.Tests`, 36 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 695 of
+them are shared cross-store compliance tests — 512 event sourcing and 183 document.
+On JasperFx **2.88.0** / Weasel **9.42.0**.
+
+## The JasperFx 2.88.0 bump — jasperfx#1015, a Rebuild-mode shard that resumes
+
+`IProjectionDaemon.StartAgentInRebuildModeAsync` starts a shard in Rebuild mode: no side effects, it
+keeps following the store past the high-water mark, and it resumes from its own row in
+`fi_event_progression` rather than rewinding to 0. That is the blue/green warm-up role of
+wolverine#4569. `ProjectionSideEffectCompliance` gains three facts for it, all green.
+`rebuild_mode_start_resumes_after_a_failure` is the store-local case, ported from Marten: a Rebuild-mode
+run that pauses on an apply error part of the way through (it commits 50 of 100 events in pages of 10)
+can be stopped, fixed and started again, and finishes with every document folded exactly once. Against a
+JasperFx build with the resume disabled, the 50 committed documents end at `Count == 2`.
 
 ## The JasperFx 2.84.0 bump — jasperfx#869, Dynamic LINQ criteria in the document diagnostics
 
@@ -907,8 +918,8 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.86.0 ships 59 suites; Fisher enrolls **58 of them, 692 tests**.
-Fisher passes **692 of them, across all
+`JasperFx.Events.ComplianceTests` 2.88.0 ships 59 suites; Fisher enrolls **58 of them, 695 tests**.
+Fisher passes **695 of them, across all
 58 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
@@ -1057,9 +1068,9 @@ naming.
 **Green on all fifty-eight is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 58 suites, 692 tests
+### Green — 58 suites, 695 tests
 
-Event sourcing — 46 suites, 509 tests:
+Event sourcing — 46 suites, 512 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1087,7 +1098,7 @@ Event sourcing — 46 suites, 509 tests:
 | `MultiStreamProjectionCompliance` | 10 |
 | `EventMetadataCompliance` | 9 |
 | `ProjectionStatusCompliance` | 9 |
-| `ProjectionSideEffectCompliance` | 9 |
+| `ProjectionSideEffectCompliance` | 12 |
 | `SelfAggregatingEvolveCompliance` | 8 |
 | `DatabasePerTenantExplorerCompliance` | 7 |
 | `LiveAggregationCompliance` | 7 |
