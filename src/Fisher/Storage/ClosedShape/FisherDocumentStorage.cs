@@ -263,8 +263,18 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
 
     public Task<IReadOnlyList<TDoc>> LoadManyProjectedAsync(TId[] ids, IStorageDatabase database, string tenantId,
         CancellationToken token)
-        => ClosedShapeProjectionLoader<TDoc, TId>.LoadManyAsync(
+    {
+        // fisher#446. The projected loader opens a connection of its own, so an empty array would
+        // cost a connection as well as a statement that can only return no rows. QueryManyAsync
+        // already guards; this is the one read path that did not.
+        if (ids.Length == 0)
+        {
+            return Task.FromResult<IReadOnlyList<TDoc>>(Array.Empty<TDoc>());
+        }
+
+        return ClosedShapeProjectionLoader<TDoc, TId>.LoadManyAsync(
             BuildLoadManyCommand(ids, tenantId), _descriptor, _descriptor.Serializer, database, token);
+    }
 
     // ---- writes ----
 
