@@ -1,4 +1,5 @@
 using JasperFx.Events.Daemon;
+using JasperFx.Events.Projections;
 using Microsoft.Data.Sqlite;
 
 namespace Fisher.Tests.Events;
@@ -58,6 +59,9 @@ public class sqlite_transient_failures : IAsyncLifetime
         busy.IsTransient.ShouldBeFalse();
 
         TransientFailures.IsTransient(busy).ShouldBeTrue();
+
+        // jasperfx#1019: and the daemon retries it rather than dead-lettering the event under SkipApplyErrors
+        ProjectionExceptions.IsExceptionTransient(busy).ShouldBeTrue();
     }
 
     [Fact]
@@ -82,6 +86,7 @@ public class sqlite_transient_failures : IAsyncLifetime
         missing.SqliteErrorCode.ShouldBe(1);
         TransientFailures.IsTransient(missing).ShouldBeFalse();
         ShardFailure.For(missing, DateTimeOffset.UtcNow).IsTransient.ShouldBeFalse();
+        ProjectionExceptions.IsExceptionTransient(missing).ShouldBeFalse();
     }
 
     /// <remarks>
@@ -153,6 +158,9 @@ public class sqlite_transient_failures : IAsyncLifetime
 
         // Registration is the store's job; this fixture built one before any fact ran.
         TransientFailures.IsTransient(exception).ShouldBe(transient);
+
+        // jasperfx#1019: the daemon's retry-or-dead-letter decision for projection code agrees too
+        ProjectionExceptions.IsExceptionTransient(exception).ShouldBe(transient);
 
         // And the command retry pipeline agrees code for code: what Fisher retries inside a command is what it
         // labels transient for a supervisor, SQLITE_PROTOCOL included

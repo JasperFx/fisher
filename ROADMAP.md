@@ -9,6 +9,14 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
+**1.21.1 lets the daemon retry what 1.21.0 classified.** On JasperFx **2.90.1** (jasperfx#1019,
+jasperfx#1020). 1.21.0's classifier only labelled a paused shard; the daemon's own choice between retrying a
+projection's exception and dead-lettering the event still came from a list of registered types, and Fisher
+registers none. So a `SQLITE_BUSY` thrown from projection code was a poison event on the first throw, and
+under `SkipApplyErrors` it dead-lettered an event that would have applied fine on retry. That choice now
+consults the same classifier, so BUSY, LOCKED and PROTOCOL are rethrown and a missing column still
+dead-letters. `sqlite_transient_failures` pins both decisions code for code.
+
 **1.21.0 tells the daemon which SQLite failures are worth retrying.** On JasperFx **2.90.0**.
 [#443](https://github.com/JasperFx/fisher/pull/443) registers a classifier for jasperfx#1016's
 `ShardFailure.IsTransient`. Microsoft.Data.Sqlite never sets `DbException.IsTransient`, so
