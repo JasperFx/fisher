@@ -19,11 +19,6 @@ namespace Fisher.Storage;
 /// </remarks>
 internal static class FisherResilienceDefaults
 {
-    /// <summary>SQLITE_BUSY — the database file is locked by another connection.</summary>
-    private const int SqliteBusy = 5;
-
-    /// <summary>SQLITE_LOCKED — a table in the database is locked.</summary>
-    private const int SqliteLocked = 6;
 
     /// <param name="options">
     ///     The store whose <c>OpenTelemetry</c> counters a retry is reported to, or null for a
@@ -65,8 +60,18 @@ internal static class FisherResilienceDefaults
 
     /// <summary>
     ///     Whether a SQLite error is a contention failure worth retrying, as opposed to a genuine
-    ///     schema or constraint error that will fail identically no matter how often it is retried.
+    ///     schema or constraint error that will fail identically no matter how often it is retried:
+    ///     <c>SQLITE_BUSY</c> (5), <c>SQLITE_LOCKED</c> (6) and <c>SQLITE_PROTOCOL</c> (15), primary or
+    ///     extended.
     /// </summary>
+    /// <remarks>
+    ///     The same code table as <see cref="SqliteTransientFailures" />, so what Fisher retries inside a
+    ///     command and what it labels <see cref="JasperFx.Events.Daemon.ShardFailure.IsTransient" /> for a
+    ///     supervisor can never disagree. <c>SQLITE_PROTOCOL</c> joined the retried pair with the
+    ///     classifier: rescode.html describes it as the WAL-mode race between two connections starting a
+    ///     transaction at once, which is contention in the same family as <c>SQLITE_BUSY</c>, and WAL is
+    ///     Fisher's default.
+    /// </remarks>
     internal static bool IsTransient(SqliteException exception)
-        => exception.SqliteErrorCode is SqliteBusy or SqliteLocked;
+        => SqliteTransientFailures.IsTransientCode(exception.SqliteErrorCode);
 }

@@ -143,7 +143,8 @@ public class stream_locked_exception : IAsyncLifetime
 
         var inner = exception.InnerException.ShouldBeOfType<SqliteException>();
 
-        // 5 is SQLITE_BUSY, 6 is SQLITE_LOCKED — the two FisherResilienceDefaults treats as transient.
+        // 5 is SQLITE_BUSY, 6 is SQLITE_LOCKED — what a contended append produces. FisherResilienceDefaults also
+        // treats SQLITE_PROTOCOL (15) as transient, but an append contending for the write lock does not raise it.
         inner.SqliteErrorCode.ShouldBeOneOf(5, 6);
     }
 

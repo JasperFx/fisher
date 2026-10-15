@@ -149,8 +149,14 @@ public class sqlite_transient_failures : IAsyncLifetime
     [InlineData(2067, false)] // SQLITE_CONSTRAINT_UNIQUE
     public void every_sqlite_code_has_a_verdict(int errorCode, bool transient)
     {
+        var exception = new SqliteException("probe", errorCode);
+
         // Registration is the store's job; this fixture built one before any fact ran.
-        TransientFailures.IsTransient(new SqliteException("probe", errorCode)).ShouldBe(transient);
+        TransientFailures.IsTransient(exception).ShouldBe(transient);
+
+        // And the command retry pipeline agrees code for code: what Fisher retries inside a command is what it
+        // labels transient for a supervisor, SQLITE_PROTOCOL included
+        Fisher.Storage.FisherResilienceDefaults.IsTransient(exception).ShouldBe(transient);
     }
 
     /// <remarks>

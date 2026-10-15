@@ -27,8 +27,8 @@ namespace Fisher.Storage;
 ///         <item><c>SQLITE_BUSY</c> (5) — another connection holds the file's lock. Transient.</item>
 ///         <item><c>SQLITE_LOCKED</c> (6) — a conflict inside one connection or a shared cache.
 ///         Transient.</item>
-///         <item><c>SQLITE_PROTOCOL</c> (15) — transient, and the one addition beyond the retry
-///         pipeline's pair. rescode.html describes it as the WAL-mode race between two connections
+///         <item><c>SQLITE_PROTOCOL</c> (15) — transient. rescode.html describes it as the WAL-mode race
+///         between two connections
 ///         starting a transaction at once, returned only after the loser has backed off and lost
 ///         repeatedly for several seconds: contention, the same family as <c>SQLITE_BUSY</c>, and WAL is
 ///         Fisher's default.</item>
@@ -49,7 +49,8 @@ namespace Fisher.Storage;
 ///     </para>
 ///     <para>
 ///         <b>This is a label, not a retry.</b> Retrying inside a command is
-///         <see cref="FisherResilienceDefaults" />' job, and its predicate is deliberately unchanged.
+///         <see cref="FisherResilienceDefaults" />' job, but its predicate reads <see cref="IsTransientCode" />
+///         too, so the codes Fisher retries and the codes it labels transient are one list.
 ///     </para>
 /// </remarks>
 internal static class SqliteTransientFailures
