@@ -189,6 +189,16 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
     public async Task<IReadOnlyDictionary<TId, TDoc>> LoadManyAsync(TId[] identities,
         CancellationToken cancellationToken)
     {
+        // fisher#446 (marten#5671). A commit that only STARTS streams reaches here with an empty
+        // array: the single-stream base asks only for the ids of streams being appended to. The
+        // storage below happens to short-circuit an empty array too, but this layer is the one that
+        // depends on it, so it says so -- a read path swapped in underneath must not turn every
+        // stream start into a round trip that can only return no rows.
+        if (identities.Length == 0)
+        {
+            return new Dictionary<TId, TDoc>();
+        }
+
         var documents = await _storage.LoadManyAsync(identities, _session, cancellationToken)
             .ConfigureAwait(false);
 
