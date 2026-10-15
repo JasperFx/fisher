@@ -21,6 +21,11 @@ public partial class DocumentStore : IDocumentStore
     {
         options.AssertValid();
 
+        // wolverine#4986. Process-wide and idempotent: Microsoft.Data.Sqlite reports every failure as
+        // non-transient, so without this a shard that lost the write lock is labelled as needing an
+        // operator. Every store comes through here, which is why it lives here rather than in AddFisher.
+        SqliteTransientFailures.Register();
+
         Options = options;
         Tenancy = options switch
         {

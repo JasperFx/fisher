@@ -12,10 +12,10 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2659 tests green on net9.0 and net10.0** — 2592 in `Fisher.Tests`, 36 in
+**2679 tests green on net9.0 and net10.0** — 2612 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 695 of
 them are shared cross-store compliance tests — 512 event sourcing and 183 document.
-On JasperFx **2.88.0** / Weasel **9.42.0**.
+On JasperFx **2.89.0** / Weasel **9.42.0**.
 
 ## The JasperFx 2.88.0 bump — jasperfx#1015, a Rebuild-mode shard that resumes
 
@@ -918,7 +918,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.88.0 ships 59 suites; Fisher enrolls **58 of them, 695 tests**.
+`JasperFx.Events.ComplianceTests` 2.89.0 ships 59 suites; Fisher enrolls **58 of them, 695 tests**.
 Fisher passes **695 of them, across all
 58 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
