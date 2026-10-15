@@ -71,6 +71,23 @@ public class database_per_tenant : IAsyncLifetime
             });
         });
 
+    // JasperFx/wolverine#5002: the database half of TryCreateUsage on its own, for Wolverine's heartbeat
+    [Fact]
+    public async Task describing_the_databases_alone_matches_the_usage()
+    {
+        await using var store = StoreFor();
+        IEventStore events = store;
+
+        var databases = await events.TryDescribeDatabasesAsync(Token);
+        var usage = await events.TryCreateUsage(Token);
+
+        databases.ShouldNotBeNull();
+        databases.Cardinality.ShouldBe(usage!.Database.Cardinality);
+        databases.Databases.Select(x => (x.DatabaseName, string.Join(",", x.TenantIds))).OrderBy(x => x.DatabaseName)
+            .ShouldBe(usage.Database.Databases.Select(x => (x.DatabaseName, string.Join(",", x.TenantIds))).OrderBy(x => x.DatabaseName));
+        databases.Databases.ShouldNotBeEmpty();
+    }
+
     // ---- the default is unchanged ----
 
     /// <remarks>

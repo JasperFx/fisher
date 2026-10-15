@@ -597,6 +597,16 @@ public partial class DocumentStore : IEventStore
     // ---- diagnostics ----
 
     /// <summary>
+    ///     JasperFx/wolverine#5002 — just the database half of <c>TryCreateUsage</c>. Wolverine asks for it on every
+    ///     leader heartbeat, and the full usage also describes every projection, subscription, event type and tag
+    ///     type.
+    /// </summary>
+    Task<DatabaseUsage?> IEventStore.TryDescribeDatabasesAsync(CancellationToken token)
+    {
+        return Task.FromResult<DatabaseUsage?>(DescribeDatabases());
+    }
+
+    /// <summary>
     ///     Describe this store's configuration for monitoring tools.
     /// </summary>
     /// <remarks>
