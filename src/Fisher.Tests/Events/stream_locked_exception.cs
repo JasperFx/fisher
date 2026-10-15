@@ -148,6 +148,27 @@ public class stream_locked_exception : IAsyncLifetime
     }
 
     /// <remarks>
+    ///     wolverine#4986. Contention is the fault a supervisor should wait out, and this is the shape it
+    ///     arrives in from a real append: a Fisher exception that is not a <c>DbException</c> at all,
+    ///     around a <see cref="SqliteException" /> whose own <c>IsTransient</c> is false. Only the
+    ///     classifier the store registered, reached through the walk, makes it transient.
+    /// </remarks>
+    [Fact]
+    public async Task a_contended_append_is_labelled_transient()
+    {
+        var exception = await CommitUnderContentionAsync(session =>
+        {
+            session.Events.StartStream(Guid.NewGuid(), new Landed("Kelp Bay"));
+            return Task.CompletedTask;
+        });
+
+        exception.InnerException.ShouldBeOfType<SqliteException>().IsTransient.ShouldBeFalse();
+
+        JasperFx.Events.Daemon.TransientFailures.IsTransient(exception).ShouldBeTrue();
+        JasperFx.Events.Daemon.ShardFailure.For(exception, DateTimeOffset.UtcNow).IsTransient.ShouldBeTrue();
+    }
+
+    /// <remarks>
     ///     SQLite locks the <em>file</em>, not a row, so every stream in the unit of work lost
     ///     together — which is the one place this means something different than it does on Marten
     ///     and Polecat, where the lock really is one stream's. The base's single <c>StreamId</c> is

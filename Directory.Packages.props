@@ -7,7 +7,14 @@
         <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
              carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
              transitively. -->
-        <!-- JasperFx 2.88.0 (from 2.86.0, spanning 2.87.0/2.87.1). fisher#441. No compile break and
+        <!-- JasperFx 2.89.0 (from 2.88.0). jasperfx#1016 adds ShardFailure.IsTransient, decided by
+             JasperFx.Events.Daemon.TransientFailures, so a supervisor (wolverine#4986) can restart a
+             paused shard only when the fault is expected to clear. Microsoft.Data.Sqlite does not
+             implement DbException.IsTransient (SQLITE_BUSY reads like a missing column), so Fisher
+             registers Storage/SqliteTransientFailures from the DocumentStore constructor. No compile
+             break.
+
+             JasperFx 2.88.0 (from 2.86.0, spanning 2.87.0/2.87.1). fisher#441. No compile break and
              no Fisher code change. jasperfx#1015 adds IProjectionDaemon.StartAgentInRebuildModeAsync: a
              shard runs in Rebuild mode (no side effects), follows the store past the high-water mark and
              resumes from its own persisted progress instead of rewinding. ProjectionSideEffectCompliance
@@ -224,16 +231,16 @@
              generation, which Fisher does not do — projection dispatch is source-generated.
              jasperfx#880 is XML comments on AutoCreate. jasperfx#867 is a Wolverine codegen fix and
              jasperfx#865/#866 are the publish pipeline. -->
-        <PackageVersion Include="JasperFx" Version="2.88.0" />
-        <PackageVersion Include="JasperFx.Events" Version="2.88.0" />
+        <PackageVersion Include="JasperFx" Version="2.89.0" />
+        <PackageVersion Include="JasperFx.Events" Version="2.89.0" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.88.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.88.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.89.0" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.89.0" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.88.0" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.89.0" />
 
         <!-- Weasel 9.42.0 (from 9.41.0). Nothing for Fisher to act on: weasel#695 (SQL Server advisory
              locks end with their session), weasel#696/#698 (PostgreSQL table storage parameters) and
