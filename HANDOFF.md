@@ -12,10 +12,10 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2679 tests green on net9.0 and net10.0** — 2612 in `Fisher.Tests`, 36 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 695 of
-them are shared cross-store compliance tests — 512 event sourcing and 183 document.
-On JasperFx **2.89.0** / Weasel **9.42.0**.
+**2691 tests green on net9.0 and net10.0** — 2624 in `Fisher.Tests`, 36 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 704 of
+them are shared cross-store compliance tests — 521 event sourcing and 183 document.
+On JasperFx **2.90.0** / Weasel **9.42.0**.
 
 ## The JasperFx 2.88.0 bump — jasperfx#1015, a Rebuild-mode shard that resumes
 
@@ -918,9 +918,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.89.0 ships 59 suites; Fisher enrolls **58 of them, 695 tests**.
-Fisher passes **695 of them, across all
-58 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 2.90.0 ships 60 suites; Fisher enrolls **59 of them, 704 tests**.
+Fisher passes **704 of them, across all
+59 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -1065,12 +1065,12 @@ case is what is Fisher's alone — the `ResetAllDataAsync` daemon handling, `Fet
 and `UnknownNaturalKeyException` (which jasperfx#764 excludes on purpose), the subscription wrapper's
 naming.
 
-**Green on all fifty-eight is not the same as feature-complete.** The suites cover what is portable
+**Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 58 suites, 695 tests
+### Green — 59 suites, 704 tests
 
-Event sourcing — 46 suites, 512 tests:
+Event sourcing — 47 suites, 521 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1081,6 +1081,7 @@ Event sourcing — 46 suites, 512 tests:
 | `EventStoreExplorerCompliance` | 18 |
 | `NaturalKeyCompliance` | 17 |
 | `StreamArchivingCompliance` | 20 |
+| `StreamTombstoningCompliance` | 9 |
 | `StreamStateQueryCompliance` | 15 |
 | `AggregateWriteCacheCompliance` | 14 |
 | `StrongTypedIdentityCompliance` | 14 |
