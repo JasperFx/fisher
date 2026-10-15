@@ -9,6 +9,25 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
+**1.21.0 tells the daemon which SQLite failures are worth retrying.** On JasperFx **2.90.0**.
+[#443](https://github.com/JasperFx/fisher/pull/443) registers a classifier for jasperfx#1016's
+`ShardFailure.IsTransient`. Microsoft.Data.Sqlite never sets `DbException.IsTransient`, so
+`SQLITE_BUSY`, Fisher's most common transient fault, read the same as "no such column".
+Wolverine's sweep (wolverine#4986) restarts a paused shard only when that flag is true, so on Fisher it never did.
+BUSY, LOCKED and PROTOCOL are transient; IOERR, FULL and CANTOPEN are not. The retry
+pipeline now retries PROTOCOL too, from the same table of codes. Shipping it closes
+[#447](https://github.com/JasperFx/fisher/issues/447).
+
+**1.21.0 also adds** a warning-free `RegisterTagType<TTag, TInner>(unwrapper)` for trimmed and Native AOT
+applications, with the inferring overloads now annotated as reflection-dependent (jasperfx#1012);
+`TombstoneStream` on the shared `IEventStoreOperations`, enrolled in its compliance suite (jasperfx#1014);
+`IEventStore.TryDescribeDatabasesAsync` answered straight from the tenancy, so Wolverine's leader
+heartbeat no longer pays for the high-water read (#440, wolverine#5002); a rebuild-mode run that fails
+partway and then restarts and finishes, pinned against jasperfx#1015
+([#441](https://github.com/JasperFx/fisher/issues/441)); and a guard keeping a commit that only starts
+streams from reading the inline snapshot table, which Fisher already avoided three layers down and now
+states where it is depended on ([#446](https://github.com/JasperFx/fisher/issues/446), marten#5671).
+
 **1.20.2 answers `IEventStore.FindDatabaseForTenantAsync` from Fisher's own tenancy.**
 [#437](https://github.com/JasperFx/fisher/issues/437), over JasperFx **2.86.0** (jasperfx#1005): a known
 tenant under database-per-tenant resolves to its own file, and every tenant resolves to the one database
