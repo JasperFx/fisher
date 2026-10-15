@@ -455,6 +455,14 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     /// </remarks>
     public override bool SupportsUnarchiveStream => true;
 
+    /// <summary>
+    ///     Fisher's <c>EventOperations.TombstoneStream(Guid|string)</c> implement the members JasperFx
+    ///     2.90.0 lifted onto the shared <see cref="IEventStoreOperations" /> (jasperfx#1014), so the
+    ///     tombstoning suite runs rather than skipping. Tag rows go first, because the tag tables carry a
+    ///     real foreign key to <c>fi_events</c>; see <c>TombstoneStreamOperation</c>.
+    /// </summary>
+    public override bool SupportsTombstoneStream => true;
+
     /// <inheritdoc cref="SupportsUnarchiveStream" />
     public override void UnArchiveStream(IDocumentSession session, object streamIdentity)
     {

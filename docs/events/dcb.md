@@ -13,6 +13,10 @@ opts.Events.RegisterTagType<CustomerId>();           // suffix from the type nam
 
 Each registered tag type gets a table.
 
+Both overloads find the tag's inner value by reflection. In a trimmed or
+[Native AOT](/configuration/native-aot#dcb-tag-types) application, name the inner type and how to read
+it with `RegisterTagType<TTag, TInner>(id => id.Value)` instead.
+
 ## Tagging events
 
 Tag the events an append produces:

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using Fisher.Events;
 using Fisher.Serialization;
@@ -949,12 +950,25 @@ public class EventStoreOptions : IEventStoreInstrumentation
     ///     Register a tag type for Dynamic Consistency Boundary (DCB) support with an explicit table
     ///     suffix.
     /// </summary>
+    /// <remarks>
+    ///     Infers the tag's inner primitive by reflection. A trimmed or Native AOT application registers
+    ///     through <see cref="RegisterTagType{TTag, TInner}(Func{TTag, TInner}, string?)" /> instead.
+    /// </remarks>
+    [RequiresUnreferencedCode(Fisher.Events.EventGraph.TagTypeInferenceUnreferencedCode)]
+    [RequiresDynamicCode(Fisher.Events.EventGraph.TagTypeInferenceDynamicCode)]
     public ITagTypeRegistration RegisterTagType<TTag>(string tableSuffix) where TTag : notnull
         => EventGraph!.RegisterTagType<TTag>(tableSuffix);
 
     /// <inheritdoc cref="RegisterTagType{TTag}(string)" />
+    [RequiresUnreferencedCode(Fisher.Events.EventGraph.TagTypeInferenceUnreferencedCode)]
+    [RequiresDynamicCode(Fisher.Events.EventGraph.TagTypeInferenceDynamicCode)]
     public ITagTypeRegistration RegisterTagType<TTag>() where TTag : notnull
         => EventGraph!.RegisterTagType<TTag>();
+
+    /// <inheritdoc cref="EventGraph.RegisterTagType{TTag, TInner}(Func{TTag, TInner}, string?)" />
+    public ITagTypeRegistration RegisterTagType<TTag, TInner>(Func<TTag, TInner> unwrapper, string? tableSuffix = null)
+        where TTag : notnull
+        => EventGraph!.RegisterTagType(unwrapper, tableSuffix);
 
     /// <inheritdoc cref="EventGraph.AddMaskingRuleForProtectedInformation{T}(Action{T})" />
     public void AddMaskingRuleForProtectedInformation<T>(Action<T> masking) where T : notnull

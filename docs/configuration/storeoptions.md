@@ -122,6 +122,7 @@ Other event options worth knowing:
 | `Events.AppendObserver` | A callback with every appended event, after commit. |
 | `Events.EnableSideEffectsOnInlineProjections` | Lets inline projections publish messages. |
 | `Events.RegisterTagType<T>()` | Registers a [DCB tag](/events/dcb) type and its table. |
+| `Events.RegisterTagType<T, TInner>(Func<T, TInner>)` | The same, from an explicit unwrapper, for [Native AOT](/configuration/native-aot#dcb-tag-types). |
 
 ## Document schema DSL
 
