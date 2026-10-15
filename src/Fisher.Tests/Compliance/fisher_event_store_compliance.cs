@@ -69,6 +69,9 @@ public class fetch_latest_compliance
 public class stream_archiving_compliance
     : StreamArchivingCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
+public class stream_tombstoning_compliance
+    : StreamTombstoningCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
 public class event_store_explorer_compliance
     : EventStoreExplorerCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 

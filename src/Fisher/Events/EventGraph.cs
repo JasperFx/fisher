@@ -479,25 +479,61 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     internal IEnumerable<EventTagTable> BuildTagTables()
         => _tagTypes.Select(registration => new EventTagTable(this, registration));
 
+    internal const string TagTypeInferenceUnreferencedCode =
+        "Discovers the tag type's inner value through ValueTypeInfo, which reflects over its members. Under trimming or Native AOT use RegisterTagType<TTag, TInner>(Func<TTag, TInner>), which wraps TagTypeRegistration.FromUnwrapper<TTag, TInner>.";
+
+    internal const string TagTypeInferenceDynamicCode =
+        "Closes TagTypeRegistration<TTag, TInner> with MakeGenericType. Under Native AOT use RegisterTagType<TTag, TInner>(Func<TTag, TInner>), which wraps TagTypeRegistration.FromUnwrapper<TTag, TInner> and closes nothing at runtime.";
+
     /// <summary>
     ///     Register a tag type for Dynamic Consistency Boundary support, deriving the table suffix from
     ///     the type name.
     /// </summary>
+    [RequiresUnreferencedCode(TagTypeInferenceUnreferencedCode)]
+    [RequiresDynamicCode(TagTypeInferenceDynamicCode)]
     public ITagTypeRegistration RegisterTagType<TTag>() where TTag : notnull
         => RegisterTagType<TTag>(ToEventTypeName(typeof(TTag).Name));
 
     /// <summary>
     ///     Register a tag type for Dynamic Consistency Boundary support with an explicit table suffix.
     /// </summary>
+    /// <remarks>
+    ///     The tag's inner primitive is inferred through <c>TagTypeRegistration.Create&lt;TTag&gt;</c>,
+    ///     which needs reflection and runtime generic instantiation. A trimmed or Native AOT
+    ///     application registers through <see cref="RegisterTagType{TTag, TInner}(Func{TTag, TInner}, string?)" />
+    ///     instead.
+    /// </remarks>
+    [RequiresUnreferencedCode(TagTypeInferenceUnreferencedCode)]
+    [RequiresDynamicCode(TagTypeInferenceDynamicCode)]
     public ITagTypeRegistration RegisterTagType<TTag>(string tableSuffix) where TTag : notnull
-    {
-        var existing = _tagTypes.FirstOrDefault(t => t.TagType == typeof(TTag));
-        if (existing != null)
-        {
-            return existing;
-        }
+        => FindTagType(typeof(TTag)) ?? AddTagType(TagTypeRegistration.Create<TTag>(tableSuffix));
 
-        var registration = TagTypeRegistration.Create<TTag>(tableSuffix);
+    /// <summary>
+    ///     Register a tag type for Dynamic Consistency Boundary support from an explicit unwrapper, for
+    ///     a trimmed or Native AOT application. Wraps <c>TagTypeRegistration.FromUnwrapper&lt;TTag, TInner&gt;</c>,
+    ///     which reflects over nothing and closes no generic type at runtime.
+    /// </summary>
+    /// <typeparam name="TTag">The strong-typed identifier used as the tag.</typeparam>
+    /// <typeparam name="TInner">
+    ///     The primitive the tag table stores: the type of the tag's single public value property,
+    ///     typically <see cref="Guid" />, <see cref="string" />, <see cref="int" /> or <see cref="long" />.
+    /// </typeparam>
+    /// <param name="unwrapper">Reads the inner primitive out of the tag, e.g. <c>id =&gt; id.Value</c>.</param>
+    /// <param name="tableSuffix">
+    ///     Defaults to the tag type's name in snake_case, the same suffix
+    ///     <see cref="RegisterTagType{TTag}()" /> derives.
+    /// </param>
+    public ITagTypeRegistration RegisterTagType<TTag, TInner>(Func<TTag, TInner> unwrapper, string? tableSuffix = null)
+        where TTag : notnull
+    {
+        ArgumentNullException.ThrowIfNull(unwrapper);
+        return FindTagType(typeof(TTag))
+               ?? AddTagType(TagTypeRegistration.FromUnwrapper(unwrapper,
+                   tableSuffix ?? ToEventTypeName(typeof(TTag).Name)));
+    }
+
+    private ITagTypeRegistration AddTagType(ITagTypeRegistration registration)
+    {
         _tagTypes.Add(registration);
         return registration;
     }

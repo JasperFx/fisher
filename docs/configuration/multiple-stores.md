@@ -134,7 +134,7 @@ public interface ILedgerStore : IDocumentStore;
 
 public sealed class LedgerStore(StoreOptions options) : DocumentStore(options), ILedgerStore;
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L58-L64' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_second_store_class' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L60-L66' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_second_store_class' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 <!-- snippet: sample_native_aot_second_store -->
@@ -146,7 +146,7 @@ services.AddFisherStore<ILedgerStore, LedgerStore>(options =>
     options.ConfigureSerialization(configure: json => json.TypeInfoResolver = AppJsonContext.Default);
 });
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L115-L121' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_second_store' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L126-L132' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_second_store' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 The registration is otherwise identical. It's required under [Native AOT](/configuration/native-aot),

@@ -14,6 +14,8 @@ namespace Fisher.Tests.Documentation;
 
 public readonly record struct CharterId(Guid Value);
 
+public record HarbourId(Guid Value);
+
 public class Charter
 {
     public CharterId Id { get; set; }
@@ -94,6 +96,15 @@ public static class native_aot_samples
             // A hierarchy's sub-classes have to be registered generically, one by one.
             options.Schema.For<Vessel>().AddSubClass<Trawler>();
         });
+        #endregion
+    }
+
+    public static void configure_tag_types(StoreOptions options)
+    {
+        #region sample_native_aot_tag_types
+        // Name the inner primitive and how to read it, rather than letting Fisher discover it by
+        // reflection. Same table, same default suffix (fi_event_tag_harbour_id) as RegisterTagType<HarbourId>().
+        options.Events.RegisterTagType<HarbourId, Guid>(id => id.Value);
         #endregion
     }
 
