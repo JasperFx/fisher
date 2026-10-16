@@ -166,13 +166,17 @@ public class otel_counters : IAsyncLifetime
         await using var blocker = new SqliteConnection(_database.ConnectionString);
         await blocker.OpenAsync(Token);
 
+        var acquired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var released = new TaskCompletionSource();
 
         var holding = Task.Run(async () =>
         {
+            // Serializable is BEGIN IMMEDIATE: the write lock is held once this returns.
             await using var transaction =
                 (SqliteTransaction)await blocker.BeginTransactionAsync(
                     System.Data.IsolationLevel.Serializable, Token);
+
+            acquired.SetResult();
 
             await Task.Delay(hold, Token);
             await transaction.RollbackAsync(Token);
@@ -180,8 +184,12 @@ public class otel_counters : IAsyncLifetime
             released.SetResult();
         }, Token);
 
-        // Give the blocker time to actually hold the lock before the commit asks for it.
-        await Task.Delay(50, Token);
+        // The commit asks for the lock only once the blocker really holds it. This used to be a 50ms
+        // Task.Delay, which on a loaded host was sometimes shorter than the Task.Run took to start: the
+        // commit then found the file uncontended, waited 0.04ms, and the assertion below failed with
+        // nothing wrong in Fisher. Seen once in a supervised run beside a busy machine
+        // (JasperFx/bobcat#565); the race does not need a second process, only a starved thread pool.
+        await acquired.Task.WaitAsync(Token);
 
         await session.SaveChangesAsync(Token);
 
