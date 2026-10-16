@@ -431,3 +431,6 @@ FodyWeavers.xsd
 # VitePress build output
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# The Nuke build's scratch space: per-lane temp directories for supervised test runs (build/).
+.nuke/temp/

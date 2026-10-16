@@ -22,6 +22,12 @@ dotnet test fisher.slnx -f net10.0         # one TFM
 # One test class or method (Microsoft Testing Platform — note the bare `--`)
 dotnet test src/Fisher.Tests/Fisher.Tests.csproj -f net10.0 -- --filter-method "*appending_events*"
 
+# What CI runs: the Nuke build (build/), which runs the three suites through Bobcat's Supervisor
+./build.sh                                 # Compile + Test, both TFMs, Release
+./build.sh CI --framework net10.0          # exactly one leg of fisher.yml's test job
+./build.sh Test --skip Compile --test-workers 4   # override the worker count (and the per-machine clamp)
+./build.sh Test --record-ledger            # write this run into build/test-ledger/ (CI always does)
+
 # The documentation site
 npm install
 npm run docs                               # mdsnippets + dev server on :5173
@@ -6533,9 +6539,20 @@ factory)`, over `Projections.StorageProviders` in the core.
   must not have top-level statements. Pass `TestContext.Current.CancellationToken` to async calls.
 - MTP extension packages stay on the **1.x** line — xunit.v3 3.2.2 is built against
   Microsoft.Testing.Platform 1.x and 2.x dies at startup with a `TypeLoadException`.
-- **CI runs the test executable directly**, not `dotnet test` — `dotnet test` cannot emit TRX under
-  MTP. `--logger "trx;..."` and `-- --report-trx` both run, exit 0, and silently write nothing;
-  `--report-trx` is rejected outright by MSBuild. See `.github/workflows/fisher.yml`.
+- **CI runs the suites through Bobcat's Supervisor** (`./build.sh CI`, `build/SupervisedTests.cs`,
+  JasperFx/bobcat#565), not `dotnet test` — `dotnet test` cannot emit TRX under MTP: `--logger "trx;..."`
+  and `-- --report-trx` both run, exit 0, and silently write nothing, and `--report-trx` is rejected
+  outright by MSBuild. The supervisor drives each MTP executable as worker processes partitioned by test
+  class, gives every worker its own temp directory (`.nuke/temp/lanes/<suite>-<tfm>/lane-N`, through
+  TMPDIR/TMP/TEMP — so a test's SQLite files must live under `Path.GetTempPath()`, never a fixed path),
+  retries nothing unless a test carries Bobcat's `Retry` trait, and writes the TRX the scoreboard check
+  reads. Known durations for lane balancing come from the committed `build/test-ledger/`.
+  - ⚠️ **Theory data must be serializable** (strings, numbers, enums, arrays of those). A theory with one
+    row xUnit cannot serialize (`DBNull.Value`, an arbitrary object) is discovered as ONE test and reports
+    every row under that one id, so a runner that keeps one verdict per id sees only the last row — a
+    failing row was measured coming back green. The build refuses such a run (`[COLLAPSED]`,
+    `build/CollapsedResultsGuard.cs`); pass a name and look the value up inside the test, as
+    `reused_command_binding` does.
 - Mirror Marten's public API surface where it costs nothing; mirror Polecat's internals where the
   concern is not dialect-specific.
 - **Raw data access goes through Weasel.Sqlite first** — its data source, its `CommandBuilder`, its

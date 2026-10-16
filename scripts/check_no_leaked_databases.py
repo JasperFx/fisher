@@ -26,6 +26,12 @@ test process killed mid-run never disposes its fixtures — reported against the
 moment the run started:
 
     start=$(date +%s); <run the suites>; python3 scripts/check_no_leaked_databases.py --since "$start"
+
+`--temp-dir <dir>` (repeatable) checks those directories instead of the system temp directory
+(JasperFx/bobcat#565). The supervised build (build/SupervisedTests.cs) points every worker process at a
+temp directory of its own, `.nuke/temp/lanes/<suite>-<tfm>/lane-N`, emptied before each run, so the
+leak lands there rather than in the system temp directory -- and which lane it landed in says which
+test classes to suspect, since lanes are partitioned by class.
 """
 
 import argparse
@@ -40,24 +46,36 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--since", type=float, default=None,
                         help="only count entries modified at or after this Unix time")
+    parser.add_argument("--temp-dir", action="append", default=None,
+                        help="check this directory instead of the system temp directory (repeatable)")
     args = parser.parse_args()
 
-    temp = tempfile.gettempdir()
+    temps = args.temp_dir or [tempfile.gettempdir()]
+    temp = ", ".join(temps)
 
-    def is_recent(name: str) -> bool:
+    def is_recent(path: str) -> bool:
         if args.since is None:
             return True
         try:
-            return os.stat(os.path.join(temp, name)).st_mtime >= args.since
+            return os.stat(path).st_mtime >= args.since
         except OSError:
             # Gone between the listing and the stat: whatever it was, it did not survive the run.
             return False
 
-    try:
-        leaked = sorted(name for name in os.listdir(temp) if name.startswith(PREFIX) and is_recent(name))
-    except OSError as error:
-        print(f"Could not read the temp directory {temp}: {error}", file=sys.stderr)
-        return 0
+    leaked = []
+    for directory in temps:
+        try:
+            names = os.listdir(directory)
+        except OSError as error:
+            print(f"Could not read the temp directory {directory}: {error}", file=sys.stderr)
+            continue
+        # Named relative to the directory when there is only the one, as before; with several the
+        # directory is the useful half (it names the lane).
+        leaked += sorted(
+            name if len(temps) == 1 else os.path.join(directory, name)
+            for name in names
+            if name.startswith(PREFIX) and is_recent(os.path.join(directory, name))
+        )
 
     if not leaked:
         print(f"No test databases left behind in {temp}.")
