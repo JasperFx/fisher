@@ -7,6 +7,7 @@
         <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
              carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
              transitively. -->
+        <!-- JasperFx 2.90.2 (from 2.90.1): jasperfx#1022, a gracefully stopped subscription agent now releases its 10s heartbeat Timer, which used to root the agent and, through it, the whole store and host — so a process that boots and stops many hosts (test suites) leaked every one. -->
         <!-- JasperFx 2.90.1 (from 2.90.0): jasperfx#1019, the daemon's retry decision for exceptions thrown by projection code also consults TransientFailures, so a fault the store's classifier calls transient is retried rather than dead-lettered under SkipApplyErrors. -->
         <!-- JasperFx 2.90.0 (from 2.89.0). fisher#444. No compile break. jasperfx#1014 lifts
              TombstoneStream(Guid) and TombstoneStream(string) onto the shared IEventStoreOperations as
@@ -245,16 +246,16 @@
              generation, which Fisher does not do — projection dispatch is source-generated.
              jasperfx#880 is XML comments on AutoCreate. jasperfx#867 is a Wolverine codegen fix and
              jasperfx#865/#866 are the publish pipeline. -->
-        <PackageVersion Include="JasperFx" Version="2.90.1" />
-        <PackageVersion Include="JasperFx.Events" Version="2.90.1" />
+        <PackageVersion Include="JasperFx" Version="2.90.2" />
+        <PackageVersion Include="JasperFx.Events" Version="2.90.2" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.90.1" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.90.1" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.90.2" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.90.2" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.90.1" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.90.2" />
 
         <!-- Weasel 9.42.0 (from 9.41.0). Nothing for Fisher to act on: weasel#695 (SQL Server advisory
              locks end with their session), weasel#696/#698 (PostgreSQL table storage parameters) and
