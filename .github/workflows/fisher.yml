@@ -53,56 +53,29 @@ jobs:
             9.0.x
             10.0.x
 
-      # The whole solution, so the two companion packages and their suites are built and run here
-      # too rather than in workflows of their own.
-      - name: Restore
-        run: dotnet restore fisher.slnx
-
-      # Built without -f: Fisher.Benchmarks is deliberately net10.0-only (a perf harness is run,
-      # not shipped), and a solution-wide `-f net9.0` fails on it with NETSDK1005. Building every
-      # target framework here costs a little time and keeps the test steps below, which invoke the
-      # per-framework MTP executables out of bin/Release/<tfm>/, working unchanged.
-      - name: Build
-        run: dotnet build fisher.slnx -c Release --no-restore
-
+      # Build and test through the Nuke build (build/, JasperFx/bobcat#565): `CI` compiles the whole
+      # solution and runs the three suites -- Fisher.Tests, Fisher.AspNetCore.Tests,
+      # Fisher.EntityFrameworkCore.Tests, in that order -- through Bobcat's Supervisor. What the job
+      # does is defined there, not here; build/SupervisedTests.cs says why each setting is what it is.
+      #
+      #   - Built without -f: Fisher.Benchmarks is deliberately net10.0-only, and a solution-wide
+      #     `-f net9.0` fails on it with NETSDK1005. The suites then run for this leg's framework only.
+      #   - Each suite's MTP executable is driven as worker processes, partitioned by test class, each
+      #     worker with a temp directory of its own (.nuke/temp/lanes/<suite>-<tfm>/lane-N), so every
+      #     lane's SQLite files are its own. Fisher.Tests asks for 2 workers; the build clamps any count
+      #     to ProcessorCount/2, which is 2 on a 4-vCPU hosted runner.
+      #   - Retries are opt-in only, and no Fisher test opts in: one attempt per test, exactly the
+      #     ceiling the direct executable invocation had.
+      #   - A failure in the first suite still lets the others run; the target fails at the end.
+      #   - Each suite's TRX is written by the build to <project>/bin/Release/<tfm>/TestResults/, where
+      #     the scoreboard check and the reporter below already look. (`dotnet test` still cannot be
+      #     used for this: under MTP it writes no TRX -- see CLAUDE.md's Conventions.)
+      #   - The supervisor's run report goes to this job's summary.
+      #
       # No database service. Fisher is SQLite-backed and the suites create throwaway database files
-      # under the runner's temp directory, so there is nothing to spin up or wait for.
-
-      # Runs the Microsoft Testing Platform executables directly rather than through `dotnet test`.
-      # An xUnit v3 project builds as its own MTP executable, and invoking it is the only way to get
-      # a TRX report out. `dotnet test` does not work here, and two of the three failure modes are
-      # silent:
-      #   dotnet test ... --logger "trx;..."   VSTest-only. MTP warns MTP0001, runs the tests, exits
-      #                                        0, and writes no TRX — so the reporter finds nothing
-      #                                        and the build goes red for the wrong reason.
-      #   dotnet test ... -- --report-trx      arguments are swallowed. Tests run, exit 0, no TRX.
-      #   dotnet test ... --report-trx         MSBuild rejects it: MSB1001 Unknown switch.
-      #
-      # The suites run sequentially and in one step, because they are all writing SQLite files under
-      # the same temp directory. `set +e` plus an accumulated exit code is what makes a failure in
-      # the first suite still let the others run — otherwise a red core suite hides whether the
-      # companion packages are also broken.
-      #
-      # Each TRX lands in <project>/bin/Release/<tfm>/TestResults/, which the reporter glob matches.
-      - name: Test
-        run: |
-          set +e
-          status=0
-          for project in \
-            src/Fisher.Tests/Fisher.Tests.csproj \
-            src/Fisher.AspNetCore.Tests/Fisher.AspNetCore.Tests.csproj \
-            src/Fisher.EntityFrameworkCore.Tests/Fisher.EntityFrameworkCore.Tests.csproj
-          do
-            dir=$(dirname "$project")
-            assembly=$(basename "$project" .csproj)
-            echo "::group::$assembly (${{ matrix.tfm }})"
-            "$dir/bin/Release/${{ matrix.tfm }}/$assembly" \
-              --report-trx --report-trx-filename "$assembly-${{ matrix.tfm }}.trx"
-            code=$?
-            echo "::endgroup::"
-            if [ $code -ne 0 ]; then status=$code; fi
-          done
-          exit $status
+      # under their temp directory, so there is nothing to spin up or wait for.
+      - name: Build and test (supervised)
+        run: ./build.sh CI --framework ${{ matrix.tfm }}
 
       # HANDOFF.md calls itself the compliance scoreboard, and its numbers are hand-maintained --
       # which is why they rot. fisher#107 found it claiming "2.49.0 ships 32 suites, 275 tests"
@@ -139,8 +112,14 @@ jobs:
       # No `if:`, so it inherits "only when the steps before it succeeded", like the scoreboard check
       # and unlike the NUL-byte one: a failing test may legitimately skip its own cleanup, so a leak
       # reported over a red suite points at the wrong thing.
+      #
+      # Under the supervisor each worker's temp directory is its lane's, so the lanes are what is
+      # checked -- plus the system temp directory, for anything that bypassed TMPDIR.
       - name: The suites left no databases behind
-        run: python3 scripts/check_no_leaked_databases.py
+        run: |
+          args=(--temp-dir "$(python3 -c 'import tempfile; print(tempfile.gettempdir())')")
+          for lane in .nuke/temp/lanes/*-${{ matrix.tfm }}/lane-*; do args+=(--temp-dir "$lane"); done
+          python3 scripts/check_no_leaked_databases.py "${args[@]}"
 
       - name: Report results
         uses: dorny/test-reporter@v3
@@ -152,6 +131,17 @@ jobs:
           reporter: dotnet-trx
           list-suites: "failed"
           list-tests: "failed"
+
+      # The supervisor's per-test observations from this run (build/test-ledger/), in the format of
+      # the committed ledger. CI never commits it; download it and commit it (or merge it with the
+      # committed one through TestLedger.Merge) to move the lane balancer's known durations forward.
+      - name: Upload the test ledger
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: test-ledger-${{ matrix.tfm }}
+          path: build/test-ledger/*.${{ matrix.tfm }}.json
+          if-no-files-found: warn
 
   # fisher#73. The one property of the published package that nothing else can see: a consumer
   # referencing only the Fisher package needs the projection-dispatcher generator, and its absence

@@ -1,0 +1,409 @@
+{
+  "version": 1,
+  "maxRunsPerTest": 3,
+  "tests": {
+    "13f51fd2cba3d24783e7fa8926949d721d35691b6e919a5e6d51943280b10e83": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "13f51fd2cba3d24783e7fa8926949d721d35691b6e919a5e6d51943280b10e83",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_context_lifetime.an_inline_projection_holds_one_context_per_commit_and_no_more",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 329,
+        "firstMs": 329,
+        "stallInduced": false
+      }
+    ],
+    "1426201b8cafac4a20a9a921037e0d1084a1a444d9c99477bf5e4977e18fb109": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "1426201b8cafac4a20a9a921037e0d1084a1a444d9c99477bf5e4977e18fb109",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_projection_concurrency.slices_are_applied_one_at_a_time",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 1369,
+        "firstMs": 1369,
+        "stallInduced": false
+      }
+    ],
+    "15d1da1d9a3d0ed7b1a0fa01feb373209525c491702be51ea37b4780bbb91fa0": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "15d1da1d9a3d0ed7b1a0fa01feb373209525c491702be51ea37b4780bbb91fa0",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_projection_concurrency.a_wide_fan_out_applies_every_slice",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 261,
+        "firstMs": 261,
+        "stallInduced": false
+      }
+    ],
+    "17a031b710c12d2a5a53f9386cf4cb6ec5b1d3e55677b22382e220be761de95c": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "17a031b710c12d2a5a53f9386cf4cb6ec5b1d3e55677b22382e220be761de95c",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_projection_concurrency.fishers_own_projection_storage_is_still_thread_safe",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 6,
+        "firstMs": 6,
+        "stallInduced": false
+      }
+    ],
+    "1c9244738b9b3636aa89e0fa1ad81c5eef4b25c506ccc5e431ec7c57c9fac377": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "1c9244738b9b3636aa89e0fa1ad81c5eef4b25c506ccc5e431ec7c57c9fac377",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_transactions.fisher_and_ef_commit_together",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 319,
+        "firstMs": 319,
+        "stallInduced": false
+      }
+    ],
+    "23c8568cb75e4441307eaa3b02c3bf201f5f3d261f6392eda300b5ff66bdb7f9": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "23c8568cb75e4441307eaa3b02c3bf201f5f3d261f6392eda300b5ff66bdb7f9",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_projections.a_rebuild_clears_the_ef_table_first",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 1369,
+        "firstMs": 1369,
+        "stallInduced": false
+      }
+    ],
+    "25d162f25ceec28faa0397dfd4148352ae121ebf0facbdf0be68cddf496a7f6c": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "25d162f25ceec28faa0397dfd4148352ae121ebf0facbdf0be68cddf496a7f6c",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_context_lifetime.an_async_batch_disposes_the_context_it_created",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 258,
+        "firstMs": 258,
+        "stallInduced": false
+      }
+    ],
+    "334b72483e04a25134291e173e343befd29d02bfa43199dc03cc5cca9a39d861": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "334b72483e04a25134291e173e343befd29d02bfa43199dc03cc5cca9a39d861",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_transactions.a_retried_write_still_writes_efs_rows",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 46,
+        "firstMs": 46,
+        "stallInduced": false
+      }
+    ],
+    "33532dc14d0c4ad0cb77851aa28c984ed058c955cb883446116084c291a4e988": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "33532dc14d0c4ad0cb77851aa28c984ed058c955cb883446116084c291a4e988",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_tenancy.the_daemon_keeps_two_tenants_sharing_a_stream_id_apart",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 1367,
+        "firstMs": 1367,
+        "stallInduced": false
+      }
+    ],
+    "4702edfb7d9ca97102bba1c1077f481bf9e560e6c841ee84dff40f4287b74384": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "4702edfb7d9ca97102bba1c1077f481bf9e560e6c841ee84dff40f4287b74384",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_projection_concurrency.an_ef_backed_storage_declares_itself_not_thread_safe",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 4,
+        "firstMs": 4,
+        "stallInduced": false
+      }
+    ],
+    "4ceb9eab799417f93bf86dbfb07e80db9f02994a1d62322f90ea17710bc96d7e": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "4ceb9eab799417f93bf86dbfb07e80db9f02994a1d62322f90ea17710bc96d7e",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_context_lifetime.a_failed_projection_still_disposes_the_context",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 258,
+        "firstMs": 258,
+        "stallInduced": false
+      }
+    ],
+    "5ab36f95437fd968147d86b81c30bfdf5b3d956787144e20fda592a18332d001": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "5ab36f95437fd968147d86b81c30bfdf5b3d956787144e20fda592a18332d001",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_context_lifetime.a_caller_enlisted_participant_survives_a_commit",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 6,
+        "firstMs": 6,
+        "stallInduced": false
+      }
+    ],
+    "5aba4a735369a701f407bea737e56da357ca77343a66dfd9825a2e011c80eed3": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "5aba4a735369a701f407bea737e56da357ca77343a66dfd9825a2e011c80eed3",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_tenancy.the_same_stream_id_in_two_tenants_keeps_two_isolated_rows",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 24,
+        "firstMs": 24,
+        "stallInduced": false
+      }
+    ],
+    "63b61c74f692d7aaeca406bf25ba500e7a5bf6eeb89aa7e01b25dc3e3c1be3cd": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "63b61c74f692d7aaeca406bf25ba500e7a5bf6eeb89aa7e01b25dc3e3c1be3cd",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_transactions.a_failure_in_fisher_rolls_efs_work_back",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 12,
+        "firstMs": 12,
+        "stallInduced": false
+      }
+    ],
+    "673ffebd1564bdbdbbe4174fb540c04cc535112be6ff1eea8395c90062b51634": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "673ffebd1564bdbdbbe4174fb540c04cc535112be6ff1eea8395c90062b51634",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_context_lifetime.disposal_ownership_follows_who_created_the_context",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 1,
+        "firstMs": 1,
+        "stallInduced": false
+      }
+    ],
+    "6bdab5195ce94bd5c607bbee82329e7e87cc94c8e4d9a8061e866bb906a08f85": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "6bdab5195ce94bd5c607bbee82329e7e87cc94c8e4d9a8061e866bb906a08f85",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_transactions.removing_fishers_tables_leaves_efs_alone",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 7,
+        "firstMs": 7,
+        "stallInduced": false
+      }
+    ],
+    "7761c40f99d8ea19f8c536a084543d5ef5061f553df7a468e7a74bfcd3c3c579": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "7761c40f99d8ea19f8c536a084543d5ef5061f553df7a468e7a74bfcd3c3c579",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_tenancy.the_tenant_id_is_written_to_the_ef_table",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 8,
+        "firstMs": 8,
+        "stallInduced": false
+      }
+    ],
+    "88b1cf47c557e231fb4c8d1c22901344c542cabfc231033bc4f9cdb86c7599fc": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "88b1cf47c557e231fb4c8d1c22901344c542cabfc231033bc4f9cdb86c7599fc",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_event_projections.an_event_projection_writes_to_ef_and_fisher_in_one_transaction",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 368,
+        "firstMs": 368,
+        "stallInduced": false
+      }
+    ],
+    "8aad2ceef6a426430f6938a0fe76db0e8d83c8667d5f41fd2391d1e8c0908c3e": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "8aad2ceef6a426430f6938a0fe76db0e8d83c8667d5f41fd2391d1e8c0908c3e",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_projections.an_ef_backed_projection_is_written_by_the_daemon",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 261,
+        "firstMs": 261,
+        "stallInduced": false
+      }
+    ],
+    "8c76370c49a0139bad8158841533fbe674299d736089c3eeac046ff55213b8ed": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "8c76370c49a0139bad8158841533fbe674299d736089c3eeac046ff55213b8ed",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_transactions.a_failure_in_ef_rolls_fishers_work_back",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 6,
+        "firstMs": 6,
+        "stallInduced": false
+      }
+    ],
+    "9681140d98e7102fe0208a628c67cbf6d225f44d0186e9522aca4bcc99f2eabc": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "9681140d98e7102fe0208a628c67cbf6d225f44d0186e9522aca4bcc99f2eabc",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_projection_concurrency.an_ef_backed_type_registered_through_add_gets_no_fisher_document_table",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 4,
+        "firstMs": 4,
+        "stallInduced": false
+      }
+    ],
+    "b78822cbceb56c4e5b4bf4aa6d9d0edda3e5ba972890eb7a5f7ad46cb9106dbb": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "b78822cbceb56c4e5b4bf4aa6d9d0edda3e5ba972890eb7a5f7ad46cb9106dbb",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_context_lifetime.a_failed_inline_commit_still_disposes_the_context",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 7,
+        "firstMs": 7,
+        "stallInduced": false
+      }
+    ],
+    "b814ae8e83e36f0ca8386006dc0cd431e29b18e26c30874bda88db59dbf7bb75": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "b814ae8e83e36f0ca8386006dc0cd431e29b18e26c30874bda88db59dbf7bb75",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_projection_concurrency.a_wide_fan_out_survives_a_rebuild",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 256,
+        "firstMs": 256,
+        "stallInduced": false
+      }
+    ],
+    "bd2db66e2f01c60f889a745fa790bad73c7c88ae305b491920ae34da15303f56": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "bd2db66e2f01c60f889a745fa790bad73c7c88ae305b491920ae34da15303f56",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_projections.an_ef_backed_type_gets_no_fisher_document_table",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 5,
+        "firstMs": 5,
+        "stallInduced": false
+      }
+    ],
+    "cbc47bbbba79b88fda2ad706e354d96fae96263596d2190030bf41efada4230d": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "cbc47bbbba79b88fda2ad706e354d96fae96263596d2190030bf41efada4230d",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_transactions.a_committed_context_has_its_changes_accepted",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 7,
+        "firstMs": 7,
+        "stallInduced": false
+      }
+    ],
+    "ce1ea1522d4954d67e672df7aedde7487fbf05f2ad7b281718118aef9ca7b513": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "ce1ea1522d4954d67e672df7aedde7487fbf05f2ad7b281718118aef9ca7b513",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_transactions.a_context_on_a_second_connection_is_refused_by_name",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 5,
+        "firstMs": 5,
+        "stallInduced": false
+      }
+    ],
+    "d85dabd9c684196750c40c10dbad3053a5cbfe60995de5fa2ce25d42656616bd": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "d85dabd9c684196750c40c10dbad3053a5cbfe60995de5fa2ce25d42656616bd",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_context_lifetime.an_inline_event_projection_disposes_the_context",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 7,
+        "firstMs": 7,
+        "stallInduced": false
+      }
+    ],
+    "e2327f1f8997c631ee323fddd88ee8df2e534b44c3f5d335b720d989e8dbfd95": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "e2327f1f8997c631ee323fddd88ee8df2e534b44c3f5d335b720d989e8dbfd95",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_transactions.an_existing_context_on_fishers_connection_is_accepted",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 5,
+        "firstMs": 5,
+        "stallInduced": false
+      }
+    ],
+    "e2929fea02b97b45feb0983372a321203d30f2084eae96a5338a9dba74af4196": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "e2929fea02b97b45feb0983372a321203d30f2084eae96a5338a9dba74af4196",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_tenancy.an_entity_that_cannot_carry_a_tenant_is_refused_under_conjoined_events",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 1,
+        "firstMs": 1,
+        "stallInduced": false
+      }
+    ],
+    "e2c54e43a058f655f924d04bc01625c2b63493ad0594ce723dfc3231e7ff4ad5": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "e2c54e43a058f655f924d04bc01625c2b63493ad0594ce723dfc3231e7ff4ad5",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_projections.the_entity_and_the_progression_row_commit_together",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 261,
+        "firstMs": 261,
+        "stallInduced": false
+      }
+    ],
+    "ef926303b88777cbe27bcbcbcef726b7e8058b0977cce1f153b8bb4fd4cc3270": [
+      {
+        "runId": "local-20261016201010",
+        "at": "2026-10-16T20:10:10.375686+00:00",
+        "uid": "ef926303b88777cbe27bcbcbcef726b7e8058b0977cce1f153b8bb4fd4cc3270",
+        "displayName": "Fisher.EntityFrameworkCore.Tests.ef_core_context_lifetime.an_async_event_projection_disposes_the_context_it_created",
+        "outcome": "CleanPass",
+        "attempts": 1,
+        "totalMs": 260,
+        "firstMs": 260,
+        "stallInduced": false
+      }
+    ]
+  }
+}

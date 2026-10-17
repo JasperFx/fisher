@@ -297,17 +297,32 @@ public class reused_command_binding : IAsyncLifetime
     /// <summary>
     ///     One of every value shape Fisher binds, including the two that change a slot's inferred type.
     /// </summary>
-    public static TheoryData<string, object> Values => new()
+    private static readonly Dictionary<string, object> ValuesByShape = new()
     {
-        { "text", "a string" },
-        { "guid as lowercase canonical text", "3f2504e0-4f89-11d3-9a0c-0305e82c3301" },
-        { "integer", 42L },
-        { "real", 3.5d },
-        { "blob", new byte[] { 1, 2, 3, 0xFF } },
-        { "null", DBNull.Value },
-        { "timestamp text", "2026-09-05T17:29:00.123Z" },
-        { "bool as integer", 1L }
+        ["text"] = "a string",
+        ["guid as lowercase canonical text"] = "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+        ["integer"] = 42L,
+        ["real"] = 3.5d,
+        ["blob"] = new byte[] { 1, 2, 3, 0xFF },
+        ["null"] = DBNull.Value,
+        ["timestamp text"] = "2026-09-05T17:29:00.123Z",
+        ["bool as integer"] = 1L
     };
+
+    /// <summary>
+    ///     The shapes by NAME, and the value looked up inside the test (JasperFx/bobcat#565).
+    /// </summary>
+    /// <remarks>
+    ///     The data used to carry the values themselves, and <see cref="DBNull" /> is not something
+    ///     xUnit can serialize. A theory with one unserializable row is not enumerated at discovery: it
+    ///     is discovered as ONE test and expands into its rows only when it runs, and every row then
+    ///     reports under that one test's id. A direct run counts them anyway, but anything that runs
+    ///     tests by id and keeps one verdict per id — Bobcat's supervisor, an IDE's test explorer —
+    ///     sees only the last row to finish. Measured: a deliberately failing first row came back as a
+    ///     green run with 7 of these 8 cases missing from the count. Strings serialize, so each shape is
+    ///     its own discovered test again.
+    /// </remarks>
+    public static TheoryData<string> Values => new(ValuesByShape.Keys);
 
     public async ValueTask InitializeAsync()
     {
@@ -336,8 +351,9 @@ public class reused_command_binding : IAsyncLifetime
     /// </remarks>
     [Theory]
     [MemberData(nameof(Values))]
-    public async Task a_rebound_parameter_stores_what_a_fresh_command_would(string shape, object value)
+    public async Task a_rebound_parameter_stores_what_a_fresh_command_would(string shape)
     {
+        var value = ValuesByShape[shape];
         var fresh = await StoredByAFreshCommandAsync(value);
 
         foreach (var preceding in new object[] { "a preceding string", 99L })
