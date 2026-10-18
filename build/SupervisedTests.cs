@@ -87,7 +87,7 @@ partial class Build
 
     /// <summary>
     /// Runs kept per test: Bobcat's default. The committed ledger kept 3 to hold the repository's size
-    /// down; an artifact has no such cost, and the compact v3 format is ~40% smaller anyway.
+    /// down; an artifact has no such cost, and the compact v3 format is ~60% smaller per run anyway.
     /// </summary>
     /// <remarks>
     /// Applied by merging into an empty ledger, because <c>TestLedger.Load(path, n)</c> honours
