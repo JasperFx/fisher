@@ -26,7 +26,7 @@ dotnet test src/Fisher.Tests/Fisher.Tests.csproj -f net10.0 -- --filter-method "
 ./build.sh                                 # Compile + Test, both TFMs, Release
 ./build.sh CI --framework net10.0          # exactly one leg of fisher.yml's test job
 ./build.sh Test --skip Compile --test-workers 4   # override the worker count (and the per-machine clamp)
-./build.sh Test --record-ledger            # write this run into build/test-ledger/ (CI always does)
+./build.sh Test --record-ledger            # fold this run into artifacts/test-ledger/ (CI always does)
 
 # The documentation site
 npm install
@@ -6546,12 +6546,18 @@ factory)`, over `Projections.StorageProviders` in the core.
   class, gives every worker its own temp directory (`.nuke/temp/lanes/<suite>-<tfm>/lane-N`, through
   TMPDIR/TMP/TEMP — so a test's SQLite files must live under `Path.GetTempPath()`, never a fixed path),
   retries nothing unless a test carries Bobcat's `Retry` trait, and writes the TRX the scoreboard check
-  reads. Known durations for lane balancing come from the committed `build/test-ledger/`.
+  reads (Bobcat's own `RunReport.WriteTrx`, bobcat#699). Known durations for lane balancing come from
+  `artifacts/test-ledger/`, a **CI artifact, never committed** (bobcat#730): fisher.yml downloads the newest
+  green main run's `test-ledger-<tfm>` artifact, the build folds the run in, and the job uploads it again.
+  Locally that directory is usually empty and lanes balance by test count — the run's first report line
+  says which (`Known durations matched N/M`).
   - ⚠️ **Theory data must be serializable** (strings, numbers, enums, arrays of those). A theory with one
     row xUnit cannot serialize (`DBNull.Value`, an arbitrary object) is discovered as ONE test and reports
     every row under that one id, so a runner that keeps one verdict per id sees only the last row — a
-    failing row was measured coming back green. The build refuses such a run (`[COLLAPSED]`,
-    `build/CollapsedResultsGuard.cs`); pass a name and look the value up inside the test, as
+    failing row was measured coming back green. Since Bobcat 1.0 the supervisor folds such rows worst-first
+    and lists them under "Collapsed theories" in the run report (bobcat#649); the build still refuses the run
+    (`[COLLAPSED]`, from `SupervisorResults.Collapsed`) even when every row passed, because the count is
+    short. Pass a name and look the value up inside the test, as
     `reused_command_binding` does.
 - Mirror Marten's public API surface where it costs nothing; mirror Polecat's internals where the
   concern is not dialect-specific.

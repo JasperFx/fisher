@@ -32,6 +32,12 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Explicit because the ledger download below reads another run's artifacts (actions: read), and
+    # declaring any permission drops the rest: checks: write is what dorny/test-reporter needs.
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -52,6 +58,23 @@ jobs:
           dotnet-version: |
             9.0.x
             10.0.x
+
+      # The lane balancer's known durations travel as a CI artifact, never a commit (bobcat#730): the
+      # newest successful main run's ledger for this framework, folded forward by the build and
+      # uploaded again below. Keyed by display name since Bobcat 1.0, so a ledger written on another
+      # machine, configuration or runner still matches. None yet (or an expired artifact) is fine:
+      # lanes balance by test count and the run says "Known durations matched 0/N".
+      - name: Download the previous test ledger
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=$(gh run list --repo "${{ github.repository }}" --workflow fisher.yml --branch main \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$run_id" ]; then
+            gh run download "$run_id" --repo "${{ github.repository }}" --name "test-ledger-${{ matrix.tfm }}" \
+              --dir artifacts/test-ledger || echo "No test-ledger-${{ matrix.tfm }} artifact on run $run_id"
+          fi
+          ls -la artifacts/test-ledger 2>/dev/null || echo "No ledger: lanes balance by test count"
 
       # Build and test through the Nuke build (build/, JasperFx/bobcat#565): `CI` compiles the whole
       # solution and runs the three suites -- Fisher.Tests, Fisher.AspNetCore.Tests,
@@ -132,16 +155,17 @@ jobs:
           list-suites: "failed"
           list-tests: "failed"
 
-      # The supervisor's per-test observations from this run (build/test-ledger/), in the format of
-      # the committed ledger. CI never commits it; download it and commit it (or merge it with the
-      # committed one through TestLedger.Merge) to move the lane balancer's known durations forward.
+      # The ledger downloaded above with this run folded in (newest 5 runs per test). A red run's
+      # durations are still durations, so it uploads whatever the outcome; the next run downloads
+      # only from a successful main run, so a PR's ledger is never the one carried forward.
       - name: Upload the test ledger
         uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
           name: test-ledger-${{ matrix.tfm }}
-          path: build/test-ledger/*.${{ matrix.tfm }}.json
+          path: artifacts/test-ledger/*.${{ matrix.tfm }}.json
           if-no-files-found: warn
+          retention-days: 30
 
   # fisher#73. The one property of the published package that nothing else can see: a consumer
   # referencing only the Fisher package needs the projection-dispatcher generator, and its absence

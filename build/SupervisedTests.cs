@@ -35,11 +35,11 @@ partial class Build
     readonly int? TestWorkers;
 
     /// <summary>
-    /// Write this run into the committed ledger (build/test-ledger/). Always on under CI, where the
-    /// workflow uploads the result as an artifact; off by default locally so an ordinary test run does
-    /// not dirty a committed file. Committing a ledger is a deliberate act.
+    /// Fold this run into the ledger under artifacts/test-ledger/. Always on under CI, where the
+    /// workflow downloads the newest green main run's ledger first and uploads the result again
+    /// (bobcat#730's CI-artifact model); off by default locally. Nothing is committed either way.
     /// </summary>
-    [Parameter("Record this run's observations into build/test-ledger/ (always on under CI)")]
+    [Parameter("Fold this run's observations into artifacts/test-ledger/ (always on under CI)")]
     readonly bool RecordLedger;
 
     /// <summary>
@@ -75,15 +75,26 @@ partial class Build
     static readonly TimeSpan StallThreshold = TimeSpan.FromMinutes(3);
 
     /// <summary>
-    /// Runs kept per test in the committed ledger. Bobcat's default is 20; here it is 3, because the
-    /// ledger's JSON costs ~525 bytes per test per run (indented, the uid written twice) and Fisher.Tests
-    /// has ~2,630 tests per target framework — 1.4 MB a run, so the default would commit ~28 MB per
-    /// framework. Three runs are enough for what the ledger feeds today, lane balancing by known
-    /// duration; flakiness evidence lives in the per-run TRX and job summaries.
+    /// The ledger that carries known durations from one CI run to the next (bobcat#730). It is a CI
+    /// ARTIFACT, never committed: fisher.yml downloads the newest successful main run's
+    /// <c>test-ledger-&lt;tfm&gt;</c> artifact into this directory before the build and uploads it again
+    /// after. Committing it (fisher#451's first shape) made every ledger refresh a commit, and the
+    /// durations a laptop recorded were not the ones a 4-vCPU runner sees. Locally the directory is
+    /// usually empty, and lanes balance by test count — the run says so ("Known durations matched
+    /// 0/N").
     /// </summary>
-    const int LedgerRunsPerTest = 3;
+    static AbsolutePath LedgerDirectory => RootDirectory / "artifacts" / "test-ledger";
 
-    static AbsolutePath LedgerDirectory => RootDirectory / "build" / "test-ledger";
+    /// <summary>
+    /// Runs kept per test: Bobcat's default. The committed ledger kept 3 to hold the repository's size
+    /// down; an artifact has no such cost, and the compact v3 format is ~60% smaller per run anyway.
+    /// </summary>
+    /// <remarks>
+    /// Applied by merging into an empty ledger, because <c>TestLedger.Load(path, n)</c> honours
+    /// <c>n</c> only when the file is missing — an existing file keeps the retention written in it,
+    /// and every ledger fisher#451 wrote says 3.
+    /// </remarks>
+    const int LedgerRunsPerTest = TestLedger.DefaultMaxRunsPerTest;
     static AbsolutePath LanesRoot => RootDirectory / ".nuke" / "temp" / "lanes";
 
     void RunSuites(IEnumerable<string> frameworks)
@@ -120,7 +131,7 @@ partial class Build
         var executable = testHostFor(suite.Project, framework);
         var lanes = prepareLaneDirectories(suite.Project, framework, workers);
         var ledgerPath = LedgerDirectory / $"{suite.Project}.{framework}.json";
-        var ledger = TestLedger.Load(ledgerPath, LedgerRunsPerTest);
+        var ledger = TestLedger.Empty(LedgerRunsPerTest).Merge(TestLedger.Load(ledgerPath));
         var known = ledger.KnownDurations();
 
         Log.Information("=== {Project} ({Framework}): supervised, {Workers} worker(s), {Known} known duration(s) ===",
@@ -155,22 +166,26 @@ partial class Build
             HeartbeatInterval = TimeSpan.FromSeconds(30),
             ResourceSampleInterval = TimeSpan.FromSeconds(15),
 
-            // Longest-processing-time lane balancing from the committed ledger. Empty on a first run,
+            // Longest-processing-time lane balancing from the CI-artifact ledger. Empty on a first run,
             // which degrades to balancing by test count.
             KnownTestDurations = known.Count > 0 ? known : null,
 
             Log = message => Log.Information("  {Message}", message)
         };
 
-        var collapsed = new CollapsedResultsGuard();
-        supervisor.AddObserver(collapsed);
-
+        var started = DateTimeOffset.Now;
         var results = supervisor.Run().GetAwaiter().GetResult();
 
-        // The TRX the old harness wrote (--report-trx), written from the supervisor's results to the
-        // same place: scripts/check_scoreboard.py and the dorny/test-reporter step read it unchanged.
-        var trx = SupervisedTrx.Write(results, suite.Project, framework,
-            RootDirectory / "src" / suite.Project / "bin" / Configuration / framework / "TestResults");
+        // Bobcat's TRX writer (bobcat#699), written to where the old harness's --report-trx went:
+        // scripts/check_scoreboard.py and the dorny/test-reporter step read it unchanged.
+        var trx = RootDirectory / "src" / suite.Project / "bin" / Configuration / framework / "TestResults"
+                  / $"{suite.Project}-{framework}.trx";
+        RunReport.WriteTrx(results, trx, new TrxOptions
+        {
+            StartedAt = started,
+            Storage = executable,
+            RunName = $"{suite.Project} ({framework}) supervised, {workers} worker(s)"
+        });
         Log.Information("  TRX: {Path}", trx);
 
         if (RecordLedger || IsServerBuild)
@@ -183,14 +198,14 @@ partial class Build
             Log.Information("  ledger: {Path}", ledgerPath);
         }
 
-        return report(suite, framework, workers, results, collapsed.Collapsed());
+        return report(suite, framework, workers, results);
     }
 
-    bool report(SupervisedSuite suite, string framework, int workers, SupervisorResults results,
-        IReadOnlyList<CollapsedTest> collapsed)
+    bool report(SupervisedSuite suite, string framework, int workers, SupervisorResults results)
     {
+        // RunReport has its own "Collapsed theories" section since bobcat#649.
         var text = RunReport.ToText(results);
-        if (collapsed.Count > 0) text += Environment.NewLine + Environment.NewLine + describe(collapsed);
+        var collapsed = results.Collapsed;
 
         Log.Information("=== {Project} ({Framework}) ===\n{Report}", suite.Project, framework, text);
         appendStepSummary(suite, framework, workers, results, text, green: results.ExitCode == 0
@@ -204,12 +219,14 @@ partial class Build
         foreach (var flaky in results.PassedOnRetry)
             Log.Warning("  [FLAKY] {Test} — passed on attempt {Attempts}", flaky.DisplayName, flaky.AttemptCount);
 
-        // See CollapsedResultsGuard: the results hold one row of each such theory, so they are not a
-        // verdict on the others. Refused whether or not a hidden row failed — a count the suite cannot
-        // report honestly is the defect, and the next hidden row may be the red one.
+        // A theory xUnit could not enumerate at discovery reports every row under one uid. Since
+        // bobcat#649 the supervisor folds those rows worst-first (a failing row can no longer come back
+        // green) and reports them; the exit code still passes a collapse whose rows all passed. Fisher
+        // refuses it anyway: the count is short of what a direct run sees, and the cause is in the test.
         foreach (var test in collapsed)
-            Log.Error("  [COLLAPSED] {Test} — {Rows} rows reported under one id{Hidden}",
-                test.Rows[0].DisplayName, test.Rows.Count, test.HidesAFailure ? ", and a row FAILED" : "");
+            Log.Error("  [COLLAPSED] {Test} — {Rows} rows reported under one id{Failed}",
+                test.DisplayName, test.Final.Outcome.CollapsedDisplayNames?.Count ?? 0,
+                test.Outcome is RunOutcome.Failed or RunOutcome.Aborted ? ", and a row FAILED" : "");
 
         if (collapsed.Count > 0)
         {
@@ -236,20 +253,6 @@ partial class Build
         return results.ExitCode == 0;
     }
 
-    static string describe(IReadOnlyList<CollapsedTest> collapsed)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine("Several results under ONE test id (a theory xUnit could not enumerate at discovery —");
-        builder.AppendLine("the results above keep only the last row; make the theory's data serializable):");
-        foreach (var test in collapsed)
-        {
-            builder.AppendLine($"  ✗ {test.Uid}{(test.HidesAFailure ? " — a row FAILED" : "")}");
-            foreach (var (name, state) in test.Rows) builder.AppendLine($"      {state,-8} {name}");
-        }
-
-        return builder.ToString().TrimEnd();
-    }
-
     void appendStepSummary(SupervisedSuite suite, string framework, int workers, SupervisorResults results,
         string text, bool green)
     {
@@ -258,8 +261,9 @@ partial class Build
 
         try
         {
-            var passed = results.Tests.Count(x => x.Final.Outcome.State == WorkerTestState.Passed);
-            var skipped = results.Tests.Count(x => x.Final.Outcome.State == WorkerTestState.Skipped);
+            // Skipped is its own outcome since bobcat#655: never a pass, never a failure.
+            var passed = results.CleanPasses.Count + results.PassedOnRetry.Count;
+            var skipped = results.Skipped.Count;
             var verdict = green ? "✅" : "❌";
 
             var builder = new StringBuilder();

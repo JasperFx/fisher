@@ -383,8 +383,15 @@
              JasperFx/bobcat#565: the suites run through Bobcat's Supervisor, which drives each MTP test
              executable as worker processes over the platform's JSON-RPC server mode. It takes no
              Microsoft.Testing.Platform reference of its own, so the MTP 1.x pin above is unaffected:
-             the supervisor speaks the wire, it does not host the platform. -->
-        <PackageVersion Include="Bobcat.Supervisor" Version="0.60.4" />
+             the supervisor speaks the wire, it does not host the platform.
+
+             1.0.0-rc.1 (from 0.60.4) retired two of fisher#451's stopgaps: the supervisor folds a
+             collapsed theory's rows worst-first and reports them (bobcat#649, replacing
+             build/CollapsedResultsGuard.cs), and RunReport.WriteTrx writes the TRX (bobcat#699,
+             replacing build/SupervisedTrx.cs). The ledger is keyed by display name (bobcat#730) and
+             now travels as a CI artifact instead of being committed. Its JasperFx floor is 2.90.2,
+             which Fisher already pins, so build/build.csproj needs no VersionOverride. -->
+        <PackageVersion Include="Bobcat.Supervisor" Version="1.0.0-rc.1" />
         <PackageVersion Include="Nuke.Common" Version="10.1.0" />
         <!-- Nuke.Common's transitive NuGet.Packaging 6.12.1 and System.Security.Cryptography.Xml/Pkcs
              9.0.x carry published advisories (NU1901-NU1903). Lifted for the build project only. -->
