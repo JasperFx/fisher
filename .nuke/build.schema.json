@@ -113,7 +113,7 @@
         },
         "RecordLedger": {
           "type": "boolean",
-          "description": "Record this run's observations into build/test-ledger/ (always on under CI)"
+          "description": "Fold this run's observations into artifacts/test-ledger/ (always on under CI)"
         },
         "TestWorkers": {
           "type": [
