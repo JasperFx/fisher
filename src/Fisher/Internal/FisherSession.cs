@@ -885,6 +885,11 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             throw;
         }
 
+        if (EnlistedTransaction is null)
+        {
+            await RunPostCommitHooksAsync(streams, token).ConfigureAwait(false);
+        }
+
         // Not reused across units of work: a batch's hooks have fired, and a second SaveChangesAsync
         // publishing through it would flush the same messages again.
         _messageBatch = null;
@@ -1007,20 +1012,39 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
                 await WriteAsync(connection, transaction, queued, streams, ct).ConfigureAwait(false);
 
                 await transaction.CommitAsync(ct).ConfigureAwait(false);
-
-                if (_messageBatch is not null)
-                {
-                    await _messageBatch.AfterCommitAsync(ct).ConfigureAwait(false);
-                }
-
-                NotifyAppendObserver(streams);
             }, token).ConfigureAwait(false);
-
-            // Outside the pipeline, so it fires once for a transaction that committed rather than
-            // once per attempt — and not at all above, where the caller owns the commit. See
-            // ITransactionParticipant.AfterCommitAsync.
-            await NotifyParticipantsOfCommitAsync(token).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    ///     fisher#454. The work that follows a commit Fisher made: the outbox's <c>AfterCommitAsync</c>,
+    ///     the append observer and the participants' <c>AfterCommitAsync</c>. None of it runs for an
+    ///     enlisted session, where the caller owns the commit.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Outside the resilience pipeline, so it runs once for a transaction that committed rather
+    ///         than once per attempt. The outbox's hook used to run inside it: an outbox writing to this
+    ///         same file meets the write lock there, and a <c>SQLITE_BUSY</c> from it re-executed the
+    ///         whole delegate, so a unit of work that had already committed was written a second time.
+    ///     </para>
+    ///     <para>
+    ///         And outside <c>SaveChangesAsync</c>'s commit-failure handling: a failure here is a hook
+    ///         failing after the commit, not a commit that did not happen, so it is neither logged as
+    ///         one nor translated into a <see cref="Exceptions.StreamLockedException" />.
+    ///     </para>
+    /// </remarks>
+    private async Task RunPostCommitHooksAsync(StreamAction[] streams, CancellationToken token)
+    {
+        if (_messageBatch is not null)
+        {
+            await _messageBatch.AfterCommitAsync(token).ConfigureAwait(false);
+        }
+
+        NotifyAppendObserver(streams);
+
+        // See ITransactionParticipant.AfterCommitAsync.
+        await NotifyParticipantsOfCommitAsync(token).ConfigureAwait(false);
     }
 
     /// <summary>

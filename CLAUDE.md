@@ -1110,6 +1110,14 @@ messaging is not dialect-specific and projection code should port between the st
 - **`AfterCommitAsync` runs outside the resilience pipeline** in the projection batch. A retried
   `SQLITE_BUSY` re-executes the whole delegate, so a post-commit publish inside it would fire twice
   for a transaction that had already committed.
+  - ⚠️ **The session path did not, until fisher#454.** `FisherSession` called the outbox's
+    `AfterCommitAsync` inside the pipeline, right after `CommitAsync`. An outbox writing to the same
+    file meets the write lock there, and its `SQLITE_BUSY` re-executed the whole write: an append's
+    version guard caught the replay, so a committed save failed as a conflict with itself, and a
+    documents-only save was silently written twice. `RunPostCommitHooksAsync` now runs the outbox,
+    the append observer and the participants' `AfterCommitAsync` after the pipeline *and* after
+    `SaveChangesAsync`'s commit-failure handling, so a hook failing is not logged as a failed commit
+    or translated into a `StreamLockedException`. `post_commit_work_runs_once` pins both halves.
 - **The same property bit the batch's own input, and that one was silent** (fisher#12). Everything
   the retried delegate reads has to survive being read twice, so the session's operations are taken
   *before* the pipeline (`TakePendingOperations`) and executed from that snapshot inside it. Draining
