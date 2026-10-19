@@ -1,4 +1,5 @@
 using JasperFx;
+using JasperFx.Core.Reflection;
 using Microsoft.Data.Sqlite;
 using Polly;
 using Weasel.Core;
@@ -44,6 +45,12 @@ internal sealed class HiloSequence : HiloSequenceBase
 
     private volatile bool _tableEnsured;
 
+    /// <summary>
+    ///     fisher#454. Set while an enlisted session assigns an identity, so an advance it would need is
+    ///     refused rather than attempted. See <see cref="EnlistedStorageDatabase" />.
+    /// </summary>
+    private static readonly AsyncLocal<string?> _refusingAdvanceFor = new();
+
     public HiloSequence(SqliteDataSource dataSource, string schemaName, string entityName,
         IReadOnlyHiloSettings settings, ResiliencePipeline resilience, AutoCreate autoCreate)
         : base(entityName, settings)
@@ -68,6 +75,8 @@ internal sealed class HiloSequence : HiloSequenceBase
 
     public override async Task AdvanceToNextHi(CancellationToken ct = default)
     {
+        AssertAdvanceIsAllowed();
+
         await _resilience.ExecuteAsync(async cancellation =>
         {
             await using var conn = (SqliteConnection)await _dataSource
@@ -102,6 +111,8 @@ internal sealed class HiloSequence : HiloSequenceBase
     /// </remarks>
     protected override void AdvanceToNextHiSync()
     {
+        AssertAdvanceIsAllowed();
+
         _resilience.Execute(() =>
         {
             using var conn = (SqliteConnection)_dataSource.OpenConnection();
@@ -152,6 +163,46 @@ internal sealed class HiloSequence : HiloSequenceBase
         }).ConfigureAwait(false);
 
         await AdvanceToNextHi().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     fisher#454. Refuse, for the duration of the returned scope, any hi advance this async flow
+    ///     would make, naming <paramref name="documentType" /> in the error.
+    /// </summary>
+    /// <remarks>
+    ///     An advance writes <c>fi_hilo</c> on a connection of its own. Under an enlisted session whose
+    ///     caller's transaction holds the file's write lock, that connection waits on the caller's lock
+    ///     -- the busy timeout, then every retry the pipeline allows -- while the caller waits on the
+    ///     advance: a session waiting on itself, for minutes, before failing with SQLITE_BUSY.
+    ///     Advancing inside the caller's transaction instead is not safe either: if the caller rolls back,
+    ///     <c>fi_hilo</c> goes back while this sequence keeps the block it read, and the same ids are
+    ///     handed out again. So the advance is refused by name. An id that the current block can still
+    ///     supply needs no I/O and is unaffected; the check runs under the base class's lock, inside the
+    ///     advance itself, so it cannot race another session exhausting the block.
+    /// </remarks>
+    internal static IDisposable RefuseAdvances(Type documentType)
+    {
+        var previous = _refusingAdvanceFor.Value;
+        _refusingAdvanceFor.Value = documentType.FullNameInCode();
+        return new RefusalScope(previous);
+    }
+
+    private void AssertAdvanceIsAllowed()
+    {
+        if (_refusingAdvanceFor.Value is { } documentType)
+        {
+            throw new InvalidOperationException(
+                $"Fisher cannot assign a Hi-Lo identity to a {documentType} through a session enlisted in a " +
+                $"caller's transaction (SessionOptions.ForTransaction): the '{EntityName}' sequence has to " +
+                "reserve its next block of ids, which is a write to fi_hilo on a connection of its own, and " +
+                "that write would wait on the write lock the caller's transaction holds. Assign the document's " +
+                "id before storing it, or store it from a session that is not enlisted.");
+        }
+    }
+
+    private sealed class RefusalScope(string? previous) : IDisposable
+    {
+        public void Dispose() => _refusingAdvanceFor.Value = previous;
     }
 
     private async Task EnsureTableAsync(SqliteConnection conn, CancellationToken ct)

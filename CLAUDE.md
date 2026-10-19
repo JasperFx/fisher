@@ -3275,6 +3275,27 @@ Three things worth knowing:
 Sequences are cached by sequence *name*, not by document type, so two types sharing a configured
 `SequenceName` share one allocation instead of each holding a private lo range over the same row.
 
+⚠️ **An enlisted session cannot reserve a new block, and it is refused rather than left to hang**
+(fisher#454). Advancing the hi is a write to `fi_hilo` on a connection of its own. Under
+`SessionOptions.ForTransaction` the caller's transaction already holds the file's write lock, so that
+write waited on the caller while the caller waited on it. `Store` of an int-keyed document blocked
+through the busy timeout and every retry, and was still blocked after five minutes when measured.
+
+- **Fail fast, the user's ruling.** Advancing inside the caller's transaction was the alternative, and
+  it is unsafe: a caller rollback restores `fi_hilo` while the in-memory sequence keeps the block, so
+  the next session hands out the same ids again.
+- **Only the advance is refused.** An id the current block can still supply needs no I/O and is
+  assigned as before. The check runs inside the advance, under the base class's lock, so whether the
+  block ran out and whether the call is refused are one decision.
+- **Scoped to the enlisted session's call, not to the sequence.** `IStorageSession.Database` hands an
+  enlisted session `EnlistedStorageDatabase`. Its sequences wrap each `NextInt`/`NextLong` in
+  `HiloSequence.RefuseAdvances`, an `AsyncLocal` scope. The same `HiloSequence` instance serving an
+  ordinary session on another thread is unaffected.
+- **A deferred caller transaction is refused too**, although its advance would have succeeded. Fisher
+  cannot tell a deferred transaction from an immediate one (see "Sessions, `SessionOptions` and
+  enlistment"), so it cannot refuse only the one that would hang.
+- `enlisted_session_hilo` is the pin. Against the old path its first test does not fail; it hangs.
+
 ### DI registration
 
 `AddFisher(...)` (fisher#20) — `FisherServiceCollectionExtensions`, plus `ISessionFactory` and two

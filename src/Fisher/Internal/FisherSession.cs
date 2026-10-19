@@ -107,6 +107,7 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     private IStorageSerializer? _storageSerializer;
     private int _tempTableNumber;
     private FisherVersionTracker? _versionTracker;
+    private Storage.Sequences.EnlistedStorageDatabase? _enlistedDatabase;
 
     private IFisherSessionLogger _logger = NulloFisherLogger.Flyweight;
     private bool _unlogged = true;
@@ -1703,7 +1704,12 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     IStorageSerializer IStorageSession.Serializer => LazilyCreate(ref _storageSerializer,
         () => StorageSerializerAdapter.For(FisherSerializer));
 
-    IStorageDatabase IStorageSession.Database => FisherDatabase;
+    // fisher#454: an enlisted session's storages see a database whose Hi-Lo sequences refuse to reserve
+    // a block, rather than wait on the write lock the caller's transaction holds. See
+    // EnlistedStorageDatabase.
+    IStorageDatabase IStorageSession.Database => EnlistedTransaction is null
+        ? FisherDatabase
+        : LazilyCreate(ref _enlistedDatabase, () => new Storage.Sequences.EnlistedStorageDatabase(FisherDatabase));
 
     IVersionTracker IStorageSession.Versions
         => LazilyCreate(ref _versionTracker, static () => new FisherVersionTracker());
