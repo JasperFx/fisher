@@ -15,7 +15,7 @@ scoreboard and the things that are true right now but not obvious from either.
 **2698 tests green on net9.0 and net10.0** — 2631 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 704 of
 them are shared cross-store compliance tests — 521 event sourcing and 183 document.
-On JasperFx **2.90.2** / Weasel **9.42.0**.
+On JasperFx **2.90.2** / Weasel **9.46.0**.
 
 ## The JasperFx 2.88.0 bump — jasperfx#1015, a Rebuild-mode shard that resumes
 
@@ -47,6 +47,16 @@ rolls back writes and progression together, leaves the file intact and frees the
 was already true. A cancellation **after** the commit was not handled: the post-commit listener got the
 cancelled token and a listener honouring it lost its work for good, since the progression had committed.
 Post-commit work (listener, participants, outbox flush) now runs on a token the drain does not cancel.
+
+## The Weasel 9.46.0 bump — nothing for Fisher to act on
+
+**Green on the bump, spanning 9.43.0 through 9.45.1; nothing in Fisher changed.** What reaches
+Weasel.Sqlite, Weasel.Storage and Weasel.Core: weasel#706 (a migration file creates only the schemas it
+changes, and its `.drop.sql` never drops a schema; SQLite has none to drop), weasel#707's
+`TableBase.PrimaryKeyName` being empty for a table that declares no primary key (every Fisher table
+declares one), weasel#723 (a catalog re-read that only Firebird asks for), and weasel#724 (a trim
+annotation restored on `MultiCommandDataReader.GetFieldType`). The rest is SQL Server, PostgreSQL and
+Oracle. No count moved.
 
 ## The Weasel 9.42.0 bump — nothing for Fisher to act on
 
