@@ -759,7 +759,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         }
 
         return await RunDiagnosticWriteAsync(mapping, queriedType, request.Id, request.TenantId,
-            request.ExpectedVersion, includeSoftDeletedCurrent: true,
+            request.ExpectedVersion, CurrentRow.Any,
             async (session, current, ct) =>
             {
                 var identity = (string)InvokeClosed(IdentityTextFor, queriedType, session, [document])!;
@@ -794,7 +794,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         var (mapping, queriedType) = ResolveForWrite(request.DocumentTypeName, request.Id);
 
         return await RunDiagnosticWriteAsync(mapping, queriedType, request.Id, request.TenantId,
-            request.ExpectedVersion, includeSoftDeletedCurrent: false,
+            request.ExpectedVersion, CurrentRow.Live,
             async (session, current, ct) =>
             {
                 // The document the application would have deleted, read back as its own type so a
@@ -808,6 +808,66 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                 return DocumentWriteStatus.Deleted;
             }, token).ConfigureAwait(false);
     }
+
+    /// <remarks>
+    ///     <para>
+    ///         <b>Through an enlisted session, under the writer's own <c>BEGIN IMMEDIATE</c></b>, exactly as
+    ///         a save and a delete are, so the expected version is checked against the row the restore will
+    ///         touch. The restore clears <c>is_deleted</c> and <c>deleted_at</c> and moves
+    ///         <c>last_modified</c> and the version column, without rewriting <c>data</c> — see
+    ///         <c>FisherDocumentStorage.RestoreForId</c>.
+    ///     </para>
+    ///     <para>
+    ///         <b>Only a soft-deleted row is a target.</b> A live row is <see cref="DocumentWriteStatus.NotFound" />
+    ///         as surely as a missing one: an undelete that did nothing must not look like one that did. A
+    ///         type that hard-deletes answers <see cref="DocumentWriteStatus.NotSupported" /> before anything
+    ///         is read, so a console can offer the action per type without guarding the call.
+    ///     </para>
+    /// </remarks>
+    async Task<DocumentWriteResult> IDocumentStoreDiagnosticsWriter.UndeleteDocumentAsync(
+        DocumentUndeleteRequest request, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var (mapping, queriedType) = ResolveForWrite(request.DocumentTypeName, request.Id);
+
+        if (!mapping.IsSoftDeleted)
+        {
+            return new DocumentWriteResult(DocumentWriteStatus.NotSupported);
+        }
+
+        return await RunDiagnosticWriteAsync(mapping, queriedType, request.Id, request.TenantId,
+            request.ExpectedVersion, CurrentRow.SoftDeleted,
+            async (session, current, ct) =>
+            {
+                // Only the identity is read off the document, through the root's storage, which owns the
+                // table whichever sub-class the row is.
+                var document = Deserialize(ReadTypeOf(mapping, current!) ?? queriedType, current!.Json);
+
+                InvokeClosed(UndeleteDocument, mapping.DocumentType, session, [document]);
+
+                await session.SaveChangesAsync(ct).ConfigureAwait(false);
+
+                return DocumentWriteStatus.Undeleted;
+            }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>Which existing row a diagnostic write acts on, and so what counts as not found.</summary>
+    private enum CurrentRow
+    {
+        /// <summary>A save: a soft-deleted row is still the row it replaces, and no row is an insert.</summary>
+        Any,
+
+        /// <summary>A delete: only a live row.</summary>
+        Live,
+
+        /// <summary>An undelete: only a soft-deleted row.</summary>
+        SoftDeleted
+    }
+
+    private static readonly MethodInfo UndeleteDocument =
+        typeof(FisherSession).GetMethod(nameof(FisherSession.UndeleteForDiagnostics),
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
 
     private static readonly MethodInfo StoreForDiagnostics =
         typeof(FisherSession).GetMethod(nameof(FisherSession.StoreForDiagnostics),
@@ -827,7 +887,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     ///     version against it, and only then hand an enlisted session to <paramref name="write" />.
     /// </summary>
     private async Task<DocumentWriteResult> RunDiagnosticWriteAsync(DocumentMapping mapping, Type queriedType,
-        string id, string? tenantId, string? expectedVersion, bool includeSoftDeletedCurrent,
+        string id, string? tenantId, string? expectedVersion, CurrentRow currentRow,
         Func<FisherSession, StoredDocument?, CancellationToken, Task<DocumentWriteStatus>> write,
         CancellationToken token)
     {
@@ -847,11 +907,19 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                 .BeginTransactionAsync(IsolationLevel.Serializable, ct).ConfigureAwait(false);
 
             var current = await LoadStoredDocumentAsync(connection, transaction, mapping, queriedType, tenantId,
-                id, includeSoftDeletedCurrent, ct).ConfigureAwait(false);
+                id, includeSoftDeleted: currentRow != CurrentRow.Live, ct).ConfigureAwait(false);
 
             // A soft-deleted row is still the row a save replaces — storing a soft-deleted document
-            // undeletes it, as it does for an application — but it is not a live one to delete.
-            if (!includeSoftDeletedCurrent && current is null)
+            // undeletes it, as it does for an application — but it is not a live one to delete, and a
+            // live row is not one to undelete.
+            var notFound = currentRow switch
+            {
+                CurrentRow.Live => current is null,
+                CurrentRow.SoftDeleted => current is not { IsDeleted: true },
+                _ => false
+            };
+
+            if (notFound)
             {
                 return new DocumentWriteResult(DocumentWriteStatus.NotFound);
             }
@@ -873,7 +941,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                 status = await write(session, current, ct).ConfigureAwait(false);
             }
 
-            var written = status == DocumentWriteStatus.Saved
+            var written = status is DocumentWriteStatus.Saved or DocumentWriteStatus.Undeleted
                 ? await LoadStoredDocumentAsync(connection, transaction, mapping, queriedType, tenantId, id,
                     includeSoftDeleted: true, ct).ConfigureAwait(false)
                 : null;
@@ -1069,6 +1137,10 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                 ? reader.GetString(_docTypeOrdinal)
                 : null;
 
+            var deletedAt = _deletedAtOrdinal >= 0 && !reader.IsDBNull(_deletedAtOrdinal)
+                ? reader.GetString(_deletedAtOrdinal)
+                : null;
+
             return new StoredDocument(FisherSession.InvariantText(reader.GetValue(0)), json)
             {
                 // guid_version is rendered through Guid rather than returned as stored: Weasel's version
@@ -1079,7 +1151,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                     ? CanonicalVersion(reader.GetString(_versionOrdinal))
                     : _revisionOrdinal >= 0 && !reader.IsDBNull(_revisionOrdinal)
                         ? reader.GetInt64(_revisionOrdinal).ToString(CultureInfo.InvariantCulture)
-                        : ContentVersion(lastModified, json),
+                        : ContentVersion(lastModified, json, deletedAt),
                 LastModified = lastModified is null ? null : SqliteTimestamp.FromDatabaseValue(lastModified),
                 Created = TimestampAt(reader, _createdOrdinal),
                 TenantId = _tenantOrdinal >= 0 && !reader.IsDBNull(_tenantOrdinal)
@@ -1116,9 +1188,17 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     ///         Nothing is stored: the token is derived from what the row already holds, so a type gains
     ///         no column and an existing table needs no migration.
     ///     </para>
+    ///     <para>
+    ///         <b>A soft-deleted row folds its <c>deleted_at</c> in</b> (fisher#471). A soft delete moves
+    ///         neither <c>last_modified</c> nor <c>data</c>, so without it a delete was invisible to the
+    ///         token: a console holding a live row's version could save over a deletion it never saw, and an
+    ///         undelete's "new version" could equal the deleted row's. A live row's token is unchanged.
+    ///     </para>
     /// </remarks>
-    private static string ContentVersion(string? lastModified, string json)
-        => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"{lastModified}\n{json}")))[..32];
+    private static string ContentVersion(string? lastModified, string json, string? deletedAt)
+        => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(deletedAt is null
+            ? $"{lastModified}\n{json}"
+            : $"{lastModified}\n{json}\n{deletedAt}")))[..32];
 
     private static Type? TypeForAlias(DocumentMapping mapping, string? alias)
         => alias is null

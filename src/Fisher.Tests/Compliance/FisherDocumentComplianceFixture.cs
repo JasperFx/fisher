@@ -315,6 +315,13 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
     /// <summary>The fixture replays <c>DocumentComplianceConfig.SoftDeletedDocuments</c>.</summary>
     public override bool SupportsSoftDeletedDocuments => true;
 
+    /// <summary>
+    ///     <c>IDocumentStoreDiagnosticsWriter.UndeleteDocumentAsync</c> (jasperfx#1059, fisher#471): the
+    ///     soft-delete flags cleared and the version moved, through an enlisted session under the writer's
+    ///     own write lock.
+    /// </summary>
+    public override bool SupportsDocumentUndelete => true;
+
     /// <summary>The fixture replays <c>DocumentComplianceConfig.SubClasses</c>.</summary>
     public override bool SupportsDocumentHierarchies => true;
 

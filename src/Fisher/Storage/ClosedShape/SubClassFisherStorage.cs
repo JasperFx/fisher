@@ -121,6 +121,9 @@ internal sealed class SubClassFisherStorage<TDoc, TBase, TId>
 
     public string SelectColumnsSql => ((IFisherDocumentStorage)_parent).SelectColumnsSql;
 
+    public Weasel.Storage.IStorageOperation? RestoreForId(object id, string tenantId)
+        => ((IFisherDocumentStorage)_parent).RestoreForId(id, tenantId);
+
     public void Apply(ICommandBuilder builder) => _parent.Apply(builder);
 
     public bool Contains(string sqlText) => false;

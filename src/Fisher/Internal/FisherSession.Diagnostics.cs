@@ -1,4 +1,6 @@
 using System.Globalization;
+using Fisher.Storage.ClosedShape;
+using JasperFx.Core.Reflection;
 
 namespace Fisher.Internal;
 
@@ -45,6 +47,24 @@ internal partial class FisherSession
         }
 
         QueueOperation(CaptureExpectedRevision(storage.Upsert(document, this, TenantId), document, revision: 0));
+    }
+
+    /// <summary>
+    ///     Queue the restore of one soft-deleted document for the diagnostics writer (fisher#471).
+    /// </summary>
+    /// <remarks>
+    ///     Closed over the hierarchy's ROOT type by the caller, so a sub-class row resolves the storage
+    ///     that owns the table; only the identity is read off <paramref name="document" />.
+    /// </remarks>
+    internal void UndeleteForDiagnostics<T>(T document) where T : notnull
+    {
+        var storage = StorageFor<T>();
+
+        var operation = ((IFisherDocumentStorage)storage).RestoreForId(storage.IdentityFor(document), TenantId)
+                        ?? throw new InvalidOperationException(
+                            $"'{typeof(T).FullNameInCode()}' is not soft-deleted, so there is nothing to restore.");
+
+        QueueOperation(operation);
     }
 
     /// <summary>

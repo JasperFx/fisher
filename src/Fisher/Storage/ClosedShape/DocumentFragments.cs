@@ -39,6 +39,12 @@ internal interface IFisherDocumentStorage
     ///     query-only selectors omit <c>id</c> where the writeable ones read it at column 0.
     /// </remarks>
     string SelectColumnsSql { get; }
+
+    /// <summary>
+    ///     Restore one soft-deleted row as a write: the flags cleared, and <c>last_modified</c> and the
+    ///     version column moved on, or null for a type whose delete removes the row (fisher#471).
+    /// </summary>
+    Weasel.Storage.IStorageOperation? RestoreForId(object id, string tenantId);
 }
 
 /// <summary>
