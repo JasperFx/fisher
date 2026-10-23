@@ -88,7 +88,8 @@ already-deleted document must not push `deleted_at` forward, or `DeletedSince` a
 recent call rather than about the deletion.
 
 ::: tip
-Polecat has this guard on its by-id delete but not on `DeleteWhere`. Fisher has it on both.
+The guard is on both the by-id delete and `DeleteWhere`, as it is on Marten and Polecat; the shared
+`SoftDeleteCompliance` suite holds all three stores to it.
 :::
 
 ### Comparing deletion times

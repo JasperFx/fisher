@@ -627,3 +627,16 @@ public class document_store_diagnostics_compliance
 
 public class projection_floor_compliance
     : ProjectionFloorCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * jasperfx#785 (JasperFx 2.93.0), fisher#471 — the soft-delete operators and the metadata a store stamps
+ * without being asked. The soft-delete seam is Fisher's own SoftDeletedExtensions markers in one Where() plus
+ * UndoDeleteWhere / HardDeleteWhere; the tracking facts need ITracked's three members mapped onto the
+ * correlation_id / causation_id / last_modified_by columns, which DocumentMetadata now does by convention.
+ */
+
+public class soft_delete_compliance
+    : SoftDeleteCompliance<FisherDocumentComplianceFixture>;
+
+public class document_metadata_compliance
+    : DocumentMetadataCompliance<FisherDocumentComplianceFixture>;

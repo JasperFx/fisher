@@ -2646,8 +2646,9 @@ Ported from Polecat, whose column names these are. What is worth knowing:
   the insert branch and the update branch agree without either being written twice.
 - **A soft delete guards on `is_deleted = 0`; an undelete guards on `is_deleted = 1`.** Deleting an
   already-deleted document must not push `deleted_at` forward, or `DeletedSince` answers about the
-  most recent call rather than about the deletion. Polecat has the guard on its by-id delete but not
-  on `DeleteWhere`; Fisher has it on both, and
+  most recent call rather than about the deletion. Fisher guards both the by-id delete and
+  `DeleteWhere` (Polecat closed the same gap in its `DeleteWhere` with polecat#419, and the shared
+  `SoftDeleteCompliance` now pins it on all three), and
   `deleting_an_already_deleted_document_leaves_its_deletion_time_alone` pins it against a planted
   timestamp, because two deletes in the same millisecond would agree either way.
 - **`DeletedSince` / `DeletedBefore` compare `deleted_at` as text**, with none of the `strftime`
