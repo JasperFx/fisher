@@ -154,6 +154,114 @@ public class document_diagnostics_contract : IAsyncLifetime
             new DocumentQueryOptions(1, 10) { TenantId = "atlantis" }, Token));
     }
 
+    // ---------------------------------------------------------------- write preview (jasperfx#1071)
+
+    /// <summary>
+    ///     The preview resolves the same database a save would, so a tenant's preview needs that tenant's
+    ///     file and writes nothing to it — and an unknown tenant is refused as the save refuses it.
+    /// </summary>
+    [Fact]
+    public async Task a_tenant_s_preview_writes_nothing_and_an_unknown_tenant_is_refused_as_a_save_is()
+    {
+        var lighthouse = await StoreInNorthAsync();
+        IDocumentStoreDiagnostics diagnostics = _perTenant;
+        IDocumentStoreDiagnosticsWriter writer = _perTenant;
+
+        var before = (await diagnostics.LoadDocumentAsync(LighthouseType, lighthouse.Id.ToString(), "north", Token))!;
+        var edited = before.Json.Replace("Fastnet", "Fastnet Rock");
+
+        var preview = await writer.PreviewDocumentJsonAsync(
+            new DocumentWriteRequest(LighthouseType, lighthouse.Id.ToString(), edited) { TenantId = "north" }, Token);
+
+        preview.ShouldContain("Fastnet Rock");
+
+        var after = (await diagnostics.LoadDocumentAsync(LighthouseType, lighthouse.Id.ToString(), "north", Token))!;
+        after.Version.ShouldBe(before.Version);
+        after.Json.ShouldNotContain("Fastnet Rock");
+
+        await Should.ThrowAsync<Exception>(() => writer.PreviewDocumentJsonAsync(
+            new DocumentWriteRequest(LighthouseType, lighthouse.Id.ToString(), edited) { TenantId = "atlantis" }, Token));
+    }
+
+    /// <summary>
+    ///     The shared suite's preview-equals-save fact runs over a type with no version column. These two
+    ///     have one each — a Guid version and a numeric revision — and neither is in the body, so the
+    ///     preview is still the stored JSON member for member.
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(Beacon))]
+    [InlineData(typeof(NauticalChart))]
+    public async Task the_preview_is_the_stored_json_for_a_versioned_type(Type documentType)
+    {
+        var id = Guid.NewGuid();
+
+        await using (var session = _store.LightweightSession())
+        {
+            if (documentType == typeof(Beacon))
+            {
+                session.Store(new Beacon { Id = id, Light = "white" });
+            }
+            else
+            {
+                session.Store(new NauticalChart { Id = id, Sheet = "2675" });
+            }
+
+            await session.SaveChangesAsync(Token);
+        }
+
+        IDocumentStoreDiagnostics diagnostics = _store;
+        IDocumentStoreDiagnosticsWriter writer = _store;
+        var typeName = documentType.FullName!;
+
+        var before = (await diagnostics.LoadDocumentAsync(typeName, id.ToString(), null, Token))!;
+        var edited = System.Text.Json.Nodes.JsonNode.Parse(before.Json)!.AsObject();
+        edited["notAMember"] = 7;
+
+        var request = new DocumentWriteRequest(typeName, id.ToString(), edited.ToJsonString())
+        {
+            ExpectedVersion = before.Version
+        };
+
+        var preview = await writer.PreviewDocumentJsonAsync(request, Token);
+        var saved = await writer.SaveDocumentJsonAsync(request, Token);
+
+        saved.Status.ShouldBe(DocumentWriteStatus.Saved);
+        System.Text.Json.Nodes.JsonNode.DeepEquals(
+                System.Text.Json.Nodes.JsonNode.Parse(preview),
+                System.Text.Json.Nodes.JsonNode.Parse(saved.Document!.Json))
+            .ShouldBeTrue($"preview {preview} differs from stored {saved.Document!.Json}");
+    }
+
+    // ---------------------------------------------------------------- delete style (jasperfx#1070)
+
+    /// <summary>
+    ///     A sub-class reports its ROOT's delete style. The shared suite's hierarchy is hard-deleted, so it
+    ///     cannot tell "the root's style" from "false": this one is soft-deleted, under a hard-deleted
+    ///     sibling type.
+    /// </summary>
+    [Fact]
+    public async Task a_sub_class_reports_its_soft_deleted_root_s_delete_style()
+    {
+        using var database = TemporaryDatabase.Create("diag-delete-style");
+
+        await using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = database.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+
+            options.Schema.For<Lightship>().SoftDeleted().AddSubClass<RelieverLightship>();
+            options.Schema.For<Beacon>();
+        });
+
+        var types = (await ((IDocumentStoreDiagnostics)store).DocumentTypesAsync(Token))
+            .ToDictionary(x => x.TypeName);
+
+        types[typeof(Lightship).FullName!].IsSoftDeleted.ShouldBeTrue();
+        types[typeof(RelieverLightship).FullName!].IsSoftDeleted.ShouldBeTrue();
+        types[typeof(RelieverLightship).FullName!].RootTypeName.ShouldBe(typeof(Lightship).FullName);
+        types[typeof(Beacon).FullName!].IsSoftDeleted.ShouldBeFalse();
+    }
+
     // ---------------------------------------------------------------- all tenants (fisher#368)
 
     /// <remarks>
@@ -457,4 +565,15 @@ public class NauticalChart
 {
     public Guid Id { get; set; }
     public string Sheet { get; set; } = string.Empty;
+}
+
+public class Lightship
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+}
+
+public class RelieverLightship : Lightship
+{
+    public int Nets { get; set; }
 }

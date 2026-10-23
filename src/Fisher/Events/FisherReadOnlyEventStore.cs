@@ -90,19 +90,47 @@ internal sealed class FisherReadOnlyEventStore : IReadOnlyEventStore
     ///     would read as one tenant's, which is the jasperfx#737 silently-unfiltered failure mode.
     /// </exception>
     public IQueryable<StreamState> QueryStreamStates(string? tenantId = null)
+        => new StreamStateQueryProvider(_store, ScopeFor(tenantId, nameof(QueryStreamStates), "fi_streams",
+            "streams")).CreateRoot();
+
+    /// <summary>
+    ///     The bodies of every event stored as exactly <typeparamref name="T" />, across every stream, as
+    ///     a composable <see cref="IQueryable{T}" /> (jasperfx#1073). See
+    ///     <see cref="EventDataQueryProvider{T}" /> for the translation.
+    /// </summary>
+    /// <remarks>
+    ///     The tenant rule is <see cref="QueryStreamStates" />'s, word for word: an omitted
+    ///     <paramref name="tenantId" /> falls back to the tenant this tier was opened for, an explicit one
+    ///     wins, and the session each terminator opens follows it to its own file under
+    ///     database-per-tenant.
+    /// </remarks>
+    /// <exception cref="NotSupportedException">
+    ///     A non-null tenant on a store with no tenant dimension at all, refused rather than ignored for
+    ///     the same reason <see cref="QueryStreamStates" /> refuses one.
+    /// </exception>
+    public IQueryable<T> QueryEventData<T>(string? tenantId = null) where T : class
+        => new EventDataQueryProvider<T>(_store, ScopeFor(tenantId, "QueryEventData", "fi_events",
+            "events")).CreateRoot();
+
+    /// <summary>
+    ///     The tenant a queryable member reads for: its own argument, else the tier's — refused by name on
+    ///     a store with no tenant dimension, where the unscoped table would read as that tenant's (the
+    ///     jasperfx#737 silently-unfiltered failure mode).
+    /// </summary>
+    private string? ScopeFor(string? tenantId, string member, string table, string rows)
     {
         var scope = tenantId ?? _tenantId;
 
         if (scope is not null && !_store.IsTenanted())
         {
             throw new NotSupportedException(
-                $"This event store is not multi-tenanted, so QueryStreamStates cannot scope to tenantId "
-                + $"'{scope}': fi_streams has no tenant dimension, and the unscoped streams would read "
+                $"This event store is not multi-tenanted, so {member} cannot scope to tenantId "
+                + $"'{scope}': {table} has no tenant dimension, and the unscoped {rows} would read "
                 + "as that tenant's. Set StoreOptions.Events.TenancyStyle = TenancyStyle.Conjoined before "
                 + "the schema is created, configure a database per tenant, or omit the tenant id.");
         }
 
-        return new StreamStateQueryProvider(_store, scope).CreateRoot();
+        return scope;
     }
 
     /// <summary>

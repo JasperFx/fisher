@@ -12,10 +12,33 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2768 tests green on net9.0 and net10.0** — 2701 in `Fisher.Tests`, 36 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 747 of
-them are shared cross-store compliance tests — 530 event sourcing and 217 document.
-On JasperFx **2.93.0** / Weasel **9.46.0**.
+**2795 tests green on net9.0 and net10.0** — 2728 in `Fisher.Tests`, 36 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 762 of
+them are shared cross-store compliance tests — 539 event sourcing and 223 document.
+On JasperFx **2.94.0** / Weasel **9.46.0**.
+
+## The JasperFx 2.94.0 bump — three CritterWatch asks implemented, one suite enrolled
+
+**No compile break: every new member is default-implemented and both new fixture gates default off.**
+jasperfx#1070, #1071 and #1073 are implemented rather than left on their defaults:
+
+- **`DocumentTypeRef.IsSoftDeleted`** (jasperfx#1070), from the mapping's own delete style, with a
+  sub-class reporting its root's. `ReportsDocumentDeleteStyle` on; `document_diagnostics_contract` pins
+  a soft-deleted hierarchy, which the shared suite's hard-deleted one cannot tell from `false`.
+- **`PreviewDocumentJsonAsync`** (jasperfx#1071), a dry run of the diagnostics save. The save's
+  deserialize and id check are now two shared helpers, `ReadWriteRequest` and `AssertIdentityAgrees`, so
+  the two refuse the same requests. The answer is the store serializer's `ToJson`, which is what the
+  closed-shape upsert binds into `data`. No lock, no read, no write, `ExpectedVersion` ignored.
+  `SupportsDocumentWritePreview` on, so `DocumentStoreDiagnosticsCompliance` went from 80 to 86.
+  `document_diagnostics_contract` adds the tenant's file, and preview-equals-save for a Guid version and
+  a numeric revision.
+- **`IReadOnlyEventStore.QueryEventData<T>()`** (jasperfx#1073), an `IQueryable<T>` over `fi_events`
+  bodies of exactly `T`. `QueryStreamStates()`'s provider is split into `EventTableQueryProvider<TElement>`
+  (operators, terminators, session lifetime) and a per-table subclass. `EventDataQueryProvider<T>` is the
+  second subclass, using the mapping-less `MemberFactory` that `QueryEventDataAsync` (fisher#41) already
+  used, with the `type` alias as the "exactly `T`" term. It follows `QueryStreamStates()`'s tenant rule.
+  `EventDataQueryCompliance` enrolled, 9/9. `event_data_queries` (6) pins the refusals, the default order
+  and archived streams, and `tenant_scoped_read_only_event_store` (2 more) pins the tier's tenant.
 
 ## The JasperFx 2.93.0 bump — five new members implemented, three suites enrolled
 
@@ -952,9 +975,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.93.0 ships 63 suites; Fisher enrolls **62 of them, 747 tests**.
-Fisher passes **747 of them, across all
-62 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 2.94.0 ships 64 suites; Fisher enrolls **63 of them, 762 tests**.
+Fisher passes **762 of them, across all
+63 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -1102,9 +1125,9 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 62 suites, 747 tests
+### Green — 63 suites, 762 tests
 
-Event sourcing — 48 suites, 530 tests:
+Event sourcing — 49 suites, 539 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1118,6 +1141,7 @@ Event sourcing — 48 suites, 530 tests:
 | `StreamTombstoningCompliance` | 9 |
 | `ProjectionFloorCompliance` | 9 |
 | `StreamStateQueryCompliance` | 15 |
+| `EventDataQueryCompliance` | 9 |
 | `AggregateWriteCacheCompliance` | 14 |
 | `StrongTypedIdentityCompliance` | 14 |
 | `FetchForWritingCompliance` | 18 |
@@ -1157,11 +1181,11 @@ Event sourcing — 48 suites, 530 tests:
 | `EventProjectionRegistrationCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 14 suites, 217 tests, through `FisherDocumentComplianceFixture`:
+Documents — 14 suites, 223 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
-| `DocumentStoreDiagnosticsCompliance` | 80 |
+| `DocumentStoreDiagnosticsCompliance` | 86 |
 | `SoftDeleteCompliance` | 15 |
 | `DocumentMetadataCompliance` | 5 |
 | `DocumentQueryCompliance` | 17 |

@@ -11,6 +11,14 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
+**1.23.0 implements everything JasperFx 2.94.0 added** (from 2.93.0), the three CritterWatch asks
+jasperfx#1070, #1071 and #1073. `DocumentTypeRef.IsSoftDeleted` reports each type's delete style, with a
+sub-class reporting its root's. `PreviewDocumentJsonAsync` is a dry run of the diagnostics save: the same
+deserialize and id check, then the store's serializer, with nothing read or written.
+`IReadOnlyEventStore.QueryEventData<T>()` is an `IQueryable<T>` over the event bodies of one type, built on
+the same provider base as `QueryStreamStates()` and the member factory `QueryEventDataAsync` already used.
+`EventDataQueryCompliance` is newly enrolled: 63 of 64, 762 shared tests, 2795 tests green.
+
 **1.22.0 implements everything JasperFx 2.93.0 added** (from 2.91.0, spanning 2.92.x), in
 [#472](https://github.com/JasperFx/fisher/pull/472), closing [#470](https://github.com/JasperFx/fisher/issues/470)
 and [#471](https://github.com/JasperFx/fisher/issues/471). It adds the store-agnostic high-water preview and
@@ -763,7 +771,7 @@ Test counts keep understating the suites that matter. `AsyncDaemonCompliance` is
 the whole daemon; `FlatTableProjectionCompliance` is eight that demand an upsert generator, a
 migration hook and rebuild teardown.
 
-Being green on all sixty-two is not the same as being feature-complete against Marten. The suites
+Being green on all sixty-three is not the same as being feature-complete against Marten. The suites
 cover what is portable across stores; the deliberate gaps listed in HANDOFF.md are still gaps.
 
 ## Filed follow-ups

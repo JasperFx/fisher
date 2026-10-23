@@ -324,6 +324,18 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
     /// </summary>
     public override bool SupportsDocumentUndelete => true;
 
+    /// <summary>
+    ///     <c>DocumentTypeRef.IsSoftDeleted</c> (jasperfx#1070): the mapping's own delete style, with a
+    ///     sub-class reporting its root's.
+    /// </summary>
+    public override bool ReportsDocumentDeleteStyle => true;
+
+    /// <summary>
+    ///     <c>IDocumentStoreDiagnosticsWriter.PreviewDocumentJsonAsync</c> (jasperfx#1071): the save's own
+    ///     deserialize and id check, then the store's serializer, with nothing read or written.
+    /// </summary>
+    public override bool SupportsDocumentWritePreview => true;
+
     /// <summary>The fixture replays <c>DocumentComplianceConfig.SubClasses</c>.</summary>
     public override bool SupportsDocumentHierarchies => true;
 

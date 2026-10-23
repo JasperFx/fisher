@@ -342,6 +342,17 @@ new version. The body is not rewritten. Only a soft-deleted row is a target — 
 that hard-deletes is `NotSupported`. A soft-deleted row's content-hash version includes its `deleted_at`,
 so a soft delete changes the version of a type with no version column too.
 
+`PreviewDocumentJsonAsync` (jasperfx#1071, JasperFx 2.94) is a dry run of `SaveDocumentJsonAsync`. It
+runs the save's own deserialize and id check, so it refuses the same requests with the same
+`ArgumentException`, and returns the store's serializer's JSON for the document: a member the type does
+not have is gone, and casing and enum storage are the store's. That is the JSON a save then stores. It
+reads and writes nothing, takes no write lock and ignores `ExpectedVersion`. It does use the tenant's
+database, so an unknown tenant is refused as it is on a save.
+
+`DocumentTypesAsync` reports each type's delete style in `DocumentTypeRef.IsSoftDeleted` (jasperfx#1070,
+JasperFx 2.94), so a console can say before a delete whether it is permanent. A sub-class reports its
+root's style, because its rows are in the root's table.
+
 Several things in that surface are worth knowing:
 
 - **The store is identified as `fisher://{store name}`**, the same `Subject` the event side reports, not

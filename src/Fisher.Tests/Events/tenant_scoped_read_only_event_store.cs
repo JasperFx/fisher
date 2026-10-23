@@ -269,6 +269,96 @@ public class tenant_scoped_read_only_event_store
     }
 
     /// <summary>
+    ///     <c>QueryEventData&lt;T&gt;()</c> (jasperfx#1073) follows <c>QueryStreamStates</c>'s tenant rule:
+    ///     it inherits the tier's tenant, an explicit tenant outranks it, and the store-global tier names
+    ///     one explicitly.
+    /// </summary>
+    /// <remarks>
+    ///     The same event body in both tenants, in a stream with the same id, so a reader that ignored the
+    ///     tenant answers with both rather than a plausible one.
+    /// </remarks>
+    [Fact]
+    public async Task query_event_data_follows_the_tier_s_tenant_and_an_explicit_one_outranks_it()
+    {
+        var (database, store) = await ConjoinedStoreAsync();
+
+        try
+        {
+            var shared = Guid.NewGuid();
+
+            await AppendAsync(store, North, shared, new QuestStarted("Find the ring"), new MemberJoined("Frodo"));
+            await AppendAsync(store, South, shared, new QuestStarted("Find the ring"));
+            await AppendAsync(store, North, Guid.NewGuid(), new QuestStarted("Guard the road"));
+
+            var reader = ((IEventStore)store).OpenReadOnlyEventStore(North);
+
+            (await reader.QueryEventData<QuestStarted>().CountAsync(Token)).ShouldBe(2);
+            (await reader.QueryEventData<QuestStarted>(South).ToListAsync(Token))
+                .ShouldHaveSingleItem().Name.ShouldBe("Find the ring");
+
+            (await ((IEventStore)store).OpenReadOnlyEventStore().QueryEventData<QuestStarted>(North)
+                .Where(x => x.Name == "Guard the road").CountAsync(Token)).ShouldBe(1);
+
+            // The default tenant has no events at all, which is what the store-global tier reads unasked.
+            (await ((IEventStore)store).OpenReadOnlyEventStore().QueryEventData<QuestStarted>()
+                .AnyAsync(Token)).ShouldBeFalse();
+        }
+        finally
+        {
+            await store.DisposeAsync();
+            database.Dispose();
+        }
+    }
+
+    /// <summary>
+    ///     Under database-per-tenant the tier's tenant selects the file, and <c>QueryEventData&lt;T&gt;()</c>
+    ///     has to follow it there — there is no <c>tenant_id</c> term to add.
+    /// </summary>
+    [Fact]
+    public async Task query_event_data_follows_the_tier_s_tenant_to_its_own_database()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "fisher-tier-data-" + Guid.NewGuid().ToString("n")[..8]);
+
+        await using var store = DocumentStore.For(options =>
+        {
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.MultiTenantedDatabases(databases =>
+                databases.InDirectory(directory).AddTenants(North, South));
+        });
+
+        try
+        {
+            await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+            await AppendAsync(store, North, Guid.NewGuid(), new QuestStarted("Find the ring"));
+            await AppendAsync(store, North, Guid.NewGuid(), new QuestStarted("Guard the road"));
+            await AppendAsync(store, South, Guid.NewGuid(), new QuestStarted("Guard the shire"));
+
+            (await ((IEventStore)store).OpenReadOnlyEventStore(North).QueryEventData<QuestStarted>()
+                .CountAsync(Token)).ShouldBe(2);
+
+            (await ((IEventStore)store).OpenReadOnlyEventStore(South).QueryEventData<QuestStarted>()
+                .ToListAsync(Token)).ShouldHaveSingleItem().Name.ShouldBe("Guard the shire");
+        }
+        finally
+        {
+            await store.DisposeAsync();
+
+            if (Directory.Exists(directory))
+            {
+                try
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+                catch (IOException)
+                {
+                    // A tenant file still held by a pooled connection; the directory is under the temp path.
+                }
+            }
+        }
+    }
+
+    /// <summary>
     ///     A tenant on a store with no tenant dimension at all is refused by name, at the point the tier
     ///     is opened.
     /// </summary>

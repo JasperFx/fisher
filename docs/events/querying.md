@@ -155,6 +155,33 @@ they would apply here unchanged.
 A [binary event](/events/storage#binary-event-bodies) is refused by name — `data` is null for those
 rows, so the query would match nothing and report that as an answer.
 
+### As an `IQueryable<T>`
+
+`IReadOnlyEventStore.QueryEventData<T>()` (jasperfx#1073, JasperFx 2.94) is the same read as a
+composable queryable, for a console that builds its query a clause at a time:
+
+```cs
+var reader = ((IEventStore)store).OpenReadOnlyEventStore();
+
+var heavy = await reader.QueryEventData<OrderPlaced>()
+    .Where(e => e.Total > 1000m)
+    .OrderByDescending(e => e.Total)
+    .Take(20)
+    .ToListAsync(); // JasperFx.Events.Documents.DocumentQueryableExtensions
+```
+
+It answers every event stored as exactly `OrderPlaced`, across every stream, archived streams
+included. The member locators and the `type` filter are the ones above, so a same-shaped event of
+another type never matches. `Where`, `OrderBy`/`ThenBy` (and their descending forms), `Skip` and `Take`
+translate. Anything else, including an untranslatable member, fails the query by name rather than
+matching every event. Execute it with the shared async terminators (`ToListAsync`, `CountAsync`,
+`AnyAsync`, `FirstOrDefaultAsync`), as for `QueryStreamStates()`. With no `OrderBy` the order is append
+order (`seq_id`), which is also the tiebreak under one, so paging is stable.
+
+The tenant rule is `QueryStreamStates()`'s. An omitted tenant falls back to the tenant the tier was
+opened for, and an explicit one wins. Under database-per-tenant the read goes to that tenant's file. A
+tenant on a store with no tenant dimension is a `NotSupportedException`.
+
 ## The read-only event store
 
 ```cs

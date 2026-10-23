@@ -7,6 +7,13 @@
         <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
              carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
              transitively. -->
+        <!-- JasperFx 2.94.0 (from 2.93.0). jasperfx#1070, #1071, #1073, made for CritterWatch. No compile break:
+             every new member is default-implemented and both new fixture gates default off. Implemented here:
+             DocumentTypeRef.IsSoftDeleted from the root mapping's delete style (ReportsDocumentDeleteStyle),
+             IDocumentStoreDiagnosticsWriter.PreviewDocumentJsonAsync through the save's own deserialize and
+             id check (SupportsDocumentWritePreview), and IReadOnlyEventStore.QueryEventData of T, an
+             IQueryable over fi_events bodies sharing the QueryStreamStates provider base and the
+             QueryEventDataAsync member factory (EventDataQueryCompliance enrolled). -->
         <!-- JasperFx 2.93.0 (from 2.91.0, spanning 2.92.x). fisher#470, fisher#471. No compile break: every new
              member is default-implemented and every new suite or fact is gated off. Implemented here:
              IEventStore.PreviewHighWaterAdvanceAsync / AdvanceHighWaterMarkToLatestAsync (jasperfx#1031),
@@ -263,16 +270,16 @@
              generation, which Fisher does not do — projection dispatch is source-generated.
              jasperfx#880 is XML comments on AutoCreate. jasperfx#867 is a Wolverine codegen fix and
              jasperfx#865/#866 are the publish pipeline. -->
-        <PackageVersion Include="JasperFx" Version="2.93.0" />
-        <PackageVersion Include="JasperFx.Events" Version="2.93.0" />
+        <PackageVersion Include="JasperFx" Version="2.94.0" />
+        <PackageVersion Include="JasperFx.Events" Version="2.94.0" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.93.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.93.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.94.0" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.94.0" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.93.0" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.94.0" />
 
         <!-- Weasel 9.46.0 (from 9.42.0, spanning 9.43.0, 9.44.0, 9.45.0 and 9.45.1). JasperFx floor
              2.90.2, which Fisher already pins. Reaching Fisher:
