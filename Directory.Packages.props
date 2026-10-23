@@ -7,7 +7,7 @@
         <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
              carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
              transitively. -->
-        <!-- JasperFx 2.93.0 (from 2.90.2, spanning 2.91.x/2.92.x). fisher#470, fisher#471. No compile break: every new
+        <!-- JasperFx 2.93.0 (from 2.91.0, spanning 2.92.x). fisher#470, fisher#471. No compile break: every new
              member is default-implemented and every new suite or fact is gated off. Implemented here:
              IEventStore.PreviewHighWaterAdvanceAsync / AdvanceHighWaterMarkToLatestAsync (jasperfx#1031),
              IEventDatabase's projection start floors over a new fi_projection_floors table (jasperfx#809,
@@ -16,6 +16,14 @@
              and DocumentMetadataCompliance suites (jasperfx#785), the latter needing ITracked mapped by convention.
              Behaviour change, no code: jasperfx#1029 pauses a shard on a permanent SqliteException under
              SkipApplyErrors rather than dead-lettering every event. -->
+        <!-- JasperFx 2.91.0 (from 2.90.2). Fisher 1.21.2, a rebuild for the matched-set release train. No compile
+             break, and the compliance suite's sources are byte-identical to 2.90.2's (no new suite, no new fact).
+             jasperfx#1025 (per-tenant subscription rewind) and jasperfx#1026 (a re-added tenant's per-tenant
+             high-water mark) both live behind IEventStore.DistributesAgentsPerTenant, which Fisher leaves at its
+             false default: a Fisher file has one AUTOINCREMENT sequence shared by every tenant in it, and
+             database-per-tenant runs one daemon per file. So Fisher needs no store-side companion to marten#5700.
+             jasperfx#1027/#1028 (the high-water watchdog restart), #1024 (Dynamic LINQ reads offset-less date text
+             as UTC) and #1030 (EmittedEvents manifest per overload) need nothing from Fisher. -->
         <!-- JasperFx 2.90.2 (from 2.90.1): jasperfx#1022, a gracefully stopped subscription agent now releases its 10s heartbeat Timer, which used to root the agent and, through it, the whole store and host — so a process that boots and stops many hosts (test suites) leaked every one. -->
         <!-- JasperFx 2.90.1 (from 2.90.0): jasperfx#1019, the daemon's retry decision for exceptions thrown by projection code also consults TransientFailures, so a fault the store's classifier calls transient is retried rather than dead-lettered under SkipApplyErrors. -->
         <!-- JasperFx 2.90.0 (from 2.89.0). fisher#444. No compile break. jasperfx#1014 lifts

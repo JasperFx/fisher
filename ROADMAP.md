@@ -9,6 +9,15 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
+**1.21.2 is a rebuild on JasperFx 2.91.0** (from 2.90.2) and Weasel 9.46.0, so Fisher ships in a matched
+set with Marten 9.51.0. No Fisher behaviour changed and no compliance suite moved. 2.91.0's per-tenant
+rewind (jasperfx#1025) and per-tenant high-water fix (jasperfx#1026) only apply to stores that set
+`DistributesAgentsPerTenant`. Fisher does not: one file has one event sequence however many tenants share
+it, and database-per-tenant runs a daemon per file. So Fisher needs no companion to marten#5700. The
+release also carries the fixes merged since 1.21.1: post-commit hooks run once, after the commit
+([#455](https://github.com/JasperFx/fisher/pull/455)), and an enlisted session's Hi-Lo block reservation
+is refused instead of hanging ([#457](https://github.com/JasperFx/fisher/pull/457)).
+
 **1.21.1 lets the daemon retry what 1.21.0 classified.** On JasperFx **2.90.1** (jasperfx#1019,
 jasperfx#1020). 1.21.0's classifier only labelled a paused shard; the daemon's own choice between retrying a
 projection's exception and dead-lettering the event still came from a list of registered types, and Fisher
