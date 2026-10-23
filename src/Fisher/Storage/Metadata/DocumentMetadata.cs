@@ -171,6 +171,17 @@ public class DocumentMetadata
             MapInterfaceProperty(documentType, typeof(IVersioned), nameof(IVersioned.Version), Version);
         }
 
+        // ITracked (fisher#471, jasperfx#785): the three session-sourced columns fisher#29 added, mapped
+        // back onto the document's own members, as Marten's TrackedPolicy maps them. Mapping an optional
+        // column enables it, so a tracked type gains the columns with nothing else said; the session's
+        // values are what is written, and what is read back over whatever the body held.
+        if (typeof(ITracked).IsAssignableFrom(documentType))
+        {
+            MapInterfaceProperty(documentType, typeof(ITracked), nameof(ITracked.CorrelationId), CorrelationId);
+            MapInterfaceProperty(documentType, typeof(ITracked), nameof(ITracked.CausationId), CausationId);
+            MapInterfaceProperty(documentType, typeof(ITracked), nameof(ITracked.LastModifiedBy), LastModifiedBy);
+        }
+
         // IRevisioned is the numeric alternative, and it shares the Version slot: a document type is
         // versioned one way or the other, never both, so one MetadataColumn serves whichever column
         // the mapping ends up with. DocumentMapping is what refuses the pair.

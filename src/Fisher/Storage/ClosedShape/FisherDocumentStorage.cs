@@ -397,6 +397,48 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
             id, tenantId, _descriptor, _mapping.IsConjoined, OperationRole.Update);
     }
 
+    /// <remarks>
+    ///     <para>
+    ///         <see cref="UndeleteForId" />'s statement plus the columns a write moves, for the diagnostics
+    ///         writer's <c>UndeleteDocumentAsync</c> (jasperfx#1059), whose contract restores the document
+    ///         "live, with a new version". <c>UndoDeleteWhere</c> and a projection's <c>UnDelete</c> keep
+    ///         the narrower statement: neither has promised a caller a new version.
+    ///     </para>
+    ///     <para>
+    ///         <c>data</c> is not rewritten, so the body comes back byte-exact rather than through a
+    ///         deserialize and re-serialize that would drop any member this deployment's type does not
+    ///         have. The new <c>guid_version</c> is generated in SQL, in the uppercase form Weasel's
+    ///         version binder writes, so the statement binds exactly the id-then-tenant slots
+    ///         <see cref="DocumentByIdCommand{TDoc,TId}" /> knows how to fill.
+    ///     </para>
+    /// </remarks>
+    public Weasel.Storage.IStorageOperation? RestoreForId(object id, string tenantId)
+    {
+        if (!_mapping.IsSoftDeleted)
+        {
+            return null;
+        }
+
+        var metadata = _mapping.Metadata;
+        var sql = SoftDelete.ClearDeletedSql(_mapping.QuotedTableName)
+                  + $", {metadata.LastModified.Name} = {SqliteTimestamp.NowExpression}";
+
+        if (_mapping.UseOptimisticConcurrency)
+        {
+            sql += $", {metadata.Version.Name} = (select substr(h, 1, 8) || '-' || substr(h, 9, 4) || '-' || "
+                   + "substr(h, 13, 4) || '-' || substr(h, 17, 4) || '-' || substr(h, 21, 12) "
+                   + "from (select hex(randomblob(16)) as h))";
+        }
+
+        if (_mapping.UseNumericRevisions)
+        {
+            sql += $", {metadata.Revision.Name} = coalesce({metadata.Revision.Name}, 0) + 1";
+        }
+
+        return new DocumentByIdCommand<TDoc, TId>(sql + WhereIdSql(guard: SoftDelete.DeletedSql),
+            (TId)id, tenantId, _descriptor, _mapping.IsConjoined, OperationRole.Update);
+    }
+
     private IDeletion BuildDeletion(TId id, string tenantId, bool hard)
     {
         // The soft form guards on is_deleted = 0 so that deleting an already-deleted document is a

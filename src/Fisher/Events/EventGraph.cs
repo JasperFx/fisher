@@ -102,6 +102,9 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     internal string ProgressionTableName =>
         FisherTableNaming.QuotedTableName(DatabaseSchemaName, "event_progression");
 
+    internal string ProjectionFloorsTableName =>
+        FisherTableNaming.QuotedTableName(DatabaseSchemaName, Schema.ProjectionFloorsTable.TableSuffix);
+
     internal string DeadLetterTableName =>
         FisherTableNaming.QuotedTableName(DatabaseSchemaName, Schema.DeadLetterTable.TableSuffix);
 
@@ -472,6 +475,8 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     internal EventProgressionTable BuildEventProgressionTable() => new(this);
 
     internal DeadLetterTable BuildDeadLetterTable() => new(this);
+
+    internal ProjectionFloorsTable BuildProjectionFloorsTable() => new(this);
 
     /// <summary>
     ///     One table per registered tag type.

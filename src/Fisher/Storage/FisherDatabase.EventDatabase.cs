@@ -46,6 +46,14 @@ public partial class FisherDatabase : IEventDatabase
     public string StorageIdentifier => Identifier;
 
     /// <summary>
+    ///     Run <paramref name="action" /> through <see cref="StoreOptions.ResiliencePipeline" />, for a
+    ///     collaborator such as the high-water detector that holds this database but not its options.
+    /// </summary>
+    internal async Task<T> ExecuteResilientlyAsync<T>(Func<CancellationToken, ValueTask<T>> action,
+        CancellationToken token)
+        => await _options.ResiliencePipeline.ExecuteAsync(action, token).ConfigureAwait(false);
+
+    /// <summary>
     ///     Run a diagnostic read, answering <paramref name="whenStorageIsMissing" /> rather than throwing
     ///     when the table or column it reads does not exist (fisher#332).
     /// </summary>
@@ -244,6 +252,116 @@ public partial class FisherDatabase : IEventDatabase
         {
             // Nothing to delete — see the remarks.
         }
+    }
+
+    // ---- projection start floors (fisher#471, jasperfx#809) ----
+
+    /// <summary>
+    ///     The persisted start floor of <paramref name="projectionName" />, or null when none is stored.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Floors live in <c>fi_projection_floors</c> rather than on the progression row, because a
+    ///         rebuild deletes the progression row and the floor has to survive that — see
+    ///         <c>ProjectionFloorsTable</c>. Keyed by the projection name without its version, and a tenant.
+    ///     </para>
+    ///     <para>
+    ///         A missing table answers null, as the monitoring reads do (fisher#332): a store whose schema
+    ///         predates the table has no floor stored, which is the true answer.
+    ///     </para>
+    /// </remarks>
+    public Task<long?> FetchProjectionFloorAsync(string projectionName, string? tenantId,
+        CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
+
+        return ReadWhenStorageExistsAsync<long?>(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                $"select floor from {_events.ProjectionFloorsTableName} where projection_name = @name and tenant_id = @tenant";
+            BindFloorKey(command, projectionName, tenantId);
+
+            return await command.ExecuteScalarAsync(ct).ConfigureAwait(false) is long floor ? floor : null;
+        }, null, token);
+    }
+
+    /// <summary>
+    ///     Store <paramref name="floor" /> only if no floor is stored yet, and return the floor stored
+    ///     afterwards — the winner of any race.
+    /// </summary>
+    /// <remarks>
+    ///     <b>One statement, so the insert and the read-back cannot be split by another writer.</b> The
+    ///     conflict branch is a self-assignment that exists only so <c>returning</c> has a row to return:
+    ///     <c>do nothing</c> returns no row at all, which would need a second statement and a window
+    ///     between them. Concurrent first starts on several nodes all get the one stored value, because
+    ///     SQLite takes one writer at a time and the loser's statement sees the winner's row.
+    /// </remarks>
+    public async Task<long> TrySetProjectionFloorAsync(string projectionName, string? tenantId, long floor,
+        CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
+
+        await EnsureEventStorageAsync(token).ConfigureAwait(false);
+
+        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"""
+                                   insert into {_events.ProjectionFloorsTableName} (projection_name, tenant_id, floor, last_updated)
+                                   values (@name, @tenant, @floor, {SqliteTimestamp.NowExpression})
+                                   on conflict (projection_name, tenant_id) do update set floor = floor
+                                   returning floor
+                                   """;
+            BindFloorKey(command, projectionName, tenantId);
+            command.Parameters.AddWithValue("@floor", floor);
+
+            return Convert.ToInt64(await command.ExecuteScalarAsync(ct).ConfigureAwait(false));
+        }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     The operator's override: set the floor unconditionally, or clear it with a null
+    ///     <paramref name="floor" />. Reprocesses nothing by itself.
+    /// </summary>
+    public async Task SetProjectionFloorAsync(string projectionName, string? tenantId, long? floor,
+        CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
+
+        await EnsureEventStorageAsync(token).ConfigureAwait(false);
+
+        await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+
+            command.CommandText = floor is null
+                ? $"delete from {_events.ProjectionFloorsTableName} where projection_name = @name and tenant_id = @tenant"
+                : $"""
+                   insert into {_events.ProjectionFloorsTableName} (projection_name, tenant_id, floor, last_updated)
+                   values (@name, @tenant, @floor, {SqliteTimestamp.NowExpression})
+                   on conflict (projection_name, tenant_id) do update
+                     set floor = excluded.floor, last_updated = excluded.last_updated
+                   """;
+
+            BindFloorKey(command, projectionName, tenantId);
+
+            if (floor is not null)
+            {
+                command.Parameters.AddWithValue("@floor", floor.Value);
+            }
+
+            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }, token).ConfigureAwait(false);
+    }
+
+    private static void BindFloorKey(SqliteCommand command, string projectionName, string? tenantId)
+    {
+        command.Parameters.AddWithValue("@name", projectionName);
+        command.Parameters.AddWithValue("@tenant", tenantId ?? Fisher.Events.Schema.ProjectionFloorsTable.StoreGlobalTenant);
     }
 
     /// <summary>

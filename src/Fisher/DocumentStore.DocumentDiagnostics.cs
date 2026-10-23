@@ -170,6 +170,10 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
             return empty;
         }
 
+        // Refused, if it is going to be, before anything is read: whether a column can be ordered by is a
+        // fact about the type, not about whether it has rows yet.
+        var metadataOrder = MetadataOrderFor(mapping, options);
+
         if (options.HasCriteria())
         {
             return await QueryWithCriteriaAsync(mapping, queriedType, options, pageNumber, pageSize, token)
@@ -206,9 +210,9 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         }
 
         // Ordered by id so paging is stable — a page of an unordered SELECT is not a page. The id is
-        // the primary key, so this costs nothing.
+        // the primary key, so this costs nothing. A metadata ordering goes in front of it (jasperfx#1058).
         var documents = await ReadStoredDocumentsAsync(connection, null, mapping, tenantId, where, bind,
-            " order by id limit $take offset $skip", command =>
+            $" order by {OrderByClause(metadataOrder)} limit $take offset $skip", command =>
             {
                 command.Parameters.AddWithValue("$take", pageSize);
                 command.Parameters.AddWithValue("$skip", (pageNumber - 1) * pageSize);
@@ -216,6 +220,65 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
 
         return new DocumentQueryResult(documents, total, pageNumber, pageSize);
     }
+
+    /// <summary>
+    ///     The column <see cref="DocumentQueryOptions.OrderByMetadata" /> orders by, or null when none was
+    ///     asked for (jasperfx#1058, fisher#471).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <c>last_modified</c> is on every table and is <c>SqliteTimestamp</c>'s fixed-width UTC text,
+    ///         so ordering it as text is ordering it by instant. <c>created_at</c> exists only where the
+    ///         type tracks it, and a version orders only as a numeric <c>revision</c>.
+    ///     </para>
+    ///     <para>
+    ///         <b>Refused rather than ignored</b> for the two it cannot answer, naming the criterion as the
+    ///         contract asks: a <c>guid_version</c> is random and the content hash a type with no version
+    ///         column gets (<see cref="ContentVersion" />) is not stored at all, so neither has an order to
+    ///         give, and a type that does not track <c>created_at</c> has no column to read. Answering in
+    ///         id order would look like an answer.
+    ///     </para>
+    /// </remarks>
+    private static (string Locator, bool Descending)? MetadataOrderFor(DocumentMapping mapping,
+        DocumentQueryOptions options)
+    {
+        if (options.OrderByMetadata is not { } order)
+        {
+            return null;
+        }
+
+        var metadata = mapping.Metadata;
+
+        var column = order.Field switch
+        {
+            DocumentMetadataField.LastModified => metadata.LastModified.Name,
+            DocumentMetadataField.Created when metadata.CreatedAt.Enabled => metadata.CreatedAt.Name,
+            DocumentMetadataField.Created => throw new DocumentCriteriaNotSupportedException(
+                nameof(DocumentQueryOptions.OrderByMetadata),
+                $"'{mapping.DocumentType.FullNameInCode()}' does not track a created timestamp, so there is no "
+                + "created_at column to order by. Enable it with Schema.For<T>().Metadata(m => m.CreatedAt.Enabled = true) "
+                + "or order by DocumentMetadataField.LastModified."),
+            DocumentMetadataField.Version when mapping.UseNumericRevisions => metadata.Revision.Name,
+            DocumentMetadataField.Version => throw new DocumentCriteriaNotSupportedException(
+                nameof(DocumentQueryOptions.OrderByMetadata),
+                mapping.UseOptimisticConcurrency
+                    ? $"'{mapping.DocumentType.FullNameInCode()}' versions with a Guid, which has no meaningful "
+                      + "order. Only a numeric revision (UseNumericRevisions()) can be ordered by."
+                    : $"'{mapping.DocumentType.FullNameInCode()}' stores no version column; its version is a "
+                      + "content hash derived when the row is read, which has no order. Only a numeric revision "
+                      + "(UseNumericRevisions()) can be ordered by."),
+            _ => throw new DocumentCriteriaNotSupportedException(nameof(DocumentQueryOptions.OrderByMetadata),
+                $"Fisher does not know the metadata field '{order.Field}'.")
+        };
+
+        return (column, order.Descending);
+    }
+
+    /// <summary>The hand-built reads' <c>order by</c>: the metadata key if any, then the identity.</summary>
+    private static string OrderByClause((string Locator, bool Descending)? metadataOrder)
+        => metadataOrder is { } order
+            ? $"{order.Locator}{(order.Descending ? " desc" : "")}, id"
+            : "id";
 
     private static DiagnosticFilter FilterFor(DocumentMapping mapping, Type queriedType, string? tenantId,
         DocumentQueryOptions options, bool everyTenant = false)
@@ -343,7 +406,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
             var offset = skip;
 
             var rows = await ReadStoredDocumentsAsync(connection, null, mapping, segment.Tenant, where, bind,
-                " order by id limit $take offset $skip", command =>
+                $" order by {OrderByClause(MetadataOrderFor(mapping, options))} limit $take offset $skip", command =>
                 {
                     command.Parameters.AddWithValue("$take", take);
                     command.Parameters.AddWithValue("$skip", offset);
@@ -621,6 +684,13 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                 statement.OrderBys.Add(("id", false));
             }
 
+            // jasperfx#1058: the metadata key first, the criteria's ordering breaking its ties, and the
+            // identity breaking whatever ties remain.
+            if (MetadataOrderFor(mapping, options) is { } metadataOrder)
+            {
+                statement.OrderBys.Insert(0, metadataOrder);
+            }
+
             statement.Limit = take;
             statement.Offset = checked((int)skip);
 
@@ -759,7 +829,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         }
 
         return await RunDiagnosticWriteAsync(mapping, queriedType, request.Id, request.TenantId,
-            request.ExpectedVersion, includeSoftDeletedCurrent: true,
+            request.ExpectedVersion, CurrentRow.Any,
             async (session, current, ct) =>
             {
                 var identity = (string)InvokeClosed(IdentityTextFor, queriedType, session, [document])!;
@@ -794,7 +864,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         var (mapping, queriedType) = ResolveForWrite(request.DocumentTypeName, request.Id);
 
         return await RunDiagnosticWriteAsync(mapping, queriedType, request.Id, request.TenantId,
-            request.ExpectedVersion, includeSoftDeletedCurrent: false,
+            request.ExpectedVersion, CurrentRow.Live,
             async (session, current, ct) =>
             {
                 // The document the application would have deleted, read back as its own type so a
@@ -808,6 +878,66 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                 return DocumentWriteStatus.Deleted;
             }, token).ConfigureAwait(false);
     }
+
+    /// <remarks>
+    ///     <para>
+    ///         <b>Through an enlisted session, under the writer's own <c>BEGIN IMMEDIATE</c></b>, exactly as
+    ///         a save and a delete are, so the expected version is checked against the row the restore will
+    ///         touch. The restore clears <c>is_deleted</c> and <c>deleted_at</c> and moves
+    ///         <c>last_modified</c> and the version column, without rewriting <c>data</c> — see
+    ///         <c>FisherDocumentStorage.RestoreForId</c>.
+    ///     </para>
+    ///     <para>
+    ///         <b>Only a soft-deleted row is a target.</b> A live row is <see cref="DocumentWriteStatus.NotFound" />
+    ///         as surely as a missing one: an undelete that did nothing must not look like one that did. A
+    ///         type that hard-deletes answers <see cref="DocumentWriteStatus.NotSupported" /> before anything
+    ///         is read, so a console can offer the action per type without guarding the call.
+    ///     </para>
+    /// </remarks>
+    async Task<DocumentWriteResult> IDocumentStoreDiagnosticsWriter.UndeleteDocumentAsync(
+        DocumentUndeleteRequest request, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var (mapping, queriedType) = ResolveForWrite(request.DocumentTypeName, request.Id);
+
+        if (!mapping.IsSoftDeleted)
+        {
+            return new DocumentWriteResult(DocumentWriteStatus.NotSupported);
+        }
+
+        return await RunDiagnosticWriteAsync(mapping, queriedType, request.Id, request.TenantId,
+            request.ExpectedVersion, CurrentRow.SoftDeleted,
+            async (session, current, ct) =>
+            {
+                // Only the identity is read off the document, through the root's storage, which owns the
+                // table whichever sub-class the row is.
+                var document = Deserialize(ReadTypeOf(mapping, current!) ?? queriedType, current!.Json);
+
+                InvokeClosed(UndeleteDocument, mapping.DocumentType, session, [document]);
+
+                await session.SaveChangesAsync(ct).ConfigureAwait(false);
+
+                return DocumentWriteStatus.Undeleted;
+            }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>Which existing row a diagnostic write acts on, and so what counts as not found.</summary>
+    private enum CurrentRow
+    {
+        /// <summary>A save: a soft-deleted row is still the row it replaces, and no row is an insert.</summary>
+        Any,
+
+        /// <summary>A delete: only a live row.</summary>
+        Live,
+
+        /// <summary>An undelete: only a soft-deleted row.</summary>
+        SoftDeleted
+    }
+
+    private static readonly MethodInfo UndeleteDocument =
+        typeof(FisherSession).GetMethod(nameof(FisherSession.UndeleteForDiagnostics),
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
 
     private static readonly MethodInfo StoreForDiagnostics =
         typeof(FisherSession).GetMethod(nameof(FisherSession.StoreForDiagnostics),
@@ -827,7 +957,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     ///     version against it, and only then hand an enlisted session to <paramref name="write" />.
     /// </summary>
     private async Task<DocumentWriteResult> RunDiagnosticWriteAsync(DocumentMapping mapping, Type queriedType,
-        string id, string? tenantId, string? expectedVersion, bool includeSoftDeletedCurrent,
+        string id, string? tenantId, string? expectedVersion, CurrentRow currentRow,
         Func<FisherSession, StoredDocument?, CancellationToken, Task<DocumentWriteStatus>> write,
         CancellationToken token)
     {
@@ -847,11 +977,19 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                 .BeginTransactionAsync(IsolationLevel.Serializable, ct).ConfigureAwait(false);
 
             var current = await LoadStoredDocumentAsync(connection, transaction, mapping, queriedType, tenantId,
-                id, includeSoftDeletedCurrent, ct).ConfigureAwait(false);
+                id, includeSoftDeleted: currentRow != CurrentRow.Live, ct).ConfigureAwait(false);
 
             // A soft-deleted row is still the row a save replaces — storing a soft-deleted document
-            // undeletes it, as it does for an application — but it is not a live one to delete.
-            if (!includeSoftDeletedCurrent && current is null)
+            // undeletes it, as it does for an application — but it is not a live one to delete, and a
+            // live row is not one to undelete.
+            var notFound = currentRow switch
+            {
+                CurrentRow.Live => current is null,
+                CurrentRow.SoftDeleted => current is not { IsDeleted: true },
+                _ => false
+            };
+
+            if (notFound)
             {
                 return new DocumentWriteResult(DocumentWriteStatus.NotFound);
             }
@@ -873,7 +1011,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                 status = await write(session, current, ct).ConfigureAwait(false);
             }
 
-            var written = status == DocumentWriteStatus.Saved
+            var written = status is DocumentWriteStatus.Saved or DocumentWriteStatus.Undeleted
                 ? await LoadStoredDocumentAsync(connection, transaction, mapping, queriedType, tenantId, id,
                     includeSoftDeleted: true, ct).ConfigureAwait(false)
                 : null;
@@ -1069,6 +1207,10 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                 ? reader.GetString(_docTypeOrdinal)
                 : null;
 
+            var deletedAt = _deletedAtOrdinal >= 0 && !reader.IsDBNull(_deletedAtOrdinal)
+                ? reader.GetString(_deletedAtOrdinal)
+                : null;
+
             return new StoredDocument(FisherSession.InvariantText(reader.GetValue(0)), json)
             {
                 // guid_version is rendered through Guid rather than returned as stored: Weasel's version
@@ -1079,7 +1221,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                     ? CanonicalVersion(reader.GetString(_versionOrdinal))
                     : _revisionOrdinal >= 0 && !reader.IsDBNull(_revisionOrdinal)
                         ? reader.GetInt64(_revisionOrdinal).ToString(CultureInfo.InvariantCulture)
-                        : ContentVersion(lastModified, json),
+                        : ContentVersion(lastModified, json, deletedAt),
                 LastModified = lastModified is null ? null : SqliteTimestamp.FromDatabaseValue(lastModified),
                 Created = TimestampAt(reader, _createdOrdinal),
                 TenantId = _tenantOrdinal >= 0 && !reader.IsDBNull(_tenantOrdinal)
@@ -1116,9 +1258,17 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     ///         Nothing is stored: the token is derived from what the row already holds, so a type gains
     ///         no column and an existing table needs no migration.
     ///     </para>
+    ///     <para>
+    ///         <b>A soft-deleted row folds its <c>deleted_at</c> in</b> (fisher#471). A soft delete moves
+    ///         neither <c>last_modified</c> nor <c>data</c>, so without it a delete was invisible to the
+    ///         token: a console holding a live row's version could save over a deletion it never saw, and an
+    ///         undelete's "new version" could equal the deleted row's. A live row's token is unchanged.
+    ///     </para>
     /// </remarks>
-    private static string ContentVersion(string? lastModified, string json)
-        => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"{lastModified}\n{json}")))[..32];
+    private static string ContentVersion(string? lastModified, string json, string? deletedAt)
+        => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(deletedAt is null
+            ? $"{lastModified}\n{json}"
+            : $"{lastModified}\n{json}\n{deletedAt}")))[..32];
 
     private static Type? TypeForAlias(DocumentMapping mapping, string? alias)
         => alias is null

@@ -8,9 +8,9 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and fifty-nine are enrolled from
- * JasperFx.Events.ComplianceTests 2.91.0, which itself ships sixty concrete suites across
- * fifty-nine files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
+ * Suites were added one at a time as Fisher grew into them, and sixty-two are enrolled from
+ * JasperFx.Events.ComplianceTests 2.93.0, which itself ships sixty-three concrete suites across
+ * sixty-two files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
  * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
@@ -617,3 +617,26 @@ public class document_conjoined_tenancy_compliance
 
 public class document_store_diagnostics_compliance
     : DocumentStoreDiagnosticsCompliance<FisherDocumentComplianceFixture>;
+
+/*
+ * jasperfx#809 (JasperFx 2.93.0), fisher#471 — the persisted projection start floor on IEventDatabase:
+ * absent until stored, insert-if-absent returning the stored winner, an operator set and clear, one floor
+ * per tenant, agreement under concurrent first starts, and survival across data cleaning. Fisher keeps
+ * floors in fi_projection_floors, which neither rebuild teardown nor DeleteAllEventDataAsync touches.
+ */
+
+public class projection_floor_compliance
+    : ProjectionFloorCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * jasperfx#785 (JasperFx 2.93.0), fisher#471 — the soft-delete operators and the metadata a store stamps
+ * without being asked. The soft-delete seam is Fisher's own SoftDeletedExtensions markers in one Where() plus
+ * UndoDeleteWhere / HardDeleteWhere; the tracking facts need ITracked's three members mapped onto the
+ * correlation_id / causation_id / last_modified_by columns, which DocumentMetadata now does by convention.
+ */
+
+public class soft_delete_compliance
+    : SoftDeleteCompliance<FisherDocumentComplianceFixture>;
+
+public class document_metadata_compliance
+    : DocumentMetadataCompliance<FisherDocumentComplianceFixture>;

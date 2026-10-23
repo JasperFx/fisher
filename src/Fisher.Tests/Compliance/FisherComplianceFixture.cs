@@ -537,6 +537,16 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override bool SupportsSubscriptionEventFilters => true;
 
     /// <summary>
+    ///     jasperfx#809 — projection start floors, in <c>fi_projection_floors</c> (fisher#471).
+    /// </summary>
+    /// <remarks>
+    ///     A table of its own rather than a column on the progression row, because a rebuild deletes
+    ///     the progression row and the floor has to survive it — and survive
+    ///     <c>DeleteAllEventDataAsync</c>, which is what <c>CleanEventDataAsync</c> calls.
+    /// </remarks>
+    public override bool SupportsProjectionFloors => true;
+
+    /// <summary>
     ///     fisher#42 — Fisher subclasses JasperFx's projection scenario harness and exposes it on
     ///     <c>Advanced.EventProjectionScenarioAsync</c>.
     /// </summary>

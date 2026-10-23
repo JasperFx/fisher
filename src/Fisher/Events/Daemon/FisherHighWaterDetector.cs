@@ -1,4 +1,6 @@
+using System.Data;
 using Fisher.Storage;
+using Microsoft.Data.Sqlite;
 using JasperFx.Events.Daemon.HighWater;
 using JasperFx.Events.Projections;
 
@@ -199,34 +201,126 @@ internal sealed class FisherHighWaterDetector : IHighWaterDetector
         => _database.FetchHighestEventSequenceNumber(token);
 
     /// <summary>
-    ///     Move the high-water mark straight to the highest sequence in the database, without the
-    ///     daemon having read a single event (fisher#173).
+    ///     What advancing the mark to the committed ceiling would do, without writing anything
+    ///     (jasperfx#1031).
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         <b>For retrofitting async projections onto a store that has never had any.</b> A daemon
-    ///         starting against a large existing event store begins at zero and replays everything to
-    ///         reach the head; advancing the mark first means it starts in catch-up mode and processes
-    ///         only what arrives afterwards.
-    ///     </para>
-    ///     <para>
-    ///         <b>Nothing is projected by this, and that is the whole point — so it is also the
-    ///         hazard.</b> Every registered shard still starts from its own progression row, so a shard
-    ///         with no row will still replay from zero; what this skips is the *high-water* agent's
-    ///         climb. Use it on a store whose projections are genuinely new and whose history is
-    ///         genuinely not wanted, which is why Marten's own doc comment says "use with caution".
-    ///     </para>
-    ///     <para>
-    ///         Reads <c>max(seq_id)</c> and writes it. On SQLite that is the honest ceiling with no
-    ///         safe-zone reasoning behind it, for the reason this whole class documents: committed
-    ///         sequences are contiguous.
+    ///         <b>The missing count is a count of holes, not of in-flight appends.</b> On SQLite nothing
+    ///         is ever in flight below <c>max(seq_id)</c> — see this class's remarks — so a sequence
+    ///         number between the mark and the ceiling with no row is one a delete removed: compaction,
+    ///         masking's deletes, a tenant wipe. The contract still asks for it because Marten and
+    ///         Polecat can genuinely lose a slow append there, and on Fisher it is an honest zero far
+    ///         more often than not.
     ///     </para>
     /// </remarks>
-    internal async Task AdvanceHighWaterMarkToLatestAsync(CancellationToken token)
+    internal Task<HighWaterMarkPreview> PreviewAdvanceAsync(CancellationToken token)
     {
-        var highest = await _database.FetchHighestEventSequenceNumber(token).ConfigureAwait(false);
+        return _database.ExecuteResilientlyAsync(async ct =>
+        {
+            await using var connection = await _database.OpenConnectionAsync(ct).ConfigureAwait(false);
+            var (current, ceiling, missing) = await ReadMarkAsync(connection, null, ct).ConfigureAwait(false);
 
-        await MarkAsync(highest, token).ConfigureAwait(false);
+            return new HighWaterMarkPreview(_database.Identifier, null, current, ceiling, missing);
+        }, token);
+    }
+
+    /// <summary>
+    ///     Move the high-water mark forward to the highest committed sequence, refusing when
+    ///     <paramref name="expectedCurrentMark" /> no longer matches the stored mark (fisher#173,
+    ///     jasperfx#1031).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>For retrofitting async projections onto a store that has never had any</b>, or for
+    ///         jump-starting one an operator has decided to move on. Nothing is projected by this, and
+    ///         every registered shard still starts from its own progression row, so a shard with no row
+    ///         still replays from zero; what this skips is the <em>high-water</em> agent's climb. Marten's
+    ///         own doc comment says "use with caution", and the reason is the same here.
+    ///     </para>
+    ///     <para>
+    ///         <b>The read, the comparison and the write are one <c>BEGIN IMMEDIATE</c> transaction</b>,
+    ///         which on SQLite is the whole of the compare-and-set: the transaction holds the file's one
+    ///         write lock, so no running detector can move the mark between the read and the write. The
+    ///         siblings need a row lock for the same guarantee.
+    ///     </para>
+    ///     <para>
+    ///         <b>Never backwards.</b> A mark at or past <c>max(seq_id)</c> is left where it is and
+    ///         reported <see cref="HighWaterAdvanceOutcome.AlreadyAtCeiling" />. Deleting the newest
+    ///         events can leave the mark above the ceiling, and pulling it down is
+    ///         <see cref="TryCorrectProgressInDatabaseAsync" />'s job rather than this one's — this used
+    ///         to write <c>max(seq_id)</c> unconditionally, which did both jobs and said it did one.
+    ///     </para>
+    /// </remarks>
+    internal Task<HighWaterMarkAdvance> AdvanceToCommittedCeilingAsync(long? expectedCurrentMark,
+        CancellationToken token)
+    {
+        return _database.ExecuteResilientlyAsync(async ct =>
+        {
+            await using var connection = await _database.OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var transaction = (SqliteTransaction)await connection
+                .BeginTransactionAsync(IsolationLevel.Serializable, ct).ConfigureAwait(false);
+
+            var (current, ceiling, missing) = await ReadMarkAsync(connection, transaction, ct).ConfigureAwait(false);
+
+            if (expectedCurrentMark.HasValue && expectedCurrentMark.Value != current)
+            {
+                return new HighWaterMarkAdvance(_database.Identifier, null,
+                    HighWaterAdvanceOutcome.RefusedStaleExpectation, current, current, 0);
+            }
+
+            if (ceiling <= current)
+            {
+                return new HighWaterMarkAdvance(_database.Identifier, null,
+                    HighWaterAdvanceOutcome.AlreadyAtCeiling, current, current, 0);
+            }
+
+            await MarkAsync(connection, transaction, ceiling, ct).ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+
+            return new HighWaterMarkAdvance(_database.Identifier, null, HighWaterAdvanceOutcome.Advanced,
+                current, ceiling, missing);
+        }, token);
+    }
+
+    /// <summary>
+    ///     The stored mark (zero when none has been stored), the committed ceiling, and how many sequence
+    ///     numbers between them have no row.
+    /// </summary>
+    private async Task<(long Current, long Ceiling, long Missing)> ReadMarkAsync(SqliteConnection connection,
+        SqliteTransaction? transaction, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+                               select coalesce((select last_seq_id from {_events.ProgressionTableName} where name = @name), 0),
+                                      (select coalesce(max(seq_id), 0) from {_events.EventsTableName})
+                               """;
+        command.Parameters.AddWithValue("@name", ShardState.HighWaterMark);
+
+        long current, ceiling;
+        await using (var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false))
+        {
+            await reader.ReadAsync(token).ConfigureAwait(false);
+            current = reader.GetInt64(0);
+            ceiling = reader.GetInt64(1);
+        }
+
+        if (ceiling <= current)
+        {
+            return (current, ceiling, 0);
+        }
+
+        await using var counting = connection.CreateCommand();
+        counting.Transaction = transaction;
+        counting.CommandText =
+            $"select count(*) from {_events.EventsTableName} where seq_id > @current and seq_id <= @ceiling";
+        counting.Parameters.AddWithValue("@current", current);
+        counting.Parameters.AddWithValue("@ceiling", ceiling);
+
+        var present = Convert.ToInt64(await counting.ExecuteScalarAsync(token).ConfigureAwait(false));
+
+        return (current, ceiling, ceiling - current - present);
     }
 
     /// <summary>
@@ -279,7 +373,14 @@ internal sealed class FisherHighWaterDetector : IHighWaterDetector
     private async Task MarkAsync(long sequence, CancellationToken token)
     {
         await using var connection = await _database.OpenConnectionAsync(token).ConfigureAwait(false);
+        await MarkAsync(connection, null, sequence, token).ConfigureAwait(false);
+    }
+
+    private async Task MarkAsync(SqliteConnection connection, SqliteTransaction? transaction, long sequence,
+        CancellationToken token)
+    {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = $"""
                                insert into {_events.ProgressionTableName} (name, last_seq_id, last_updated)
                                values (@name, @seq, {SqliteTimestamp.NowExpression})

@@ -35,6 +35,10 @@ internal class EventStoreFeatureSchema : FeatureSchemaBase
         // letter outlives the event it describes. See DeadLetterTable.
         yield return _events.BuildDeadLetterTable();
 
+        // fisher#471 / jasperfx#809. Independent of the others too, and it has to outlive both rebuild
+        // teardown and data cleaning. See ProjectionFloorsTable.
+        yield return _events.BuildProjectionFloorsTable();
+
         // Tag tables last: each carries a real foreign key to fi_events(seq_id), so the referenced
         // table has to exist first.
         foreach (var tagTable in _events.BuildTagTables())

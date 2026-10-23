@@ -1,4 +1,6 @@
+using System.Linq.Expressions;
 using System.Reflection;
+using Fisher.Linq.SoftDeletes;
 using JasperFx;
 using JasperFx.Documents;
 using JasperFx.Events.ComplianceTests;
@@ -315,6 +317,13 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
     /// <summary>The fixture replays <c>DocumentComplianceConfig.SoftDeletedDocuments</c>.</summary>
     public override bool SupportsSoftDeletedDocuments => true;
 
+    /// <summary>
+    ///     <c>IDocumentStoreDiagnosticsWriter.UndeleteDocumentAsync</c> (jasperfx#1059, fisher#471): the
+    ///     soft-delete flags cleared and the version moved, through an enlisted session under the writer's
+    ///     own write lock.
+    /// </summary>
+    public override bool SupportsDocumentUndelete => true;
+
     /// <summary>The fixture replays <c>DocumentComplianceConfig.SubClasses</c>.</summary>
     public override bool SupportsDocumentHierarchies => true;
 
@@ -329,6 +338,13 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
     ///     <c>Query&lt;T&gt;()</c>, with the stored row read from the statement the provider builds.
     /// </summary>
     public override bool SupportsDocumentDiagnosticCriteria => true;
+
+    /// <summary>
+    ///     <c>DocumentQueryOptions.OrderByMetadata</c> (jasperfx#1058, fisher#471): <c>last_modified</c>
+    ///     always, <c>created_at</c> where tracked, and a version only as a numeric revision — the rest
+    ///     refused by name.
+    /// </summary>
+    public override bool SupportsDocumentMetadataOrdering => true;
 
     /// <summary>
     ///     The two deliberate escapes from tenant scoping — <c>AnyTenant()</c> and
@@ -352,6 +368,51 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
     public override async Task<IReadOnlyList<T>> QueryTenantsAsync<T>(
         IDocumentReadOperations session, string[] tenantIds, CancellationToken token)
         => await session.Query<T>().TenantIsOneOf(tenantIds).ToListAsync(token).ConfigureAwait(false);
+
+    /// <summary>
+    ///     The soft-delete seam (jasperfx#785, fisher#471): Fisher's own <c>SoftDeletedExtensions</c> markers
+    ///     in one <c>Where()</c>, and its <c>UndoDeleteWhere</c> / <c>HardDeleteWhere</c>.
+    /// </summary>
+    public override bool SupportsSoftDeleteOperators => true;
+
+    /// <inheritdoc />
+    /// <remarks>
+    ///     Fisher's markers are queryable operators — <c>Query&lt;T&gt;().IsDeleted()</c> — rather than element
+    ///     predicates inside a <c>Where</c>, the same shape <c>AnyTenant()</c> takes, so the operator is
+    ///     applied directly in place of the <c>Where</c>. No filtering of Fisher's own, as the seam asks: the
+    ///     operator is what refuses a type that is not soft-deleted.
+    /// </remarks>
+    public override async Task<IReadOnlyList<T>> QuerySoftDeletedAsync<T>(IDocumentReadOperations session,
+        SoftDeleteFilter filter, CancellationToken token)
+    {
+        var query = session.Query<T>();
+
+        query = filter.Operator switch
+        {
+            SoftDeleteOperator.MaybeDeleted => query.MaybeDeleted(),
+            SoftDeleteOperator.IsDeleted => query.IsDeleted(),
+            SoftDeleteOperator.DeletedSince => query.DeletedSince(filter.At!.Value),
+            SoftDeleteOperator.DeletedBefore => query.DeletedBefore(filter.At!.Value),
+            _ => throw new ArgumentOutOfRangeException(nameof(filter), filter.Operator, null)
+        };
+
+        return await query.ToListAsync(token).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public override void UndoDeleteWhere<T>(IDocumentSessionOperations session, Expression<Func<T, bool>> predicate)
+        => ((IDocumentSession)session).UndoDeleteWhere(predicate);
+
+    /// <inheritdoc />
+    public override void HardDeleteWhere<T>(IDocumentSessionOperations session, Expression<Func<T, bool>> predicate)
+        => ((IDocumentSession)session).HardDeleteWhere(predicate);
+
+    /// <summary>
+    ///     A document implementing <c>ITracked</c> carries the session's correlation id, causation id and
+    ///     user name (jasperfx#785, fisher#471), through the metadata columns fisher#29 added, mapped by
+    ///     convention.
+    /// </summary>
+    public override bool SupportsTrackedDocuments => true;
 
     public override async Task CleanDocumentDataAsync()
     {
