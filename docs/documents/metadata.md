@@ -93,6 +93,11 @@ public class Order : IVersioned
 }
 ```
 
+A document implementing `JasperFx.Metadata.ITracked` has its `CorrelationId`, `CausationId` and
+`LastModifiedBy` mapped onto the `correlation_id`, `causation_id` and `last_modified_by` columns, which
+enables them. Every save writes the session's values, and a load reads them back over whatever the body
+held, so the document always says which unit of work last wrote it.
+
 ::: tip
 `IVersioned` **turns optimistic concurrency on**, as on both siblings. That is not a liberty: with it
 off the `guid_version` column is neither written nor read, so mapping a member onto it would mean

@@ -323,10 +323,24 @@ the container for the main store and for each ancillary store. What the contract
   do — `Note <> "x" or Note = null`, or `Note != null and Note <> "x"` — and it runs. A member the
   document declares non-nullable is not affected.
 
+- **`OrderByMetadata` orders by a metadata column** (jasperfx#1058, JasperFx 2.93) —
+  `DocumentMetadataOrder.NewestFirst` is "newest first". The metadata key comes first, then a given
+  `OrderBy`, then the id; under `AllTenants` the tenant still comes first. `LastModified` works for every
+  type, `Created` where `created_at` is enabled, and `Version` only for numeric revisions. A Guid version,
+  a content-hash version and an untracked created time have no order, and are refused with
+  `DocumentCriteriaNotSupportedException` naming `OrderByMetadata` rather than ignored.
+
 The writer saves or deletes through an ordinary session, so versions move, metadata is stamped and a
 soft-deleted type is soft-deleted. It checks `ExpectedVersion` inside Fisher's own write transaction,
 before it writes anything, so a stale edit comes back as `ConcurrencyConflict` with the current document.
 An unknown type, or JSON whose id disagrees with the requested id, is an `ArgumentException`.
+
+`UndeleteDocumentAsync` (jasperfx#1059, JasperFx 2.93) restores a soft-deleted document: the deletion
+flags are cleared, and `last_modified` and the version column move on, so it comes back `Undeleted` with a
+new version. The body is not rewritten. Only a soft-deleted row is a target — a live or missing one is
+`NotFound` — a stale `ExpectedVersion` is `ConcurrencyConflict` with the still-deleted document, and a type
+that hard-deletes is `NotSupported`. A soft-deleted row's content-hash version includes its `deleted_at`,
+so a soft delete changes the version of a type with no version column too.
 
 Several things in that surface are worth knowing:
 

@@ -12,10 +12,34 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2703 tests green on net9.0 and net10.0** — 2636 in `Fisher.Tests`, 36 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 704 of
-them are shared cross-store compliance tests — 521 event sourcing and 183 document.
-On JasperFx **2.90.2** / Weasel **9.46.0**.
+**2768 tests green on net9.0 and net10.0** — 2701 in `Fisher.Tests`, 36 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 747 of
+them are shared cross-store compliance tests — 530 event sourcing and 217 document.
+On JasperFx **2.93.0** / Weasel **9.46.0**.
+
+## The JasperFx 2.93.0 bump — five new members implemented, three suites enrolled
+
+**No compile break: every new member is default-implemented and every new suite or fact is gated off.**
+fisher#470 and fisher#471 implement them rather than leaving the defaults in place:
+
+- **`IEventStore.PreviewHighWaterAdvanceAsync` / `AdvanceHighWaterMarkToLatestAsync`** (jasperfx#1031,
+  fisher#470). A compare-and-set under `BEGIN IMMEDIATE` that never moves a mark backwards, which changed
+  `Advanced.AdvanceHighWaterMarkToLatestAsync` too: it shares the path and no longer lowers a mark above
+  `max(seq_id)`. No shared suite; `high_water_advance_contract` (9 tests).
+- **Projection start floors** (jasperfx#809) in a new `fi_projection_floors` table that survives rebuild
+  teardown, `ResetAllDataAsync` and a tenant wipe. `ProjectionFloorCompliance` enrolled, 9/9;
+  `projection_start_floors` (5) covers the daemon actually using one.
+- **`UndeleteDocumentAsync`** (jasperfx#1059) and **`OrderByMetadata`** (jasperfx#1058) on the document
+  diagnostics. `DocumentStoreDiagnosticsCompliance` went from 66 to 80 with both flags on;
+  `document_diagnostics_undelete_and_ordering` (8) covers the two real version columns, conjoined tenancy,
+  a hierarchy and a byte-exact body. A soft-deleted row's content-hash version now folds in `deleted_at`.
+- **`SoftDeleteCompliance` (15) and `DocumentMetadataCompliance` (5)** (jasperfx#785). The tracking facts
+  needed `ITracked` mapped onto the session metadata columns by convention, as Marten's `TrackedPolicy`
+  does; one created-time fact skips, the suite's `ComplianceWidget` not tracking `created_at`.
+
+**Release-note item, no code:** with `SkipApplyErrors` on, a permanent `SqliteException` from projection
+code now pauses the shard (`ShardFailure.IsTransient = false`) instead of dead-lettering every following
+event (jasperfx#1029).
 
 ## The JasperFx 2.88.0 bump — jasperfx#1015, a Rebuild-mode shard that resumes
 
@@ -928,9 +952,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.90.2 ships 60 suites; Fisher enrolls **59 of them, 704 tests**.
-Fisher passes **704 of them, across all
-59 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 2.93.0 ships 63 suites; Fisher enrolls **62 of them, 747 tests**.
+Fisher passes **747 of them, across all
+62 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -1078,9 +1102,9 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 59 suites, 704 tests
+### Green — 62 suites, 747 tests
 
-Event sourcing — 47 suites, 521 tests:
+Event sourcing — 48 suites, 530 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1092,6 +1116,7 @@ Event sourcing — 47 suites, 521 tests:
 | `NaturalKeyCompliance` | 17 |
 | `StreamArchivingCompliance` | 20 |
 | `StreamTombstoningCompliance` | 9 |
+| `ProjectionFloorCompliance` | 9 |
 | `StreamStateQueryCompliance` | 15 |
 | `AggregateWriteCacheCompliance` | 14 |
 | `StrongTypedIdentityCompliance` | 14 |
@@ -1132,11 +1157,13 @@ Event sourcing — 47 suites, 521 tests:
 | `EventProjectionRegistrationCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 12 suites, 183 tests, through `FisherDocumentComplianceFixture`:
+Documents — 14 suites, 217 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
-| `DocumentStoreDiagnosticsCompliance` | 66 |
+| `DocumentStoreDiagnosticsCompliance` | 80 |
+| `SoftDeleteCompliance` | 15 |
+| `DocumentMetadataCompliance` | 5 |
 | `DocumentQueryCompliance` | 17 |
 | `DocumentConjoinedTenancyCompliance` | 10 |
 | `DocumentSearchCompliance` | 15 |

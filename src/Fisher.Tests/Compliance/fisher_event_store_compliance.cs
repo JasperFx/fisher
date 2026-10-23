@@ -8,9 +8,9 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and fifty-nine are enrolled from
- * JasperFx.Events.ComplianceTests 2.90.2, which itself ships sixty concrete suites across
- * fifty-nine files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
+ * Suites were added one at a time as Fisher grew into them, and sixty-two are enrolled from
+ * JasperFx.Events.ComplianceTests 2.93.0, which itself ships sixty-three concrete suites across
+ * sixty-two files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
  * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a

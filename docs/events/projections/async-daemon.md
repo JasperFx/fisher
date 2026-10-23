@@ -155,6 +155,41 @@ foreach (var db in eventStore.AllDatabases())
 }
 ```
 
+::: warning Behaviour change in JasperFx 2.93
+With `SkipApplyErrors` on, a **permanent** `SqliteException` thrown from projection code — a missing
+column, a constraint the projection's own SQL violates — used to be dead-lettered event by event. It now
+**pauses the shard** with `ShardFailure.IsTransient = false`, because it would fail every following
+event the same way (jasperfx#1029). Transient errors (`SQLITE_BUSY`, `SQLITE_LOCKED`, timeouts) are
+retried as before, and a projection's own exceptions are still dead-lettered.
+:::
+
+## Projection start floors
+
+A floor is the sequence below which a projection has no meaningful history: a continuous start begins at
+`max(progress, floor)` and a rebuild replays from it. `AsyncOptions.SubscribeFromFirstRun()` pins the
+high-water mark as the floor the first time the projection starts, and every later start and rebuild
+honours it:
+
+```cs
+public class RecentOrders : SingleStreamProjection<OrderSummary, Guid>
+{
+    public RecentOrders() => Options.SubscribeFromFirstRun();
+}
+```
+
+Floors live in `fi_projection_floors`, keyed by the projection's name without its version (so a version
+bump inherits the floor) and a tenant. **A floor outlives a rebuild's teardown, `ResetAllDataAsync`,
+`DeleteAllEventDataAsync` and a tenant wipe**, which is why it is not a column on the progression row a
+rebuild deletes. An operator can set or clear one per database through `IEventDatabase`:
+
+```cs
+var database = (await ((IEventStore)store).AllDatabases()).First();
+await database.SetProjectionFloorAsync("OrderSummary", null, 5_000, token); // or null to clear
+```
+
+A stored floor wins over a code-configured `SubscribeFromSequence` or `SubscribeFromTime`, which is what
+lets one database be fixed without a deploy. Neither setting nor clearing reprocesses anything by itself.
+
 ## Rebuilds
 
 ```cs
@@ -202,6 +237,33 @@ await daemon.RewindSubscriptionAsync("ReleasedTally", token, sequenceFloor: 0);
 
 Sharing a published type between two projections is legal and costs nothing until somebody rebuilds,
 so Fisher warns rather than refusing.
+
+## Previewing and advancing the high-water mark
+
+`IEventStore.PreviewHighWaterAdvanceAsync` and `AdvanceHighWaterMarkToLatestAsync` (jasperfx#1031) move a
+database's mark to `max(seq_id)` through the store-agnostic interface, which is how a monitoring console
+reaches them without naming Fisher. Preview first, then advance against the mark the operator was shown:
+
+```cs
+IEventStore events = store;
+var database = (await events.AllDatabases()).First();
+
+var preview = (await events.PreviewHighWaterAdvanceAsync(database, null, token)).Single();
+// preview.CurrentMark, preview.CommittedCeiling, preview.MissingSequenceCount
+
+var advance = (await events.AdvanceHighWaterMarkToLatestAsync(database, null, preview.CurrentMark, token)).Single();
+// advance.Outcome: Advanced, AlreadyAtCeiling, or RefusedStaleExpectation
+```
+
+- **The comparison and the write are one `BEGIN IMMEDIATE` transaction**, so a running detector cannot
+  move the mark between them. A mark that moved since the preview is refused and nothing is written.
+- **The mark never moves backwards.** A mark already above `max(seq_id)` — the newest events were
+  deleted — is left where it is; `Advanced.TryCorrectProgressInDatabaseAsync()` is what pulls one down.
+  `Advanced.AdvanceHighWaterMarkToLatestAsync()` shares this path, so it no longer lowers a mark either.
+- **A tenant is refused.** Every Fisher database keeps one mark: conjoined tenants share their file's
+  sequence, and under database-per-tenant the database you pass already names the tenant.
+- **`MissingSequenceCount` counts holes a delete left.** On SQLite nothing is ever in flight below
+  `max(seq_id)`, so the count is usually zero.
 
 ## Reaching the running daemon
 

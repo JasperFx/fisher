@@ -344,6 +344,11 @@ Working, with tests:
   `DocumentStore`, `FisherProjectionDaemon`, and `Snapshot<T>(SnapshotLifecycle.Async)`
 - **Dead letters** — `fi_dead_letters`, so `SkipApplyErrors` quarantines a poison event instead of
   stopping its shard
+- **Projection start floors** — `fi_projection_floors` behind `IEventDatabase`'s three floor members,
+  so `SubscribeFromFirstRun()` works and a stored floor survives rebuilds and data cleaning
+- **The store-agnostic high-water advance** — `IEventStore.PreviewHighWaterAdvanceAsync` /
+  `AdvanceHighWaterMarkToLatestAsync`, a compare-and-set under `BEGIN IMMEDIATE` that never moves a mark
+  backwards
 - **Projection side effects** — `IMessageOutbox` / `IMessageBatch`, with both commit paths bracketing
   their transaction; the default outbox drops every message
 - **Event-emitting async projections** — a projection's raised events are planned and appended inside
@@ -385,7 +390,8 @@ Working, with tests:
 - **Vector projections** — `VectorProjection<TDoc, TId>`, embeddings produced from an event stream
   with SHA-256 content-hash skipping, so an unchanged body costs no embedding call
 - **Document metadata member mapping** — `guid_version`, `last_modified`, `is_deleted` and
-  `deleted_at` projected back onto members of the document, by interface, attribute or DSL
+  `deleted_at` projected back onto members of the document, by interface, attribute or DSL, and
+  `ITracked`'s three members onto the session metadata columns
 - **Strong-typed identities** — a wrapper around any of the four id types, as an aggregate's identity
   and as a document's
 - **Event rewriting** — `OverwriteEvent`, `CompletelyReplaceEvent`, event data masking through
@@ -410,7 +416,8 @@ Working, with tests:
   `Events.UseBinarySerializer<TEvent>(…)` over a supplied `JasperFx.Events.IEventBinarySerializer`,
   stored in an always-present `data_binary` BLOB column beside the JSON one
 - **Document-side tooling** — `IDocumentStoreUsageSource`, `IDocumentStoreDiagnostics` and projection
-  step-through, so a monitoring console sees the document half as well as the event half
+  step-through, so a monitoring console sees the document half as well as the event half, including
+  `UndeleteDocumentAsync` and `OrderByMetadata`
 - **Tracing** — an `ActivitySource` named `Fisher`, with spans for commits, queries and loads and a
   retry event that says a call waited on the write lock
 - **Metrics** — a `Meter` named `Fisher`, with opt-in instruments for the write-lock wait, busy
@@ -619,6 +626,48 @@ reason one fails is that the schema has not been applied **yet** — the window 
 - **`DeleteProjectionProgressByShardNameAsync` is the one write that treats a missing table as a
   no-op** (fisher#396, Marten's #5511). "No progress for this shard" is already true of a file with no
   progression table, so this is not the silent-write hazard above. It does not provision the table.
+
+### Projection start floors — fisher#471
+
+`IEventDatabase.FetchProjectionFloorAsync` / `TrySetProjectionFloorAsync` / `SetProjectionFloorAsync`
+(jasperfx#809), over `fi_projection_floors`. The daemon's use of a floor is JasperFx's; the storage is
+Fisher's, and the one decision in it is where the rows live.
+
+- **A table of its own, never a column on `fi_event_progression`.** A rebuild deletes the projection's
+  progression rows, and "no progression row" is how a fresh shard is recognised, so a floor stored there
+  would be deleted by the rebuild that is supposed to honour it.
+- **Nothing that clears data clears it.** `DeleteAllEventDataAsync` names its tables, so the floors table
+  is left out by construction. `TenantDataCleaner` sweeps every table with a `tenant_id` column, which
+  this one has, so it is excluded by name — a floor says where a projection's history starts, not data a
+  tenant owns. `CompletelyRemoveAllAsync` drops it with everything else.
+- **The key is (projection name without version, tenant)**, the tenant stored as `''` for store-global,
+  because SQLite treats NULLs in a primary key as distinct and would allow two store-global floors.
+- **Insert-if-absent is one statement**: `on conflict … do update set floor = floor returning floor`. The
+  self-assignment exists only so `returning` has a row; `do nothing` returns none, and a second read would
+  leave a window. Concurrent first starts all get the winner.
+- **A missing table answers "no floor"** through `ReadWhenStorageExistsAsync`, and the two writes ensure
+  the event tables first (fisher#333), which is what creates the table on a store migrated before it.
+- ⚠️ **A floor is keyed by the shard's projection NAME, which for a single-stream projection is the
+  document type's name**, not the projection class's. `projection_start_floors` found that by waiting on
+  the class name for thirty seconds.
+
+### The store-agnostic high-water advance — fisher#470
+
+`IEventStore.PreviewHighWaterAdvanceAsync` / `AdvanceHighWaterMarkToLatestAsync` (jasperfx#1031), in
+`DocumentStore.HighWaterAdvance.cs` over `FisherHighWaterDetector`. CritterWatch calls these because it
+compiles one source against all three stores and cannot name `Advanced`.
+
+- **The compare-and-set is one `BEGIN IMMEDIATE` transaction**: read the mark, read `max(seq_id)`, compare
+  against `expectedCurrentMark`, write. Holding the file's write lock is the whole guarantee; the siblings
+  need a row lock for it.
+- **Never backwards**, and that changed `Advanced.AdvanceHighWaterMarkToLatestAsync`, which shares the
+  path. It used to write `max(seq_id)` unconditionally, which also pulled a mark down after the newest
+  events were deleted — `TryCorrectProgressInDatabaseAsync`'s job, now only its job.
+- **A non-null tenant is refused**, as the contract asks of a database with one mark. Every Fisher database
+  has one: conjoined tenants share their file's sequence, and under database-per-tenant the database
+  argument already names the tenant.
+- **`MissingSequenceCount` is a count of holes a delete left**, since nothing is in flight below
+  `max(seq_id)` on SQLite (see `FisherHighWaterDetector`'s remarks). Usually zero.
 
 ### Flat-table projections
 
@@ -3056,7 +3105,10 @@ back out, which is what makes `ISoftDeleted`'s `Deleted` / `DeletedAt` mean some
 being an opt-in marker (fisher#11).
 
 Three ways to say it, each overriding the one before: the JasperFx metadata interfaces (`ISoftDeleted`,
-`IVersioned`), the `Fisher.Attributes` metadata attributes, then `Schema.For<T>().Metadata(...)`. The
+`IVersioned`, and since fisher#471 `ITracked`), the `Fisher.Attributes` metadata attributes, then
+`Schema.For<T>().Metadata(...)`. `ITracked` maps onto the three session-sourced columns fisher#29 added,
+which mapping enables, so a tracked document reads back the session that last wrote it — Marten's
+`TrackedPolicy`, and what `DocumentMetadataCompliance`'s tracking facts need. The
 first two are conventions applied when the mapping is created; the DSL runs afterwards.
 
 - **Four columns of the five, because `dotnet_type` has nowhere to go.** Weasel's
@@ -4646,6 +4698,29 @@ all, including the zero-infrastructure embedded configuration that is Fisher's b
 - **A step's exception is recorded on the step rather than thrown**, or the first bad event would hide
   every step after it. An unknown event type is skipped, following the stream reads' policy rather than
   the daemon's: a console may be pointed at a store holding types this deployment does not know.
+
+#### Undelete and metadata ordering — fisher#471
+
+JasperFx 2.93 added `IDocumentStoreDiagnosticsWriter.UndeleteDocumentAsync` (jasperfx#1059) and
+`DocumentQueryOptions.OrderByMetadata` (jasperfx#1058); the suite's 7 + 7 facts run.
+
+- **The undelete is a by-id `update`, not a deserialize-and-store.** `FisherDocumentStorage.RestoreForId`
+  is `UndeleteForId`'s statement plus `last_modified` and the version column, so the contract's "live, with
+  a new version" holds while `data` stays byte-exact — a store would drop any member this deployment's type
+  lacks. The new `guid_version` is generated in SQL (`hex(randomblob(16))`, hyphenated) so the statement
+  binds only the id-then-tenant slots `DocumentByIdCommand` fills. `UndoDeleteWhere` and a projection's
+  `UnDelete` keep the narrower statement: nobody promised them a new version.
+- **It runs through `RunDiagnosticWriteAsync`'s enlisted session**, with a `CurrentRow.SoftDeleted` target:
+  a live row is `NotFound` like a missing one, and a type that hard-deletes is `NotSupported` before
+  anything is read. The storage is closed over the hierarchy's ROOT, so a sub-class row resolves the table.
+- ⚠️ **A soft-deleted row's content-hash version folds in `deleted_at`.** A soft delete moves neither
+  `last_modified` nor `data`, so the hash used to ignore deletes entirely: a console holding a live row's
+  version could save over a deletion it never saw. Live rows hash exactly as before.
+- **`OrderByMetadata` goes in front of the id on the hand-built reads and at index 0 of the criteria
+  statement's `OrderBys`**, so a given `OrderBy` breaks its ties and the id breaks the rest; the all-tenants
+  segments are still ordered by tenant first. `LastModified` always, `Created` where `created_at` is
+  enabled, `Version` only as a numeric revision. A Guid version, a content hash and an untracked created
+  time have no order and are refused by name before anything is read.
 
 #### The grown diagnostics contract, and its writer — fisher#364
 
