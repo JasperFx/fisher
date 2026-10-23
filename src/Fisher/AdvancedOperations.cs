@@ -578,6 +578,12 @@ public class AdvancedOperations
     ///         Spans every database the store has, because under database-per-tenant a mark advanced on
     ///         one file says nothing about the rest. Name a tenant to advance one.
     ///     </para>
+    ///     <para>
+    ///         <b>The mark never moves backwards</b> (fisher#470). This shares its path with the
+    ///         store-agnostic <c>IEventStore.AdvanceHighWaterMarkToLatestAsync</c> (jasperfx#1031), which
+    ///         forbids it, so a mark already above <c>max(seq_id)</c> is left alone. It used to be written
+    ///         down to the ceiling; that is <see cref="TryCorrectProgressInDatabaseAsync()" />'s job.
+    ///     </para>
     /// </remarks>
     public async Task AdvanceHighWaterMarkToLatestAsync(CancellationToken token = default)
     {
@@ -585,7 +591,7 @@ public class AdvancedOperations
 
         foreach (var database in _store.Tenancy.AllDatabases())
         {
-            await DetectorFor(database).AdvanceHighWaterMarkToLatestAsync(token).ConfigureAwait(false);
+            await _store.AdvanceHighWaterMarkAsync(database, null, token).ConfigureAwait(false);
         }
     }
 
@@ -600,7 +606,7 @@ public class AdvancedOperations
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
 
-        return DetectorFor(_store.Tenancy.ExistingDatabaseFor(tenantId)).AdvanceHighWaterMarkToLatestAsync(token);
+        return _store.AdvanceHighWaterMarkAsync(_store.Tenancy.ExistingDatabaseFor(tenantId), null, token);
     }
 
     /// <summary>

@@ -46,6 +46,14 @@ public partial class FisherDatabase : IEventDatabase
     public string StorageIdentifier => Identifier;
 
     /// <summary>
+    ///     Run <paramref name="action" /> through <see cref="StoreOptions.ResiliencePipeline" />, for a
+    ///     collaborator such as the high-water detector that holds this database but not its options.
+    /// </summary>
+    internal async Task<T> ExecuteResilientlyAsync<T>(Func<CancellationToken, ValueTask<T>> action,
+        CancellationToken token)
+        => await _options.ResiliencePipeline.ExecuteAsync(action, token).ConfigureAwait(false);
+
+    /// <summary>
     ///     Run a diagnostic read, answering <paramref name="whenStorageIsMissing" /> rather than throwing
     ///     when the table or column it reads does not exist (fisher#332).
     /// </summary>
