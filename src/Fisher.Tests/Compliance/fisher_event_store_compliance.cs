@@ -617,3 +617,13 @@ public class document_conjoined_tenancy_compliance
 
 public class document_store_diagnostics_compliance
     : DocumentStoreDiagnosticsCompliance<FisherDocumentComplianceFixture>;
+
+/*
+ * jasperfx#809 (JasperFx 2.93.0), fisher#471 — the persisted projection start floor on IEventDatabase:
+ * absent until stored, insert-if-absent returning the stored winner, an operator set and clear, one floor
+ * per tenant, agreement under concurrent first starts, and survival across data cleaning. Fisher keeps
+ * floors in fi_projection_floors, which neither rebuild teardown nor DeleteAllEventDataAsync touches.
+ */
+
+public class projection_floor_compliance
+    : ProjectionFloorCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

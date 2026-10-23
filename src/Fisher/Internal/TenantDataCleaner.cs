@@ -56,8 +56,12 @@ internal sealed class TenantDataCleaner
         {
             await using var connection = await database.OpenConnectionAsync(ct).ConfigureAwait(false);
 
+            // Projection floors (fisher#471) carry a tenant_id but describe where a projection's history
+            // starts rather than data a tenant owns, so a tenant wipe leaves them alone as it leaves the
+            // progression rows alone.
             var tables = (await ReadTableNamesAsync(connection, ct).ConfigureAwait(false))
                 .Where(x => x.StartsWith(Prefix, StringComparison.Ordinal))
+                .Where(x => !x.Equals(Unquoted(events.ProjectionFloorsTableName), StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             var tenanted = new List<string>();
