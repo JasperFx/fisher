@@ -105,6 +105,12 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     ///         table alias, which is Polecat's answer too: the table is the root's, named on the root's
     ///         entry.
     ///     </para>
+    ///     <para>
+    ///         <b><see cref="DocumentTypeRef.IsSoftDeleted" /> is the mapping's own delete style</b>
+    ///         (jasperfx#1070) — the same <see cref="DocumentMapping.IsSoftDeleted" /> that
+    ///         <c>DeleteDocumentAsync</c> and <c>UndeleteDocumentAsync</c> act on, so the type list can
+    ///         never promise a delete style the writer then does not deliver.
+    ///     </para>
     /// </remarks>
     Task<IReadOnlyList<DocumentTypeRef>> IDocumentStoreDiagnostics.DocumentTypesAsync(CancellationToken token)
     {
@@ -113,14 +119,20 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         foreach (var mapping in MaterializeMappings().OrderBy(x => x.DocumentType.Name, StringComparer.Ordinal))
         {
             var rootTypeName = mapping.DocumentType.FullNameInCode();
-            refs.Add(new DocumentTypeRef(rootTypeName, mapping.Alias, Options.DatabaseSchemaName));
+            refs.Add(new DocumentTypeRef(rootTypeName, mapping.Alias, Options.DatabaseSchemaName)
+            {
+                IsSoftDeleted = mapping.IsSoftDeleted
+            });
 
+            // A sub-class reports its ROOT's delete style (jasperfx#1070): its rows are the root's
+            // table's rows, and DeleteDocumentAsync deletes them through the root's storage.
             refs.AddRange(mapping.SubClasses
                 .OrderBy(x => x.DocumentType.Name, StringComparer.Ordinal)
                 .Select(x => new DocumentTypeRef(
                     x.DocumentType.FullNameInCode(), x.Alias, Options.DatabaseSchemaName)
                 {
-                    RootTypeName = rootTypeName
+                    RootTypeName = rootTypeName,
+                    IsSoftDeleted = mapping.IsSoftDeleted
                 }));
         }
 
@@ -814,33 +826,13 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var (mapping, queriedType) = ResolveForWrite(request.DocumentTypeName, request.Id);
-
-        object document;
-        try
-        {
-            document = Deserialize(queriedType, request.Json);
-        }
-        catch (Exception e) when (e is System.Text.Json.JsonException or NotSupportedException)
-        {
-            throw new ArgumentException(
-                $"The JSON for '{request.DocumentTypeName}' '{request.Id}' could not be read as {queriedType.FullNameInCode()}: {e.Message}",
-                nameof(request), e);
-        }
+        var (mapping, queriedType, document) = ReadWriteRequest(request);
 
         return await RunDiagnosticWriteAsync(mapping, queriedType, request.Id, request.TenantId,
             request.ExpectedVersion, CurrentRow.Any,
             async (session, current, ct) =>
             {
-                var identity = (string)InvokeClosed(IdentityTextFor, queriedType, session, [document])!;
-
-                if (!string.Equals(identity, FisherSession.InvariantText(ConvertIdentity(mapping, request.Id)),
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new ArgumentException(
-                        $"The id in the JSON ('{identity}') does not agree with the requested id '{request.Id}'. "
-                        + "Refusing rather than guessing which one was meant.", nameof(request));
-                }
+                AssertIdentityAgrees(session, mapping, queriedType, document, request);
 
                 InvokeClosed(StoreForDiagnostics, queriedType, session, [document, GuidVersionOf(mapping, current)]);
 
@@ -848,6 +840,82 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
 
                 return DocumentWriteStatus.Saved;
             }, token).ConfigureAwait(false);
+    }
+
+    /// <remarks>
+    ///     <para>
+    ///         <b>The save's own steps, minus the database</b> (jasperfx#1071): the same
+    ///         <see cref="ReadWriteRequest" /> deserialize and the same <see cref="AssertIdentityAgrees" />
+    ///         check <see cref="IDocumentStoreDiagnosticsWriter.SaveDocumentJsonAsync" /> runs, so the two
+    ///         refuse exactly the same requests, and then the store's own serializer writes the document back
+    ///         out — <c>ToJson</c>, which is what the closed-shape upsert binds into <c>data</c>. That is what
+    ///         makes the answer the JSON a save would store rather than a reformatting of the operator's
+    ///         text: a member the CLR type does not have is gone, and casing and enum storage are the
+    ///         store's.
+    ///     </para>
+    ///     <para>
+    ///         Nothing is read or written: no write lock, no current row, and no
+    ///         <see cref="DocumentWriteRequest.ExpectedVersion" /> check, which the contract says to ignore.
+    ///         The session is only there to resolve the type's identity strategy for the id check — it is
+    ///         never saved, and a Fisher session opens no connection until something needs one.
+    ///     </para>
+    /// </remarks>
+    async Task<string> IDocumentStoreDiagnosticsWriter.PreviewDocumentJsonAsync(DocumentWriteRequest request,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var (mapping, queriedType, document) = ReadWriteRequest(request);
+
+        // The database a save would write to, so an unknown tenant is refused here as it is there.
+        var tenantId = DocumentQueryOptions.NormalizeTenantId(request.TenantId);
+        await using (var session = (FisherSession)OpenSessionOn(DatabaseForDiagnostics(tenantId), tenantId))
+        {
+            AssertIdentityAgrees(session, mapping, queriedType, document, request);
+        }
+
+        return Options.Serializer.ToJson(document);
+    }
+
+    /// <summary>
+    ///     The first half of a save, shared with its preview: the named type, refused by name when this
+    ///     store has none, and the request's JSON read as that type by the store's own serializer.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    ///     An unknown type name, or JSON the serializer cannot read as the type.
+    /// </exception>
+    private (DocumentMapping Mapping, Type QueriedType, object Document) ReadWriteRequest(DocumentWriteRequest request)
+    {
+        var (mapping, queriedType) = ResolveForWrite(request.DocumentTypeName, request.Id);
+
+        try
+        {
+            return (mapping, queriedType, Deserialize(queriedType, request.Json));
+        }
+        catch (Exception e) when (e is System.Text.Json.JsonException or NotSupportedException)
+        {
+            throw new ArgumentException(
+                $"The JSON for '{request.DocumentTypeName}' '{request.Id}' could not be read as {queriedType.FullNameInCode()}: {e.Message}",
+                nameof(request), e);
+        }
+    }
+
+    /// <summary>
+    ///     Refuse a document whose own identity disagrees with the id the request names — through the
+    ///     storage's identity strategy, so a strong-typed id and a Guid's casing compare as the column does.
+    /// </summary>
+    private static void AssertIdentityAgrees(FisherSession session, DocumentMapping mapping, Type queriedType,
+        object document, DocumentWriteRequest request)
+    {
+        var identity = (string)InvokeClosed(IdentityTextFor, queriedType, session, [document])!;
+
+        if (!string.Equals(identity, FisherSession.InvariantText(ConvertIdentity(mapping, request.Id)),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"The id in the JSON ('{identity}') does not agree with the requested id '{request.Id}'. "
+                + "Refusing rather than guessing which one was meant.", nameof(request));
+        }
     }
 
     /// <remarks>

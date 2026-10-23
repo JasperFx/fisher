@@ -8,9 +8,9 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and sixty-two are enrolled from
- * JasperFx.Events.ComplianceTests 2.93.0, which itself ships sixty-three concrete suites across
- * sixty-two files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
+ * Suites were added one at a time as Fisher grew into them, and sixty-three are enrolled from
+ * JasperFx.Events.ComplianceTests 2.94.0, which itself ships sixty-four concrete suites across
+ * sixty-three files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
  * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
@@ -152,6 +152,18 @@ public class event_query_compliance
 
 public class stream_state_query_compliance
     : StreamStateQueryCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * jasperfx#1073 — the bodies of one event type across every stream as an IQueryable<T> behind
+ * IReadOnlyEventStore.QueryEventData<T>, executed through the same IDocumentQueryExecutor hook and the
+ * same EventTableQueryProvider base as QueryStreamStates. Predicates resolve through the mapping-less
+ * MemberFactory that QueryEventDataAsync (fisher#41) already used, and "exactly T" is the type alias,
+ * so the suite's same-shaped BargeUnloaded decoy never matches. The untranslatable-member and
+ * tenantless-tenant refusals are Fisher's own, in event_data_queries.
+ */
+
+public class event_data_query_compliance
+    : EventDataQueryCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
 /*
  * fisher#154 / jasperfx#725 — composite projections: several members sharing one shard, one
