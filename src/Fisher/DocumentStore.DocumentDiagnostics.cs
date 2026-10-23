@@ -170,6 +170,10 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
             return empty;
         }
 
+        // Refused, if it is going to be, before anything is read: whether a column can be ordered by is a
+        // fact about the type, not about whether it has rows yet.
+        var metadataOrder = MetadataOrderFor(mapping, options);
+
         if (options.HasCriteria())
         {
             return await QueryWithCriteriaAsync(mapping, queriedType, options, pageNumber, pageSize, token)
@@ -206,9 +210,9 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         }
 
         // Ordered by id so paging is stable — a page of an unordered SELECT is not a page. The id is
-        // the primary key, so this costs nothing.
+        // the primary key, so this costs nothing. A metadata ordering goes in front of it (jasperfx#1058).
         var documents = await ReadStoredDocumentsAsync(connection, null, mapping, tenantId, where, bind,
-            " order by id limit $take offset $skip", command =>
+            $" order by {OrderByClause(metadataOrder)} limit $take offset $skip", command =>
             {
                 command.Parameters.AddWithValue("$take", pageSize);
                 command.Parameters.AddWithValue("$skip", (pageNumber - 1) * pageSize);
@@ -216,6 +220,65 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
 
         return new DocumentQueryResult(documents, total, pageNumber, pageSize);
     }
+
+    /// <summary>
+    ///     The column <see cref="DocumentQueryOptions.OrderByMetadata" /> orders by, or null when none was
+    ///     asked for (jasperfx#1058, fisher#471).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <c>last_modified</c> is on every table and is <c>SqliteTimestamp</c>'s fixed-width UTC text,
+    ///         so ordering it as text is ordering it by instant. <c>created_at</c> exists only where the
+    ///         type tracks it, and a version orders only as a numeric <c>revision</c>.
+    ///     </para>
+    ///     <para>
+    ///         <b>Refused rather than ignored</b> for the two it cannot answer, naming the criterion as the
+    ///         contract asks: a <c>guid_version</c> is random and the content hash a type with no version
+    ///         column gets (<see cref="ContentVersion" />) is not stored at all, so neither has an order to
+    ///         give, and a type that does not track <c>created_at</c> has no column to read. Answering in
+    ///         id order would look like an answer.
+    ///     </para>
+    /// </remarks>
+    private static (string Locator, bool Descending)? MetadataOrderFor(DocumentMapping mapping,
+        DocumentQueryOptions options)
+    {
+        if (options.OrderByMetadata is not { } order)
+        {
+            return null;
+        }
+
+        var metadata = mapping.Metadata;
+
+        var column = order.Field switch
+        {
+            DocumentMetadataField.LastModified => metadata.LastModified.Name,
+            DocumentMetadataField.Created when metadata.CreatedAt.Enabled => metadata.CreatedAt.Name,
+            DocumentMetadataField.Created => throw new DocumentCriteriaNotSupportedException(
+                nameof(DocumentQueryOptions.OrderByMetadata),
+                $"'{mapping.DocumentType.FullNameInCode()}' does not track a created timestamp, so there is no "
+                + "created_at column to order by. Enable it with Schema.For<T>().Metadata(m => m.CreatedAt.Enabled = true) "
+                + "or order by DocumentMetadataField.LastModified."),
+            DocumentMetadataField.Version when mapping.UseNumericRevisions => metadata.Revision.Name,
+            DocumentMetadataField.Version => throw new DocumentCriteriaNotSupportedException(
+                nameof(DocumentQueryOptions.OrderByMetadata),
+                mapping.UseOptimisticConcurrency
+                    ? $"'{mapping.DocumentType.FullNameInCode()}' versions with a Guid, which has no meaningful "
+                      + "order. Only a numeric revision (UseNumericRevisions()) can be ordered by."
+                    : $"'{mapping.DocumentType.FullNameInCode()}' stores no version column; its version is a "
+                      + "content hash derived when the row is read, which has no order. Only a numeric revision "
+                      + "(UseNumericRevisions()) can be ordered by."),
+            _ => throw new DocumentCriteriaNotSupportedException(nameof(DocumentQueryOptions.OrderByMetadata),
+                $"Fisher does not know the metadata field '{order.Field}'.")
+        };
+
+        return (column, order.Descending);
+    }
+
+    /// <summary>The hand-built reads' <c>order by</c>: the metadata key if any, then the identity.</summary>
+    private static string OrderByClause((string Locator, bool Descending)? metadataOrder)
+        => metadataOrder is { } order
+            ? $"{order.Locator}{(order.Descending ? " desc" : "")}, id"
+            : "id";
 
     private static DiagnosticFilter FilterFor(DocumentMapping mapping, Type queriedType, string? tenantId,
         DocumentQueryOptions options, bool everyTenant = false)
@@ -343,7 +406,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
             var offset = skip;
 
             var rows = await ReadStoredDocumentsAsync(connection, null, mapping, segment.Tenant, where, bind,
-                " order by id limit $take offset $skip", command =>
+                $" order by {OrderByClause(MetadataOrderFor(mapping, options))} limit $take offset $skip", command =>
                 {
                     command.Parameters.AddWithValue("$take", take);
                     command.Parameters.AddWithValue("$skip", offset);
@@ -619,6 +682,13 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
             if (statement.OrderBys.Count == 0)
             {
                 statement.OrderBys.Add(("id", false));
+            }
+
+            // jasperfx#1058: the metadata key first, the criteria's ordering breaking its ties, and the
+            // identity breaking whatever ties remain.
+            if (MetadataOrderFor(mapping, options) is { } metadataOrder)
+            {
+                statement.OrderBys.Insert(0, metadataOrder);
             }
 
             statement.Limit = take;

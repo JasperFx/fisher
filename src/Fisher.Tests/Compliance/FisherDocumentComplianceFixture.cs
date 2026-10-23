@@ -338,6 +338,13 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
     public override bool SupportsDocumentDiagnosticCriteria => true;
 
     /// <summary>
+    ///     <c>DocumentQueryOptions.OrderByMetadata</c> (jasperfx#1058, fisher#471): <c>last_modified</c>
+    ///     always, <c>created_at</c> where tracked, and a version only as a numeric revision — the rest
+    ///     refused by name.
+    /// </summary>
+    public override bool SupportsDocumentMetadataOrdering => true;
+
+    /// <summary>
     ///     The two deliberate escapes from tenant scoping — <c>AnyTenant()</c> and
     ///     <c>TenantIsOneOf(...)</c> (fisher#26).
     /// </summary>
