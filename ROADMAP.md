@@ -3,11 +3,23 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **three open issues, and none of them is feature work.** One is a bug filed on the day of
-1.15.0, one is an unreproduced intermittent kept open on evidence, and one is blocked upstream. 1.5.0 closed both of 1.4.0's
+Status: **fourteen open issues: eleven are the Fisher 2.0 milestone, and the other three are not feature
+work.** The 2.0 issues are Fisher's share of the Critter Stack .NET 11 release train. Of the other three, one
+is a bug filed on the day of 1.15.0, one is an unreproduced intermittent kept open on evidence, and one is
+blocked upstream. 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
+
+**1.22.0 implements everything JasperFx 2.93.0 added** (from 2.91.0, spanning 2.92.x), in
+[#472](https://github.com/JasperFx/fisher/pull/472), closing [#470](https://github.com/JasperFx/fisher/issues/470)
+and [#471](https://github.com/JasperFx/fisher/issues/471). It adds the store-agnostic high-water preview and
+advance on `IEventStore` (jasperfx#1031), a compare-and-set that never moves a mark backwards. That also
+changes `Advanced.AdvanceHighWaterMarkToLatestAsync`, which no longer lowers a mark. Projection start floors
+live in a new `fi_projection_floors` table that survives rebuilds and data cleaning, so
+`SubscribeFromFirstRun()` works (jasperfx#809). The document diagnostics gain `UndeleteDocumentAsync`
+(jasperfx#1059) and `OrderByMetadata` (jasperfx#1058). `ITracked` documents carry the session's metadata by
+convention (jasperfx#785). Three suites are newly enrolled: 62 of 63, 747 shared tests, 2768 tests green.
 
 **1.21.2 is a rebuild on JasperFx 2.91.0** (from 2.90.2) and Weasel 9.46.0, so Fisher ships in a matched
 set with Marten 9.51.0. No Fisher behaviour changed and no compliance suite moved. 2.91.0's per-tenant
@@ -265,7 +277,19 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is three items.
+What is left is fourteen items, eleven of them the Fisher 2.0 milestone.
+
+**Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.0, Weasel 10.0, `net10.0;net11.0`):
+[#459](https://github.com/JasperFx/fisher/issues/459) build and pack targets,
+[#460](https://github.com/JasperFx/fisher/issues/460) the TFM move,
+[#461](https://github.com/JasperFx/fisher/issues/461) small runtime cleanups,
+[#462](https://github.com/JasperFx/fisher/issues/462) the SQLite bundle decision,
+[#463](https://github.com/JasperFx/fisher/issues/463) the single-writer queue benchmark,
+[#464](https://github.com/JasperFx/fisher/issues/464) and [#465](https://github.com/JasperFx/fisher/issues/465)
+adopting the lifted shared bases, [#466](https://github.com/JasperFx/fisher/issues/466) union-typed members,
+[#467](https://github.com/JasperFx/fisher/issues/467) the dependency pins,
+[#468](https://github.com/JasperFx/fisher/issues/468) an Aspire hosting helper, and
+[#469](https://github.com/JasperFx/fisher/issues/469) the migration guide. None of it lands in a 1.x release.
 
 [#372](https://github.com/JasperFx/fisher/issues/372) was filed the day 1.15.0 shipped: a LINQ
 `Contains()` over more than 32,766 values exceeds SQLite's bound-variable limit and throws, where
