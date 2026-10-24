@@ -326,6 +326,13 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override bool SupportsMultipleDatabases => true;
 
     /// <summary>
+    ///     <c>IEventStore.QueryStreamStatesForAllTenants()</c> and <c>StreamState.TenantId</c>
+    ///     (jasperfx#1079): <c>fi_streams</c> with no tenant predicate on a store with one database, refused
+    ///     by name on one with several.
+    /// </summary>
+    public override bool SupportsAllTenantStreamStates => true;
+
+    /// <summary>
     ///     The <see cref="IEventDatabase" /> a tenant's data lives in.
     /// </summary>
     /// <remarks>

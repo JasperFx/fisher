@@ -776,6 +776,48 @@ public partial class DocumentStore : IEventStore
     IReadOnlyEventStore IEventStore.OpenReadOnlyEventStore() => new Events.FisherReadOnlyEventStore(this);
 
     /// <summary>
+    ///     Every tenant's streams as one composable queryable (jasperfx#1079), each row carrying its
+    ///     <see cref="StreamState.TenantId" />.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>The read this replaces answered for the default tenant only.</b>
+    ///         <c>OpenReadOnlyEventStore().QueryStreamStates()</c> on a conjoined store carries
+    ///         <c>tenant_id = '*DEFAULT*'</c> — the tier is the default tenant's — so there was no
+    ///         store-wide stream read at all. This one reads <c>fi_streams</c> with no tenant predicate;
+    ///         on a single-tenanted store that is exactly the tenant-less read.
+    ///     </para>
+    ///     <para>
+    ///         <b>More than one database is refused rather than fanned out.</b> A paged, ordered queryable
+    ///         spread over several files would have to be merged in memory under .NET's comparisons, which
+    ///         are not SQLite's (a Guid id orders as lowercase text in SQL and by <see cref="Guid.CompareTo(Guid)" />
+    ///         in .NET), so a page could differ from the same page read from one file. Answering from the
+    ///         default file alone is the one answer the contract forbids. A caller opens
+    ///         <c>OpenReadOnlyEventStore(tenantId)</c> per tenant instead, which names its tenant on every
+    ///         row too.
+    ///     </para>
+    ///     <para>
+    ///         Fisher has no way to disable the default tenant, so the session each terminator opens for
+    ///         the default scope is never refused; the statement carries no tenant term either way.
+    ///     </para>
+    /// </remarks>
+    /// <exception cref="NotSupportedException">The store has more than one database.</exception>
+    IQueryable<StreamState> IEventStore.QueryStreamStatesForAllTenants()
+    {
+        if (Tenancy.Cardinality != DatabaseCardinality.Single)
+        {
+            throw new NotSupportedException(
+                $"{nameof(IEventStore.QueryStreamStatesForAllTenants)} reads one database's streams table, and "
+                + $"this Fisher store has a database per tenant ({Tenancy.Cardinality}): answering from one file "
+                + "would present one tenant's streams as every tenant's, and Fisher does not merge paged, ordered "
+                + "stream queries across files. Open OpenReadOnlyEventStore(tenantId) for each tenant and call "
+                + "QueryStreamStates() on it; every row names its tenant.");
+        }
+
+        return new Events.StreamStateQueryProvider(this, null, allTenants: true).CreateRoot();
+    }
+
+    /// <summary>
     ///     The read-only event store slice, opened in one tenant's scope (jasperfx#885).
     /// </summary>
     /// <remarks>

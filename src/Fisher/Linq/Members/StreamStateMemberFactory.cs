@@ -26,10 +26,18 @@ namespace Fisher.Linq.Members;
 internal class StreamStateMemberFactory : IMemberResolver
 {
     private readonly EventGraph _graph;
+    private readonly string? _fileTenant;
 
-    public StreamStateMemberFactory(EventGraph graph)
+    /// <param name="graph">The event graph.</param>
+    /// <param name="fileTenant">
+    ///     The tenant every row belongs to when the <c>tenant_id</c> column cannot say (database-per-tenant
+    ///     without conjoined events), or null when the column is the answer — see
+    ///     <see cref="Events.StreamStateQueryProvider" />.
+    /// </param>
+    public StreamStateMemberFactory(EventGraph graph, string? fileTenant = null)
     {
         _graph = graph;
+        _fileTenant = fileTenant;
     }
 
     public IQueryableMember ResolveMember(MemberExpression expression)
@@ -59,11 +67,36 @@ internal class StreamStateMemberFactory : IMemberResolver
             nameof(StreamState.IsArchived) =>
                 new EventQueryableMember("is_archived", typeof(bool), isBoolean: true),
 
+            // jasperfx#1079. Translates to whatever the reader reports, so a predicate and the value it
+            // returns cannot disagree: the column, or under database-per-tenant the file's tenant as a
+            // literal — the column holds the default there for every row, and comparing it would make
+            // Where(x => x.TenantId == "north") match nothing in north's own file.
+            nameof(StreamState.TenantId) => _fileTenant is null
+                ? new EventQueryableMember("tenant_id", typeof(string))
+                : new TenantLiteralMember(_fileTenant),
+
             _ => throw new BadLinqExpressionException(
                 $"'StreamState.{name}' cannot be translated to a {_graph.StreamsTableName} column. "
                 + "Supported members are Id, Key, Version, AggregateType, Created, LastTimestamp, "
-                + "IsArchived and CompactedVersion.")
+                + "IsArchived, CompactedVersion and TenantId.")
         };
+    }
+
+    /// <summary>
+    ///     A tenant id the whole read shares, rendered as a SQL string literal. It is the tenancy's own
+    ///     spelling of a tenant the session already resolved, never free text, and a quote is doubled
+    ///     anyway — the literal is how a constant can stand where a column would.
+    /// </summary>
+    private sealed class TenantLiteralMember : IQueryableMember
+    {
+        internal TenantLiteralMember(string tenantId)
+            => TypedLocator = "'" + tenantId.Replace("'", "''", StringComparison.Ordinal) + "'";
+
+        public Type MemberType => typeof(string);
+        public string TypedLocator { get; }
+        public string RawLocator => TypedLocator;
+        public bool IsBoolean => false;
+        public object? ConvertValue(object? value) => value;
     }
 
     /// <summary>

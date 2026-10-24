@@ -49,6 +49,13 @@ internal static class FisherStreamsRowReader
     }
 
     /// <summary>
+    ///     The row's stored <c>tenant_id</c> (jasperfx#1079). The default tenant id on a store whose events
+    ///     are single-tenanted, since the column defaults to it.
+    /// </summary>
+    internal static string ReadTenantId(DbDataReader reader)
+        => reader.IsDBNull(5) ? JasperFx.StorageConstants.DefaultTenantId : reader.GetString(5);
+
+    /// <summary>
     ///     Read the current row into the event store explorer's <see cref="StreamSummary" />.
     /// </summary>
     /// <remarks>

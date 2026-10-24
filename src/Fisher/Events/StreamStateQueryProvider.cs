@@ -54,15 +54,38 @@ internal sealed class StreamStateQueryProvider : EventTableQueryProvider<StreamS
     ///     <see cref="FisherReadOnlyEventStore.QueryStreamStates" /> to be null on a store without
     ///     a tenant dimension.
     /// </param>
-    internal StreamStateQueryProvider(DocumentStore store, string? tenantId) : base(store, tenantId)
+    /// <param name="allTenants">
+    ///     <see cref="JasperFx.Events.IEventStore.QueryStreamStatesForAllTenants" /> (jasperfx#1079): no tenant
+    ///     predicate at all. Only ever true on a store with one database — the caller refuses the rest.
+    /// </param>
+    internal StreamStateQueryProvider(DocumentStore store, string? tenantId, bool allTenants = false)
+        : base(store, tenantId)
     {
+        _allTenants = allTenants;
+
+        // jasperfx#1079: which tenant a row belongs to. Under conjoined tenancy that is the row's own
+        // tenant_id. Otherwise every row in the file is one tenant's, and the column cannot say which: it
+        // holds the default for every row, the file being the tenant under database-per-tenant. So the
+        // tenant is the one the read was opened for, spelled as the tenancy spells it (fisher#393).
+        _fileTenant = Graph.TenancyStyle == JasperFx.MultiTenancy.TenancyStyle.Conjoined
+                      || store.Tenancy.Cardinality == JasperFx.Descriptors.DatabaseCardinality.Single
+            ? null
+            : store.Tenancy.TenantIdFor(tenantId ?? JasperFx.StorageConstants.DefaultTenantId);
     }
+
+    private readonly bool _allTenants;
+
+    /// <summary>
+    ///     The tenant every row of the read belongs to when the <c>tenant_id</c> column cannot say —
+    ///     database-per-tenant without conjoined events — or null when the column is the answer.
+    /// </summary>
+    private readonly string? _fileTenant;
 
     protected override string Origin => "QueryStreamStates()";
 
     protected override string QueryKind => "stream-state query";
 
-    protected override IMemberResolver CreateMemberResolver() => new StreamStateMemberFactory(Graph);
+    protected override IMemberResolver CreateMemberResolver() => new StreamStateMemberFactory(Graph, _fileTenant);
 
     protected override Statement CreateStatement() => new()
     {
@@ -71,7 +94,11 @@ internal sealed class StreamStateQueryProvider : EventTableQueryProvider<StreamS
     };
 
     protected override StreamState Read(DbDataReader reader, FisherSession session)
-        => FisherStreamsRowReader.Read(reader, Graph, Graph.StreamIdentity == StreamIdentity.AsGuid);
+    {
+        var state = FisherStreamsRowReader.Read(reader, Graph, Graph.StreamIdentity == StreamIdentity.AsGuid);
+        state.TenantId = _fileTenant ?? FisherStreamsRowReader.ReadTenantId(reader);
+        return state;
+    }
 
     /// <summary>
     ///     Under conjoined tenancy the queryable is always tenant-scoped: to the explicit tenant when
@@ -90,6 +117,13 @@ internal sealed class StreamStateQueryProvider : EventTableQueryProvider<StreamS
     /// </remarks>
     protected override void ApplyScope(Statement statement)
     {
+        if (_allTenants)
+        {
+            // jasperfx#1079: every tenant's streams, so no predicate — which is the whole of the
+            // difference from the default-tenant read OpenReadOnlyEventStore().QueryStreamStates() is.
+            return;
+        }
+
         if (Graph.TenancyStyle == JasperFx.MultiTenancy.TenancyStyle.Conjoined)
         {
             statement.Wheres.Add(new ComparisonFilter("tenant_id", "=",
