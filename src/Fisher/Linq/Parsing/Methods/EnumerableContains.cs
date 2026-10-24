@@ -40,6 +40,18 @@ internal class EnumerableContains : IMethodCallParser
             return IsDocumentMember(expression.Arguments[1]);
         }
 
+        // The three-argument span form with a NULL comparer, which is what an enum array's Contains binds
+        // to under C# 14's first-class spans on net10.0: an enum is not IEquatable<T>, so the two-argument
+        // MemoryExtensions overload does not apply and the compiler supplies the comparer's default. A null
+        // comparer is the default equality, which `in (...)` is. A real comparer is not matched, and is
+        // refused as unsupported rather than ignored.
+        if (expression.Object == null && expression.Arguments.Count == 3
+            && expression.Method.DeclaringType == typeof(MemoryExtensions)
+            && Strip(expression.Arguments[2]) is ConstantExpression { Value: null })
+        {
+            return IsDocumentMember(expression.Arguments[1]);
+        }
+
         // The instance form on a collection — but not on a string, which StringContains owns.
         return expression.Object != null
                && expression.Method.DeclaringType != typeof(string)

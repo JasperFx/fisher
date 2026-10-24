@@ -124,6 +124,23 @@ public class contains_over_many_values : IAsyncLifetime
         (await query.Query<Ledger>().Where(x => withNulls.Contains(x.Name)).CountAsync(Token)).ShouldBe(1);
     }
 
+    /// <summary>
+    ///     Found by the large-set facts on net10.0 and independent of them: an ENUM array's
+    ///     <c>Contains</c> binds, under C# 14's first-class spans, to the three-argument
+    ///     <c>MemoryExtensions.Contains(ReadOnlySpan&lt;T&gt;, T, IEqualityComparer&lt;T&gt;?)</c> — an enum is not
+    ///     <c>IEquatable&lt;T&gt;</c>, so the two-argument overload does not apply — with a null comparer, and
+    ///     the parser matched only the two-argument shape. Three values, nothing large about it.
+    /// </summary>
+    [Fact]
+    public async Task an_enum_array_contains_translates_on_every_target_framework()
+    {
+        await using var query = _store.QuerySession();
+
+        var kinds = new[] { LedgerKind.Savings, LedgerKind.Loan };
+        (await query.Query<Ledger>().Where(x => kinds.Contains(x.Kind)).CountAsync(Token))
+            .ShouldBe(_stored.Count(x => x.Kind is LedgerKind.Savings or LedgerKind.Loan));
+    }
+
     [Fact]
     public async Task a_small_set_is_still_bound_value_by_value_and_a_large_one_as_one_array()
     {
