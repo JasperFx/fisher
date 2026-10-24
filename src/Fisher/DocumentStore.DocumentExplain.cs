@@ -39,16 +39,26 @@ public partial class DocumentStore
 {
     /// <remarks>
     ///     <para>
-    ///         An unknown type is null, there being no query to explain. So is a type whose table does not
-    ///         exist yet: <c>QueryDocumentsAsync</c> answers that case with an empty page and runs no
-    ///         statement at all, and SQLite cannot prepare one against a missing table — and this read must
-    ///         not create it, being a monitoring read. Null renders as "unknown", never as "no scan".
+    ///         An unknown type is null, there being no query to explain. A type whose table does not exist
+    ///         yet gets the contract's plan of nothing: <c>QueryDocumentsAsync</c> answers that case with an
+    ///         empty page and runs no statement at all, SQLite cannot prepare one against a missing table, and
+    ///         this read must not create it, being a monitoring read.
     ///     </para>
     ///     <para>
     ///         <see cref="DocumentQueryOptions.AllTenants" /> runs one page statement per (file, tenant)
     ///         segment, all of one shape; the plan is of the first segment's, in tenant order.
     ///     </para>
     /// </remarks>
+    private static DocumentQueryPlan NoTablePlan(DocumentMapping mapping)
+        => new("SQLite",
+            $"No query was executed: the table {mapping.TableName.Name} does not exist yet, so the read is an empty page.")
+        {
+            RowsExamined = 0,
+            RowsReturned = 0,
+            IndexesUsed = [],
+            ScansTable = false
+        };
+
     async Task<DocumentQueryPlan?> IDocumentStoreDiagnostics.ExplainDocumentQueryAsync(string documentTypeName,
         DocumentQueryOptions options, CancellationToken token)
     {
@@ -80,7 +90,7 @@ public partial class DocumentStore
 
             if (!target.TableExists)
             {
-                return null;
+                return NoTablePlan(mapping);
             }
 
             var steps = await read.ExplainPageAsync(pageSize, skip, token).ConfigureAwait(false);
@@ -89,7 +99,7 @@ public partial class DocumentStore
 
         if (!target.TableExists)
         {
-            return null;
+            return NoTablePlan(mapping);
         }
 
         await using var connection = await target.Database.OpenConnectionAsync(token).ConfigureAwait(false);

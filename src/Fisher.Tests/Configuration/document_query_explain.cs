@@ -11,7 +11,7 @@ namespace Fisher.Tests.Configuration;
 /// <remarks>
 ///     The shared suite asserts only what every engine can say. What is Fisher's to pin is the reading of
 ///     SQLite's prose — which index a step names, and whether a step scans the document table — against a
-///     table with a declared index, and that a type with no table yet is "unknown" rather than "no scan".
+///     table with a declared index, and that a type with no table yet is a plan of nothing.
 /// </remarks>
 public class document_query_explain : IAsyncLifetime
 {
@@ -151,11 +151,11 @@ public class document_query_explain : IAsyncLifetime
     }
 
     /// <summary>
-    ///     The query answers a type with no table with an empty page and runs nothing, so there is no
-    ///     plan — and asking must not create the table.
+    ///     The query answers a type with no table with an empty page and runs nothing, so the plan is the
+    ///     contract's plan of nothing — and asking must not create the table.
     /// </summary>
     [Fact]
-    public async Task a_type_with_no_table_yet_is_unknown_and_stays_tableless()
+    public async Task a_type_with_no_table_yet_is_a_plan_of_nothing_and_stays_tableless()
     {
         using var fresh = TemporaryDatabase.Create("diag-explain-fresh");
         await using var store = DocumentStore.For(options =>
@@ -164,9 +164,13 @@ public class document_query_explain : IAsyncLifetime
             options.Schema.For<Beacon>();
         });
 
-        (await ((IDocumentStoreDiagnostics)store).ExplainDocumentQueryAsync(typeof(Beacon).FullName!,
+        var plan = (await ((IDocumentStoreDiagnostics)store).ExplainDocumentQueryAsync(typeof(Beacon).FullName!,
                 new DocumentQueryOptions(1, 10), Token))
-            .ShouldBeNull();
+            .ShouldNotBeNull();
+        plan.RowsExamined.ShouldBe(0);
+        plan.RowsReturned.ShouldBe(0);
+        plan.ScansTable.ShouldBe(false);
+        plan.PlanText.ShouldStartWith("No query was executed");
 
         await using var connection = await store.Database.OpenConnectionAsync(Token);
         await using var command = connection.CreateCommand();
