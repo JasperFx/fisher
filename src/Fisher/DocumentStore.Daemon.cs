@@ -333,6 +333,11 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     ///     The progression row names a rebuild of <paramref name="subscriptionName" /> clears: its own, and
     ///     every member's if it is a composite (fisher#402).
     /// </summary>
+    /// <remarks>
+    ///     The members come from <c>CompositeProjection.ConstituentShardNames</c> (jasperfx#1080), the one
+    ///     spelling of a member's shard identity the execution also uses — which also reaches the members
+    ///     of a nested composite, where <c>AllProjections()</c> stopped one level down.
+    /// </remarks>
     private IEnumerable<string> ProgressionNamesClearedBy(string subscriptionName)
     {
         yield return subscriptionName;
@@ -340,9 +345,9 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         var source = Options.Projections.All.FirstOrDefault(x => x.Name == subscriptionName);
         if (source is JasperFx.Events.Projections.Composite.CompositeProjection<IDocumentSession, IQuerySession> composite)
         {
-            foreach (var member in composite.AllProjections())
+            foreach (var name in composite.ConstituentShardNames().Select(x => x.Name).Distinct(StringComparer.Ordinal))
             {
-                yield return member.Name;
+                yield return name;
             }
         }
     }

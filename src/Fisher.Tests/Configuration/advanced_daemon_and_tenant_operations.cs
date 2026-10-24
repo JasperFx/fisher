@@ -212,6 +212,37 @@ public class advanced_daemon_and_tenant_operations : IAsyncLifetime
         names.ShouldHaveSingleItem().Identity.ShouldContain(nameof(TallySnapshot));
     }
 
+    /// <summary>
+    ///     jasperfx#1080's twin: a composite registers one shard, but each member writes its own progression
+    ///     row, so its members' names belong in the list too — after their composite, tagged with it and
+    ///     their stage, exactly as <c>IEventStore.RegisteredShardNames()</c> lists them.
+    /// </summary>
+    [Fact]
+    public async Task async_shard_names_include_a_composites_members()
+    {
+        await using var store = await StoreAsync(o =>
+        {
+            o.Projections.Snapshot<TallySnapshot>(SnapshotLifecycle.Async);
+            o.Projections.CompositeProjectionFor("ledger", composite =>
+            {
+                composite.Snapshot<InlineTally>();
+                composite.Snapshot<CompositeTally>(stageNumber: 2);
+            });
+        });
+
+        var names = store.Advanced.AllAsyncProjectionShardNames();
+
+        names.Select(x => x.Name).ShouldBe(
+            [nameof(TallySnapshot), "ledger", nameof(InlineTally), nameof(CompositeTally)]);
+
+        var members = names.Where(x => x.CompositeParentName == "ledger").ToArray();
+        members.Select(x => x.StageNumber).ShouldBe([1u, 2u]);
+
+        // The same list the store-agnostic surface gives, so a console and an operator agree.
+        names.Select(x => x.Identity)
+            .ShouldBe(((IEventStore)store).RegisteredShardNames().Select(x => x.Identity));
+    }
+
     // ---- RebuildSingleStreamAsync ----
 
     [Fact]
@@ -538,6 +569,14 @@ public class TallySnapshot
 }
 
 public class InlineTally
+{
+    public Guid Id { get; set; }
+    public int Members { get; set; }
+
+    public void Apply(MemberJoined joined) => Members++;
+}
+
+public class CompositeTally
 {
     public Guid Id { get; set; }
     public int Members { get; set; }

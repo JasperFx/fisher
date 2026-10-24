@@ -739,9 +739,31 @@ public class AdvancedOperations
     ///     The names <see cref="ProjectionProgressFor" /> and the daemon's rebuild overloads are
     ///     addressed by, so an operator does not have to reconstruct <c>{Name}:{ShardKey}</c> by hand.
     ///     Asynchronous only — an inline projection has no shard, because it has no progress to record.
+    ///     <para>
+    ///         <b>A composite's members are listed after it</b> (jasperfx#1080's twin): the composite
+    ///         registers one shard, but each member runs under, and writes progress as, a shard name of its
+    ///         own, tagged with <see cref="ShardName.CompositeParentName" /> and
+    ///         <see cref="ShardName.StageNumber" />. They come from
+    ///         <c>CompositeProjection.ConstituentShardNames</c>, the spelling the execution itself uses, so
+    ///         this list agrees with <c>IEventStore.RegisteredShardNames()</c> name for name.
+    ///     </para>
     /// </remarks>
     public IReadOnlyList<ShardName> AllAsyncProjectionShardNames()
-        => _store.Options.Projections.AllShards().Select(x => x.Name).ToList();
+    {
+        var names = new List<ShardName>();
+
+        foreach (var shard in _store.Options.Projections.AllShards())
+        {
+            names.Add(shard.Name);
+
+            if (shard.Factory is JasperFx.Events.Projections.Composite.CompositeProjection<IDocumentSession, IQuerySession> composite)
+            {
+                names.AddRange(composite.ConstituentShardNames(shard.Name));
+            }
+        }
+
+        return names;
+    }
 
     private Events.Daemon.FisherHighWaterDetector DetectorFor(Storage.FisherDatabase database)
         => new(database, _store.Options.EventGraph);
