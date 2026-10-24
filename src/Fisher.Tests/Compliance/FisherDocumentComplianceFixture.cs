@@ -359,6 +359,19 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
     public override bool SupportsDocumentMetadataOrdering => true;
 
     /// <summary>
+    ///     A correlation, causation or last-modified-by filter on a type that does not capture the column
+    ///     is refused through <c>DocumentQueryOptions.AssertMetadataFiltersAreCaptured</c> (jasperfx#1077)
+    ///     rather than skipped.
+    /// </summary>
+    public override bool RefusesUncapturedMetadataFilters => true;
+
+    /// <summary>
+    ///     <c>ExplainDocumentQueryAsync</c> (jasperfx#1078): SQLite's <c>EXPLAIN QUERY PLAN</c> over the
+    ///     same page statement <c>QueryDocumentsAsync</c> runs. No row counts — SQLite gives none.
+    /// </summary>
+    public override bool SupportsDocumentQueryExplain => true;
+
+    /// <summary>
     ///     The two deliberate escapes from tenant scoping — <c>AnyTenant()</c> and
     ///     <c>TenantIsOneOf(...)</c> (fisher#26).
     /// </summary>
