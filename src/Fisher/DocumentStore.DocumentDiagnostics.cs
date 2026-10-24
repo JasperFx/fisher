@@ -121,7 +121,11 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
             var rootTypeName = mapping.DocumentType.FullNameInCode();
             refs.Add(new DocumentTypeRef(rootTypeName, mapping.Alias, Options.DatabaseSchemaName)
             {
-                IsSoftDeleted = mapping.IsSoftDeleted
+                IsSoftDeleted = mapping.IsSoftDeleted,
+
+                // jasperfx#1082: the projection AggregateDocumentJsonAsync folds through. A sub-class is
+                // never a single-stream projection's aggregate, so it is set on roots only.
+                SingleStreamProjection = SingleStreamProjectionNameFor(mapping.DocumentType)
             });
 
             // A sub-class reports its ROOT's delete style (jasperfx#1070): its rows are the root's
