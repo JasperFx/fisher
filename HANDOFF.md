@@ -12,10 +12,37 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2795 tests green on net9.0 and net10.0** — 2728 in `Fisher.Tests`, 36 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 762 of
-them are shared cross-store compliance tests — 539 event sourcing and 223 document.
-On JasperFx **2.94.0** / Weasel **9.46.0**.
+**2850 tests green on net9.0 and net10.0** — 2783 in `Fisher.Tests`, 36 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 773 of
+them are shared cross-store compliance tests — 542 event sourcing and 231 document.
+On JasperFx **2.95.0** / Weasel **9.46.0**.
+
+## The JasperFx 2.95.0 bump — the CritterWatch 1.1 checklist (fisher#475), and fisher#372
+
+**No compile break: every new member is default-implemented and the three new fixture gates default off.**
+All five store-side asks are implemented, and all three gates are on:
+
+- **jasperfx#1077**: `QueryDocumentsAsync` calls the shared `AssertMetadataFiltersAreCaptured` with the root
+  mapping's flags before anything else, and the silent `column.Enabled` skip is gone.
+  `RefusesUncapturedMetadataFilters` on.
+- **jasperfx#1081**: `IndexesReported` / `DuplicatedFieldsReported` are set only once the table model built
+  and both lists were read off it; the `catch { return; }` path leaves them false. Per-type `Metadata` reports
+  real columns only (Version only with a version column, TenantId only when conjoined).
+- **jasperfx#1078**: `ExplainDocumentQueryAsync` runs `EXPLAIN QUERY PLAN` over the same page statement the
+  query builds (one shared SQL builder), no row counts, `ScansTable` only for a `SCAN` of the document table.
+  A type with no table yet is a plan of nothing, and the table is not created. `SupportsDocumentQueryExplain` on.
+- **jasperfx#1079**: `QueryStreamStatesForAllTenants()` over `fi_streams` with no tenant term on a one-file store;
+  a file-per-tenant store refuses rather than merge-sort in .NET. `StreamState.TenantId` is the row's column
+  under conjoined tenancy and the file's tenant under database-per-tenant. `SupportsAllTenantStreamStates` on
+  (the two default-tenant-disabled facts skip: Fisher cannot disable its default tenant).
+- **jasperfx#1082**: `AggregateDocumentJsonAsync` live-aggregates in the tenant's own session and renders with
+  `StoreOptions.Serializer`; `DocumentTypeRef.SingleStreamProjection` names top-level single-stream projections.
+- **jasperfx#1080 parity**: `AllAsyncProjectionShardNames()` and rebuild teardown list composite members through
+  `ConstituentShardNames`.
+- **fisher#372**: a `Contains()` over more than 1,000 values binds one JSON array (`json_each`), and an enum
+  array's `Contains()` translates on net10.0 (C# 14 binds it to the 3-argument `MemoryExtensions.Contains`).
+
+`ConjoinedEventTenancyCompliance` went from 18 to 21 and `DocumentStoreDiagnosticsCompliance` from 86 to 94.
 
 ## The JasperFx 2.94.0 bump — three CritterWatch asks implemented, one suite enrolled
 
@@ -975,8 +1002,8 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.94.0 ships 64 suites; Fisher enrolls **63 of them, 762 tests**.
-Fisher passes **762 of them, across all
+`JasperFx.Events.ComplianceTests` 2.95.0 ships 64 suites; Fisher enrolls **63 of them, 773 tests**.
+Fisher passes **773 of them, across all
 63 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
@@ -1125,9 +1152,9 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 63 suites, 762 tests
+### Green — 63 suites, 773 tests
 
-Event sourcing — 49 suites, 539 tests:
+Event sourcing — 49 suites, 542 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1148,7 +1175,7 @@ Event sourcing — 49 suites, 539 tests:
 | `StreamQueryPlanCompliance` | 13 |
 | `FetchLatestCompliance` | 12 |
 | `AlwaysEnforceConsistencyCompliance` | 11 |
-| `ConjoinedEventTenancyCompliance` | 18 |
+| `ConjoinedEventTenancyCompliance` | 21 |
 | `EventDataMaskingCompliance` | 11 |
 | `RebuildAndCatchUpCompliance` | 11 |
 | `StreamCompactingCompliance` | 13 |
@@ -1181,11 +1208,11 @@ Event sourcing — 49 suites, 539 tests:
 | `EventProjectionRegistrationCompliance` | 3 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 14 suites, 223 tests, through `FisherDocumentComplianceFixture`:
+Documents — 14 suites, 231 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
-| `DocumentStoreDiagnosticsCompliance` | 86 |
+| `DocumentStoreDiagnosticsCompliance` | 94 |
 | `SoftDeleteCompliance` | 15 |
 | `DocumentMetadataCompliance` | 5 |
 | `DocumentQueryCompliance` | 17 |

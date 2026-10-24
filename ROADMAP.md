@@ -3,13 +3,24 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **fourteen open issues: eleven are the Fisher 2.0 milestone, and the other three are not feature
-work.** The 2.0 issues are Fisher's share of the Critter Stack .NET 11 release train. Of the other three, one
-is a bug filed on the day of 1.15.0, one is an unreproduced intermittent kept open on evidence, and one is
-blocked upstream. 1.5.0 closed both of 1.4.0's
+Status: **thirteen open issues: eleven are the Fisher 2.0 milestone, and the other two are not feature
+work.** The 2.0 issues are Fisher's share of the Critter Stack .NET 11 release train. Of the other two, one
+is an unreproduced intermittent kept open on evidence, and one is blocked upstream. 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
+
+**1.24.0 implements everything JasperFx 2.95.0 added** (from 2.94.0), the CritterWatch 1.1 checklist
+[#475](https://github.com/JasperFx/fisher/issues/475), and closes [#372](https://github.com/JasperFx/fisher/issues/372).
+A metadata filter on a type that does not capture the column is refused rather than ignored (jasperfx#1077), and
+each descriptor says whether its index and duplicated-field lists are complete and which metadata its table
+captures (jasperfx#1081). `ExplainDocumentQueryAsync` runs `EXPLAIN QUERY PLAN` over the exact page statement a
+query builds (jasperfx#1078). `QueryStreamStatesForAllTenants()` reads every tenant's streams from one file, and
+`StreamState.TenantId` is populated and translatable (jasperfx#1079). `AggregateDocumentJsonAsync` rebuilds a
+projected document from its stream as Fisher would store it (jasperfx#1082). `AllAsyncProjectionShardNames()`
+lists composite members, matching the new `RegisteredShardNames()` (jasperfx#1080). A `Contains()` over more than
+1,000 values binds one JSON array instead of a parameter per value, and an enum array's `Contains()` translates on
+net10.0, where C# 14 binds it to the three-argument `MemoryExtensions.Contains`.
 
 **1.23.0 implements everything JasperFx 2.94.0 added** (from 2.93.0), the three CritterWatch asks
 jasperfx#1070, #1071 and #1073. `DocumentTypeRef.IsSoftDeleted` reports each type's delete style, with a
@@ -285,7 +296,7 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is fourteen items, eleven of them the Fisher 2.0 milestone.
+What is left is thirteen items, eleven of them the Fisher 2.0 milestone.
 
 **Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.0, Weasel 10.0, `net10.0;net11.0`):
 [#459](https://github.com/JasperFx/fisher/issues/459) build and pack targets,
@@ -298,10 +309,6 @@ adopting the lifted shared bases, [#466](https://github.com/JasperFx/fisher/issu
 [#467](https://github.com/JasperFx/fisher/issues/467) the dependency pins,
 [#468](https://github.com/JasperFx/fisher/issues/468) an Aspire hosting helper, and
 [#469](https://github.com/JasperFx/fisher/issues/469) the migration guide. None of it lands in a 1.x release.
-
-[#372](https://github.com/JasperFx/fisher/issues/372) was filed the day 1.15.0 shipped: a LINQ
-`Contains()` over more than 32,766 values exceeds SQLite's bound-variable limit and throws, where
-`LoadManyAsync` over the same ids does not.
 
 [#189](https://github.com/JasperFx/fisher/issues/189) is an unreproduced flake with 65 clean runs
 against it, and stays open on evidence rather than on work outstanding.
