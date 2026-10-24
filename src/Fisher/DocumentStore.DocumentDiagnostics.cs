@@ -148,10 +148,9 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     ///         browsing a freshly-migrated store meets this on its first click.
     ///     </para>
     ///     <para>
-    ///         The three metadata filters are honoured only where the type persists the column, and
-    ///         ignored otherwise. A filter on a disabled column is <c>no such column</c>, not an empty
-    ///         result — the same gating <c>QueryEventsAsync</c> applies on the event side, for the same
-    ///         reason.
+    ///         The three metadata filters are refused with <see cref="DocumentCriteriaNotSupportedException" />
+    ///         on a type that does not persist the column (jasperfx#1077) — they used to be ignored, which
+    ///         returned the unfiltered page as though it were the filtered one.
     ///     </para>
     ///     <para>
     ///         <see cref="DocumentQueryOptions.AllTenants" /> with a named tenant is refused before
@@ -182,8 +181,9 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
             return empty;
         }
 
-        // Refused, if it is going to be, before anything is read: whether a column can be ordered by is a
-        // fact about the type, not about whether it has rows yet.
+        // Refused, if it is going to be, before anything is read: whether a column can be filtered or
+        // ordered by is a fact about the type, not about whether it has rows yet.
+        AssertMetadataFiltersAreCaptured(mapping, queriedType, options);
         var metadataOrder = MetadataOrderFor(mapping, options);
 
         if (options.HasCriteria())
@@ -224,7 +224,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         // Ordered by id so paging is stable — a page of an unordered SELECT is not a page. The id is
         // the primary key, so this costs nothing. A metadata ordering goes in front of it (jasperfx#1058).
         var documents = await ReadStoredDocumentsAsync(connection, null, mapping, tenantId, where, bind,
-            $" order by {OrderByClause(metadataOrder)} limit $take offset $skip", command =>
+            PageTail(metadataOrder), command =>
             {
                 command.Parameters.AddWithValue("$take", pageSize);
                 command.Parameters.AddWithValue("$skip", (pageNumber - 1) * pageSize);
@@ -285,6 +285,29 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
 
         return (column, order.Descending);
     }
+
+    /// <summary>
+    ///     jasperfx#1077: a correlation, causation or last-modified-by filter on a type whose table does not
+    ///     carry the column is refused, through the shared wording every store uses.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         It used to be skipped — <see cref="DiagnosticFilter.RequestedTerms" /> gated each term on the
+    ///         column being enabled, because a term on a missing column is <c>no such column</c> — and the
+    ///         page and total that came back were the unfiltered ones, which a console renders as a filter
+    ///         that matched everything.
+    ///     </para>
+    ///     <para>
+    ///         The flags are <paramref name="mapping" />'s, which is the hierarchy ROOT's for a sub-class:
+    ///         a sub-class has no table of its own, so its columns are its root's.
+    ///     </para>
+    /// </remarks>
+    private static void AssertMetadataFiltersAreCaptured(DocumentMapping mapping, Type queriedType,
+        DocumentQueryOptions options)
+        => options.AssertMetadataFiltersAreCaptured(queriedType.FullNameInCode(),
+            mapping.Metadata.CorrelationId.Enabled,
+            mapping.Metadata.CausationId.Enabled,
+            mapping.Metadata.LastModifiedBy.Enabled);
 
     /// <summary>The hand-built reads' <c>order by</c>: the metadata key if any, then the identity.</summary>
     private static string OrderByClause((string Locator, bool Descending)? metadataOrder)
@@ -418,7 +441,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
             var offset = skip;
 
             var rows = await ReadStoredDocumentsAsync(connection, null, mapping, segment.Tenant, where, bind,
-                $" order by {OrderByClause(MetadataOrderFor(mapping, options))} limit $take offset $skip", command =>
+                PageTail(MetadataOrderFor(mapping, options)), command =>
                 {
                     command.Parameters.AddWithValue("$take", take);
                     command.Parameters.AddWithValue("$skip", offset);
@@ -685,7 +708,31 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         public async Task<List<StoredDocument>> PageAsync(int take, long skip, CancellationToken token)
         {
             var layout = new StoredRowLayout(mapping);
+            var statement = PageStatement(layout, take, skip);
 
+            await using var reader = await TranslatedAsync(() => Provider.ExecuteDiagnosticReaderAsync(statement, token))
+                .ConfigureAwait(false);
+
+            return await layout.ReadAllAsync(reader, tenantId, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        ///     SQLite's plan for exactly the statement <see cref="PageAsync" /> runs (jasperfx#1078) — the
+        ///     same builder with <see cref="Statement.Explain" /> set, so the two cannot drift apart.
+        /// </summary>
+        public async Task<List<ExplainedStep>> ExplainPageAsync(int take, long skip, CancellationToken token)
+        {
+            var statement = PageStatement(new StoredRowLayout(mapping), take, skip);
+            statement.Explain = true;
+
+            await using var reader = await TranslatedAsync(() => Provider.ExecuteDiagnosticReaderAsync(statement, token))
+                .ConfigureAwait(false);
+
+            return await ReadExplainedStepsAsync(reader, token).ConfigureAwait(false);
+        }
+
+        private Statement PageStatement(StoredRowLayout layout, int take, long skip)
+        {
             var statement = Build();
             statement.SelectColumns = layout.Columns;
 
@@ -706,10 +753,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
             statement.Limit = take;
             statement.Offset = checked((int)skip);
 
-            await using var reader = await TranslatedAsync(() => Provider.ExecuteDiagnosticReaderAsync(statement, token))
-                .ConfigureAwait(false);
-
-            return await layout.ReadAllAsync(reader, tenantId, token).ConfigureAwait(false);
+            return statement;
         }
 
         /// <summary>Build the statement and throw it away: the provider's own refusal, without a read.</summary>
@@ -1194,13 +1238,24 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
 
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = $"select {layout.Columns} from {mapping.QuotedTableName}{where}{tail}";
+        command.CommandText = StoredRowsSql(layout, mapping, where, tail);
         bindWhere(command);
         bindTail(command);
 
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         return await layout.ReadAllAsync(reader, tenantId, token).ConfigureAwait(false);
     }
+
+    /// <summary>
+    ///     The hand-built read's statement — one spelling, so <c>ExplainDocumentQueryAsync</c> explains
+    ///     exactly what <c>QueryDocumentsAsync</c> runs (jasperfx#1078).
+    /// </summary>
+    private static string StoredRowsSql(StoredRowLayout layout, DocumentMapping mapping, string where, string tail)
+        => $"select {layout.Columns} from {mapping.QuotedTableName}{where}{tail}";
+
+    /// <summary>The hand-built page read's tail: the ordering, then the page.</summary>
+    private static string PageTail((string Locator, bool Descending)? metadataOrder)
+        => $" order by {OrderByClause(metadataOrder)} limit $take offset $skip";
 
     /// <summary>
     ///     The columns a <see cref="StoredDocument" /> is read from, and the read — one definition for the
@@ -1479,8 +1534,11 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
         ///     statement predicates by the criteria read, so both reads narrow by exactly the same list.
         /// </summary>
         /// <remarks>
-        ///     A metadata filter is honoured only where the type persists the column, and ignored
-        ///     otherwise: a filter on a disabled column is <c>no such column</c>, not an empty result.
+        ///     A metadata filter on a column the type does not persist never reaches here: every read
+        ///     refuses it first (<see cref="AssertMetadataFiltersAreCaptured" />, jasperfx#1077). The terms
+        ///     are emitted unconditionally on purpose, so a read path that forgot the refusal fails with
+        ///     <c>no such column</c> rather than silently returning the unfiltered page, which is what the
+        ///     old <c>column.Enabled</c> gate here did.
         /// </remarks>
         public IEnumerable<(string Column, object Value)> RequestedTerms()
         {
@@ -1500,7 +1558,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
                          (mapping.Metadata.LastModifiedBy, LastModifiedBy)
                      })
             {
-                if (value is not null && column.Enabled)
+                if (value is not null)
                 {
                     yield return (column.Name, value);
                 }
