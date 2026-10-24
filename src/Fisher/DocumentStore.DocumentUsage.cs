@@ -131,10 +131,44 @@ public partial class DocumentStore : IDocumentStoreUsageSource
             Ddl = WriteCreateStatement(mapping, migrator)
         };
 
-        DescribeIndexesAndDuplicatedFields(mapping, descriptor);
+        DescribeIndexesAndDuplicatedFields(mapping, descriptor, () => new Storage.DocumentTable(mapping));
+        descriptor.Metadata = MetadataCapabilitiesOf(mapping);
 
         return descriptor;
     }
+
+    /// <summary>
+    ///     Which metadata columns this one type's table carries (jasperfx#1077) — the per-type answer
+    ///     <see cref="DocumentStoreUsage.DocumentMetadata" /> gives for the whole store as an
+    ///     "any mapping" roll-up.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Read off the same flags the table and the diagnostics reads are built from, so the
+    ///         descriptor cannot promise a filter <c>QueryDocumentsAsync</c> then refuses: the three opt-in
+    ///         columns are the mapping's <see cref="Storage.Metadata.MetadataColumn.Enabled" />, the
+    ///         same test <c>AssertMetadataFiltersAreCaptured</c> is called with.
+    ///     </para>
+    ///     <para>
+    ///         <see cref="DocumentMetadataCapabilities.Version" /> is a version <em>column</em> —
+    ///         <c>guid_version</c> or a numeric <c>revision</c>. A type with neither still reports a
+    ///         <see cref="JasperFx.Documents.StoredDocument.Version" />, but that one is a content hash derived on
+    ///         read, which nothing can filter or order by. <see cref="DocumentMetadataCapabilities.TenantId" />
+    ///         is a <c>tenant_id</c> column, which only a <c>MultiTenanted()</c> type has.
+    ///     </para>
+    /// </remarks>
+    internal static DocumentMetadataCapabilities MetadataCapabilitiesOf(Storage.DocumentMapping mapping)
+        => new()
+        {
+            StoreType = "Fisher",
+            Version = mapping.UseOptimisticConcurrency || mapping.UseNumericRevisions,
+            LastModified = true,
+            TenantId = mapping.IsConjoined,
+            SoftDelete = mapping.IsSoftDeleted,
+            CorrelationId = mapping.Metadata.CorrelationId.Enabled,
+            CausationId = mapping.Metadata.CausationId.Enabled,
+            LastModifiedBy = mapping.Metadata.LastModifiedBy.Enabled
+        };
 
     /// <summary>
     ///     jasperfx#870 §5 — the table's indexes and duplicated fields in structured form, so a console
@@ -156,14 +190,24 @@ public partial class DocumentStore : IDocumentStoreUsageSource
     ///         Like the DDL, a mapping whose table cannot be built reports nothing here rather than
     ///         taking the whole store's description with it.
     ///     </para>
+    ///     <para>
+    ///         <b>And it says so</b> (jasperfx#1081). <see cref="DocumentMappingDescriptor.IndexesReported" />
+    ///         and <see cref="DocumentMappingDescriptor.DuplicatedFieldsReported" /> are set only once both
+    ///         lists are complete — after the table built and every index and duplicated field was read
+    ///         off it. The early return below is exactly the "not reported" case the flags exist for: two
+    ///         empty lists there mean "unknown", where the same two empty lists from a table that built
+    ///         mean "no secondary index, nothing duplicated", which a console renders as "this filter
+    ///         reads every row". The table is a parameter so that branch can be pinned by a test, there
+    ///         being no configuration that reaches it on purpose.
+    ///     </para>
     /// </remarks>
-    private static void DescribeIndexesAndDuplicatedFields(Storage.DocumentMapping mapping,
-        DocumentMappingDescriptor descriptor)
+    internal static void DescribeIndexesAndDuplicatedFields(Storage.DocumentMapping mapping,
+        DocumentMappingDescriptor descriptor, Func<Storage.DocumentTable> buildTable)
     {
         Storage.DocumentTable table;
         try
         {
-            table = new Storage.DocumentTable(mapping);
+            table = buildTable();
         }
         catch (Exception)
         {
@@ -217,6 +261,9 @@ public partial class DocumentStore : IDocumentStoreUsageSource
                 Predicate = index.Predicate
             });
         }
+
+        descriptor.DuplicatedFieldsReported = true;
+        descriptor.IndexesReported = true;
     }
 
     /// <remarks>
