@@ -740,15 +740,24 @@ public class AdvancedOperations
     ///     addressed by, so an operator does not have to reconstruct <c>{Name}:{ShardKey}</c> by hand.
     ///     Asynchronous only — an inline projection has no shard, because it has no progress to record.
     ///     <para>
-    ///         <b>A composite's members are listed after it</b> (jasperfx#1080's twin): the composite
-    ///         registers one shard, but each member runs under, and writes progress as, a shard name of its
-    ///         own, tagged with <see cref="ShardName.CompositeParentName" /> and
-    ///         <see cref="ShardName.StageNumber" />. They come from
-    ///         <c>CompositeProjection.ConstituentShardNames</c>, the spelling the execution itself uses, so
-    ///         this list agrees with <c>IEventStore.RegisteredShardNames()</c> name for name.
+    ///         These are the shards a daemon can start, so a composite is one name here and its members are
+    ///         not listed: they run inside it. <see cref="AllAsyncProjectionShardNames(bool)" /> adds them. The
+    ///         list agrees with <c>IEventStore.RegisteredShardNames()</c> name for name. (Fisher 1.24.0 listed
+    ///         the members here, as JasperFx 2.95.0 did; both were put back in the next patch, because a
+    ///         caller starting an agent per name was refused for every member.)
     ///     </para>
     /// </remarks>
-    public IReadOnlyList<ShardName> AllAsyncProjectionShardNames()
+    public IReadOnlyList<ShardName> AllAsyncProjectionShardNames() => AllAsyncProjectionShardNames(false);
+
+    /// <summary>
+    ///     <see cref="AllAsyncProjectionShardNames()" />, optionally with each composite's members listed after
+    ///     it (jasperfx#1080's twin): the shard names each member runs under and writes progress as, tagged with
+    ///     <see cref="ShardName.CompositeParentName" /> and <see cref="ShardName.StageNumber" />. They come from
+    ///     <c>CompositeProjection.ConstituentShardNames</c>, the spelling the execution itself uses, so this
+    ///     agrees with <c>IEventStore.RegisteredShardNames(includeCompositeMembers)</c> name for name. For
+    ///     accounting for progression rows, not for starting agents.
+    /// </summary>
+    public IReadOnlyList<ShardName> AllAsyncProjectionShardNames(bool includeCompositeMembers)
     {
         var names = new List<ShardName>();
 
@@ -756,7 +765,8 @@ public class AdvancedOperations
         {
             names.Add(shard.Name);
 
-            if (shard.Factory is JasperFx.Events.Projections.Composite.CompositeProjection<IDocumentSession, IQuerySession> composite)
+            if (includeCompositeMembers
+                && shard.Factory is JasperFx.Events.Projections.Composite.CompositeProjection<IDocumentSession, IQuerySession> composite)
             {
                 names.AddRange(composite.ConstituentShardNames(shard.Name));
             }

@@ -12,10 +12,10 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2850 tests green on net9.0 and net10.0** — 2783 in `Fisher.Tests`, 36 in
+**2851 tests green on net9.0 and net10.0** — 2784 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 773 of
 them are shared cross-store compliance tests — 542 event sourcing and 231 document.
-On JasperFx **2.95.0** / Weasel **9.46.0**.
+On JasperFx **2.95.1** / Weasel **9.46.0**.
 
 ## The JasperFx 2.95.0 bump — the CritterWatch 1.1 checklist (fisher#475), and fisher#372
 
@@ -37,8 +37,10 @@ All five store-side asks are implemented, and all three gates are on:
   (the two default-tenant-disabled facts skip: Fisher cannot disable its default tenant).
 - **jasperfx#1082**: `AggregateDocumentJsonAsync` live-aggregates in the tenant's own session and renders with
   `StoreOptions.Serializer`; `DocumentTypeRef.SingleStreamProjection` names top-level single-stream projections.
-- **jasperfx#1080 parity**: `AllAsyncProjectionShardNames()` and rebuild teardown list composite members through
-  `ConstituentShardNames`.
+- **jasperfx#1080 parity**: rebuild teardown clears composite members through `ConstituentShardNames`, and
+  `AllAsyncProjectionShardNames(includeCompositeMembers: true)` lists them. The plain `AllAsyncProjectionShardNames()`
+  lists startable shards only (1.24.1; 1.24.0 listed members there, as JasperFx 2.95.0 did in
+  `RegisteredShardNames()`, and an agent per member was refused as an unknown shard).
 - **fisher#372**: a `Contains()` over more than 1,000 values binds one JSON array (`json_each`), and an enum
   array's `Contains()` translates on net10.0 (C# 14 binds it to the 3-argument `MemoryExtensions.Contains`).
 
@@ -1002,7 +1004,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.95.0 ships 64 suites; Fisher enrolls **63 of them, 773 tests**.
+`JasperFx.Events.ComplianceTests` 2.95.1 ships 64 suites; Fisher enrolls **63 of them, 773 tests**.
 Fisher passes **773 of them, across all
 63 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed

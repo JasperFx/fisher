@@ -10,6 +10,10 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
+**1.24.1 moves to JasperFx 2.95.1**, which put `RegisteredShardNames()` back to startable shards only after
+2.95.0's composite members made Wolverine start an agent per member. `AllAsyncProjectionShardNames()` follows it,
+and `AllAsyncProjectionShardNames(includeCompositeMembers: true)` keeps the members for accounting.
+
 **1.24.0 implements everything JasperFx 2.95.0 added** (from 2.94.0), the CritterWatch 1.1 checklist
 [#475](https://github.com/JasperFx/fisher/issues/475), and closes [#372](https://github.com/JasperFx/fisher/issues/372).
 A metadata filter on a type that does not capture the column is refused rather than ignored (jasperfx#1077), and

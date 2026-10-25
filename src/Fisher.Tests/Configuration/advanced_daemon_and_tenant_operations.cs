@@ -213,12 +213,12 @@ public class advanced_daemon_and_tenant_operations : IAsyncLifetime
     }
 
     /// <summary>
-    ///     jasperfx#1080's twin: a composite registers one shard, but each member writes its own progression
-    ///     row, so its members' names belong in the list too — after their composite, tagged with it and
-    ///     their stage, exactly as <c>IEventStore.RegisteredShardNames()</c> lists them.
+    ///     A composite is one startable shard: its members run inside it, and an agent started for a member alone
+    ///     is refused. So the plain list names the composite only, exactly as <c>IEventStore.RegisteredShardNames()</c>
+    ///     does (Fisher 1.24.0 and JasperFx 2.95.0 listed the members here, and Wolverine's agents broke on them).
     /// </summary>
     [Fact]
-    public async Task async_shard_names_include_a_composites_members()
+    public async Task async_shard_names_list_a_composite_as_one_shard()
     {
         await using var store = await StoreAsync(o =>
         {
@@ -232,6 +232,31 @@ public class advanced_daemon_and_tenant_operations : IAsyncLifetime
 
         var names = store.Advanced.AllAsyncProjectionShardNames();
 
+        names.Select(x => x.Name).ShouldBe([nameof(TallySnapshot), "ledger"]);
+        names.Select(x => x.Identity)
+            .ShouldBe(((IEventStore)store).RegisteredShardNames().Select(x => x.Identity));
+    }
+
+    /// <summary>
+    ///     jasperfx#1080's twin: each member writes its own progression row, so asked for them, the members are
+    ///     listed after their composite, tagged with it and their stage, exactly as
+    ///     <c>IEventStore.RegisteredShardNames(includeCompositeMembers: true)</c> lists them.
+    /// </summary>
+    [Fact]
+    public async Task async_shard_names_include_a_composites_members_when_asked()
+    {
+        await using var store = await StoreAsync(o =>
+        {
+            o.Projections.Snapshot<TallySnapshot>(SnapshotLifecycle.Async);
+            o.Projections.CompositeProjectionFor("ledger", composite =>
+            {
+                composite.Snapshot<InlineTally>();
+                composite.Snapshot<CompositeTally>(stageNumber: 2);
+            });
+        });
+
+        var names = store.Advanced.AllAsyncProjectionShardNames(includeCompositeMembers: true);
+
         names.Select(x => x.Name).ShouldBe(
             [nameof(TallySnapshot), "ledger", nameof(InlineTally), nameof(CompositeTally)]);
 
@@ -240,7 +265,7 @@ public class advanced_daemon_and_tenant_operations : IAsyncLifetime
 
         // The same list the store-agnostic surface gives, so a console and an operator agree.
         names.Select(x => x.Identity)
-            .ShouldBe(((IEventStore)store).RegisteredShardNames().Select(x => x.Identity));
+            .ShouldBe(((IEventStore)store).RegisteredShardNames(includeCompositeMembers: true).Select(x => x.Identity));
     }
 
     // ---- RebuildSingleStreamAsync ----

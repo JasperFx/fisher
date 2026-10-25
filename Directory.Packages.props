@@ -270,16 +270,16 @@
              generation, which Fisher does not do — projection dispatch is source-generated.
              jasperfx#880 is XML comments on AutoCreate. jasperfx#867 is a Wolverine codegen fix and
              jasperfx#865/#866 are the publish pipeline. -->
-        <PackageVersion Include="JasperFx" Version="2.95.0" />
-        <PackageVersion Include="JasperFx.Events" Version="2.95.0" />
+        <PackageVersion Include="JasperFx" Version="2.95.1" />
+        <PackageVersion Include="JasperFx.Events" Version="2.95.1" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.95.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.95.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.95.1" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.95.1" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.95.0" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.95.1" />
 
         <!-- Weasel 9.46.0 (from 9.42.0, spanning 9.43.0, 9.44.0, 9.45.0 and 9.45.1). JasperFx floor
              2.90.2, which Fisher already pins. Reaching Fisher:
