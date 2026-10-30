@@ -15,7 +15,7 @@ scoreboard and the things that are true right now but not obvious from either.
 **2851 tests green on net9.0 and net10.0** — 2784 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 773 of
 them are shared cross-store compliance tests — 542 event sourcing and 231 document.
-On JasperFx **2.95.1** / Weasel **9.46.0**.
+On JasperFx **2.96.1** / Weasel **9.46.0**.
 
 ## The JasperFx 2.95.0 bump — the CritterWatch 1.1 checklist (fisher#475), and fisher#372
 
@@ -1004,7 +1004,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.95.1 ships 64 suites; Fisher enrolls **63 of them, 773 tests**.
+`JasperFx.Events.ComplianceTests` 2.96.1 ships 64 suites; Fisher enrolls **63 of them, 773 tests**.
 Fisher passes **773 of them, across all
 63 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
