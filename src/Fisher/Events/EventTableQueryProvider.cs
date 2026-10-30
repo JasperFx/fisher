@@ -79,6 +79,13 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
     protected abstract TElement? Read(DbDataReader reader, FisherSession session);
 
     /// <summary>
+    ///     Materialize the current row asynchronously. Defaults to <see cref="Read" />; an element whose
+    ///     hydration can be asynchronous (an upcast event, fisher#191) overrides this instead.
+    /// </summary>
+    protected virtual ValueTask<TElement?> ReadAsync(DbDataReader reader, FisherSession session,
+        CancellationToken token) => new(Read(reader, session));
+
+    /// <summary>
     ///     Called once the caller's operators are applied, so a subclass can append a tiebreak that
     ///     makes the store's own order deterministic. A count or an existence check clears it.
     /// </summary>
@@ -123,7 +130,7 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
         {
             while (await reader.ReadAsync(token).ConfigureAwait(false))
             {
-                if (Read(reader, session) is { } element)
+                if (await ReadAsync(reader, session, token).ConfigureAwait(false) is { } element)
                 {
                     results.Add(element);
                 }
@@ -144,7 +151,7 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
         {
             if (await reader.ReadAsync(token).ConfigureAwait(false))
             {
-                result = Read(reader, session);
+                result = await ReadAsync(reader, session, token).ConfigureAwait(false);
             }
         }).ConfigureAwait(false);
 
