@@ -46,6 +46,13 @@ internal class EventMemberFactory : IMemberResolver
             nameof(IEvent.IsArchived) => new EventQueryableMember("is_archived", typeof(bool), isBoolean: true),
             nameof(IEvent.Timestamp) => Timestamp(),
 
+            // Opt-in columns: they exist only when the matching Enable* option created them, so naming one
+            // otherwise is refused by name rather than left to fail as "no such column" or match nothing.
+            nameof(IEvent.CorrelationId) => Optional("correlation_id", _graph.EventOptions.EnableCorrelationId,
+                name, "EnableCorrelationId"),
+            nameof(IEvent.CausationId) => Optional("causation_id", _graph.EventOptions.EnableCausationId,
+                name, "EnableCausationId"),
+
             // Stream identity is one column under two names, picked by the configured identity style.
             nameof(IEvent.StreamId) => Guid("stream_id"),
             nameof(IEvent.StreamKey) => Column("stream_id", typeof(string)),
@@ -53,9 +60,16 @@ internal class EventMemberFactory : IMemberResolver
             _ => throw new BadLinqExpressionException(
                 $"'IEvent.{name}' cannot be translated to a {_graph.EventsTableName} column. Supported "
                 + "members are Sequence, Id, Version, EventTypeName, DotNetTypeName, TenantId, "
-                + "IsArchived, Timestamp, StreamId and StreamKey.")
+                + "IsArchived, Timestamp, StreamId, StreamKey, CorrelationId and CausationId.")
         };
     }
+
+    private EventQueryableMember Optional(string column, bool enabled, string member, string option)
+        => enabled
+            ? Column(column, typeof(string))
+            : throw new BadLinqExpressionException(
+                $"'IEvent.{member}' cannot be queried: {_graph.EventsTableName} has no {column} column "
+                + $"because StoreOptions.Events.{option} is off.");
 
     private static EventQueryableMember Column(string column, Type memberType) => new(column, memberType);
 

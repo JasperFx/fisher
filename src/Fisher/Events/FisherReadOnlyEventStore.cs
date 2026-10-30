@@ -113,6 +113,20 @@ internal sealed class FisherReadOnlyEventStore : IReadOnlyEventStore
             "events")).CreateRoot();
 
     /// <summary>
+    ///     Every event, across all streams, as a composable <see cref="IQueryable{T}" /> over the
+    ///     <see cref="IEvent" /> envelope (jasperfx#1094). See <see cref="RawEventQueryProvider" />.
+    /// </summary>
+    /// <remarks>
+    ///     The tenant rule is <see cref="QueryStreamStates" />'s, word for word.
+    /// </remarks>
+    /// <exception cref="NotSupportedException">
+    ///     A non-null tenant on a store with no tenant dimension at all.
+    /// </exception>
+    public IQueryable<IEvent> QueryRawEvents(string? tenantId = null)
+        => new RawEventQueryProvider(_store, ScopeFor(tenantId, nameof(QueryRawEvents), "fi_events",
+            "events")).CreateRoot();
+
+    /// <summary>
     ///     The tenant a queryable member reads for: its own argument, else the tier's — refused by name on
     ///     a store with no tenant dimension, where the unscoped table would read as that tenant's (the
     ///     jasperfx#737 silently-unfiltered failure mode).
