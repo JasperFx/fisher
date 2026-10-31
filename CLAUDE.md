@@ -5161,6 +5161,11 @@ happened.
   state nobody in that session appended. Since the whole subject is that caching is unobservable except
   in latency, that is disqualifying. The write-back is deferred to the end of the unit of work, as
   Marten's is.
+- ⚠️ **The fold is bounded by the version just read** (fisher#486, the marten#5604 class). The version
+  and the events are two reads, so an append committing between them used to land in an aggregate labelled
+  with the older version. Harmless alone, since the guard refuses any append on it. With the cache enrolled
+  the write-back stored that label, and the next fetch folded the event again. `FetchManyForWriting` always
+  bounded its fold; the single fetch did not.
 - **The version stored is the one read *before* the unit of work appended anything**, which is where
   Fisher diverges from the issue's advice to take it from the committed `StreamAction`. That advice is
   for a store whose inline projection mutates the very instance `FetchForWriting` handed out; **Fisher's

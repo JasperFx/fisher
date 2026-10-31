@@ -628,10 +628,14 @@ public partial class EventOperations
         // Take-on-read is a contract requirement rather than an implementation detail: the fold below
         // mutates the instance it is handed, so exactly one caller may ever win an entry. A loser
         // simply misses and takes the uncached path, which is always correct.
+        //
+        // Bounded by the version the caller read (fisher#486). An append committing between that read and
+        // this fold would otherwise land in an aggregate labelled with the older version, and the
+        // write-back would store it, so the next fetch folds that event a second time.
         var aggregate = cache.TryTake(key, out var claimed, out var baseline) && claimed is T typed
                         && baseline > 0 && baseline <= version
-            ? await AggregateStreamAsync<T>(streamId, 0, null, typed, baseline + 1, token).ConfigureAwait(false)
-            : await AggregateStreamAsync<T>(streamId, 0, null, null, 0, token).ConfigureAwait(false);
+            ? await AggregateStreamAsync<T>(streamId, version, null, typed, baseline + 1, token).ConfigureAwait(false)
+            : await AggregateStreamAsync<T>(streamId, version, null, null, 0, token).ConfigureAwait(false);
 
         if (aggregate is not null)
         {
