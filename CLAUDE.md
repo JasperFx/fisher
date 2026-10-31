@@ -6523,6 +6523,10 @@ returning it goes from "parse JSON, build an object, serialize an object" to "co
   the marten#5029 class), not the `InvalidOperationException` `JsonElement` raises. The payload's
   shape was already checked; the per-key *bind* was not, so one way of malforming a client-supplied
   cursor produced a 400 and another a 500.
+- **`AddFisherHighWaterHealthCheck<T>()` covers a store from `AddFisherStore<T>`** (fisher#492, marten#5705).
+  It keeps its settings and readings on the registration rather than in the container, so it can sit beside
+  the primary store's check. The check reads databases through `Tenancy` because a marker store arrives as
+  a `DispatchProxy`, which is not an `IEventStore`.
 - **MCP endpoints are deliberately not ported.** That surface is moving upstream, and porting it
   speculatively would mean maintaining a copy of something about to change.
 - Tested against a `DefaultHttpContext` with a `MemoryStream` body rather than through a test host: an

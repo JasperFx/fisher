@@ -83,6 +83,34 @@ public static class HighWaterHealthCheckExtensions
             tags: ["Fisher", "AsyncDaemon", "HighWater"]);
     }
 
+    /// <summary>
+    ///     Register the high-water health check for a store registered with
+    ///     <c>AddFisherStore&lt;T&gt;()</c> (fisher#492, marten#5705).
+    /// </summary>
+    /// <remarks>
+    ///     A second store is usually a second file with a daemon of its own, so its mark is a separate
+    ///     thing to watch. The settings and the readings belong to this registration, and its name carries
+    ///     the store's, so it can sit beside the primary store's check.
+    /// </remarks>
+    /// <inheritdoc cref="AddFisherHighWaterHealthCheck(IHealthChecksBuilder, TimeSpan?, long)" />
+    public static IHealthChecksBuilder AddFisherHighWaterHealthCheck<T>(this IHealthChecksBuilder builder,
+        TimeSpan? staleThreshold = null, long minimumGap = 1) where T : class, IDocumentStore
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        var settings = new HighWaterHealthCheckSettings(staleThreshold ?? TimeSpan.FromSeconds(30), minimumGap);
+        var tracker = new HighWaterStateTracker();
+
+        builder.Services.TryAddSingleton(TimeProvider.System);
+
+        return builder.Add(new HealthCheckRegistration(
+            $"{nameof(HighWaterHealthCheck)}:{typeof(T).Name}",
+            services => new HighWaterHealthCheck(services.GetRequiredService<T>(), settings,
+                services.GetRequiredService<TimeProvider>(), tracker),
+            failureStatus: null,
+            tags: ["Fisher", "AsyncDaemon", "HighWater"]));
+    }
+
     /// <summary>How the check decides a mark is stale.</summary>
     public sealed record HighWaterHealthCheckSettings(TimeSpan StaleThreshold, long MinimumGap);
 
@@ -144,9 +172,14 @@ public static class HighWaterHealthCheckExtensions
                         $"The async daemon mode is {mode}; this store does not advance the high-water mark.");
                 }
 
-                var databases = await ((IEventStore)_store).AllDatabases().ConfigureAwait(false);
+                // Through the tenancy rather than IEventStore, which is implemented explicitly and so is
+                // not on the proxy an ancillary store arrives as.
+                if (_store.Tenancy is DynamicTenancy tenancy)
+                {
+                    await tenancy.RefreshAsync(cancellationToken).ConfigureAwait(false);
+                }
 
-                foreach (var database in databases)
+                foreach (var database in _store.Tenancy.AllDatabases())
                 {
                     var result = await CheckAsync(database, cancellationToken).ConfigureAwait(false);
 
