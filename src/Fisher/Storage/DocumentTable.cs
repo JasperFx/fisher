@@ -127,12 +127,16 @@ internal class DocumentTable : Table
 
             var referenced = mapping.StoreOptions.Schema.MappingFor(declared.ReferencedType);
 
+            declared.AssertTenancyAgrees(mapping, referenced);
+
             ForeignKeys.Add(new Weasel.Sqlite.Tables.ForeignKey(
                 $"fkey_{Identifier.Name}_{field.ColumnName}")
             {
-                ColumnNames = [field.ColumnName],
+                // Composite between conjoined types, in the order of the referenced primary key. That
+                // is also what stops a child pointing at another tenant's row.
+                ColumnNames = referenced.IsConjoined ? ["tenant_id", field.ColumnName] : [field.ColumnName],
                 LinkedTable = referenced.TableName,
-                LinkedNames = ["id"],
+                LinkedNames = referenced.IsConjoined ? ["tenant_id", "id"] : ["id"],
                 OnDelete = declared.OnDelete
             });
         }

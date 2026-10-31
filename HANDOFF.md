@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2923 tests green on net9.0 and net10.0** — 2856 in `Fisher.Tests`, 36 in
+**2933 tests green on net9.0 and net10.0** — 2866 in `Fisher.Tests`, 36 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 773 of
 them are shared cross-store compliance tests — 542 event sourcing and 231 document.
 On JasperFx **2.97.0** / Weasel **9.47.1**.

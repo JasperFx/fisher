@@ -94,3 +94,24 @@ exists means **recreating the table**. Weasel reports that rather than attemptin
 `SetNull` against a **generated** column cannot write the column — the value lives in `data`. Prefer
 `Cascade` or `NoAction`, and handle the null-out in your own code if you need it.
 :::
+
+## Multi-tenanted documents
+
+A `MultiTenanted()` table is keyed by `(tenant_id, id)`, so a key between two of them includes the tenant:
+
+```cs
+options.Schema.For<Warehouse>().MultiTenanted();
+options.Schema.For<Pallet>().MultiTenanted().ForeignKey<Warehouse>(x => x.WarehouseId);
+```
+
+A child can only reference a parent in its own tenant, two tenants can use the same parent id, and a
+cascade stays inside the tenant that deleted the parent.
+
+| Parent | Child | |
+| :--- | :--- | :--- |
+| `MultiTenanted()` | `MultiTenanted()` | The key is composite on the tenant |
+| Single-tenant | `MultiTenanted()` | Every tenant shares the parent |
+| `MultiTenanted()` | Single-tenant | Refused when the store is built: the child has no tenant to reference |
+
+`SetNull` and `SetDefault` are refused between two `MultiTenanted()` types too, because they would clear
+`tenant_id` along with the key.

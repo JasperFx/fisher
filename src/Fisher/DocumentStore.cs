@@ -75,6 +75,7 @@ public partial class DocumentStore : IDocumentStore
         // that mattered — a document type Fisher cannot store is a configuration-time error naming the
         // type, rather than an InvalidOperationException on somebody's first save.
         options.Schema.AssertEveryMappingHasIdentity();
+        options.Schema.AssertForeignKeysCanBeEnforced();
 
         // fisher#356. The serializer is final here too — ConfigureSerialization replaces it wholesale —
         // and nothing has serialized a document yet.

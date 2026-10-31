@@ -2880,6 +2880,11 @@ discovered the hard way, and it means a document foreign key bites the moment it
   dropped table.
 - **A self-reference is refused at configuration time.** Not because SQLite minds, but because the only
   shape that wants one (a tree) has no insert order that satisfies the constraint for its own root.
+- ⚠️ **Between two `MultiTenanted()` types the key is composite on `tenant_id`** (fisher#488). A conjoined
+  table's primary key is `(tenant_id, id)`, so `id` alone is not a key. SQLite accepted the DDL and every
+  write failed with `foreign key mismatch`, far from the configuration line. The composite key also stops a
+  child referencing another tenant's row. A conjoined parent with a single-tenant child has no sound key and
+  is refused in `DocumentStore`'s constructor, as is `SetNull`, which would clear `tenant_id` too.
 
 Adding a foreign key to a type whose table already exists means recreating the table: SQLite has no
 `ALTER TABLE ADD CONSTRAINT`, and Weasel reports that rather than attempting it.
