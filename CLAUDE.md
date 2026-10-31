@@ -4272,6 +4272,20 @@ cached database is evicted and disposed.
   `ForgetTenantAsync`'s async path is only that a pooled connection's close is not awaited, and
   clearing the pool leaves a checked-out connection working either way (fisher#59).
 
+⚠️ **A revocation made in another process arrives on the next refresh** (fisher#487, marten#5629).
+`OnTenantRevoked` only ever fired where the call was made, and `DatabaseFor` answers from its cache first, so
+a tenant suspended elsewhere kept resolving, and kept its daemon, until that process restarted. All the
+while `RefreshAsync`'s own remarks promised that case worked. `MasterTableTenantSource.AllAsync` now revokes
+everything the table no longer offers, so the daemon's tenant poll converges every process on the table.
+
+- **A removed row is held in `_removed`, and not evicted from the base's cache**, because the base can only
+  evict by deleting the row, which could delete a tenant another process has just re-added.
+- **The poll retires a revoked tenant's daemon.** It was projecting through a disposed data source, in the
+  process that made the call as well. The same pass that starts new tenants' daemons stops these, and a
+  tenant that comes back gets a new one.
+- Marten ruled the same cross-node convergence a CritterWatch feature. Fisher's is smaller, since a registry
+  refresh is a local file read and the poll already exists.
+
 ### Releasing pooled connections
 
 `FisherDatabase.ReleasePooledConnections` and `DynamicTenancy.ForgetTenantAsync` (fisher#59).

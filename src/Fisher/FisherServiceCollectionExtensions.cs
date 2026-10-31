@@ -1244,6 +1244,13 @@ internal class FisherDaemonHostedService : IProjectionCoordinator, IDisposable
         // the property JasperFx's own coordinator base establishes, and the one ResumeAsync rests on.
         await StopPollingAsync().ConfigureAwait(false);
 
+        // Ahead of the restart below, or a resume would start agents over a tenant's disposed database.
+        if (_store.Tenancy is Storage.DynamicTenancy tenancy)
+        {
+            await tenancy.RefreshAsync(cancellationToken).ConfigureAwait(false);
+            await StopDaemonsOfRevokedTenantsAsync().ConfigureAwait(false);
+        }
+
         // Agents on daemons this instance already holds, which is what a resume after PauseAsync
         // needs: StartAnyNewDaemonsAsync skips a database already in _running, so on its own it would
         // resume nothing at all.
@@ -1376,14 +1383,16 @@ internal class FisherDaemonHostedService : IProjectionCoordinator, IDisposable
 
     private async Task StartAnyNewDaemonsAsync()
     {
-        foreach (var daemon in await _store.BuildProjectionDaemonsAsync(_logger).ConfigureAwait(false))
+        var current = await _store.BuildProjectionDaemonsAsync(_logger).ConfigureAwait(false);
+
+        await StopDaemonsOfRevokedTenantsAsync().ConfigureAwait(false);
+
+        foreach (var daemon in current)
         {
             // Keyed by database, because starting a second daemon over one file is two writers
             // contending for one write lock and two shards replaying the same range. The database is
             // on the concrete daemon rather than on IProjectionDaemon, hence the cast.
-            var identifier = ((Events.Daemon.FisherProjectionDaemon)daemon).Database.Identifier;
-
-            if (!_running.Add(identifier))
+            if (!_running.Add(IdentifierOf(daemon)))
             {
                 daemon.Dispose();
                 continue;
@@ -1393,6 +1402,39 @@ internal class FisherDaemonHostedService : IProjectionCoordinator, IDisposable
             await daemon.StartAllAsync().ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    ///     A tenant that was suspended or removed has lost its database, so a daemon still running over it
+    ///     is projecting through a disposed data source (fisher#487). The same poll that finds new tenants
+    ///     retires these, and a tenant that comes back gets a new daemon.
+    /// </summary>
+    private async Task StopDaemonsOfRevokedTenantsAsync()
+    {
+        var databases = _store.Tenancy.AllDatabases().Select(x => x.Identifier)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var daemon in _daemons.Where(x => !databases.Contains(IdentifierOf(x))).ToList())
+        {
+            _daemons.Remove(daemon);
+            _running.Remove(IdentifierOf(daemon));
+
+            try
+            {
+                await daemon.StopAllAsync().ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                // Its database is gone, so a failed stop is unsurprising, and it must not cost the
+                // other tenants' daemons this poll.
+                _logger.LogWarning(e, "Fisher could not cleanly stop the daemon of a revoked tenant.");
+            }
+
+            daemon.Dispose();
+        }
+    }
+
+    private static string IdentifierOf(IProjectionDaemon daemon)
+        => ((Events.Daemon.FisherProjectionDaemon)daemon).Database.Identifier;
 
     private async Task PollForNewTenantsAsync(CancellationToken token)
     {
