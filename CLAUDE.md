@@ -1713,6 +1713,11 @@ revert a `Select` of a `Uri` to a whole-document read.
   not `Flashing`), which is why `Enum.Parse` would be the wrong fix.
 - `serializer_shaped_projections` asserts equality with the **whole-document load** rather than with a
   literal, because agreement between those two paths is the property the fix provides.
+- **An object or array member was the same bug one branch over** (fisher#489). `json_extract` returns those
+  as JSON text, and the quoting above turned that into a JSON string no object can be built from, so
+  `Select(x => x.Address)` and `new { x.Id, x.Tags }` threw `JsonException`. They go to the serializer as
+  they are now. The decision reads the text as well as the target, because a type with a string converter
+  is a non-scalar target stored as a JSON string. Found through a Native AOT probe and not AOT-specific.
 
 ### LINQ joins
 

@@ -1079,9 +1079,17 @@ public partial class FisherQueryProvider : IQueryProvider
     ///     from — a TEXT value as a JSON string, a number as a JSON number.
     /// </summary>
     /// <remarks>
-    ///     <c>json_extract</c> unquotes a JSON string on the way out, so the quotes are put back before the
-    ///     serializer sees it; <see cref="System.Text.Json.JsonEncodedText" /> does the escaping, so a
-    ///     value containing a quote or a backslash round-trips.
+    ///     <para>
+    ///         <c>json_extract</c> unquotes a JSON string on the way out, so the quotes are put back before
+    ///         the serializer sees it; <see cref="System.Text.Json.JsonEncodedText" /> does the escaping, so
+    ///         a value containing a quote or a backslash round-trips.
+    ///     </para>
+    ///     <para>
+    ///         An object or an array comes back as its own JSON text, so that goes to the serializer as it
+    ///         is (fisher#489). Quoted, it is a JSON string no object can be built from. The target alone
+    ///         cannot decide this, because a type with a string converter is a non-scalar target stored as
+    ///         a JSON string, and the text is what tells the two apart.
+    ///     </para>
     /// </remarks>
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
         Justification =
@@ -1092,6 +1100,7 @@ public partial class FisherQueryProvider : IQueryProvider
     {
         var json = raw switch
         {
+            string text when IsJsonContainer(text, target) => text,
             string text => $"\"{System.Text.Json.JsonEncodedText.Encode(text)}\"",
             IFormattable number => number.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
             _ => raw.ToString() ?? "null"
@@ -1099,6 +1108,9 @@ public partial class FisherQueryProvider : IQueryProvider
 
         return _session.Options.Serializer.FromJson(target, json);
     }
+
+    private static bool IsJsonContainer(string text, Type target)
+        => text is ['{' or '[', ..] && !ScalarMemberAccess.IsScalar(target);
 
     /// <summary>
     ///     Rebuilds a paged statement as <c>select count(*) from (…) </c> so the count applies to the
