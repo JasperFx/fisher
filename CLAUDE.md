@@ -6007,6 +6007,13 @@ learns from the trailing sequence read-back in `FisherQuickAppendEventsOperation
 nothing to write until the appends postprocess. Committing separately would leave an event visible
 but untagged, and to a tag query that is indistinguishable from an event that was never tagged.
 
+⚠️ **Archived events are out of every tag read** (fisher#485, marten#5677): `QueryByTagsAsync`,
+`EventsExistAsync`, `AggregateByTagsAsync`, `FetchForWritingByTags` and the boundary check at commit. All
+of them render through `AppendConditions`, so that is the one place the term lives. They used to see
+archived events while every other event read did not, so a retired stream could still block or satisfy a
+boundary. Marten's master still has the old answer: its issue was auto-closed by an unrelated commit and
+has been reopened.
+
 Query shape: each condition is a `seq_id in (select seq_id from <tag table> where value = ?)`
 subselect, OR'd. **Subselects rather than joins**, because joining several tag tables multiplies rows
 when one event carries two matching tags and the caller expects each event once. Ordering is by

@@ -316,6 +316,9 @@ public partial class EventOperations
             sql.Append(')');
         }
 
-        sql.Append(')');
+        // Here rather than per caller, so the read, the existence check and the boundary guard cannot
+        // disagree. Archiving is how an application retires a stream, and every other event read leaves
+        // those events out (fisher#485, marten#5677).
+        sql.Append(") and is_archived = 0");
     }
 }
