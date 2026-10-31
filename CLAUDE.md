@@ -5650,6 +5650,18 @@ Six SQLite decisions that are easy to get wrong and fail silently:
     three decimal-binding paths were correct and documented while the one a caller reaches first was
     not; that is the shape rather than the exception.
 
+**A member below a scalar is translated or refused, never rendered as a path** (fisher#483, near
+marten#5556). `ScalarMemberAccess` is where. There is nothing below one JSON value for a path to reach, so
+`$.count.value` was valid SQL yielding NULL: a `Where` matched nothing, a `Select` returned the type's
+default and an `OrderBy` did not order, all silently. `Nullable<T>.Value` resolves to the member,
+`HasValue` and `string.Length` translate wherever a member can appear, and `Year`/`Month`/`Day`/`Hour`/
+`Minute`/`Second` read the stored text with `substr`.
+- ⚠️ **`substr` and not `strftime`**, which is what the fix first looks like. `strftime` folds to UTC, and
+  .NET's `DateTimeOffset.Year` is the year at the value's own offset, so 23:30 at -02:00 on New Year's Eve
+  lands in the wrong year. The input is `RawLocator` because a duplicated column holds the UTC form.
+- `.Date`, `DayOfWeek`, every `TimeSpan` member and anything else is refused by name. `CriteriaShapeRules`
+  lost its date and `Nullable.Value` rules with this, since an honest refusal reaches a console on its own.
+
 The provider takes both the column list and the materializer from the **query-only** closed-shape
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,
 which is what keeps the query path's read layout aligned with `LoadAsync`'s.

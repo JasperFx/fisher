@@ -377,14 +377,25 @@ public class document_diagnostics_criteria : IAsyncLifetime
             new DocumentQueryOptions(1, 100) { Where = where, Arguments = arguments }, Token);
 
     [Theory]
-    [InlineData("PlacedAt.Year = 2026")]
-    [InlineData("DueDate.Month = 3")]
-    [InlineData("ShipBy.Day = 25")]
-    [InlineData("Cutoff.Hour = 9")]
-    [InlineData("Window.TotalHours > 2")]
-    public async Task a_part_of_a_date_or_time_is_refused(string where)
+    [InlineData("PlacedAt.Year = 2026", 2026)]
+    [InlineData("DueDate.Month = 3", 3)]
+    public async Task a_date_part_answers(string where, int part)
     {
-        var refused = await Should.ThrowAsync<DocumentCriteriaNotSupportedException>(() => WhereAsync(where));
+        var expected = where.StartsWith("PlacedAt")
+            ? _orders.Count(x => x.PlacedAt.Year == part)
+            : _orders.Count(x => x.DueDate.Month == part);
+
+        (await WhereAsync(where)).TotalCount.ShouldBe(expected);
+    }
+
+    [Theory]
+    [InlineData("PlacedAt.Date = @0")]
+    [InlineData("Window.TotalHours > 2")]
+    [InlineData("Window.Hours = 2")]
+    public async Task a_part_of_a_date_or_time_the_provider_cannot_translate_is_refused(string where)
+    {
+        var refused = await Should.ThrowAsync<DocumentCriteriaNotSupportedException>(
+            () => WhereAsync(where, new DateTime(2026, 3, 15)));
 
         refused.Criterion.ShouldBe(nameof(DocumentQueryOptions.Where));
         refused.Message.ShouldContain("Compare the whole value against a range");
@@ -400,11 +411,9 @@ public class document_diagnostics_criteria : IAsyncLifetime
     }
 
     [Fact]
-    public async Task value_off_a_nullable_member_is_refused_and_the_member_itself_works()
+    public async Task value_off_a_nullable_member_answers_as_the_member_itself()
     {
-        var refused = await Should.ThrowAsync<DocumentCriteriaNotSupportedException>(() => WhereAsync("Discount.Value > 5"));
-        refused.Message.ShouldContain("Compare the member itself");
-
+        (await WhereAsync("Discount.Value > 5")).TotalCount.ShouldBe(_orders.Count(x => x.Discount > 5));
         (await WhereAsync("Discount > 5")).TotalCount.ShouldBe(_orders.Count(x => x.Discount > 5));
         (await WhereAsync("Discount.HasValue")).TotalCount.ShouldBe(_orders.Count(x => x.Discount.HasValue));
     }

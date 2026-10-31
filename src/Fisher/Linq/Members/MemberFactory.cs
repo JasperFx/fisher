@@ -162,6 +162,21 @@ internal class MemberFactory : IMemberResolver
             };
         }
 
+        if (expression.Expression is MemberExpression owner)
+        {
+            // Nullable<T>.Value is the member itself: the JSON holds the value or nothing.
+            if (expression.Member.Name == nameof(Nullable<int>.Value)
+                && Nullable.GetUnderlyingType(owner.Type) is not null)
+            {
+                return ResolveMember(owner);
+            }
+
+            if (ScalarMemberAccess.IsScalar(owner.Type))
+            {
+                return ScalarMemberAccess.Resolve(expression, ResolveMember(owner));
+            }
+        }
+
         return ResolveMember(ChainOf(expression));
     }
 
