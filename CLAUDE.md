@@ -4756,6 +4756,13 @@ JasperFx 2.93 added `IDocumentStoreDiagnosticsWriter.UndeleteDocumentAsync` (jas
 - ⚠️ **A soft-deleted row's content-hash version folds in `deleted_at`.** A soft delete moves neither
   `last_modified` nor `data`, so the hash used to ignore deletes entirely: a console holding a live row's
   version could save over a deletion it never saw. Live rows hash exactly as before.
+- ⚠️ **The restore moves `last_modified` strictly forward** (fisher#507). Every input to that hash has
+  millisecond precision, and SQLite in WAL commits in microseconds, so a restore and re-delete inside the
+  millisecond of the original write and delete reproduced the old token and a stale version was accepted.
+  That was a real lost update, and it surfaced as
+  `undelete_with_a_stale_version_is_refused_and_stays_deleted` failing about a third of the time.
+  `undelete_moves_the_version` plants a future timestamp, so the old code fails every run rather than
+  sometimes.
 - **`OrderByMetadata` goes in front of the id on the hand-built reads and at index 0 of the criteria
   statement's `OrderBys`**, so a given `OrderBy` breaks its ties and the id breaks the rest; the all-tenants
   segments are still ordered by tenant first. `LastModified` always, `Created` where `created_at` is
