@@ -356,3 +356,24 @@ lists now exists here, so a ported query compiles — though several mean someth
 Compiled queries (`ICompiledQuery<T>`) remain absent, on a
 [measurement](https://github.com/JasperFx/fisher/issues/195) rather than by omission — building the
 SQL is 4–11% of an ordinary Fisher query, so the absolute saving is around 2 µs.
+
+## Nullable members and date parts
+
+A member read off a stored value works in `Where`, `OrderBy`, `Select` and `GroupBy`:
+
+```csharp
+.Where(x => x.Quantity.Value > 2)     // the same as x.Quantity > 2
+.Where(x => x.PlacedAt.Year == 2026)
+.GroupBy(x => x.PlacedAt.Year)
+```
+
+`Year`, `Month`, `Day`, `Hour`, `Minute` and `Second` are read at the value's own offset, which is what
+.NET means by them: 23:30 at `-02:00` on New Year's Eve is still the old year, even though it is the
+next one in UTC.
+
+Anything else below a stored value, such as `.Date`, `DayOfWeek` or a `TimeSpan`'s `TotalHours`, is refused
+with a `BadLinqExpressionException`. Compare the whole value against a range instead:
+
+```csharp
+.Where(x => x.PlacedAt >= start && x.PlacedAt < end)
+```
