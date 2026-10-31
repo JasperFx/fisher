@@ -45,6 +45,14 @@ internal static class SqliteTimestamp
     public const string NowDefaultExpression = "(" + NowExpression + ")";
 
     /// <summary>
+    ///     SQL expression for a time strictly after what <paramref name="column" /> holds: now, or one
+    ///     millisecond past it when now has not yet moved on. For an update whose whole point is that the
+    ///     row visibly changed, which at this precision "now" alone cannot promise (fisher#507).
+    /// </summary>
+    public static string StrictlyAfter(string column)
+        => $"max({NowExpression}, strftime('%Y-%m-%dT%H:%M:%fZ', {column}, '+0.001 seconds'))";
+
+    /// <summary>
     ///     Render a timestamp for binding to a TEXT column.
     /// </summary>
     public static string ToDatabaseValue(DateTimeOffset value)

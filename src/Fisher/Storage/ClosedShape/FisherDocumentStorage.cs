@@ -411,6 +411,12 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
     ///         version binder writes, so the statement binds exactly the id-then-tenant slots
     ///         <see cref="DocumentByIdCommand{TDoc,TId}" /> knows how to fill.
     ///     </para>
+    ///     <para>
+    ///         ⚠️ <b><c>last_modified</c> has to move strictly forward</b> (fisher#507). A type with no
+    ///         version column gets a content hash at millisecond precision, so a restore and a re-delete
+    ///         inside the millisecond of the original write and delete reproduced the old token, and a
+    ///         stale expected version was accepted.
+    ///     </para>
     /// </remarks>
     public Weasel.Storage.IStorageOperation? RestoreForId(object id, string tenantId)
     {
@@ -421,7 +427,7 @@ internal abstract class FisherDocumentStorage<TDoc, TId> : IDocumentStorage<TDoc
 
         var metadata = _mapping.Metadata;
         var sql = SoftDelete.ClearDeletedSql(_mapping.QuotedTableName)
-                  + $", {metadata.LastModified.Name} = {SqliteTimestamp.NowExpression}";
+                  + $", {metadata.LastModified.Name} = {SqliteTimestamp.StrictlyAfter(metadata.LastModified.Name)}";
 
         if (_mapping.UseOptimisticConcurrency)
         {
