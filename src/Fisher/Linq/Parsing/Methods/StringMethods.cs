@@ -205,6 +205,13 @@ internal class StringEquals : IMethodCallParser
 /// </summary>
 internal class StringIsNullOrEmpty : IMethodCallParser
 {
+    /// <summary>
+    ///     Every character <see cref="char.IsWhiteSpace(char)" /> accepts, as a SQL expression.
+    ///     <c>a_value_of_any_white_space_character_matches</c> walks all of <see cref="char" /> against it.
+    /// </summary>
+    private const string WhiteSpaceCharacters =
+        "char(9,10,11,12,13,32,133,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288)";
+
     public bool Matches(MethodCallExpression expression)
         => expression.Method.Name is "IsNullOrEmpty" or "IsNullOrWhiteSpace"
            && expression.Method.DeclaringType == typeof(string)
@@ -220,9 +227,11 @@ internal class StringIsNullOrEmpty : IMethodCallParser
 
         var member = memberFactory.ResolveMember(memberExpression);
 
-        // IsNullOrWhiteSpace additionally folds away surrounding whitespace, which trim() does.
+        // IsNullOrWhiteSpace additionally folds away surrounding whitespace. SQLite's one-argument trim()
+        // strips spaces and nothing else, so a value holding only tabs or line breaks would count as
+        // having content (fisher#484, marten#5759). The set is spelled out to mean what the method means.
         var locator = expression.Method.Name == "IsNullOrWhiteSpace"
-            ? $"trim({member.RawLocator})"
+            ? $"trim({member.RawLocator}, {WhiteSpaceCharacters})"
             : member.RawLocator;
 
         return new WhereFragment($"({locator} is null or {locator} = '')");

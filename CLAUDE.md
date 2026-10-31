@@ -5587,6 +5587,9 @@ Six SQLite decisions that are easy to get wrong and fail silently:
   where `== "frodo"` does not — a query surface contradicting itself, and not what .NET's ordinal
   `string.Contains` means. `_` and `%` are also `LIKE` wildcards needing an `ESCAPE` clause (Polecat's
   `[_]` bracket form is T-SQL-only) — the same trap as the document cleaner's table matching.
+  **`trim()` has the same shape of trap** (fisher#484, marten#5759): with one argument SQLite strips spaces
+  and nothing else, so `string.IsNullOrWhiteSpace` spells out every character `char.IsWhiteSpace` accepts,
+  and `white_space_predicates` walks all of `char` against that list in both directions.
 - **Paging is `limit m offset n`.** `TOP(n)` and `OFFSET … FETCH NEXT` collapse to one form; T-SQL's
   `ORDER BY (SELECT NULL)` filler is not emitted because SQLite does not need it and it would impose a
   sort nobody asked for. An offset with no limit must say `limit -1` first — a bare `offset` is a
