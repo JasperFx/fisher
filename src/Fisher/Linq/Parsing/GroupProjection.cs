@@ -1,6 +1,8 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using Fisher.Linq.Members;
 using Fisher.Linq.SqlGeneration;
+using Weasel.Core;
 using Weasel.Core.SqlGeneration;
 
 namespace Fisher.Linq.Parsing;
@@ -28,11 +30,13 @@ namespace Fisher.Linq.Parsing;
 /// </remarks>
 internal sealed class GroupProjection
 {
-    private GroupProjection(string[] columns, Type[] columnTypes, Func<object?[], object?> build)
+    private GroupProjection(string[] columns, Type[] columnTypes, Func<object?[], object?> build,
+        ISqlFragment? selectFragment)
     {
         Columns = columns;
         ColumnTypes = columnTypes;
         Build = build;
+        SelectFragment = selectFragment;
     }
 
     /// <summary>The SQL expressions to select, in order — the key and the aggregates.</summary>
@@ -41,6 +45,11 @@ internal sealed class GroupProjection
     public Type[] ColumnTypes { get; }
 
     public Func<object?[], object?> Build { get; }
+
+    /// <summary>
+    ///     The select list when a column binds a value, which a plain string cannot carry. Null otherwise.
+    /// </summary>
+    public ISqlFragment? SelectFragment { get; }
 
     public static GroupProjection For(LambdaExpression selector, GroupingTranslator translator)
     {
@@ -56,8 +65,12 @@ internal sealed class GroupProjection
         var lambda = Expression.Lambda<Func<object?[], object?>>(
             Expression.Convert(body, typeof(object)), collector.Values);
 
+        var selectFragment = collector.Fragments.Any(x => x is not null)
+            ? new GroupedSelect(collector.Columns, collector.Fragments)
+            : null;
+
         return new GroupProjection(collector.Columns.ToArray(), collector.ColumnTypes.ToArray(),
-            lambda.Compile());
+            lambda.Compile(), selectFragment);
     }
 
     private sealed class Collector : ExpressionVisitor
@@ -78,17 +91,41 @@ internal sealed class GroupProjection
 
         public List<Type> ColumnTypes { get; } = [];
 
+        public List<ISqlFragment?> Fragments { get; } = [];
+
         public override Expression? Visit(Expression? node)
         {
             if (node is not null && _translator.TryTranslate(node, _group, out var sql))
             {
-                return Capture(sql, node.Type);
+                return Capture(sql, node.Type, null);
+            }
+
+            if (node is not null && _translator.TryTranslateFilteredCount(node, _group, out var count))
+            {
+                return Capture(node.ToString(), node.Type, count);
             }
 
             return base.Visit(node);
         }
 
-        private Expression Capture(string sql, Type type)
+        /// <summary>
+        ///     A call the translator declined would otherwise reach <c>Compile()</c> still naming the
+        ///     group, whose error says nothing about the query.
+        /// </summary>
+        protected override Expression VisitMethodCall(MethodCallExpression node)
+            => node.Arguments.Count > 0 && node.Arguments[0] == _group
+                ? throw Refused($"'{node.Method.Name}'")
+                : base.VisitMethodCall(node);
+
+        protected override Expression VisitParameter(ParameterExpression node)
+            => node == _group ? throw Refused("The group itself") : base.VisitParameter(node);
+
+        private static BadLinqExpressionException Refused(string what)
+            => new($"{what} cannot be used in a Select over a GroupBy. GROUP BY has collapsed the rows, so only "
+                   + "g.Key and the aggregates over the group can be read: Count, LongCount, Sum, Min, Max and "
+                   + "Average.");
+
+        private Expression Capture(string sql, Type type, ISqlFragment? fragment)
         {
             if (!_indexes.TryGetValue(sql, out var index))
             {
@@ -96,10 +133,67 @@ internal sealed class GroupProjection
                 _indexes[sql] = index;
                 Columns.Add(sql);
                 ColumnTypes.Add(type);
+                Fragments.Add(fragment);
             }
 
             return Expression.Convert(Expression.ArrayIndex(Values, Expression.Constant(index)), type);
         }
+    }
+
+    /// <summary>The select list, for a query with a column that binds a value.</summary>
+    private sealed class GroupedSelect(List<string> columns, List<ISqlFragment?> fragments) : ISqlFragment
+    {
+        public void Apply(ICommandBuilder builder)
+        {
+            for (var i = 0; i < columns.Count; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append(", ");
+                }
+
+                if (fragments[i] is { } fragment)
+                {
+                    fragment.Apply(builder);
+                }
+                else
+                {
+                    builder.Append(columns[i]);
+                }
+            }
+        }
+    }
+}
+
+/// <summary>
+///     <c>g.Count(x =&gt; …)</c>: <c>count(*) filter (where …)</c>, over the fragment the predicate
+///     parsed to.
+/// </summary>
+/// <remarks>
+///     A fragment and not a string, unlike every other grouped column, because the predicate can bind
+///     values. Inlining them would put a caller's value in SQL text, which is why
+///     <c>LiteralRenderingCommandBuilder</c> is confined to DDL.
+/// </remarks>
+internal sealed class FilteredCount(ISqlFragment predicate) : ISqlFragment
+{
+    public void Apply(ICommandBuilder builder)
+    {
+        builder.Append("count(*) filter (where ");
+        predicate.Apply(builder);
+        builder.Append(")");
+    }
+}
+
+/// <summary>A <c>HAVING</c> comparison whose left side binds values of its own.</summary>
+internal sealed class FilteredCountComparison(ISqlFragment count, string op, object value) : ISqlFragment
+{
+    public void Apply(ICommandBuilder builder)
+    {
+        count.Apply(builder);
+        builder.Append(" ");
+        builder.Append(op);
+        builder.Append(" ");
+        builder.AppendParameter(value);
     }
 }
 
@@ -140,8 +234,8 @@ internal sealed class GroupingTranslator
             return false;
         }
 
-        // g.Count() — the only aggregate with no selector.
-        if (call.Method.Name == "Count" && call.Arguments.Count == 1)
+        // g.Count() and g.LongCount(), the only aggregates with no selector.
+        if (call.Method.Name is "Count" or "LongCount" && call.Arguments.Count == 1)
         {
             sql = "count(*)";
             return true;
@@ -167,6 +261,27 @@ internal sealed class GroupingTranslator
         }
 
         sql = $"{function.Value.Sql()}({LocatorFor(call, function.Value)})";
+        return true;
+    }
+
+    /// <summary>
+    ///     <c>g.Count(x =&gt; …)</c> or <c>g.LongCount(x =&gt; …)</c>. The predicate goes through the same
+    ///     parser a <c>Where</c> does, so the two cannot disagree about what it means (marten#5625).
+    /// </summary>
+    public bool TryTranslateFilteredCount(Expression node, ParameterExpression group,
+        [NotNullWhen(true)] out ISqlFragment? count)
+    {
+        count = null;
+
+        if (node is not MethodCallExpression { Method.Name: "Count" or "LongCount", Arguments.Count: 2 } call
+            || !IsOverTheGroup(call, group))
+        {
+            return false;
+        }
+
+        var predicate = (LambdaExpression)StripQuotes(call.Arguments[1]);
+        count = new FilteredCount(new WhereClauseParser(_members).Parse(predicate.Body));
+
         return true;
     }
 
@@ -280,6 +395,16 @@ internal sealed class GroupingTranslator
 
     private ISqlFragment Comparison(BinaryExpression binary, string op, ParameterExpression group)
     {
+        if (TryTranslateFilteredCount(binary.Left, group, out var leftCount))
+        {
+            return new FilteredCountComparison(leftCount, op, HavingValue(binary.Right));
+        }
+
+        if (TryTranslateFilteredCount(binary.Right, group, out var rightCount))
+        {
+            return new FilteredCountComparison(rightCount, Flip(op), HavingValue(binary.Left));
+        }
+
         if (TryTranslate(binary.Left, group, out var left))
         {
             return new ComparisonFilter(left, op,
@@ -298,6 +423,10 @@ internal sealed class GroupingTranslator
         throw new BadLinqExpressionException(
             $"Neither side of '{binary}' is the group's key or an aggregate over it.");
     }
+
+    private static object HavingValue(Expression expression)
+        => WhereClauseParser.ExtractValue(expression)
+           ?? throw new BadLinqExpressionException("A HAVING comparison cannot be against null.");
 
     private static string Flip(string op) => op switch
     {

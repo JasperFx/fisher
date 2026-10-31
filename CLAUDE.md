@@ -2192,6 +2192,11 @@ it in the parser. It is unreachable through this API: the `Select`'s parameter i
 there is no ungrouped member in scope to select. The type system does the validation for free, and
 that is worth knowing before someone adds a validator for a case that cannot arise.
 
+- **`g.Count(predicate)` is `count(*) filter (where …)`** (fisher#490, marten#5625), through the same
+  parser a `Where` uses. It is the one grouped column that binds values, so it is a fragment rather than a
+  string, and the query's select list becomes `Statement.SelectFragment`. Inlining the values would put a
+  caller's value in SQL text. Anything else called on the group is refused by name, where it used to reach
+  `Compile()` and surface "variable 'g' … is not defined".
 - **Where a `Where` sits decides what it filters.** Before the `GroupBy` it is a `WHERE` over rows;
   after it, a `HAVING` over groups. The chain is walked source-outward, so which one it is falls out of
   whether the key has been seen yet — no lookahead.

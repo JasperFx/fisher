@@ -1337,6 +1337,7 @@ public partial class FisherQueryProvider : IQueryProvider
             Statistics = parser.Statistics
         };
 
+        statement.SelectFragment = parser.GroupProjection?.SelectFragment;
         statement.DocumentTypes.Add(sourceType);
         statement.OrderBys.AddRange(parser.OrderBys);
 

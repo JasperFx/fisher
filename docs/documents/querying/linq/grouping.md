@@ -125,6 +125,21 @@ It must come **before** the `Select`, because after it the element is the projec
 single-value grouped `Select`, `OrderBy(x => x)` works the same way it does for an ordinary
 projection.
 
+## Counting part of a group
+
+`Count` and `LongCount` take a predicate, which reaches SQL as `count(*) filter (where …)` and means what
+it would mean in a `Where`:
+
+```cs
+await session.Query<Shipment>()
+    .GroupBy(x => x.Region)
+    .Select(g => new { g.Key, Late = g.Count(x => x.Late), All = g.LongCount() })
+    .ToListAsync();
+```
+
+A predicate count works in a `Where` after the `GroupBy` too, as part of the `HAVING`. Ordering by one is
+not supported.
+
 ## A trap that does not exist
 
 SQLite permits a bare non-aggregated column in a `GROUP BY` select list and picks an arbitrary row
