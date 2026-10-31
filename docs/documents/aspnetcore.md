@@ -107,6 +107,15 @@ builder.Services.AddHealthChecks()
         minimumGap: 1);
 ```
 
+A store registered with `AddFisherStore<T>()` has its own daemon, usually over its own file, so it gets
+its own check:
+
+```cs
+builder.Services.AddHealthChecks()
+    .AddFisherHighWaterHealthCheck()
+    .AddFisherHighWaterHealthCheck<IArchiveStore>(staleThreshold: TimeSpan.FromMinutes(1));
+```
+
 ::: tip
 Keep `staleThreshold` comfortably above `EventStoreOptions.HighWaterLivenessInterval` (five seconds by
 default), or a healthy agent reports unhealthy between two of its own touches.
