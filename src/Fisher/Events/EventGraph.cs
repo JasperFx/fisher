@@ -372,12 +372,26 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     /// </remarks>
     internal void AssertBodyIsRewritable(Type eventType, string operation)
     {
-        if (EventMappingFor(eventType).IsBinary)
+        var mapping = EventMappingFor(eventType);
+
+        if (mapping.IsBinary)
         {
             throw new InvalidOperationException(
                 $"'{eventType.Name}' is marked [BinaryEvent], so {operation} cannot rewrite it — the "
                 + "rewrite writes the JSON data column, which would leave the row holding a JSON body "
                 + "and a BLOB body at once. Archive or compact the stream instead.");
+        }
+
+        // A rewrite stores the event's current shape under its current name, so a transformation on
+        // that same name would upcast the rewritten row on its next read (fisher#494). There is no
+        // other name to store it under, so this one is refused rather than left to read back wrong.
+        if (Upcasters.HasAny && Upcasters.TryFindTransformation(mapping.EventTypeName, out _))
+        {
+            throw new InvalidOperationException(
+                $"'{eventType.Name}' is stored as event type '{mapping.EventTypeName}', and an upcast is "
+                + $"registered on that same name, so {operation} cannot rewrite it: the next read would "
+                + "upcast the current shape as though it were the old one. Give the current event type "
+                + "its own name, so the upcast's source and target differ.");
         }
     }
 

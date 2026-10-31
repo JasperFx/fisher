@@ -15,9 +15,16 @@ namespace Fisher.Events.Protected;
 ///         primary key and the only column with an index that makes the update a seek.
 ///     </para>
 ///     <para>
-///         Everything else about the row is left alone — the version, the stream, the timestamp, the
-///         type. This rewrites what an event <em>says</em>, not what it <em>is</em>; replacing the
-///         latter is <see cref="ReplaceEventOperation" />.
+///         Everything placing the row is left alone — the version, the stream, the timestamp, the
+///         event id and the tags. This rewrites what an event <em>says</em>, not what it <em>is</em>;
+///         replacing the latter is <see cref="ReplaceEventOperation" />.
+///     </para>
+///     <para>
+///         ⚠️ <b>The row's type moves with the body</b> (fisher#494, marten#5642). An upcast event reads
+///         as its target type, so what is written here is the target's shape. Left under the source's
+///         type name, the next read upcasts data already in the new shape, and masking loses the event
+///         rather than masking it. <c>data_binary</c> clears for the same reason: a binary source read
+///         through its upcast is written back as the JSON its target stores.
 ///     </para>
 ///     <para>
 ///         <b>An async projection that has already passed this event does not see the rewrite.</b>
@@ -44,10 +51,16 @@ internal sealed class OverwriteEventOperation : Weasel.Storage.IStorageOperation
 
     public void ConfigureCommand(ICommandBuilder builder, IStorageSession session)
     {
+        var mapping = _graph.EventMappingFor(_event.Data.GetType());
+
         builder.Append("update ");
         builder.Append(_graph.EventsTableName);
         builder.Append(" set data = ");
         Bind(builder, session.Serializer.ToJson(_event.Data), StorageColumnType.Json);
+        builder.Append(", data_binary = null, type = ");
+        Bind(builder, mapping.EventTypeName, StorageColumnType.String);
+        builder.Append(", dotnet_type = ");
+        Bind(builder, mapping.DotNetTypeName, StorageColumnType.String);
 
         // Only when the store keeps a headers column at all: writing to one that does not exist is a
         // "no such column" error rather than a no-op, and a masking rule that adds a header to a store

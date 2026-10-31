@@ -1200,6 +1200,11 @@ event data masking (fisher#9) and stream compacting (fisher#10) are clients of. 
 
 - `OverwriteEventOperation` rewrites what an event **says**: `data`, plus `headers` where the store
   keeps them. Everything placing the row in the stream and in the global order is untouched.
+  ⚠️ **`type` and `dotnet_type` move with the body, and `data_binary` clears** (fisher#494, marten#5642).
+  An upcast event reads as its target, so what gets written is the target's shape. Left under the
+  source's name, the next read upcast data already in the new shape, so masking destroyed the event. An
+  upcast registered on the event's *own* name leaves nowhere else to store the row, so
+  `AssertBodyIsRewritable` refuses that one.
 - `ReplaceEventOperation` rewrites what an event **is**: `data`, `type`, `dotnet_type` and a fresh
   `id`, because it is no longer the event that was appended. Stream, version and sequence stay, and
   the row's **tag rows are deleted** — a tag describes the event that was appended, so carrying it
