@@ -44,6 +44,10 @@ var exists = await session.Events.EventsExistAsync(query);
 var basket = await session.Events.AggregateByTagsAsync<Basket>(query);
 ```
 
+Archived events are left out, as they are from every other event read. That applies to
+`QueryByTagsAsync`, `EventsExistAsync`, `AggregateByTagsAsync` and `FetchForWritingByTags`, and to the
+boundary check at commit, so archiving a stream retires its events from every boundary they matched.
+
 ## Writing against a boundary
 
 ```cs
