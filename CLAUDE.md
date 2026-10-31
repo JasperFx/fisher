@@ -5996,6 +5996,11 @@ One `fi_event_tag_<suffix>` table per registered tag type, composite primary key
 the lookup a range scan; and it is what lets both the append path and `AssignTagWhere` write
 `on conflict do nothing` instead of reading first, which is where idempotency comes from.
 
+**A second index leads with `seq_id`** (fisher#491, from marten#5694), because the key cannot answer the
+question a delete asks. SQLite checks the foreign key for each `fi_events` row removed, so compacting,
+tombstoning or wiping a tenant scanned each tag table once per event, inside the write lock. Compacting
+2,000 events beside 40,000 tag rows measured 1,073 ms without it and 116 ms with it.
+
 **Tags are written after the batch and inside its transaction** (`FisherSession.SaveChangesAsync` →
 `EventTagWriter`). A tag row is keyed by the `seq_id` SQLite assigns on insert, which Fisher only
 learns from the trailing sequence read-back in `FisherQuickAppendEventsOperation` — so there is

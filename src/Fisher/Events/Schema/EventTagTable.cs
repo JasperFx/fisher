@@ -39,6 +39,16 @@ internal class EventTagTable : Table
 
         AddColumn("seq_id", "INTEGER").NotNull().AsPrimaryKey()
             .ForeignKeyTo(FisherTableNaming.ObjectFor(events.DatabaseSchemaName, EventsTable.TableSuffix), "seq_id");
+
+        // The primary key answers "which events carry this tag" and not "which tag rows belong to this
+        // event", which is what every delete asks: the foreign key's own check for each fi_events row
+        // removed, and each tag delete. Without this each one scans the whole table, inside the
+        // transaction holding the file's one write lock (fisher#491).
+        Indexes.Add(new IndexDefinition(
+            $"ix_{FisherTableNaming.TableName(events.DatabaseSchemaName, SuffixFor(registration))}_seq_id")
+        {
+            Columns = ["seq_id"]
+        });
     }
 
     /// <summary>
