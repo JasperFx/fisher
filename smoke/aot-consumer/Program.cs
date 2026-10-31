@@ -321,6 +321,32 @@ try
         Expect(e.Message.Contains("Native AOT"), "diagnostics criteria are refused in a native image, by name");
     }
 
+    // fisher#493, marten#5597. The compiler builds this expression tree in THIS assembly, and
+    // Expression.GreaterThan finds decimal's operator by reflection. It throws without the root.
+    DecimalOperatorRoots.Root();
+
+    await using (var query = store.QuerySession())
+    {
+        var solvent = await query.Query<Ledger>().Where(x => x.Balance > 10m).ToListAsync();
+        Expect(solvent.Count == 1, "a decimal comparison filters natively once decimal's operators are rooted");
+    }
+
+    // fisher#493. Inferring a tag's inner value does not work natively, and the failure names the fix.
+    try
+    {
+        DocumentStore.For(options =>
+        {
+            options.Connection($"Data Source={path}");
+            options.ConfigureSerialization(configure: json => json.TypeInfoResolver = SmokeJson.Default);
+            options.Events.RegisterTagType<InferredTag>();
+        }).Dispose();
+    }
+    catch (JasperFx.Core.Reflection.InvalidValueTypeException e)
+    {
+        Expect(e.Message.Contains("RegisterTagType<InferredTag, TInner>"),
+            "a failed tag inference names the explicit overload");
+    }
+
     // fisher#430: the paths that had never been measured natively.
     await UnmeasuredPaths.RunAsync();
 
@@ -349,6 +375,17 @@ finally
 static void Expect(bool condition, string what)
 {
     if (!condition) throw new Exception($"Expected: {what}");
+}
+
+public readonly record struct InferredTag(Guid Value);
+
+internal static class DecimalOperatorRoots
+{
+    [System.Diagnostics.CodeAnalysis.DynamicDependency(
+        System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicMethods, typeof(decimal))]
+    internal static void Root()
+    {
+    }
 }
 
 public class GuidDoc
