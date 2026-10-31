@@ -80,6 +80,11 @@ public sealed class MasterTableTenantSource
 
     private volatile HashSet<string> _disabled = new(StringComparer.OrdinalIgnoreCase);
 
+    // Tenants still in the base's cache whose row another process deleted. The base offers no way to
+    // evict without deleting the row, which could delete a tenant re-added a moment ago, so these are
+    // answered as unknown here instead (fisher#487).
+    private volatile HashSet<string> _removed = new(StringComparer.OrdinalIgnoreCase);
+
     /// <inheritdoc />
     public Action<string>? OnTenantRevoked { get; set; }
 
@@ -163,6 +168,13 @@ public sealed class MasterTableTenantSource
     /// </remarks>
     public bool TryFind(string tenantId, out TenantRegistration registration)
     {
+        if (_removed.Contains(tenantId))
+        {
+            registration = null!;
+
+            return false;
+        }
+
         var cached = FindCachedDatabase(tenantId);
         if (cached is not null)
         {
@@ -199,13 +211,37 @@ public sealed class MasterTableTenantSource
     ///     <see cref="MasterTableTenancyBase{TDatabase,TDataSource}.BuildDatabasesAsync" />, which also
     ///     provisions the table on first use and writes the seed list, and the disabled ids beside them
     ///     so a suspended tenant stays distinguishable from an unknown one.
+    ///     <para>
+    ///         ⚠️ <b>This is also where another process's change reaches this one</b> (fisher#487).
+    ///         Suspending or forgetting a tenant revokes it only in the process that made the call, and
+    ///         <see cref="DynamicTenancy.DatabaseFor" /> answers from its cache before it asks a source.
+    ///         So every tenant the table no longer offers is revoked here, which evicts its database and
+    ///         lets the daemon's tenant poll converge every process on the table.
+    ///     </para>
     /// </remarks>
     public async ValueTask<IReadOnlyList<TenantRegistration>> AllAsync(CancellationToken token = default)
     {
-        var enabled = await BuildDatabasesAsync(token).ConfigureAwait(false);
+        var cached = await BuildDatabasesAsync(token).ConfigureAwait(false);
         var disabled = await AllDisabledAsync(token).ConfigureAwait(false);
+        var inTheTable = await EnabledTenantIdsAsync(token).ConfigureAwait(false);
 
-        _disabled = new HashSet<string>(disabled, StringComparer.OrdinalIgnoreCase);
+        var disabledIds = new HashSet<string>(disabled, StringComparer.OrdinalIgnoreCase);
+
+        // Disabled rows are not enabled rows either, and that is not the same as gone: a suspended
+        // tenant stays distinguishable from an unknown one.
+        var removed = new HashSet<string>(
+            cached.Select(x => x.TenantId).Where(x => !inTheTable.Contains(x) && !disabledIds.Contains(x)),
+            StringComparer.OrdinalIgnoreCase);
+
+        _disabled = disabledIds;
+        _removed = removed;
+
+        foreach (var tenantId in disabled.Concat(removed))
+        {
+            OnTenantRevoked?.Invoke(tenantId);
+        }
+
+        var enabled = cached.Where(x => inTheTable.Contains(x.TenantId)).ToList();
 
         if (disabled.Count == 0)
         {
@@ -220,6 +256,24 @@ public sealed class MasterTableTenantSource
                 _lastKnown.GetValueOrDefault(id, string.Empty), IsActive: false)))
             .ToList();
     }
+
+    private Task<HashSet<string>> EnabledTenantIdsAsync(CancellationToken token)
+        => ExecuteAsync(async ct =>
+        {
+            await using var connection = await MasterDataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = Dialect.SelectEnabledTenants(QualifiedTableName);
+
+            var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                ids.Add(reader.GetString(0));
+            }
+
+            return ids;
+        }, token);
 
     /// <summary>
     ///     Re-read the control table now, rather than waiting for the daemon's poll.
@@ -252,8 +306,14 @@ public sealed class MasterTableTenantSource
     ///         suspension; <see cref="EnableTenantAsync" /> is one call away and says what it means.
     ///     </para>
     /// </remarks>
-    public Task AddTenantAsync(string tenantId, string connectionString, CancellationToken token = default)
-        => AddDatabaseRecordAsync(tenantId, connectionString, token);
+    public async Task AddTenantAsync(string tenantId, string connectionString, CancellationToken token = default)
+    {
+        await AddDatabaseRecordAsync(tenantId, connectionString, token).ConfigureAwait(false);
+
+        var next = new HashSet<string>(_removed, StringComparer.OrdinalIgnoreCase);
+        next.Remove(tenantId);
+        _removed = next;
+    }
 
     /// <summary>
     ///     Suspend a tenant. Sessions for it are refused until it is resumed; <b>its file is
@@ -262,8 +322,9 @@ public sealed class MasterTableTenantSource
     /// <remarks>
     ///     The base evicts the tenant from its cache, which is what makes suspension take effect
     ///     without a refresh — a cached row would otherwise go on resolving a tenant that is switched
-    ///     off. <see cref="DynamicTenancy" /> still holds the tenant's <see cref="FisherDatabase" />;
-    ///     call <c>ForgetTenantAsync</c> to release its pooled connections as well.
+    ///     off. <see cref="ITenantSource.OnTenantRevoked" /> does the same for
+    ///     <see cref="DynamicTenancy" />'s <see cref="FisherDatabase" />, in this process. Another process
+    ///     sees it on its next refresh, which is what <see cref="AllAsync" /> is for.
     /// </remarks>
     public async Task SuspendTenantAsync(string tenantId, CancellationToken token = default)
     {
