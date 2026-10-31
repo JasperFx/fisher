@@ -32,7 +32,7 @@ services.AddFisher(options =>
     options.Schema.For<Vessel>().AddSubClass<Trawler>();
 });
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L81-L99' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_configuration' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L82-L100' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_configuration' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 ## Supply a source-generated JSON context
@@ -51,7 +51,7 @@ you store:
 [JsonSerializable(typeof(Trawler))]
 internal partial class AppJsonContext : JsonSerializerContext;
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L68-L75' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_json_context' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L69-L76' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_json_context' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 The context also keeps each document's properties from being trimmed, which is how Fisher finds the
@@ -94,7 +94,7 @@ options.Projections.Snapshot<Berth, BerthId>(SnapshotLifecycle.Inline);
 // One that is only ever aggregated live is declared the same way.
 options.Projections.LiveStreamAggregation<Tide, TideId>();
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L113-L121' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_strong_typed_aggregates' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L114-L122' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_strong_typed_aggregates' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 A strong-typed aggregate that is not registered either way is refused by name in a native image, rather
@@ -116,7 +116,40 @@ nothing:
 // reflection. Same table, same default suffix (fi_event_tag_harbour_id) as RegisterTagType<HarbourId>().
 options.Events.RegisterTagType<HarbourId, Guid>(id => id.Value);
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L104-L108' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_tag_types' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L105-L109' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_tag_types' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+If the inferring overload fails in a native image, the exception names this one.
+
+## Decimal comparisons
+
+A decimal comparison in a LINQ query needs one thing Fisher cannot do for you:
+
+```cs
+await session.Query<Order>().Where(x => x.Total > 10m).ToListAsync();
+
+// In a native image, thrown from your own method before Fisher is involved:
+// InvalidOperationException: The binary operator GreaterThan is not defined for the types
+// 'System.Decimal' and 'System.Decimal'.
+```
+
+The C# compiler builds that expression tree in your assembly, and `Expression.GreaterThan` looks up
+`decimal`'s operator by reflection, because `decimal` has no primitive `>`. The trimmer has no reason to
+keep an operator nothing calls directly. The same lookup applies to every comparison on a `decimal`.
+
+Keep the operators by rooting `decimal`'s public methods, and call this once at startup:
+
+<!-- snippet: sample_native_aot_decimal_operators -->
+<a id='snippet-sample_native_aot_decimal_operators'></a>
+```cs
+// Expression.GreaterThan finds decimal's operator by reflection, in your own assembly, and the
+// trimmer has no reason to keep an operator nothing calls directly. Call this once at startup.
+[DynamicDependency(DynamicallyAccessedMemberTypes.PublicMethods, typeof(decimal))]
+public static void RootDecimalOperators()
+{
+}
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L125-L132' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_decimal_operators' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 ## Async projections and the daemon
@@ -141,7 +174,7 @@ public interface ILedgerStore : IDocumentStore;
 
 public sealed class LedgerStore(StoreOptions options) : DocumentStore(options), ILedgerStore;
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L60-L66' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_second_store_class' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L61-L67' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_second_store_class' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 and register it with both types:
@@ -155,7 +188,7 @@ services.AddFisherStore<ILedgerStore, LedgerStore>(options =>
     options.ConfigureSerialization(configure: json => json.TypeInfoResolver = AppJsonContext.Default);
 });
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L126-L132' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_second_store' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/native_aot_samples.cs#L136-L142' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_native_aot_second_store' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 The one-type-argument overload is refused by name in a native image, naming this one. Under the JIT

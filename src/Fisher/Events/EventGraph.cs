@@ -6,6 +6,7 @@ using System.Text;
 using Fisher.Events.Schema;
 using Fisher.Serialization;
 using Fisher.Storage;
+using JasperFx.Core.Reflection;
 using JasperFx.Events;
 using JasperFx.Events.Aggregation;
 using JasperFx.Events.Projections;
@@ -525,7 +526,32 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     [RequiresUnreferencedCode(TagTypeInferenceUnreferencedCode)]
     [RequiresDynamicCode(TagTypeInferenceDynamicCode)]
     public ITagTypeRegistration RegisterTagType<TTag>(string tableSuffix) where TTag : notnull
-        => FindTagType(typeof(TTag)) ?? AddTagType(TagTypeRegistration.Create<TTag>(tableSuffix));
+        => FindTagType(typeof(TTag)) ?? AddTagType(InferTagType<TTag>(tableSuffix));
+
+    /// <summary>
+    ///     The inferring registration, naming the overload that does not infer when it fails (fisher#493).
+    /// </summary>
+    /// <remarks>
+    ///     In a native image the tag's property can be trimmed, and JasperFx then reports "Must be only a
+    ///     single public, 'gettable' property" about a type that visibly has one. The exception type stays
+    ///     the shared one, so what changes is only that the message says what to do.
+    /// </remarks>
+    [RequiresUnreferencedCode(TagTypeInferenceUnreferencedCode)]
+    [RequiresDynamicCode(TagTypeInferenceDynamicCode)]
+    private static ITagTypeRegistration InferTagType<TTag>(string tableSuffix) where TTag : notnull
+    {
+        try
+        {
+            return TagTypeRegistration.Create<TTag>(tableSuffix);
+        }
+        catch (Exception e) when (e is InvalidValueTypeException or NotSupportedException)
+        {
+            throw new InvalidValueTypeException(typeof(TTag),
+                $"Fisher could not work out the inner value of tag type '{typeof(TTag).Name}': {e.Message} "
+                + "That is expected of a type with no single value property, and of any tag in a trimmed or "
+                + $"Native AOT application. Name it instead: RegisterTagType<{typeof(TTag).Name}, TInner>(x => x.Value).");
+        }
+    }
 
     /// <summary>
     ///     Register a tag type for Dynamic Consistency Boundary support from an explicit unwrapper, for

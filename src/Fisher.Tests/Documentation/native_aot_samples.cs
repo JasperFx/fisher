@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json.Serialization;
 using JasperFx;
 using JasperFx.Events.Projections;
@@ -120,6 +121,15 @@ public static class native_aot_samples
         options.Projections.LiveStreamAggregation<Tide, TideId>();
         #endregion
     }
+
+    #region sample_native_aot_decimal_operators
+    // Expression.GreaterThan finds decimal's operator by reflection, in your own assembly, and the
+    // trimmer has no reason to keep an operator nothing calls directly. Call this once at startup.
+    [DynamicDependency(DynamicallyAccessedMemberTypes.PublicMethods, typeof(decimal))]
+    public static void RootDecimalOperators()
+    {
+    }
+    #endregion
 
     public static void register_a_second_store(IServiceCollection services)
     {

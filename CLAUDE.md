@@ -1466,6 +1466,12 @@ reloads an inline `Snapshot<T>`.
     `strong_typed_aggregate_identity` fails 5 of 7 against the old backfill. The inline snapshot never had
     the bug (it goes through the projection's identity setter), and that test pins it. The smoke asserts
     the ids natively.
+- **A decimal comparison in LINQ needs `decimal`'s operators rooted, and Fisher cannot do it** (fisher#493,
+  marten#5597). The compiler builds the tree in the consumer's assembly, and `Expression.GreaterThan` finds
+  `op_GreaterThan` by reflection, so the failure is in their frame before Fisher is involved. The guide says so
+  and the smoke pins the `[DynamicDependency]` workaround. An inferring `RegisterTagType<TTag>()` that fails
+  now names the explicit overload, where it used to report a bare "Must be only a single public, 'gettable'
+  property" about a type that visibly has one.
 - **The smoke consumer references `JasperFx.Events.SourceGenerator` itself**, because a project
   reference does not carry the analyzer the package bundles. Its version is kept in step by hand.
 
