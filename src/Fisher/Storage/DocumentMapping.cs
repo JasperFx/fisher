@@ -1142,6 +1142,20 @@ public class DocumentSchema
         }
     }
 
+    /// <summary>
+    ///     Every foreign key has to be one SQLite can enforce, which it only says at the first write.
+    /// </summary>
+    internal void AssertForeignKeysCanBeEnforced()
+    {
+        foreach (var mapping in AllMappings().ToList())
+        {
+            foreach (var key in mapping.ForeignKeys)
+            {
+                key.AssertTenancyAgrees(mapping, MappingFor(key.ReferencedType));
+            }
+        }
+    }
+
     public bool HasMappingFor(Type documentType) => _mappings.ContainsKey(documentType);
 
     internal bool HasAny => !_mappings.IsEmpty;

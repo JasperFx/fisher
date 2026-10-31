@@ -62,4 +62,39 @@ internal sealed class DocumentForeignKey
     internal CascadeAction OnDelete { get; }
 
     internal IEnumerable<string> MemberNames => Members.Select(x => x.Name);
+
+    /// <summary>
+    ///     Refuse a key SQLite would accept in DDL and fail on at the first write (fisher#488).
+    /// </summary>
+    /// <remarks>
+    ///     A conjoined table's primary key is <c>(tenant_id, id)</c>, so <c>id</c> alone is not a key it
+    ///     can reference, and SQLite says so only when a row is written: <c>foreign key mismatch</c>, a
+    ///     long way from the configuration line. Between two conjoined types the key is composite on the
+    ///     tenant. A single-tenant child has no tenant to put in it, and a cascade that clears the key
+    ///     would clear <c>tenant_id</c> too.
+    /// </remarks>
+    internal void AssertTenancyAgrees(DocumentMapping mapping, DocumentMapping referenced)
+    {
+        if (!referenced.IsConjoined)
+        {
+            return;
+        }
+
+        var key = $"'{mapping.DocumentType.Name}.{string.Join(".", MemberNames)}'";
+
+        if (!mapping.IsConjoined)
+        {
+            throw new InvalidOperationException(
+                $"The foreign key on {key} references '{referenced.DocumentType.Name}', which is MultiTenanted(), "
+                + $"so its rows are keyed by tenant as well as id and '{mapping.DocumentType.Name}' has no tenant "
+                + $"to reference them with. Mark '{mapping.DocumentType.Name}' MultiTenanted() too.");
+        }
+
+        if (OnDelete is CascadeAction.SetNull or CascadeAction.SetDefault)
+        {
+            throw new InvalidOperationException(
+                $"The foreign key on {key} is between two MultiTenanted() types, so it includes tenant_id, and "
+                + $"OnDelete = {OnDelete} would clear that as well. Use Cascade, Restrict or NoAction.");
+        }
+    }
 }
