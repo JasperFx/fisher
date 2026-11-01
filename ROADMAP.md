@@ -10,6 +10,23 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
+**1.26.0 comes out of a sweep of a month of Marten issues for anything that also bites Fisher**, closing
+[#483](https://github.com/JasperFx/fisher/issues/483) through [#494](https://github.com/JasperFx/fisher/issues/494)
+and [#507](https://github.com/JasperFx/fisher/issues/507), on the same JasperFx 2.97.0 / Weasel 9.47.1 as 1.25.0.
+`AddFisherHighWaterHealthCheck<T>()` health-checks a store registered with `AddFisherStore<T>`. LINQ translates
+`Nullable.Value`, `HasValue`, `string.Length` and date parts, plus grouped `Count(predicate)` and `LongCount()`,
+and refuses every other member below a scalar by name where it used to render a path that matched nothing. A
+`Select` of an object or collection member builds it from its JSON. `IsNullOrWhiteSpace` matches every white
+space character rather than only spaces. A foreign key between two `MultiTenanted()` documents keys on the tenant.
+DCB tag reads leave archived events out. `FetchForWriting`'s fold is bounded by the version it read. A tenant
+another process suspended or removed is revoked on refresh, and its daemon stops. Rewriting an upcast event stores
+it under the type it is written as. DCB tag tables are indexed on `seq_id`. An undelete moves `last_modified`
+strictly forward, so a restored and re-deleted row cannot reproduce a version a console already holds.
+
+**1.25.0 implements `QueryRawEvents`**, an `IQueryable<IEvent>` over the raw events, on JasperFx 2.97.0 and
+Weasel 9.47.1, with jasperfx#1087's required members on a missing aggregate from JasperFx 2.96.1 and Bobcat's
+Supervisor at 1.0.0.
+
 **1.24.1 moves to JasperFx 2.95.1**, which put `RegisteredShardNames()` back to startable shards only after
 2.95.0's composite members made Wolverine start an agent per member. `AllAsyncProjectionShardNames()` follows it,
 and `AllAsyncProjectionShardNames(includeCompositeMembers: true)` keeps the members for accounting.
