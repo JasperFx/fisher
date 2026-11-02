@@ -3,12 +3,20 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **thirteen open issues: eleven are the Fisher 2.0 milestone, and the other two are not feature
-work.** The 2.0 issues are Fisher's share of the Critter Stack .NET 11 release train. Of the other two, one
-is an unreproduced intermittent kept open on evidence, and one is blocked upstream. 1.5.0 closed both of 1.4.0's
+Status: **fourteen open issues: eleven are the Fisher 2.0 milestone, and the other three are small or
+waiting.** The 2.0 issues are Fisher's share of the Critter Stack .NET 11 release train. Of the other three, one
+is an unreproduced intermittent kept open on evidence, one is blocked upstream, and one is a missing
+`EventStoreUsage` value. 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
+
+**1.27.0 leaves archived events out of every default event read**, as Marten and Polecat do
+([#511](https://github.com/JasperFx/fisher/pull/511)), and only a predicate's own parameter can opt back in
+([#513](https://github.com/JasperFx/fisher/pull/513)). That is a breaking behaviour change: an application reading
+archived events through a default read gets fewer rows with no error. It moves to JasperFx 2.98.0 and Weasel 9.48.0,
+and publishes through NuGet trusted publishing rather than a stored API key. 1.26.0 was tagged but never reached
+NuGet, because that key had expired, so 1.27.0 is the first package carrying 1.26.0's work.
 
 **1.26.0 comes out of a sweep of a month of Marten issues for anything that also bites Fisher**, closing
 [#483](https://github.com/JasperFx/fisher/issues/483) through [#494](https://github.com/JasperFx/fisher/issues/494)
@@ -317,7 +325,7 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is thirteen items, eleven of them the Fisher 2.0 milestone.
+What is left is fourteen items, eleven of them the Fisher 2.0 milestone.
 
 **Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.0, Weasel 10.0, `net10.0;net11.0`):
 [#459](https://github.com/JasperFx/fisher/issues/459) build and pack targets,
@@ -336,6 +344,9 @@ against it, and stays open on evidence rather than on work outstanding.
 
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.
+
+[#510](https://github.com/JasperFx/fisher/issues/510) is the one small item: `EventStoreUsage` does not report
+the event store's `TenancyStyle`, where Polecat does.
 <!-- /open-issues -->
 
 [#243](https://github.com/JasperFx/fisher/issues/243) and
