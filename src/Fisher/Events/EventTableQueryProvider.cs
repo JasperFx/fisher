@@ -293,7 +293,7 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
 
         // Worked out across every Where, since a Where(...).Where(...) chain is one query.
         if (LeavesOutArchivedEvents && !calls.Any(x => x.Method.Name == nameof(Queryable.Where)
-                                                       && LambdaOf(x).Body.SpecifiesEventArchivalStatus()))
+                                                       && LambdaOf(x).SpecifiesEventArchivalStatus()))
         {
             statement.Wheres.Add(new WhereFragment("is_archived = 0"));
         }
