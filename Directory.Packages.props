@@ -283,16 +283,34 @@
              INERT:
              jasperfx#1086 shares Roslyn metadata references in JasperFx.RuntimeCompiler, which Fisher
              does not use. -->
-        <PackageVersion Include="JasperFx" Version="2.97.0" />
-        <PackageVersion Include="JasperFx.Events" Version="2.97.0" />
+        <!-- JasperFx 2.98.0 (from 2.97.0; 2.97.1 was tagged but never reached NuGet). No compile break.
+             EventProjectionRegistrationCompliance grew from 3 to 9 facts (jasperfx#1102) and they were green
+             on the bump alone; no suite was added.
+
+             INHERITED, no Fisher change needed:
+             jasperfx#1101/#1105 - with correlation ids on, slice.PublishMessage(message) carries the id all
+             of the slice's events agree on, through the MessageMetadata overloads FisherProjectionBatch and
+             the session's message sink already carry.
+             jasperfx#1107 - fan-out and ReplaceEvent clones keep their correlation and causation ids.
+             jasperfx#1098 - raised events go only to the stream they were raised to.
+             jasperfx#1100 - stopping the high water agent cancels its poll wait.
+             jasperfx#1102/#1106/#1108 - PublishedTypes on SubscriptionDescriptor, and a scoped projection
+             or a composite describing itself as registered, all reach Fisher through TryCreateUsage.
+             No Fisher test expectation moved.
+
+             INERT:
+             jasperfx#1099/#1103 fold an HTTP endpoint and a message handler in the Event Model, which
+             Fisher contributes to but does not assert on. -->
+        <PackageVersion Include="JasperFx" Version="2.98.0" />
+        <PackageVersion Include="JasperFx.Events" Version="2.98.0" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.97.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.97.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.98.0" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.98.0" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.97.0" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.98.0" />
 
         <!-- Weasel 9.46.0 (from 9.42.0, spanning 9.43.0, 9.44.0, 9.45.0 and 9.45.1). JasperFx floor
              2.90.2, which Fisher already pins. Reaching Fisher:
