@@ -361,6 +361,42 @@ public class archived_events_are_opt_in : IAsyncLifetime
         events.ShouldHaveSingleItem().StreamId.ShouldBe(_live);
     }
 
+    /// <summary>A lambda over events in hand filters those events, and says nothing about the rows.</summary>
+    [Fact]
+    public async Task a_nested_lambda_naming_is_archived_does_not_opt_in()
+    {
+        var captured = await everyEventOfAsync(_archived);
+
+        await using var query = _store.LightweightSession();
+
+        (await query.Events.QueryEventsAsync(
+                x => captured.Where(e => e.IsArchived).Select(e => e.Id).Contains(x.Id), Token))
+            .ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task a_nested_lambda_calling_maybe_archived_does_not_opt_in()
+    {
+        var captured = await everyEventOfAsync(_archived);
+
+        await using var query = _store.LightweightSession();
+
+        (await query.Events.QueryEventsAsync(
+                x => captured.Where(e => e.MaybeArchived()).Select(e => e.Id).Contains(x.Id), Token))
+            .ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task a_nested_lambda_does_not_opt_in_on_the_raw_queryable_either()
+    {
+        var captured = await everyEventOfAsync(_archived);
+
+        (await Reader.QueryRawEvents()
+                .Where(x => captured.Where(e => e.IsArchived).Select(e => e.Id).Contains(x.Id))
+                .ToListAsync(Token))
+            .ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task the_stream_state_queryable_keeps_its_archived_rows()
     {
