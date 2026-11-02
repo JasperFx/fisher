@@ -58,7 +58,7 @@ public partial class EventOperations
     {
         ArgumentNullException.ThrowIfNull(filter);
 
-        return QueryEventsAsync(filter, filter.Body.SpecifiesEventArchivalStatus(), token);
+        return QueryEventsAsync(filter, filter.SpecifiesEventArchivalStatus(), token);
     }
 
     /// <summary>

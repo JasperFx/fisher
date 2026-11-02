@@ -17,27 +17,35 @@ namespace Fisher.Events.Archiving;
 ///         including on one side of an <c>||</c>.
 ///     </para>
 ///     <para>
-///         Only the event being filtered counts. An event body with an <c>IsArchived</c> of its own says
-///         nothing about the row, and neither does the flag of an event captured from outside the query.
+///         Only the event being filtered counts, which means the predicate's own parameter. An event body
+///         with an <c>IsArchived</c> of its own says nothing about the row. Neither does the flag of an
+///         event captured from outside the query, or a nested lambda over events held in memory.
 ///     </para>
 /// </remarks>
 internal static class ArchivalPredicates
 {
-    public static bool SpecifiesEventArchivalStatus(this Expression predicate)
+    public static bool SpecifiesEventArchivalStatus(this LambdaExpression predicate)
     {
-        var finder = new ArchivalStatusFinder();
-        finder.Visit(predicate);
+        var row = predicate.Parameters[0];
+
+        if (!typeof(IEvent).IsAssignableFrom(row.Type))
+        {
+            return false;
+        }
+
+        var finder = new ArchivalStatusFinder(row);
+        finder.Visit(predicate.Body);
 
         return finder.Found;
     }
 
-    private sealed class ArchivalStatusFinder : ExpressionVisitor
+    private sealed class ArchivalStatusFinder(ParameterExpression row) : ExpressionVisitor
     {
         public bool Found { get; private set; }
 
         protected override Expression VisitMember(MemberExpression node)
         {
-            if (node.Member.Name == nameof(IEvent.IsArchived) && IsTheEvent(node.Expression))
+            if (node.Member.Name == nameof(IEvent.IsArchived) && IsTheRow(node.Expression))
             {
                 Found = true;
             }
@@ -47,7 +55,7 @@ internal static class ArchivalPredicates
 
         protected override Expression VisitMethodCall(MethodCallExpression node)
         {
-            if (node.Method.DeclaringType == typeof(ArchivedEventExtensions))
+            if (node.Method.DeclaringType == typeof(ArchivedEventExtensions) && IsTheRow(node.Arguments[0]))
             {
                 Found = true;
             }
@@ -55,14 +63,14 @@ internal static class ArchivalPredicates
             return base.VisitMethodCall(node);
         }
 
-        private static bool IsTheEvent(Expression? expression)
+        private bool IsTheRow(Expression? expression)
         {
             while (expression is UnaryExpression { NodeType: ExpressionType.Convert } convert)
             {
                 expression = convert.Operand;
             }
 
-            return expression is ParameterExpression parameter && typeof(IEvent).IsAssignableFrom(parameter.Type);
+            return expression == row;
         }
     }
 }
