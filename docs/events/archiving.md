@@ -19,9 +19,11 @@ longer live.
   `fi_streams`, so the flag is read off the join rather than being copied.
 - An archived stream is excluded from the explorer's recent-streams read.
 - **Archived events are left out of event reads unless you opt in.** The events stay in `fi_events`, but
-  `FetchStreamAsync`, `QueryEventsAsync`, `QueryEventData<T>`, `QueryRawEvents()`, `LoadAsync`, live
-  aggregation and the [async daemon](/events/projections/async-daemon) all read past them. See
+  `FetchStreamAsync`, `QueryEventsAsync`, `QueryEventData<T>`, `QueryRawEvents()`, live aggregation and
+  the [async daemon](/events/projections/async-daemon) all read past them. See
   [Reading archived events](#reading-archived-events).
+- `LoadAsync(eventId)` still returns an archived event, with `IsArchived` set, because naming one event
+  by its id is asking for it.
 - `FetchStreamStateAsync` and `QueryStreamStates()` still answer for the stream, with `IsArchived` set.
 
 ::: warning

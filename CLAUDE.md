@@ -320,7 +320,8 @@ Working, with tests:
   `FisherProjectionStorage.ArchiveStream`. **Archived events are left out of every default event read**
   unless a predicate opts in with `MaybeArchived()` or by naming `IEvent.IsArchived`, which
   `ArchivalPredicates` detects. Anything internal that must reach them takes its own read
-  (`FetchStreamIncludingArchivedAsync`, `QueryEventsIncludingArchivedAsync`), as masking and compacting do
+  (`FetchStreamIncludingArchivedAsync`, `QueryEventsIncludingArchivedAsync`), as masking and compacting do.
+  `LoadAsync(eventId)` is not one of those reads: loading an event by its id returns it even when archived
 - Live aggregation: `AggregateStreamAsync`, `AggregateStreamToLastKnownAsync`, over auto-discovered
   self-aggregating types
 - Inline projections: `Projections.Snapshot<T>` and `Projections.Add`, applied during

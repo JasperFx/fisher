@@ -157,13 +157,16 @@ public class archived_events_are_opt_in : IAsyncLifetime
     }
 
     [Fact]
-    public async Task loading_one_of_them_by_id_finds_nothing()
+    public async Task loading_one_of_them_by_id_still_finds_it()
     {
         var @event = (await everyEventOfAsync(_archived))[0];
 
         await using var query = _store.LightweightSession();
 
-        (await query.Events.LoadAsync(@event.Id, Token)).ShouldBeNull();
+        var loaded = await query.Events.LoadAsync(@event.Id, Token);
+
+        loaded.ShouldNotBeNull();
+        loaded.IsArchived.ShouldBeTrue();
     }
 
     [Fact]

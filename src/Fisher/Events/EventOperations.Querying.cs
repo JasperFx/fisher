@@ -217,10 +217,11 @@ public partial class EventOperations
     }
 
     /// <summary>
-    ///     A single event by its id, or null when no such event exists or it is archived.
+    ///     A single event by its id, or null when no such event exists.
     /// </summary>
     /// <remarks>
-    ///     Polecat leaves archived events out here too. Marten's load by id does not filter them.
+    ///     An archived event is returned, with <see cref="IEvent.IsArchived" /> set. Naming one event by
+    ///     its id is asking for it, so this read has no implicit archive filter, as on Marten.
     /// </remarks>
     public async Task<IEvent?> LoadAsync(Guid id, CancellationToken token = default)
     {
@@ -229,7 +230,7 @@ public partial class EventOperations
         var connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText =
-            $"select {FisherEventsRowReader.ComposeSelectColumns(options)} from {Graph.EventsTableName} where id = @id and is_archived = 0";
+            $"select {FisherEventsRowReader.ComposeSelectColumns(options)} from {Graph.EventsTableName} where id = @id";
         command.CommandTimeout = _session.Options.CommandTimeout;
         command.Parameters.Add(new SqliteParameter("id", id.ToString()) { SqliteType = SqliteType.Text });
 

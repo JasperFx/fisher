@@ -262,10 +262,10 @@ with no signal. Fisher appends them, inside the batch's transaction, with the op
 ### `MaybeArchived()` lives in `Fisher.Events.Archiving`
 
 [Archived events](/events/archiving#reading-archived-events) are left out of event reads unless a
-predicate opts in, as on Marten, and `MaybeArchived()` and `x.IsArchived` work the same way. Two reads
-differ. `LoadAsync(eventId)` leaves an archived event out here and on Polecat, where Marten's returns it.
-`FetchForWriting` always folds the stream here and on Polecat, so an archived stream's aggregate is null
-even for an Inline aggregate, where Marten can hand back the stored document.
+predicate opts in, as on Marten, and `MaybeArchived()` and `x.IsArchived` work the same way.
+`LoadAsync(eventId)` returns an archived event here and on Marten, where Polecat's leaves it out. One read
+differs from Marten: `FetchForWriting` always folds the stream here and on Polecat, so an archived stream's
+aggregate is null even for an Inline aggregate, where Marten can hand back the stored document.
 
 ### Inner-side join predicates are applied
 
