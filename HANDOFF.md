@@ -1004,11 +1004,15 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.97.0 ships 64 suites; Fisher enrolls **63 of them, 773 tests**.
-Fisher passes **773 of them, across all
+`JasperFx.Events.ComplianceTests` 2.98.0 ships 64 suites; Fisher enrolls **63 of them, 779 tests**.
+Fisher passes **779 of them, across all
 63 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
+
+**2.98.0 added six tests to `EventProjectionRegistrationCompliance` and cost nothing.** They pin
+`SubscriptionDescriptor.PublishedTypes` (jasperfx#1102) through `TryCreateUsage`, and all six were green on
+the bump alone: the descriptors are JasperFx's, and Fisher's own projection sources needed no change.
 
 **2.68.0 added five tests to two existing suites and cost nothing** (fisher#241 took the bump for
 `JasperFx.Events.Vectors`). `EventStoreExplorerCompliance` went from 14 to 18 with the four
@@ -1154,9 +1158,9 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 63 suites, 773 tests
+### Green — 63 suites, 779 tests
 
-Event sourcing — 49 suites, 542 tests:
+Event sourcing — 49 suites, 548 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1207,7 +1211,7 @@ Event sourcing — 49 suites, 542 tests:
 | `AsyncDaemonCompliance` | 5 |
 | `CompositeProjectionCompliance` | 3 |
 | `EventProjectionEnrichmentCompliance` | 3 |
-| `EventProjectionRegistrationCompliance` | 3 |
+| `EventProjectionRegistrationCompliance` | 9 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
 Documents — 14 suites, 231 tests, through `FisherDocumentComplianceFixture`:
