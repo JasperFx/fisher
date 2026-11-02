@@ -18,14 +18,60 @@ longer live.
 - A [natural key](/events/natural-keys) no longer resolves an archived stream. The lookup joins
   `fi_streams`, so the flag is read off the join rather than being copied.
 - An archived stream is excluded from the explorer's recent-streams read.
-- The events remain in `fi_events` and remain visible to the [async daemon](/events/projections/async-daemon)
-  and to [stream reads](/events/querying).
+- **Archived events are left out of event reads unless you opt in.** The events stay in `fi_events`, but
+  `FetchStreamAsync`, `QueryEventsAsync`, `QueryEventData<T>`, `QueryRawEvents()`, live aggregation and
+  the [async daemon](/events/projections/async-daemon) all read past them. See
+  [Reading archived events](#reading-archived-events).
+- `LoadAsync(eventId)` still returns an archived event, with `IsArchived` set, because naming one event
+  by its id is asking for it.
+- `FetchStreamStateAsync` and `QueryStreamStates()` still answer for the stream, with `IsArchived` set.
 
 ::: warning
 **Starting a stream over an archived id is still a collision**, not an archive refusal — you get
 `ExistingStreamIdCollisionException`. An archived id is an id in use, and a caller who reused one
 needs a different id rather than an unarchive.
 :::
+
+## Reading archived events
+
+Marten and Polecat filter archived events out of their reads, and Fisher follows the same rule: you have to
+ask for them. There are two ways to ask, both in a predicate over `IEvent`:
+
+<!-- snippet: sample_reading_archived_events -->
+<a id='snippet-sample_reading_archived_events'></a>
+```cs
+// Live and archived events together. MaybeArchived() is in Fisher.Events.Archiving.
+var everything = await session.Events.QueryEventsAsync(
+    x => x.MaybeArchived() && x.StreamId == streamId, token);
+
+// Naming IsArchived replaces the implicit filter, so this finds only archived events...
+var archived = await session.Events.QueryEventsAsync(x => x.IsArchived, token);
+
+// ...and this finds only live ones.
+var live = await session.Events.QueryEventsAsync(x => !x.IsArchived, token);
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/archiving_samples.cs#L21-L31' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_reading_archived_events' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+`QueryRawEvents()` takes the same predicates, and `EventQuery` has no opt-in. `FetchStreamAsync` has no
+opt-in either, as on Marten, so read an archived stream through one of the predicates above. Neither do
+`QueryEventData<T>` and `QueryEventDataAsync<T>`, because those predicates are over the event body, which
+cannot speak for the row. An `IsArchived` member on the body itself has no effect on archiving.
+
+What this means for code built on those reads:
+
+- **`AggregateStreamAsync` folds an archived stream as a stream with no events**: null, or the `state` you
+  passed in. `AggregateStreamToLastKnownAsync` and `FetchLatest` on a live aggregate return null too.
+- **`FetchForWriting` returns a null `Aggregate` with the stream's real version**, and an append through it
+  is refused with `ArchivedStreamException` at `SaveChangesAsync`.
+- **`RebuildSingleStreamAsync` deletes the projected document**, as a full rebuild leaves it gone.
+- **In `Fisher.AspNetCore`, `StreamEvents` and `StreamAggregate` answer `404`**, and `StreamEventState`
+  still answers `200` with `isArchived` set.
+
+[Masking](/events/rewriting#event-data-masking) and [compacting](/events/rewriting#stream-compacting) reach
+archived events through reads of their own, and [`TombstoneStream`](#deleting-a-stream-with-tombstonestream)
+removes them. `UnArchiveStream` returns them to the default reads. The `IEventStore` explorer's
+`ReadStreamAsync` is a diagnostic read and shows them, as it does on Marten and Polecat.
 
 ## Archiving through an `Archived` event
 
@@ -68,7 +114,7 @@ session.Events.TombstoneStream(streamId);
 // session's tenant and in one transaction. A stream that does not exist is a no-op.
 await session.SaveChangesAsync(token);
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/archiving_samples.cs#L19-L28' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_tombstone_stream' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/archiving_samples.cs#L36-L45' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_tombstone_stream' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 There is a `TombstoneStream(string)` twin for string-identified streams. What it does:
@@ -115,7 +161,7 @@ public static async Task PurgeAsync(IDocumentSessionOperations session, Guid str
     await session.SaveChangesAsync(token);
 }
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/archiving_samples.cs#L31-L40' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_tombstone_stream_store_neutral' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/archiving_samples.cs#L48-L57' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_tombstone_stream_store_neutral' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 On the shared contract the members default to throwing `NotSupportedException`, so a store that has

@@ -1,3 +1,5 @@
+using Fisher.Events.Archiving;
+using JasperFx.Events;
 using JasperFx.Events.Documents;
 
 namespace Fisher.Tests.Documentation;
@@ -9,11 +11,26 @@ namespace Fisher.Tests.Documentation;
  * #region here and is pulled into the markdown by mdsnippets, so a sample that stops compiling
  * fails the build rather than going stale in a page nobody rebuilds. The behaviour these samples
  * describe is pinned by StreamTombstoningCompliance (fisher_event_store_compliance.cs) and by
- * Events/fetching_events.cs.
+ * Events/fetching_events.cs and Events/archived_events_are_opt_in.cs.
  */
 
 public static class archiving_samples
 {
+    public static async Task read_archived_events(IDocumentSession session, Guid streamId, CancellationToken token)
+    {
+        #region sample_reading_archived_events
+        // Live and archived events together. MaybeArchived() is in Fisher.Events.Archiving.
+        var everything = await session.Events.QueryEventsAsync(
+            x => x.MaybeArchived() && x.StreamId == streamId, token);
+
+        // Naming IsArchived replaces the implicit filter, so this finds only archived events...
+        var archived = await session.Events.QueryEventsAsync(x => x.IsArchived, token);
+
+        // ...and this finds only live ones.
+        var live = await session.Events.QueryEventsAsync(x => !x.IsArchived, token);
+        #endregion
+    }
+
     public static async Task tombstone_a_stream(IDocumentStore store, Guid streamId, CancellationToken token)
     {
         #region sample_tombstone_stream

@@ -1,12 +1,14 @@
 using System.Collections;
 using System.Data.Common;
 using System.Linq.Expressions;
+using Fisher.Events.Archiving;
 using Fisher.Internal;
 using Fisher.Linq;
 using Fisher.Linq.Members;
 using Fisher.Linq.Parsing;
 using Fisher.Linq.SqlGeneration;
 using JasperFx.Events.Documents;
+using Weasel.Core.SqlGeneration;
 
 namespace Fisher.Events;
 
@@ -74,6 +76,12 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
 
     /// <summary>The scope every query carries whatever the caller composed: the conjoined tenant term, at least.</summary>
     protected abstract void ApplyScope(Statement statement);
+
+    /// <summary>
+    ///     Whether this surface reads <c>fi_events</c> and so leaves archived events out unless a
+    ///     predicate says otherwise. Archived streams are ordinary rows of <c>fi_streams</c>.
+    /// </summary>
+    protected virtual bool LeavesOutArchivedEvents => false;
 
     /// <summary>Materialize the current row, or null to skip it.</summary>
     protected abstract TElement? Read(DbDataReader reader, FisherSession session);
@@ -281,6 +289,13 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
                         + "Supported: Where, OrderBy, OrderByDescending, ThenBy, ThenByDescending, "
                         + "Skip and Take, executed with the async terminators.");
             }
+        }
+
+        // Worked out across every Where, since a Where(...).Where(...) chain is one query.
+        if (LeavesOutArchivedEvents && !calls.Any(x => x.Method.Name == nameof(Queryable.Where)
+                                                       && LambdaOf(x).Body.SpecifiesEventArchivalStatus()))
+        {
+            statement.Wheres.Add(new WhereFragment("is_archived = 0"));
         }
 
         ApplyScope(statement);

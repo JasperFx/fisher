@@ -15,7 +15,8 @@ public partial class EventOperations
     ///     Nothing is stored — the aggregate is rebuilt from the events on every call. The aggregate
     ///     type is discovered by convention (its own <c>Create</c> / <c>Apply</c> / <c>ShouldDelete</c>
     ///     methods) the first time it is asked for, and the resulting aggregator is cached on the event
-    ///     graph.
+    ///     graph. An archived stream's events are out of the read, so it folds as a stream with no
+    ///     events.
     /// </remarks>
     /// <param name="streamId">The stream to fold.</param>
     /// <param name="version">When greater than 0, fold only up to and including this version.</param>
@@ -97,9 +98,10 @@ public partial class EventOperations
     }
 
     private async Task<T?> AggregateStreamAsync<T>(object streamId, long version, DateTimeOffset? timestamp,
-        T? state, long fromVersion, CancellationToken token) where T : class
+        T? state, long fromVersion, CancellationToken token, bool includeArchived = false) where T : class
     {
-        var events = await FetchStreamAsync(streamId, version, timestamp, fromVersion, token).ConfigureAwait(false);
+        var events = await FetchStreamAsync(streamId, version, timestamp, fromVersion, token, includeArchived)
+            .ConfigureAwait(false);
 
         if (events.Count == 0)
         {

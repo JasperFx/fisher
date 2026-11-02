@@ -9,8 +9,7 @@ namespace Fisher.Tests.Events;
 /// <summary>
 ///     Fisher's own pins on <c>IReadOnlyEventStore.QueryEventData&lt;T&gt;</c> (jasperfx#1073) — the
 ///     REFUSAL half of the contract, which the shared <c>EventDataQueryCompliance</c> suite does not
-///     cover, plus the two Fisher-specific answers it cannot see: the order with no <c>OrderBy</c>, and
-///     archived streams.
+///     cover, plus the order with no <c>OrderBy</c>, and archived streams.
 /// </summary>
 /// <remarks>
 ///     Every refusal test seeds data first, so it would FAIL against a silently-match-all provider even
@@ -100,11 +99,10 @@ public class event_data_queries : IAsyncLifetime
     }
 
     /// <summary>
-    ///     Every event stored as the type, archived or not — archiving takes a stream out of the live
-    ///     reads, not out of the store, and <c>QueryEventDataAsync</c> answers the same way.
+    ///     This is a live read like the others, and <c>QueryEventDataAsync</c> answers the same way.
     /// </summary>
     [Fact]
-    public async Task an_archived_stream_s_events_are_still_returned()
+    public async Task an_archived_stream_s_events_are_left_out()
     {
         await using (var session = _store.LightweightSession())
         {
@@ -112,6 +110,7 @@ public class event_data_queries : IAsyncLifetime
             await session.SaveChangesAsync(Token);
         }
 
-        (await Starts.Where(x => x.Name == "Find the ring").CountAsync(Token)).ShouldBe(1);
+        (await Starts.Where(x => x.Name == "Find the ring").CountAsync(Token)).ShouldBe(0);
+        (await Starts.CountAsync(Token)).ShouldBe(1);
     }
 }

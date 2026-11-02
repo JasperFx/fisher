@@ -93,6 +93,10 @@ masking.IncludeStream(streamId, e => e.Version > 5);   // in-memory filter
 masking.IncludeEvents(e => e.Timestamp < cutoff);      // translated to SQL
 ```
 
+Every selector reaches [archived events](/events/archiving#reading-archived-events), which the default
+reads leave out, so an archived stream is erased like any other. `IncludeEvents` can still narrow them
+itself with `e => !e.IsArchived`.
+
 ::: tip
 **`IncludeEvents` is the only selector translated to SQL.** The two `IncludeStream` filter overloads
 take a plain delegate and are applied in memory to an already-fetched stream; `IncludeEvents` takes an
@@ -146,6 +150,8 @@ follows. Live aggregation, `FetchForWriting` and the daemon all inherit it.
   `ShouldDelete` has no state to snapshot, and writing an empty `Compacted<T>` would be worse than
   doing nothing.
 - **Every compacted event's tag rows go**, including the replaced one.
+- **An archived stream is compacted too**, and its snapshot row stays archived. Marten and Polecat read
+  the stream through their default read, so compacting an archived stream does nothing on either.
 
 ### There is no version guard, and that is not an oversight
 

@@ -136,6 +136,36 @@ public class event_stream_results : IAsyncLifetime
         JsonDocument.Parse(Read(body)).RootElement.GetArrayLength().ShouldBe(2);
     }
 
+    /// <summary>
+    ///     Archived events are out of the reads behind these two, so only the stream's metadata still
+    ///     answers for it.
+    /// </summary>
+    [Fact]
+    public async Task an_archived_stream_keeps_its_state_and_answers_404_for_its_events_and_aggregate()
+    {
+        var streamId = await AppendAsync(new LegSailed(12), new LegSailed(8));
+
+        await using var query = _store.LightweightSession();
+        query.Events.ArchiveStream(streamId);
+        await query.SaveChangesAsync(Token);
+
+        var (stateContext, stateBody) = NewContext();
+        await query.StreamEventState(streamId).ExecuteAsync(stateContext);
+
+        stateContext.Response.StatusCode.ShouldBe(StatusCodes.Status200OK);
+        JsonDocument.Parse(Read(stateBody)).RootElement.GetProperty("isArchived").GetBoolean().ShouldBeTrue();
+
+        var (eventsContext, _) = NewContext();
+        await query.StreamEvents(streamId).ExecuteAsync(eventsContext);
+
+        eventsContext.Response.StatusCode.ShouldBe(StatusCodes.Status404NotFound);
+
+        var (aggregateContext, _) = NewContext();
+        await query.StreamAggregate<Voyage>(streamId).ExecuteAsync(aggregateContext);
+
+        aggregateContext.Response.StatusCode.ShouldBe(StatusCodes.Status404NotFound);
+    }
+
     [Fact]
     public async Task a_stream_with_no_events_is_a_404()
     {

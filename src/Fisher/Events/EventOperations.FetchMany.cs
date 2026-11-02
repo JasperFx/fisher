@@ -35,6 +35,10 @@ public partial class EventOperations
     ///         The aggregate write cache applies per stream exactly as it does to a single fetch: a
     ///         stream with a usable baseline reads only the events after it.
     ///     </para>
+    ///     <para>
+    ///         An archived stream comes back as it does from a single fetch: a null aggregate and its real
+    ///         version.
+    ///     </para>
     /// </remarks>
     /// <exception cref="ArgumentException"><paramref name="ids" /> repeats an id.</exception>
     public Task<IReadOnlyList<IEventStream<T>>> FetchManyForWriting<T>(IReadOnlyList<Guid> ids,
@@ -76,7 +80,7 @@ public partial class EventOperations
             return [];
         }
 
-        var versions = await ReadStreamVersionsAsync(ids, token).ConfigureAwait(false);
+        var rows = await ReadStreamRowsAsync(ids, token).ConfigureAwait(false);
 
         // Claim each stream's cached baseline before reading, so the event read can start after it.
         // Take-on-read, as in AggregateForWritingAsync: a claimed entry is ours to fold onto.
@@ -86,11 +90,11 @@ public partial class EventOperations
         foreach (var id in ids)
         {
             var databaseId = DatabaseStreamId(id);
-            var version = versions.TryGetValue(databaseId, out var v) ? v : (long?)null;
-            var plan = new FetchPlan<T>(id, databaseId, version, AggregateCacheKeyFor<T>(id));
+            var (version, isArchived) = rows.TryGetValue(databaseId, out var row) ? row : (null, false);
+            var plan = new FetchPlan<T>(id, databaseId, version, isArchived, AggregateCacheKeyFor<T>(id));
 
-            if (version > 0 && cache.TryTake(plan.CacheKey, out var claimed, out var baseline)
-                            && claimed is T typed && baseline > 0 && baseline <= version)
+            if (plan.Folds && cache.TryTake(plan.CacheKey, out var claimed, out var baseline)
+                           && claimed is T typed && baseline > 0 && baseline <= version)
             {
                 plan.Baseline = typed;
                 plan.FromVersion = baseline + 1;
@@ -99,7 +103,7 @@ public partial class EventOperations
             plans.Add(plan);
         }
 
-        var toRead = plans.Where(x => x.Version > 0 && x.FromVersion <= x.Version).ToList();
+        var toRead = plans.Where(x => x.Folds && x.FromVersion <= x.Version).ToList();
         if (toRead.Count > 0)
         {
             await ReadEventsForPlansAsync(toRead, token).ConfigureAwait(false);
@@ -113,7 +117,7 @@ public partial class EventOperations
             var plan = plans[i];
             T? aggregate = null;
 
-            if (plan.Version > 0)
+            if (plan.Folds)
             {
                 // Same rules as AggregateStreamAsync: nothing new folds to the baseline itself, and a
                 // fold that produced something gets the stream's identity stamped on it.
@@ -139,13 +143,14 @@ public partial class EventOperations
     }
 
     /// <summary>
-    ///     Every requested stream's current version in one statement, keyed by the database's rendering
-    ///     of its id. A stream with no row is simply absent.
+    ///     Every requested stream's current version and archived flag in one statement, keyed by the
+    ///     database's rendering of its id. A stream with no row is simply absent.
     /// </summary>
-    private async Task<Dictionary<string, long>> ReadStreamVersionsAsync<TId>(IReadOnlyList<TId> ids,
-        CancellationToken token) where TId : notnull
+    private async Task<Dictionary<string, (long? Version, bool IsArchived)>> ReadStreamRowsAsync<TId>(
+        IReadOnlyList<TId> ids, CancellationToken token) where TId : notnull
     {
-        var sql = $"select id, version from {Graph.StreamsTableName} where id in (select value from json_each(@ids))";
+        var sql =
+            $"select id, version, is_archived from {Graph.StreamsTableName} where id in (select value from json_each(@ids))";
 
         if (IsConjoined)
         {
@@ -162,24 +167,30 @@ public partial class EventOperations
         });
         BindTenantIfConjoined(command);
 
-        var versions = new Dictionary<string, long>(ids.Count, StringComparer.Ordinal);
+        var rows = new Dictionary<string, (long? Version, bool IsArchived)>(ids.Count, StringComparer.Ordinal);
 
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         while (await reader.ReadAsync(token).ConfigureAwait(false))
         {
-            versions[reader.GetString(0)] = reader.GetInt64(1);
+            rows[reader.GetString(0)] = (reader.GetInt64(1), reader.GetInt64(2) != 0);
         }
 
-        return versions;
+        return rows;
     }
 
     /// <summary>
     ///     Every planned stream's events in one statement, each stream bounded by its own version range.
     /// </summary>
     /// <remarks>
-    ///     The ranges travel as one JSON array and are unpacked into a CTE. <c>json_each</c> is not
-    ///     joined directly because its own <c>id</c> and <c>type</c> columns collide with
-    ///     <c>fi_events</c>' and the canonical select list is unqualified.
+    ///     <para>
+    ///         The ranges travel as one JSON array and are unpacked into a CTE. <c>json_each</c> is not
+    ///         joined directly because its own <c>id</c> and <c>type</c> columns collide with
+    ///         <c>fi_events</c>' and the canonical select list is unqualified.
+    ///     </para>
+    ///     <para>
+    ///         There is no <c>is_archived</c> term. An archived stream has no plan to read, and a stream
+    ///         archived since its version was read must not leave a gap under that version.
+    ///     </para>
     /// </remarks>
     private async Task ReadEventsForPlansAsync<T>(IReadOnlyList<FetchPlan<T>> plans, CancellationToken token)
         where T : class
@@ -286,13 +297,17 @@ public partial class EventOperations
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
-    private sealed class FetchPlan<T>(object id, string databaseId, long? version, AggregateCacheKey cacheKey)
-        where T : class
+    private sealed class FetchPlan<T>(object id, string databaseId, long? version, bool isArchived,
+        AggregateCacheKey cacheKey) where T : class
     {
         public object Id { get; } = id;
         public string DatabaseId { get; } = databaseId;
         public long? Version { get; } = version;
         public AggregateCacheKey CacheKey { get; } = cacheKey;
+
+        /// <summary>Whether there is anything to fold: a stream with events that are not archived.</summary>
+        public bool Folds => Version > 0 && !isArchived;
+
         public T? Baseline { get; set; }
         public long FromVersion { get; set; } = 1;
         public List<IEvent> Events { get; } = [];

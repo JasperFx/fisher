@@ -1,3 +1,4 @@
+using Fisher.Events.Archiving;
 using JasperFx;
 using JasperFx.Events;
 
@@ -297,7 +298,11 @@ public class archiving_streams : IAsyncLifetime
         (await query.Events.FetchStreamStateAsync(_streamId, TestContext.Current.CancellationToken))!
             .IsArchived.ShouldBeTrue();
 
-        var events = await query.Events.FetchStreamAsync(_streamId, token: TestContext.Current.CancellationToken);
+        (await query.Events.FetchStreamAsync(_streamId, token: TestContext.Current.CancellationToken))
+            .ShouldBeEmpty();
+
+        var events = await query.Events.QueryEventsAsync(x => x.MaybeArchived() && x.StreamId == _streamId,
+            TestContext.Current.CancellationToken);
         events.Count.ShouldBe(2);
         events.ShouldAllBe(x => x.IsArchived);
     }

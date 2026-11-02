@@ -19,6 +19,12 @@ public partial class EventOperations
     /// <summary>
     ///     Every event in a stream, in version order.
     /// </summary>
+    /// <remarks>
+    ///     Archived events are left out, so an archived stream reads as empty, as it does on Marten and
+    ///     Polecat. To read them, opt in on <see cref="QueryEventsAsync(System.Linq.Expressions.Expression{Func{IEvent,bool}},CancellationToken)" />:
+    ///     <c>x =&gt; x.MaybeArchived() &amp;&amp; x.StreamId == id</c>. <see cref="FetchStreamStateAsync(Guid,CancellationToken)" />
+    ///     still answers for the stream.
+    /// </remarks>
     /// <param name="streamId">The stream to read.</param>
     /// <param name="version">When greater than 0, read only up to and including this version.</param>
     /// <param name="timestamp">When supplied, read only events at or before this time.</param>
@@ -38,8 +44,28 @@ public partial class EventOperations
         return FetchStreamAsync((object)streamKey, version, timestamp, fromVersion, token);
     }
 
+    /// <summary>
+    ///     A stream with its archived events left in, for the operations that have to reach every stored
+    ///     row. Archiving a stream does not erase it, so masking and compacting cannot read through
+    ///     <see cref="FetchStreamAsync(Guid,long,System.Nullable{DateTimeOffset},long,CancellationToken)" />.
+    /// </summary>
+    internal Task<IReadOnlyList<IEvent>> FetchStreamIncludingArchivedAsync(Guid streamId, long version = 0,
+        DateTimeOffset? timestamp = null, CancellationToken token = default)
+    {
+        AssertGuidIdentity();
+        return FetchStreamAsync((object)streamId, version, timestamp, 0, token, includeArchived: true);
+    }
+
+    /// <inheritdoc cref="FetchStreamIncludingArchivedAsync(Guid,long,System.Nullable{DateTimeOffset},CancellationToken)" />
+    internal Task<IReadOnlyList<IEvent>> FetchStreamIncludingArchivedAsync(string streamKey, long version = 0,
+        DateTimeOffset? timestamp = null, CancellationToken token = default)
+    {
+        AssertStringIdentity();
+        return FetchStreamAsync((object)streamKey, version, timestamp, 0, token, includeArchived: true);
+    }
+
     private async Task<IReadOnlyList<IEvent>> FetchStreamAsync(object streamId, long version,
-        DateTimeOffset? timestamp, long fromVersion, CancellationToken token)
+        DateTimeOffset? timestamp, long fromVersion, CancellationToken token, bool includeArchived = false)
     {
         var options = _session.Options.Events;
         var sql = new StringBuilder("select ")
@@ -47,6 +73,11 @@ public partial class EventOperations
             .Append(" from ")
             .Append(Graph.EventsTableName)
             .Append(" where stream_id = @stream_id");
+
+        if (!includeArchived)
+        {
+            sql.Append(" and is_archived = 0");
+        }
 
         if (IsConjoined)
         {
@@ -188,6 +219,10 @@ public partial class EventOperations
     /// <summary>
     ///     A single event by its id, or null when no such event exists.
     /// </summary>
+    /// <remarks>
+    ///     An archived event is returned, with <see cref="IEvent.IsArchived" /> set. Naming one event by
+    ///     its id is asking for it, so this read has no implicit archive filter, as on Marten.
+    /// </remarks>
     public async Task<IEvent?> LoadAsync(Guid id, CancellationToken token = default)
     {
         var options = _session.Options.Events;

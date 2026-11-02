@@ -117,7 +117,8 @@ internal sealed class FisherReadOnlyEventStore : IReadOnlyEventStore
     ///     <see cref="IEvent" /> envelope (jasperfx#1094). See <see cref="RawEventQueryProvider" />.
     /// </summary>
     /// <remarks>
-    ///     The tenant rule is <see cref="QueryStreamStates" />'s, word for word.
+    ///     The tenant rule is <see cref="QueryStreamStates" />'s, word for word. Archived events are left
+    ///     out unless a predicate opts in.
     /// </remarks>
     /// <exception cref="NotSupportedException">
     ///     A non-null tenant on a store with no tenant dimension at all.

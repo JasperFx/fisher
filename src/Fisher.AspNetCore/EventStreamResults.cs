@@ -274,9 +274,9 @@ public sealed class StreamAggregate<T> : IResult, IEndpointMetadataProvider wher
 
         if (aggregate is null)
         {
-            // The stream exists but folds to nothing — a stream deleted by its own ShouldDelete, or one
-            // holding only events this aggregate ignores. Not the same as "no such stream", but the
-            // same answer to a caller asking for the aggregate.
+            // The stream exists but folds to nothing — a stream deleted by its own ShouldDelete, one
+            // holding only events this aggregate ignores, or an archived one. Not the same as "no such
+            // stream", but the same answer to a caller asking for the aggregate.
             httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
             return;
         }

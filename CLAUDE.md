@@ -317,7 +317,11 @@ Working, with tests:
   deliberately *not* for a `StartStream`, where an archived id is still an id in use and
   `ExistingStreamIdCollisionException` is the more useful answer. An `Archived` event reaching a
   single stream projection that owns the stream archives it too, through
-  `FisherProjectionStorage.ArchiveStream`
+  `FisherProjectionStorage.ArchiveStream`. **Archived events are left out of every default event read**
+  unless a predicate opts in with `MaybeArchived()` or by naming `IEvent.IsArchived`, which
+  `ArchivalPredicates` detects. Anything internal that must reach them takes its own read
+  (`FetchStreamIncludingArchivedAsync`, `QueryEventsIncludingArchivedAsync`), as masking and compacting do.
+  `LoadAsync(eventId)` is not one of those reads: loading an event by its id returns it even when archived
 - Live aggregation: `AggregateStreamAsync`, `AggregateStreamToLastKnownAsync`, over auto-discovered
   self-aggregating types
 - Inline projections: `Projections.Snapshot<T>` and `Projections.Add`, applied during
@@ -6042,9 +6046,8 @@ but untagged, and to a tag query that is indistinguishable from an event that wa
 ⚠️ **Archived events are out of every tag read** (fisher#485, marten#5677): `QueryByTagsAsync`,
 `EventsExistAsync`, `AggregateByTagsAsync`, `FetchForWritingByTags` and the boundary check at commit. All
 of them render through `AppendConditions`, so that is the one place the term lives. They used to see
-archived events while every other event read did not, so a retired stream could still block or satisfy a
-boundary. Marten's master still has the old answer: its issue was auto-closed by an unrelated commit and
-has been reopened.
+archived events, so a retired stream could still block or satisfy a boundary. Marten's master still has the
+old answer: its issue was auto-closed by an unrelated commit and has been reopened.
 
 Query shape: each condition is a `seq_id in (select seq_id from <tag table> where value = ?)`
 subselect, OR'd. **Subselects rather than joins**, because joining several tag tables multiplies rows
