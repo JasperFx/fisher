@@ -10,6 +10,18 @@ on:
         description: 'Package version (e.g. 0.5.0). Leave blank to use the version from Directory.Build.props.'
         required: false
 
+# Trusted publishing (OIDC), rather than a long-lived NUGET_API_KEY secret, the same as Weasel and
+# JasperFx. NuGet/login exchanges this run's GitHub OIDC token for an API key that expires within the
+# hour, so there is no durable credential to rotate: 1.26.0 failed to publish because the shared org
+# secret had expired. `id-token: write` lets the runner request that token. `contents: read` is the
+# checkout, declared explicitly because naming any permission drops the rest to none.
+#
+# The policy on nuget.org names this workflow by file name, so renaming publish.yml means changing the
+# policy too.
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -85,5 +97,14 @@ jobs:
           name: nupkg
           path: ./artifacts/*.nupkg
 
+      # After the suites and the pack, because the key this returns expires. `user` is the nuget.org
+      # account that owns the trusted publishing policy, and a mismatch fails here, before anything
+      # is pushed.
+      - name: Log in to NuGet with trusted publishing
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: jeremydmiller
+
       - name: Push to NuGet
-        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: dotnet nuget push ./artifacts/*.nupkg --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
