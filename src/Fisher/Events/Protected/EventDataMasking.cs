@@ -29,6 +29,11 @@ namespace Fisher.Events.Protected;
 ///         Marten is the same. This is why masking is described as a data-at-rest operation — see
 ///         <see cref="OverwriteEventOperation" />, which carries the same caveat for the same reason.
 ///     </para>
+///     <para>
+///         <b>Every source reads archived events</b>, through reads of its own rather than the default
+///         ones, because archiving a stream does not erase it and an erasure that skipped it would
+///         report success with the protected information still stored.
+///     </para>
 /// </remarks>
 internal sealed class EventDataMasking : IEventDataMasking
 {
@@ -50,13 +55,13 @@ internal sealed class EventDataMasking : IEventDataMasking
 
     public IEventDataMasking IncludeStream(Guid streamId)
     {
-        _sources.Add((s, t) => s.Events.FetchStreamAsync(streamId, token: t));
+        _sources.Add((s, t) => s.Events.FetchStreamIncludingArchivedAsync(streamId, token: t));
         return this;
     }
 
     public IEventDataMasking IncludeStream(string streamKey)
     {
-        _sources.Add((s, t) => s.Events.FetchStreamAsync(streamKey, token: t));
+        _sources.Add((s, t) => s.Events.FetchStreamIncludingArchivedAsync(streamKey, token: t));
         return this;
     }
 
@@ -66,7 +71,7 @@ internal sealed class EventDataMasking : IEventDataMasking
 
         _sources.Add(async (s, t) =>
         {
-            var events = await s.Events.FetchStreamAsync(streamId, token: t).ConfigureAwait(false);
+            var events = await s.Events.FetchStreamIncludingArchivedAsync(streamId, token: t).ConfigureAwait(false);
             return events.Where(filter).ToList();
         });
 
@@ -79,7 +84,7 @@ internal sealed class EventDataMasking : IEventDataMasking
 
         _sources.Add(async (s, t) =>
         {
-            var events = await s.Events.FetchStreamAsync(streamKey, token: t).ConfigureAwait(false);
+            var events = await s.Events.FetchStreamIncludingArchivedAsync(streamKey, token: t).ConfigureAwait(false);
             return events.Where(filter).ToList();
         });
 
@@ -98,7 +103,7 @@ internal sealed class EventDataMasking : IEventDataMasking
     {
         ArgumentNullException.ThrowIfNull(filter);
 
-        _sources.Add((s, t) => s.Events.QueryEventsAsync(filter, t));
+        _sources.Add((s, t) => s.Events.QueryEventsIncludingArchivedAsync(filter, t));
         return this;
     }
 

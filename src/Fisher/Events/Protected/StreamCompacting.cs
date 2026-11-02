@@ -116,15 +116,21 @@ internal static class StreamCompacting
     ///     set.
     /// </summary>
     /// <remarks>
-    ///     <c>Version</c> defaulting to 0 means "the latest", which is exactly what
-    ///     <c>FetchStreamAsync</c>'s own default means — so the request's default passes through
-    ///     untranslated.
+    ///     <para>
+    ///         <c>Version</c> defaulting to 0 means "the latest", which is exactly what
+    ///         <c>FetchStreamAsync</c>'s own default means — so the request's default passes through
+    ///         untranslated.
+    ///     </para>
+    ///     <para>
+    ///         An archived stream is still compacted, so this is not the default read. Its snapshot row
+    ///         stays archived, because the replace rewrites the body and leaves the flag alone.
+    ///     </para>
     /// </remarks>
     private static Task<IReadOnlyList<IEvent>> FetchAsync<T>(StreamCompactingRequest<T> request,
         FisherSession session) where T : class
         => session.Options.EventGraph.StreamIdentity == StreamIdentity.AsGuid
-            ? session.Events.FetchStreamAsync(request.StreamId!.Value, request.Version, request.Timestamp,
-                token: request.CancellationToken)
-            : session.Events.FetchStreamAsync(request.StreamKey!, request.Version, request.Timestamp,
-                token: request.CancellationToken);
+            ? session.Events.FetchStreamIncludingArchivedAsync(request.StreamId!.Value, request.Version,
+                request.Timestamp, request.CancellationToken)
+            : session.Events.FetchStreamIncludingArchivedAsync(request.StreamKey!, request.Version,
+                request.Timestamp, request.CancellationToken);
 }

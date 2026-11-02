@@ -259,6 +259,14 @@ Polecat **no-ops** the three members involved, so an event-raising projection th
 with no signal. Fisher appends them, inside the batch's transaction, with the optimistic guard.
 :::
 
+### `MaybeArchived()` lives in `Fisher.Events.Archiving`
+
+[Archived events](/events/archiving#reading-archived-events) are left out of event reads unless a
+predicate opts in, as on Marten, and `MaybeArchived()` and `x.IsArchived` work the same way. Two reads
+differ. `LoadAsync(eventId)` leaves an archived event out here and on Polecat, where Marten's returns it.
+`FetchForWriting` always folds the stream here and on Polecat, so an archived stream's aggregate is null
+even for an Inline aggregate, where Marten can hand back the stored document.
+
 ### Inner-side join predicates are applied
 
 ::: warning

@@ -36,6 +36,7 @@ internal static class MethodCallParserRegistry
         new CollectionAll(),
         new IsEmpty(),
         new MatchesSqlParser(),
+        new MaybeArchivedParser(),
         new ObjectEquals()
     ];
 

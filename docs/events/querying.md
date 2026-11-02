@@ -170,9 +170,9 @@ var heavy = await reader.QueryEventData<OrderPlaced>()
     .ToListAsync(); // JasperFx.Events.Documents.DocumentQueryableExtensions
 ```
 
-It answers every event stored as exactly `OrderPlaced`, across every stream, archived streams
-included. The member locators and the `type` filter are the ones above, so a same-shaped event of
-another type never matches. `Where`, `OrderBy`/`ThenBy` (and their descending forms), `Skip` and `Take`
+It answers every event stored as exactly `OrderPlaced`, across every stream, leaving out
+[archived events](/events/archiving#reading-archived-events). The member locators and the `type` filter are
+the ones above, so a same-shaped event of another type never matches. `Where`, `OrderBy`/`ThenBy` (and their descending forms), `Skip` and `Take`
 translate. Anything else, including an untranslatable member, fails the query by name rather than
 matching every event. Execute it with the shared async terminators (`ToListAsync`, `CountAsync`,
 `AnyAsync`, `FirstOrDefaultAsync`), as for `QueryStreamStates()`. With no `OrderBy` the order is append

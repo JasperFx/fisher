@@ -119,3 +119,20 @@ internal sealed class ObjectEquals : IMethodCallParser
         return expression;
     }
 }
+
+/// <summary>
+///     <c>x.MaybeArchived()</c> → always true.
+/// </summary>
+/// <remarks>
+///     The fragment only keeps the predicate well formed. The opt-in itself is the read seeing the call,
+///     through <see cref="Events.Archiving.ArchivalPredicates" />, and leaving out its
+///     <c>is_archived = 0</c> term.
+/// </remarks>
+internal sealed class MaybeArchivedParser : IMethodCallParser
+{
+    public bool Matches(MethodCallExpression expression)
+        => expression.Method.DeclaringType == typeof(Events.Archiving.ArchivedEventExtensions);
+
+    public ISqlFragment Parse(IMemberResolver memberFactory, MethodCallExpression expression)
+        => new WhereFragment("1=1");
+}

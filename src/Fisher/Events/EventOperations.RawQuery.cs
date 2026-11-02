@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using Fisher.Events.Archiving;
 using Fisher.Events.Internal;
 using Fisher.Events.Storage;
 using Fisher.Linq.Members;
@@ -45,12 +46,36 @@ public partial class EventOperations
     ///         read events it does not know about. That is the opposite of the daemon's loader, which
     ///         must not skip.
     ///     </para>
+    ///     <para>
+    ///         <b>Archived events are left out unless the predicate says otherwise</b>, as they are from
+    ///         Marten's <c>QueryAllRawEvents()</c>: <see cref="ArchivedEventExtensions.MaybeArchived" />
+    ///         reads live and archived events together, and a predicate naming
+    ///         <see cref="IEvent.IsArchived" /> decides for itself.
+    ///     </para>
     /// </remarks>
-    public async Task<IReadOnlyList<IEvent>> QueryEventsAsync(Expression<Func<IEvent, bool>> filter,
+    public Task<IReadOnlyList<IEvent>> QueryEventsAsync(Expression<Func<IEvent, bool>> filter,
         CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(filter);
 
+        return QueryEventsAsync(filter, filter.Body.SpecifiesEventArchivalStatus(), token);
+    }
+
+    /// <summary>
+    ///     The same read with archived events left in whatever the predicate names, for masking, which
+    ///     has to reach them. A predicate naming <see cref="IEvent.IsArchived" /> still narrows it.
+    /// </summary>
+    internal Task<IReadOnlyList<IEvent>> QueryEventsIncludingArchivedAsync(Expression<Func<IEvent, bool>> filter,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+
+        return QueryEventsAsync(filter, true, token);
+    }
+
+    private async Task<IReadOnlyList<IEvent>> QueryEventsAsync(Expression<Func<IEvent, bool>> filter,
+        bool includeArchived, CancellationToken token)
+    {
         var options = _session.Options.Events;
         var predicate = new WhereClauseParser(new EventMemberFactory(Graph)).Parse(filter.Body);
 
@@ -62,6 +87,11 @@ public partial class EventOperations
         builder.Append(" where ");
 
         predicate.Apply(builder);
+
+        if (!includeArchived)
+        {
+            builder.Append(" and is_archived = 0");
+        }
 
         if (IsConjoined)
         {
@@ -138,6 +168,10 @@ public partial class EventOperations
     ///         the property the column format was chosen for. Bounds are rendered at the store's own
     ///         millisecond precision, so a bound taken from a read-back <see cref="IEvent.Timestamp" />
     ///         compares equal to its own row, which is what makes the window inclusive in practice.
+    ///     </para>
+    ///     <para>
+    ///         Archived events are left out of the page and the count. <see cref="EventQuery" /> has no
+    ///         field to ask for them, on any store.
     ///     </para>
     /// </remarks>
     public async Task<PagedEvents> QueryEventsAsync(EventQuery query, CancellationToken token = default)
@@ -285,6 +319,9 @@ public partial class EventOperations
             builder.Append(first ? " where " : " and ");
             first = false;
         }
+
+        Prefix();
+        builder.Append("is_archived = 0");
 
         void Clause(string column, string comparison, object value)
         {
@@ -587,6 +624,10 @@ public partial class EventOperations
     ///         diagnostic or reporting query. fisher#16's expression indexes are the mechanism if one
     ///         ever needs to be fast, and they would apply here unchanged.
     ///     </para>
+    ///     <para>
+    ///         Archived events are left out, and there is no opt-in: the predicate is over the body, which
+    ///         cannot speak for the row. Marten's <c>QueryRawEventDataOnly&lt;T&gt;()</c> is the same.
+    ///     </para>
     /// </remarks>
     public async Task<IReadOnlyList<T>> QueryEventDataAsync<T>(Expression<Func<T, bool>> filter,
         CancellationToken token = default) where T : class
@@ -610,7 +651,7 @@ public partial class EventOperations
         // doc_type discriminator.
         builder.Append(" where type = ");
         builder.AppendParameter(Graph.EventMappingFor(typeof(T)).EventTypeName);
-        builder.Append(" and ");
+        builder.Append(" and is_archived = 0 and ");
 
         predicate.Apply(builder);
 

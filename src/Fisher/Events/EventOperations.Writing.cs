@@ -111,6 +111,11 @@ public partial class EventOperations
     ///         read half of a read-modify-write whose guard is the stream's version — so folding the
     ///         stream is what the version it returns has to agree with.
     ///     </para>
+    ///     <para>
+    ///         An archived stream comes back with a null <see cref="IEventStream{T}.Aggregate" /> and its
+    ///         real version, and an append through it is refused at commit with
+    ///         <see cref="ArchivedStreamException" />, not by starting a new stream.
+    ///     </para>
     /// </remarks>
     public Task<IEventStream<T>> FetchForWriting<T>(Guid id, CancellationToken cancellation = default)
         where T : class
@@ -561,7 +566,7 @@ public partial class EventOperations
     private async Task<IEventStream<T>> FetchForWritingAsync<T>(object streamId, long? expectedVersion,
         CancellationToken token) where T : class
     {
-        var version = await ReadStreamVersionAsync(streamId, token).ConfigureAwait(false);
+        var (version, isArchived) = await ReadStreamRowAsync(streamId, token).ConfigureAwait(false);
 
         if (expectedVersion.HasValue && (version ?? 0) != expectedVersion.Value)
         {
@@ -569,8 +574,12 @@ public partial class EventOperations
                 version ?? 0);
         }
 
+        // Decided off the stream's row rather than by letting the fold find no events. A cached baseline
+        // behind an archived stream would read no delta and come back labelled with the stream's version,
+        // and the write-back would store it there, so the events in between would never be folded after
+        // an un-archive. Leaving the cache alone also keeps a good baseline for that un-archive.
         T? aggregate = null;
-        if (version > 0)
+        if (version > 0 && !isArchived)
         {
             aggregate = await AggregateForWritingAsync<T>(streamId, version.Value, token).ConfigureAwait(false);
         }
@@ -632,10 +641,15 @@ public partial class EventOperations
         // Bounded by the version the caller read (fisher#486). An append committing between that read and
         // this fold would otherwise land in an aggregate labelled with the older version, and the
         // write-back would store it, so the next fetch folds that event a second time.
+        //
+        // Archived events stay in this read. The caller has already seen a live stream, so a stream
+        // archived since then must not leave a gap under the version this fold is labelled with.
         var aggregate = cache.TryTake(key, out var claimed, out var baseline) && claimed is T typed
                         && baseline > 0 && baseline <= version
-            ? await AggregateStreamAsync<T>(streamId, version, null, typed, baseline + 1, token).ConfigureAwait(false)
-            : await AggregateStreamAsync<T>(streamId, version, null, null, 0, token).ConfigureAwait(false);
+            ? await AggregateStreamAsync<T>(streamId, version, null, typed, baseline + 1, token, includeArchived: true)
+                .ConfigureAwait(false)
+            : await AggregateStreamAsync<T>(streamId, version, null, null, 0, token, includeArchived: true)
+                .ConfigureAwait(false);
 
         if (aggregate is not null)
         {
@@ -768,9 +782,9 @@ public partial class EventOperations
     /// <summary>
     ///     The current version of a stream, or null when it does not exist.
     /// </summary>
-    private async Task<long?> ReadStreamVersionAsync(object streamId, CancellationToken token)
+    private async Task<(long? Version, bool IsArchived)> ReadStreamRowAsync(object streamId, CancellationToken token)
     {
-        var sql = $"select version from {Graph.StreamsTableName} where id = @stream_id";
+        var sql = $"select version, is_archived from {Graph.StreamsTableName} where id = @stream_id";
 
         if (IsConjoined)
         {
@@ -792,13 +806,15 @@ public partial class EventOperations
             });
         }
 
-        var result = await command.ExecuteScalarAsync(token).ConfigureAwait(false);
+        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
 
-        return result is null or DBNull ? null : Convert.ToInt64(result);
+        return await reader.ReadAsync(token).ConfigureAwait(false)
+            ? (reader.GetInt64(0), reader.GetInt64(1) != 0)
+            : (null, false);
     }
 
     private async Task<long> RequireStreamVersionAsync(object streamId, CancellationToken token)
-        => await ReadStreamVersionAsync(streamId, token).ConfigureAwait(false)
+        => (await ReadStreamRowAsync(streamId, token).ConfigureAwait(false)).Version
            ?? throw new Fisher.Exceptions.NonExistentStreamException(streamId);
 
     /// <summary>

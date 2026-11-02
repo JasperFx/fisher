@@ -317,7 +317,10 @@ Working, with tests:
   deliberately *not* for a `StartStream`, where an archived id is still an id in use and
   `ExistingStreamIdCollisionException` is the more useful answer. An `Archived` event reaching a
   single stream projection that owns the stream archives it too, through
-  `FisherProjectionStorage.ArchiveStream`
+  `FisherProjectionStorage.ArchiveStream`. **Archived events are left out of every default event read**
+  unless a predicate opts in with `MaybeArchived()` or by naming `IEvent.IsArchived`, which
+  `ArchivalPredicates` detects. Anything internal that must reach them takes its own read
+  (`FetchStreamIncludingArchivedAsync`, `QueryEventsIncludingArchivedAsync`), as masking and compacting do
 - Live aggregation: `AggregateStreamAsync`, `AggregateStreamToLastKnownAsync`, over auto-discovered
   self-aggregating types
 - Inline projections: `Projections.Snapshot<T>` and `Projections.Add`, applied during

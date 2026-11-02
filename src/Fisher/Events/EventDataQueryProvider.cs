@@ -33,10 +33,10 @@ namespace Fisher.Events;
 ///         another alias, so it is never returned — the suite's <c>BargeUnloaded</c> decoy.
 ///     </para>
 ///     <para>
-///         Archived events are included: the contract is every event stored as <typeparamref name="T" />,
-///         and archiving moves a stream out of the live reads, not out of the store — the same answer
-///         <c>QueryEventDataAsync</c> gives. With no <c>OrderBy</c> the order is <c>seq_id</c>, which is
-///         also the final tiebreak under one, so paging over a member with repeated values is stable.
+///         Archived events are left out, the same answer <c>QueryEventDataAsync</c> gives, and with no
+///         opt-in, because a predicate here is over the body. With no <c>OrderBy</c> the order is
+///         <c>seq_id</c>, which is also the final tiebreak under one, so paging over a member with repeated
+///         values is stable.
 ///     </para>
 ///     <para>
 ///         <b>This is a scan.</b> There is no index over <c>fi_events.data</c>, which is honest for a
@@ -64,6 +64,8 @@ internal sealed class EventDataQueryProvider<T> : EventTableQueryProvider<T> whe
     protected override string Origin => $"QueryEventData<{typeof(T).Name}>()";
 
     protected override string QueryKind => "event-data query";
+
+    protected override bool LeavesOutArchivedEvents => true;
 
     protected override IMemberResolver CreateMemberResolver() => new MemberFactory(Store.Options);
 

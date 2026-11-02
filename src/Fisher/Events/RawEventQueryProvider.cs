@@ -26,6 +26,11 @@ namespace Fisher.Events;
 ///         unresolvable <c>dotnet_type</c> is skipped as the stream reads skip it. With no <c>OrderBy</c>
 ///         the order is <c>seq_id</c>, which is also the final tiebreak.
 ///     </para>
+///     <para>
+///         Archived events are left out unless a predicate opts in with
+///         <see cref="Fisher.Events.Archiving.ArchivedEventExtensions.MaybeArchived" /> or names
+///         <see cref="IEvent.IsArchived" />.
+///     </para>
 /// </remarks>
 internal sealed class RawEventQueryProvider : EventTableQueryProvider<IEvent>
 {
@@ -38,6 +43,8 @@ internal sealed class RawEventQueryProvider : EventTableQueryProvider<IEvent>
     protected override string QueryKind => "raw event query";
 
     protected override string ElementName => nameof(IEvent);
+
+    protected override bool LeavesOutArchivedEvents => true;
 
     protected override IMemberResolver CreateMemberResolver() => new EventMemberFactory(Graph);
 
