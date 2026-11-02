@@ -397,8 +397,40 @@
              advisory lock), and #615/#621/#625/#627/#628/#629 (Weasel.EntityFrameworkCore, which
              Fisher.EntityFrameworkCore does not reference — it takes
              Microsoft.EntityFrameworkCore.Relational alone). -->
-        <PackageVersion Include="Weasel.Sqlite" Version="9.47.1" />
-        <PackageVersion Include="Weasel.Storage" Version="9.47.1" />
+        <!-- Weasel 9.48.0 (from 9.47.1). ADOPTED as-is, no Fisher code changes. Almost all of this
+
+             The JasperFx floor: Weasel.Core 9.48.0 declares JasperFx >= 2.98.0 and Weasel.Storage
+             declares JasperFx.Events >= 2.98.0, both read from the published nuspec. Already satisfied
+             here, because the JasperFx 2.98.0 bump landed on its own ahead of this one; at 2.97.0 the
+             restore fails outright with NU1605, a package downgrade promoted to an error, rather than
+             resolving quietly upward.
+             release is SQL Server, MySQL or Oracle; what reaches Weasel.Sqlite is the parameter-type
+             work, and even there SQLite's type affinity absorbs most of it.
+
+             weasel#758/#759 — the parameter-type catch-all. SqliteProvider's private resolver ended in
+             `?? SqliteType.Text`, which can never return null, so determineParameterType always
+             reported success and every fall-through branch after the first was dead code, taking
+             weasel#404's "null means unmapped, defer to the driver" with it. An unmapped type now
+             defers, and ToParameterType THROWS for one rather than answering Text. Fisher's one call
+             site is SqliteStorageDialect.TypeForType, which short-circuits Guid to Text itself
+             and otherwise passes the id and column types Weasel maps, so the throwing path needs a
+             type Weasel has no mapping for at all.
+
+             weasel#761 — an enum parameter now resolves by EnumStorage, defaulting to the integer
+             type, and arrays defer instead of binding as Text. Measured as INERT on SQLite rather
+             than assumed: type affinity stores the underlying integer whether the parameter is bound
+             as Text or Integer, so an enum lands identically either way. The new
+             ToParameterType/TryGetDbType/TryGetDbTypeForValue overloads taking an EnumStorage are
+             additive, defaulted on the interface.
+
+             INERT: weasel#762 (SQL Server string Unicode precedence, documentation only), weasel#763
+             (DateOnly/TimeOnly on MySQL and Oracle), weasel#764, weasel#765 and weasel#766 (SQL
+             Server partitioning culture, partition DDL re-runnability and sp_getapplock), and
+             MySqlConnector 2.6.1 for GHSA-473q-m89c-ghf8, which no Fisher package resolves.
+
+             Riding along: JasperFx / JasperFx.Events 2.98.0. -->
+        <PackageVersion Include="Weasel.Sqlite" Version="9.48.0" />
+        <PackageVersion Include="Weasel.Storage" Version="9.48.0" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
