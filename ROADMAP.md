@@ -5,8 +5,8 @@ architecture and the SQLite-specific decisions.
 
 Status: **fourteen open issues: eleven are the Fisher 2.0 milestone, and the other three are small or
 waiting.** The 2.0 issues are Fisher's share of the Critter Stack .NET 11 release train. Of the other three, one
-is an unreproduced intermittent kept open on evidence, one is blocked upstream, and one is a missing
-`EventStoreUsage` value. 1.5.0 closed both of 1.4.0's
+is blocked upstream, one is the Fisher 1.28.0 release itself, and one is taking JasperFx 2.100's compliance
+additions. 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
@@ -339,14 +339,12 @@ adopting the lifted shared bases, [#466](https://github.com/JasperFx/fisher/issu
 [#468](https://github.com/JasperFx/fisher/issues/468) an Aspire hosting helper, and
 [#469](https://github.com/JasperFx/fisher/issues/469) the migration guide. None of it lands in a 1.x release.
 
-[#189](https://github.com/JasperFx/fisher/issues/189) is an unreproduced flake with 65 clean runs
-against it, and stays open on evidence rather than on work outstanding.
-
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.
 
-[#510](https://github.com/JasperFx/fisher/issues/510) is the one small item: `EventStoreUsage` does not report
-the event store's `TenancyStyle`, where Polecat does.
+[#517](https://github.com/JasperFx/fisher/issues/517) is the Fisher 1.28.0 release, and
+[#519](https://github.com/JasperFx/fisher/issues/519) takes JasperFx 2.100's compliance additions: tombstoned
+natural keys, in-flight appends, tenant switching and the suite inventory.
 <!-- /open-issues -->
 
 [#243](https://github.com/JasperFx/fisher/issues/243) and
