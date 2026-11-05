@@ -370,6 +370,15 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     ///     committed one — cannot exist here, which is the same reason <c>FisherHighWaterDetector</c> has
     ///     no gap-skipping (committed sequences below the mark can never appear later).
     ///     <c>high_water_contiguity_audit</c> is the local pin of that property.
+    ///     <para>
+    ///         Alternatives checked for fisher#519, none of which help: <b>WAL</b> lets readers run beside
+    ///         the writer but still admits exactly one writer; <b>DEFERRED</b> versus <c>IMMEDIATE</c> only
+    ///         changes when the lock is taken — a deferred transaction takes it at its first write, which
+    ///         is the very write the fact needs held; and <b>a second database file</b> would make the held
+    ///         row invisible to the store under test, so the daemon could never project it and the fact
+    ///         would assert nothing about this store. The sequence has to be allocated by the store's own
+    ///         append, and that allocation is under the file's write lock.
+    ///     </para>
     /// </summary>
     public override bool SupportsHoldingAnAppendOpen => false;
 
