@@ -1,7 +1,13 @@
+using Fisher.Tests.Compliance;
 using JasperFx.Events.ComplianceTests;
 using Shouldly;
 
-namespace Fisher.Tests.Compliance;
+// Deliberately NOT Fisher.Tests.Compliance, although it sits beside the fixtures it audits:
+// scripts/check_scoreboard.py counts every test class in that namespace as an enrolled compliance suite,
+// and this class is an audit of the enrollment, not a suite JasperFx ships. In that namespace it would
+// read as a sixty-fourth enrolled suite of the sixty-four 2.100.0 ships, while it exists to prove that
+// exactly one of them (SingleTenantedEventSlicingCompliance) is not enrolled.
+namespace Fisher.Tests;
 
 /// <summary>
 ///     jasperfx#1123 / fisher#519 — a compliance suite can never be left out silently. Every leaf suite
