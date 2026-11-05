@@ -121,18 +121,17 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     internal Weasel.Sqlite.SqliteObjectName NaturalKeyTableName(Type aggregateType)
         => FisherTableNaming.ObjectFor(DatabaseSchemaName, NaturalKeySuffixFor(aggregateType));
 
-    /// <summary>
-    ///     The quoted lookup table of every natural-key aggregate the store has registered (fisher#519).
-    /// </summary>
-    internal IEnumerable<string> QuotedNaturalKeyTableNames()
-        => _options.Projections.NaturalKeys.Select(x => QuotedNaturalKeyTableName(x.AggregateType));
-
     /// <inheritdoc cref="NaturalKeyTableName" />
     internal string QuotedNaturalKeyTableName(Type aggregateType)
         => FisherTableNaming.QuotedTableName(DatabaseSchemaName, NaturalKeySuffixFor(aggregateType));
 
     private static string NaturalKeySuffixFor(Type aggregateType)
         => $"natural_key_{ToEventTypeName(aggregateType.Name)}";
+
+    /// <summary>
+    ///     The natural keys the registered aggregate projections declare.
+    /// </summary>
+    internal IReadOnlyList<NaturalKeyDefinition> NaturalKeyDefinitions() => _options.Projections.NaturalKeys;
 
     internal IEnumerable<NaturalKeyTable> BuildNaturalKeyTables(
         IEnumerable<NaturalKeyDefinition> definitions)

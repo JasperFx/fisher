@@ -12,10 +12,10 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2986 tests green on net9.0 and net10.0** — 2915 in `Fisher.Tests`, 40 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 779 of
-them are shared cross-store compliance tests — 548 event sourcing and 231 document.
-On JasperFx **2.98.0** / Weasel **9.48.0**.
+**2994 tests green on net9.0 and net10.0** — 2923 in `Fisher.Tests`, 40 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 783 of
+them are shared cross-store compliance tests — 552 event sourcing and 231 document.
+On JasperFx **2.100.0** / Weasel **9.49.0**.
 
 ## The JasperFx 2.95.0 bump — the CritterWatch 1.1 checklist (fisher#475), and fisher#372
 
@@ -1004,8 +1004,8 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.98.0 ships 64 suites; Fisher enrolls **63 of them, 779 tests**.
-Fisher passes **779 of them, across all
+`JasperFx.Events.ComplianceTests` 2.100.0 ships 64 suites; Fisher enrolls **63 of them, 783 tests**.
+Fisher passes **783 of them, across all
 63 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
@@ -1158,9 +1158,9 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 63 suites, 779 tests
+### Green — 63 suites, 783 tests
 
-Event sourcing — 49 suites, 548 tests:
+Event sourcing — 49 suites, 552 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1169,7 +1169,7 @@ Event sourcing — 49 suites, 548 tests:
 | `ProjectionScenarioCompliance` | 20 |
 | `StringStreamIdentityCompliance` | 21 |
 | `EventStoreExplorerCompliance` | 18 |
-| `NaturalKeyCompliance` | 17 |
+| `NaturalKeyCompliance` | 19 |
 | `StreamArchivingCompliance` | 20 |
 | `StreamTombstoningCompliance` | 9 |
 | `ProjectionFloorCompliance` | 9 |
@@ -1181,7 +1181,7 @@ Event sourcing — 49 suites, 548 tests:
 | `StreamQueryPlanCompliance` | 13 |
 | `FetchLatestCompliance` | 12 |
 | `AlwaysEnforceConsistencyCompliance` | 11 |
-| `ConjoinedEventTenancyCompliance` | 21 |
+| `ConjoinedEventTenancyCompliance` | 22 |
 | `EventDataMaskingCompliance` | 11 |
 | `RebuildAndCatchUpCompliance` | 11 |
 | `StreamCompactingCompliance` | 13 |
@@ -1208,7 +1208,7 @@ Event sourcing — 49 suites, 548 tests:
 | `AggregateToManyCompliance` | 5 |
 | `RebuildConcurrencyCapCompliance` | 5 |
 | `ActivityCorrelationCompliance` | 4 |
-| `AsyncDaemonCompliance` | 5 |
+| `AsyncDaemonCompliance` | 6 |
 | `CompositeProjectionCompliance` | 3 |
 | `EventProjectionEnrichmentCompliance` | 3 |
 | `EventProjectionRegistrationCompliance` | 9 |
