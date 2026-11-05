@@ -94,6 +94,22 @@ internal sealed class TombstoneStreamOperation : Weasel.Storage.IStorageOperatio
                             """);
         }
 
+        // The stream's natural key goes with it (fisher#522): the lookup table has no foreign key, so
+        // nothing else would remove the row, and a key that outlived its stream could never be claimed
+        // again. Scoped to the tenant under conjoined tenancy, where other tenants keep theirs.
+        var streamColumn = _events.StreamIdentity == JasperFx.Events.StreamIdentity.AsGuid ? "stream_id" : "stream_key";
+        var tenantTerm = _events.TenancyStyle == JasperFx.MultiTenancy.TenancyStyle.Conjoined
+            ? " and tenant_id = @tenant_id"
+            : "";
+
+        foreach (var definition in _events.NaturalKeyDefinitions())
+        {
+            builder.Append($"""
+                            delete from {_events.QuotedNaturalKeyTableName(definition.AggregateType)}
+                            where {streamColumn} = @id{tenantTerm};
+                            """);
+        }
+
         builder.Append($"""
                         delete from {_events.EventsTableName}
                         where stream_id = @id and tenant_id = @tenant_id;
