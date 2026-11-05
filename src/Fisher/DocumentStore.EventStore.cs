@@ -640,6 +640,9 @@ public partial class DocumentStore : IEventStore
         usage.AddValue(nameof(EventGraph.AppendMode), EventGraph.AppendMode);
         usage.AddValue(nameof(Options.DatabaseSchemaName), Options.DatabaseSchemaName);
         usage.AddValue(nameof(Options.AutoCreateSchemaObjects), Options.AutoCreateSchemaObjects);
+        // The EVENTS' tenancy, which is not the documents': a store can be single-tenanted for events and
+        // conjoined for documents, and a console must not infer one from the other (fisher#510).
+        usage.AddValue(nameof(EventGraph.TenancyStyle), EventGraph.TenancyStyle);
 
         // jasperfx#434 — surface the effective cap so a rebuild orchestrator can size itself off the
         // wire rather than guessing.

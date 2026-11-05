@@ -2,6 +2,8 @@ using JasperFx;
 using JasperFx.Events;
 using JasperFx.Events.Descriptors;
 using JasperFx.Events.Projections;
+using JasperFx.MultiTenancy;
+using Fisher.Events;
 
 namespace Fisher.Tests.Events;
 
@@ -251,6 +253,35 @@ public class event_store_usage : IAsyncLifetime
 
         usage.ShouldNotBeNull();
         usage.Subscriptions.ShouldNotBeEmpty();
+    }
+
+    /// <summary>
+    ///     fisher#510: the event tenancy style is reported, and it is the EVENTS' — a store with a
+    ///     conjoined document type but single-tenanted events must not read as conjoined.
+    /// </summary>
+    [Fact]
+    public async Task the_event_tenancy_style_is_reported_as_single_by_default()
+    {
+        var usage = await TheUsage();
+
+        usage.PropertyFor(nameof(EventGraph.TenancyStyle))!.Value.ShouldBe(nameof(TenancyStyle.Single));
+    }
+
+    [Fact]
+    public async Task conjoined_event_tenancy_is_reported()
+    {
+        using var db = TemporaryDatabase.Create("usage-conjoined");
+        await using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = db.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Events.TenancyStyle = TenancyStyle.Conjoined;
+        });
+
+        var usage = await ((IEventStore)store).TryCreateUsage(Token);
+
+        usage.ShouldNotBeNull();
+        usage.PropertyFor(nameof(EventGraph.TenancyStyle))!.Value.ShouldBe(nameof(TenancyStyle.Conjoined));
     }
 }
 
