@@ -3,10 +3,9 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **fourteen open issues: eleven are the Fisher 2.0 milestone, and the other three are small or
-waiting.** The 2.0 issues are Fisher's share of the Critter Stack .NET 11 release train. Of the other three, one
-is blocked upstream, one is the Fisher 1.28.0 release itself, and one is taking JasperFx 2.100's compliance
-additions. 1.5.0 closed both of 1.4.0's
+Status: **thirteen open issues: eleven are the Fisher 2.0 milestone, and the other two are small or
+waiting.** The 2.0 issues are Fisher's share of the Critter Stack .NET 11 release train. Of the other two, one
+is blocked upstream and one is taking JasperFx 2.100's compliance additions. 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
@@ -325,7 +324,7 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is fourteen items, eleven of them the Fisher 2.0 milestone.
+What is left is thirteen items, eleven of them the Fisher 2.0 milestone.
 
 **Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.0, Weasel 10.0, `net10.0;net11.0`):
 [#459](https://github.com/JasperFx/fisher/issues/459) build and pack targets,
@@ -342,7 +341,6 @@ adopting the lifted shared bases, [#466](https://github.com/JasperFx/fisher/issu
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.
 
-[#517](https://github.com/JasperFx/fisher/issues/517) is the Fisher 1.28.0 release, and
 [#519](https://github.com/JasperFx/fisher/issues/519) takes JasperFx 2.100's compliance additions: tombstoned
 natural keys, in-flight appends, tenant switching and the suite inventory.
 <!-- /open-issues -->
