@@ -345,6 +345,34 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override ValueTask<IEventDatabase> DatabaseForTenantAsync(string tenantId)
         => ValueTask.FromResult<IEventDatabase>(Store.Tenancy.DatabaseFor(tenantId));
 
+    /// <summary>
+    ///     jasperfx#1124 — Fisher switches one open session between tenants with
+    ///     <c>session.ForTenant(id)</c>, so a single save carries events for several tenants.
+    /// </summary>
+    public override bool SupportsSessionTenantSwitching => true;
+
+    /// <summary>
+    ///     Fisher's session is not an <c>ITenantedQuerySession&lt;TOperations&gt;</c>: its
+    ///     <c>ForTenant</c> returns <see cref="ITenantOperations" />, which the session implements as a
+    ///     real <c>FisherSession</c> (fisher#33), so the scope is also an <see cref="IDocumentSession" />.
+    /// </summary>
+    public override IDocumentSession ForTenant(IDocumentSession session, string tenantId)
+        => (IDocumentSession)session.ForTenant(tenantId);
+
+    /// <summary>
+    ///     jasperfx#1124 — <b>deliberately left off, and it cannot be on.</b> The fact holds one append open
+    ///     and then commits a <em>later</em> event on another stream behind it, to prove the high-water
+    ///     detector does not step over the gap. SQLite has one writer per file: an open write transaction
+    ///     holds the file's write lock, so the "later" commit simply waits for the held one (the
+    ///     connection's busy timeout, then <c>StreamLockedException</c>). Measured: with the seam
+    ///     implemented over an enlisted session on a <c>BEGIN IMMEDIATE</c>, the fact ran 3 minutes and
+    ///     failed on that lock. The state the fact needs — a sequence allocated, uncommitted, below a
+    ///     committed one — cannot exist here, which is the same reason <c>FisherHighWaterDetector</c> has
+    ///     no gap-skipping (committed sequences below the mark can never appear later).
+    ///     <c>high_water_contiguity_audit</c> is the local pin of that property.
+    /// </summary>
+    public override bool SupportsHoldingAnAppendOpen => false;
+
     private IProjectionDaemon? _daemon;
 
     /// <summary>
