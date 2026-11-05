@@ -1,0 +1,504 @@
+<Project>
+    <PropertyGroup>
+        <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- Core Critter Stack dependencies. JasperFx and Weasel move in lockstep: Weasel 9.23.x
+             carries a JasperFx 2.37.x floor, so bump both together rather than letting one resolve
+             transitively. -->
+        <!-- JasperFx 2.94.0 (from 2.93.0). jasperfx#1070, #1071, #1073, made for CritterWatch. No compile break:
+             every new member is default-implemented and both new fixture gates default off. Implemented here:
+             DocumentTypeRef.IsSoftDeleted from the root mapping's delete style (ReportsDocumentDeleteStyle),
+             IDocumentStoreDiagnosticsWriter.PreviewDocumentJsonAsync through the save's own deserialize and
+             id check (SupportsDocumentWritePreview), and IReadOnlyEventStore.QueryEventData of T, an
+             IQueryable over fi_events bodies sharing the QueryStreamStates provider base and the
+             QueryEventDataAsync member factory (EventDataQueryCompliance enrolled). -->
+        <!-- JasperFx 2.93.0 (from 2.91.0, spanning 2.92.x). fisher#470, fisher#471. No compile break: every new
+             member is default-implemented and every new suite or fact is gated off. Implemented here:
+             IEventStore.PreviewHighWaterAdvanceAsync / AdvanceHighWaterMarkToLatestAsync (jasperfx#1031),
+             IEventDatabase's projection start floors over a new fi_projection_floors table (jasperfx#809,
+             ProjectionFloorCompliance enrolled), IDocumentStoreDiagnosticsWriter.UndeleteDocumentAsync
+             (jasperfx#1059) and DocumentQueryOptions.OrderByMetadata (jasperfx#1058), and the SoftDeleteCompliance
+             and DocumentMetadataCompliance suites (jasperfx#785), the latter needing ITracked mapped by convention.
+             Behaviour change, no code: jasperfx#1029 pauses a shard on a permanent SqliteException under
+             SkipApplyErrors rather than dead-lettering every event. -->
+        <!-- JasperFx 2.91.0 (from 2.90.2). Fisher 1.21.2, a rebuild for the matched-set release train. No compile
+             break, and the compliance suite's sources are byte-identical to 2.90.2's (no new suite, no new fact).
+             jasperfx#1025 (per-tenant subscription rewind) and jasperfx#1026 (a re-added tenant's per-tenant
+             high-water mark) both live behind IEventStore.DistributesAgentsPerTenant, which Fisher leaves at its
+             false default: a Fisher file has one AUTOINCREMENT sequence shared by every tenant in it, and
+             database-per-tenant runs one daemon per file. So Fisher needs no store-side companion to marten#5700.
+             jasperfx#1027/#1028 (the high-water watchdog restart), #1024 (Dynamic LINQ reads offset-less date text
+             as UTC) and #1030 (EmittedEvents manifest per overload) need nothing from Fisher. -->
+        <!-- JasperFx 2.90.2 (from 2.90.1): jasperfx#1022, a gracefully stopped subscription agent now releases its 10s heartbeat Timer, which used to root the agent and, through it, the whole store and host — so a process that boots and stops many hosts (test suites) leaked every one. -->
+        <!-- JasperFx 2.90.1 (from 2.90.0): jasperfx#1019, the daemon's retry decision for exceptions thrown by projection code also consults TransientFailures, so a fault the store's classifier calls transient is retried rather than dead-lettered under SkipApplyErrors. -->
+        <!-- JasperFx 2.90.0 (from 2.89.0). fisher#444. No compile break. jasperfx#1014 lifts
+             TombstoneStream(Guid) and TombstoneStream(string) onto the shared IEventStoreOperations as
+             default members that throw; EventOperations' public TombstoneStream methods implement them
+             implicitly, so no Fisher change. The new StreamTombstoningCompliance suite (9 facts, gated
+             on SupportsTombstoneStream) is enrolled and the fixture opts in: 9/9 green.
+             jasperfx#1012/#1018 mark TagTypeRegistration.Create<TTag> [RequiresUnreferencedCode] /
+             [RequiresDynamicCode]. Both RegisterTagType<TTag> overloads (EventGraph, StoreOptions.Events)
+             carry the attributes up, and RegisterTagType<TTag, TInner>(Func<TTag, TInner>) wraps
+             TagTypeRegistration.FromUnwrapper for trimmed and Native AOT applications. Weasel stays at
+             9.42.0: its JasperFx floor is 2.76.0, so nothing forces it.
+
+             JasperFx 2.89.0 (from 2.88.0). jasperfx#1016 adds ShardFailure.IsTransient, decided by
+             JasperFx.Events.Daemon.TransientFailures, so a supervisor (wolverine#4986) can restart a
+             paused shard only when the fault is expected to clear. Microsoft.Data.Sqlite does not
+             implement DbException.IsTransient (SQLITE_BUSY reads like a missing column), so Fisher
+             registers Storage/SqliteTransientFailures from the DocumentStore constructor. No compile
+             break.
+
+             JasperFx 2.88.0 (from 2.86.0, spanning 2.87.0/2.87.1). fisher#441. No compile break and
+             no Fisher code change. jasperfx#1015 adds IProjectionDaemon.StartAgentInRebuildModeAsync: a
+             shard runs in Rebuild mode (no side effects), follows the store past the high-water mark and
+             resumes from its own persisted progress instead of rewinding. ProjectionSideEffectCompliance
+             gains three facts for it (9 to 12), all green, and rebuild_mode_start_resumes_after_a_failure
+             pins restarting a failed Rebuild-mode run against fi_event_progression.
+             jasperfx#1013 (2.87.1) adds IEventStore.TryDescribeDatabasesAsync, a default interface member
+             that falls back to TryCreateUsage()?.Database, so Fisher answered correctly without an
+             override. DocumentStore overrides it from DescribeDatabases() anyway (JasperFx/wolverine#5002),
+             because Wolverine asks on every leader heartbeat and the full usage describes every
+             projection, subscription, event type and tag type. jasperfx#1011 (2.87.0) is
+             the model command's spec manifest, which Fisher does not reach.
+
+             JasperFx 2.86.0 (from 2.84.0, spanning 2.85.x). fisher#437. jasperfx#1005 added
+             IEventStore.FindDatabaseForTenantAsync as a default interface member that only answers for
+             a single-database store, so a database-per-tenant Fisher store answered null and Bobcat's
+             AfterAsyncDaemonsCatchUpAsync(tenantId) waited on every tenant's file. DocumentStore now
+             overrides it through ITenancy.ExistingDatabaseFor: the tenant's file, never provisioned.
+
+             JasperFx 2.84.0 (from 2.80.2, spanning 2.81–2.83). Carries jasperfx#869: Dynamic LINQ text to
+             IQueryable (JasperFx.Linq.DynamicQuery, DocumentQueryOptions.ApplyCriteriaTo) and the shared
+             SqlNullSemantics shape rule. IDocumentStoreDiagnostics.QueryDocumentsAsync now applies Where /
+             OrderBy through Query<T>(), so the fixture sets SupportsDocumentDiagnosticCriteria and
+             DocumentStoreDiagnosticsCompliance runs its criteria facts (52 tests to 66). The span also
+             carries jasperfx#953 — subscription drains bounded by StopAndDrainTimeout — whose release
+             note and docs are fisher#434.
+
+             JasperFx 2.80.2 (from 2.80.1). fisher#412. One change, jasperfx#950/#951:
+             IEvent / StreamAction.CreateAggregateIdentitySource<TId> compose ValueTypeInfo.CreateWrapper
+             instead of CompileFast()ing their own expression tree, so JasperFxSingleStreamProjectionBase
+             can be constructed over a strong-typed id in a Native AOT image. That is what
+             Projections.Snapshot<T, TId>() / LiveStreamAggregation<T, TId>() needed; no suite changed.
+
+             JasperFx 2.80.1 (from 2.79.2, spanning 2.80.0). fisher#423. No compile break and no new
+             suite; two existing suites widened:
+
+             - jasperfx#942/#946: ValueTypeInfo.CreateWrapper / UnWrapper fall back to reflection
+               where they cannot compile. Fisher's local copy of that fallback (ValueTypeDelegates) is
+               deleted, and strong-typed document ids call ValueTypeInfo directly. NOT the whole of
+               a strong-typed AGGREGATE id in a native image: JasperFxSingleStreamProjectionBase's
+               identity sources still CompileFast unconditionally, filed as jasperfx#950.
+             - jasperfx#943: GuidOptimisticConcurrencyCompliance gained five facts over a mapped
+               version member. They skip unless the fixture opts in, so they were skipped on the bump;
+               the fixture now replays MappedVersionMembers and sets SupportsMappedConcurrencyMember.
+             - jasperfx#944: DocumentSearchCompliance gained four hierarchy facts, green on the bump
+               alone, since fisher#285 put Fisher's search through Query<T>()'s doc_type filter.
+             - jasperfx#948 (2.80.1): ResilientEventLoader now really wraps a load failure in
+               EventLoaderException. Nothing in Fisher matches on that type.
+
+             JasperFx 2.79.2 (from 2.79.1). One change, jasperfx#940: the source generator keeps the
+             evolver constructors it emits under Native AOT, so ILC no longer trims a conventional
+             aggregate's generated dispatcher away. No suite changed and no test count moved; this is
+             the floor fisher#398's event-store AOT work builds on.
+
+             JasperFx 2.79.1 (from 2.78.0, spanning 2.79.0). No compile break and no new suite; four
+             existing suites widened, and two of the changes needed Fisher work:
+
+             - jasperfx#932: DocumentTypesAsync lists every sub-class registered under a mapped root,
+               naming the root in the new init-only DocumentTypeRef.RootTypeName. Fisher listed roots
+               only, so document_types_list_sub_classes_under_their_root was red on the bump. Now each
+               sub-class follows its root, its Alias being the doc_type discriminator (Polecat's answer).
+             - jasperfx#930: IDocumentReadOperations.LoadManyAsync<T>(IEnumerable<Guid|string>) and
+               IEventStoreOperations.FetchManyForWriting<T>, both default-implemented one id at a time.
+               ⚠️ Fisher's own LoadManyAsync takes a params array, which does NOT implement the
+               IEnumerable members — the non-covariance near-miss again, invisible to the compiler AND
+               to the suite, which pins the result rather than the round trips. Two explicit forwarders
+               on FisherSession give the one json_each statement; loading_many_through_the_contract
+               counts statements and fails without them. FetchManyForWriting keeps the default: Fisher's
+               FetchForWriting folds per stream, so there is no single round trip to override with.
+
+             INERT: jasperfx#931 default-implements the two 2.77 diagnostics members so OLDER stores
+             load beside a newer JasperFx — Fisher implements both explicitly. jasperfx#933 is a test-only
+             ratchet on abstract interface members. jasperfx#939 (2.79.1) stops a composite member
+             disposing the composite's shared batch inside ProjectionExecution; Fisher's own
+             CompositeIProjectionSource already declined to, and the composite suites are green.
+
+             JasperFx 2.78.0 (from 2.77.0). One change, jasperfx#928/#929: DocumentQueryOptions.AllTenants,
+             an explicit all-tenants scope for IDocumentStoreDiagnostics.QueryDocumentsAsync, since a
+             blank TenantId has meant the default tenant since #927. Not a compile break — the flag is
+             an init property a store can ignore, which is exactly the silent narrowing the contract
+             forbids, so the suite's refusal fact is what would have caught it. Fisher honours it
+             (fisher#368): no tenant predicate under conjoined tenancy, a fan-out across every tenant
+             database otherwise, and SupportsDocumentDiagnosticAllTenants is flipped on the fixture.
+
+             JasperFx 2.77.0 (from 2.76.0, spanning 2.76.1). THE BUMP BREAKS THE BUILD ON PURPOSE:
+             jasperfx#870/#927 made IDocumentStoreDiagnostics.Subject and LoadDocumentAsync abstract so
+             all three stores adopt the grown contract in one wave (fisher#364), and added the
+             IDocumentStoreDiagnosticsWriter sibling and a 41-fact DocumentStoreDiagnosticsCompliance.
+             Two more facts arrive behind fixture gates: the async phantom-deletion fact
+             (jasperfx#917, IComplianceCompositeBuilder.Add — fisher#362) and ShardState.LastUpdated
+             (jasperfx#924 — fisher#363).
+
+             The rest of 2.76.1/2.77.0 (jasperfx#918's DatabaseUri host sanitizing, marten#3942's
+             generator fix) needed no Fisher change: the full suite is green on the bump.
+
+             JasperFx 2.76.0 (from 2.75.2). Two new IEventStore members, both default-implemented
+             and both answered by Fisher in this bump rather than left to the default (fisher#354):
+
+             - jasperfx#914 HasEventStore. The default is TRUE, so a store that left it alone would be
+               indistinguishable from a real event store — which is exactly the question a console
+               polling a document-only store needs answered.
+             - jasperfx#910 CompactStreamAsync(stream, tenantId). The default throws for a non-null
+               tenant, so a compaction policy that selected a tenant's streams through
+               OpenReadOnlyEventStore(tenantId) could then compact none of them.
+
+             INERT: jasperfx#912 (ShardStartException carries a classified reason) is raised by the
+             shared daemon, not by Fisher; jasperfx#913 (IAdvisoryLock.FindHolderAsync) is a contract
+             Fisher does not implement — it refuses HotCold and takes no advisory lock.
+
+             JasperFx 2.75.2 (from 2.75.1). A source-generator diagnostics patch, adopted with no Fisher
+             change and no suite change (the ComplianceTests content is byte-identical to 2.75.1):
+
+             - jasperfx#906: the "no source-generated dispatcher" message decided whether the generator
+               ran by checking the projection type's assembly for the marker — and for Snapshot<T>,
+               whose projection is the STORE'S OWN closed SingleStreamProjection<T, TId>, that is
+               Fisher.dll, which always carries it. So for Fisher's commonest registration the message
+               told the reader the one cause they actually had was not the cause. Closed generics are
+               now excluded from the evidence.
+             - jasperfx#902: a double-loaded generator with the dedupe turned off now warns JFXEVT902
+               instead of going straight to CS0433. Fisher's builds and the packed-consumer smoke test
+               (fisher#337) raise no JFXEVT warning on this version.
+
+             JasperFx 2.75.1 (from 2.74.0, spanning 2.75.0).
+
+             THE BUMP IS THE WORK, and almost all of it is jasperfx#898/#899 — conjoined DOCUMENT
+             tenancy, which the shared library had no seam for at all until now. One new suite
+             (DocumentConjoinedTenancyCompliance, 10 facts) and seven more facts on
+             ConjoinedEventTenancyCompliance, which had eleven. What Fisher needed for them:
+
+             NOT AUTOMATIC — the new suite is RED on a correct store without the IDocumentStore change
+             beside it. IDocumentSessionFactory gained LightweightSession(string) / QuerySession(string)
+             additively, with THROWING defaults, and Fisher's own members take `string? tenantId = null`
+             — which satisfies neither the parameterless member (an optional parameter does not) nor the
+             string one (the nullability differs, and a hiding declaration on a derived interface never
+             implements the base's anyway). So four explicit forwarders, same near-miss
+             IDocumentReadOperations.Events and IDocumentSessionOperations.PendingStreams already carry.
+             Delete them and Fisher still compiles, is still perfectly correct about tenancy, and fails
+             every fact in the suite with NotSupportedException.
+
+             ALSO NOT AUTOMATIC:
+             jasperfx#888 — a tenant-aware IEventStore.OpenReadOnlyEventStore(tenantId), whose default
+             throws for any non-null tenant. Implemented (DocumentStore.EventStore.cs), because the
+             tier already opens a session per read precisely so it holds none: the tenant goes on the
+             session and every read it serves is scoped by the same code that scopes an application's.
+             Without it the whole read-only tier is unreachable on a store whose default tenant is
+             refused. Closes a bullet of fisher#335.
+
+             2.75.1 IS WHY THE PIN IS NOT 2.75.0. Two things in it, and neither is optional:
+             jasperfx#903/#905 — 2.75.0's
+             DocumentConjoinedTenancyCompliance.optimistic_concurrency_is_scoped_to_the_tenant_for_a_shared_id
+             asserted a refusal no correct store can produce: it re-stored the instance that had just
+             performed the winning write, which a committed Store has written the landed version back
+             onto, so nothing about it was stale. It contradicted
+             GuidOptimisticConcurrencyCompliance.a_successful_write_moves_the_instances_own_version_on,
+             and no store could be green on both. Found here by first-contact enrollment (9 of 10 passed)
+             and fixed upstream as the issue proposed — the stale instance is now separately loaded. The
+             suite is 10 of 10.
+             jasperfx#893 — ComplianceStoreConfig.AddCommitListener, the EVENT-store twin of the document
+             config's listener slot, and StreamArchivingCompliance's nineteenth fact
+             (creating_and_deleting_within_one_batch_reports_no_deletion) needs it. NOT AUTOMATIC:
+             FisherComplianceFixture has to replay it onto StoreOptions.Listeners, and ignoring it does
+             not make the fact skip — a listener that was never registered never fires, which is
+             indistinguishable from a store that reports nothing, so the fact would pass VACUOUSLY on
+             the very bug it exists to catch. Its control assertion is what fails instead, which is how
+             the replay was verified.
+
+             INHERITED, no Fisher change needed:
+             jasperfx#889 — the source-generated DetermineAction decides per BATCH rather than per
+             event. Fisher's projection dispatch is that generator's output, so this arrives whole; the
+             projection suites are green unedited, which is what says so.
+             jasperfx#890/#895/#896 — a marker in every generated assembly, exactly one copy of the
+             generator handed to the compiler, and an opt-in JasperFxEventsRequireSourceGenerator build
+             assertion. #895 matters to Fisher specifically: fisher#73 bundles the generator into the
+             nupkg as an analyzer, which is the shape that could hand a consumer two copies, and the
+             CS0433 it caused is now upstream's problem rather than the consumer's. Opting into #896 is
+             fisher#337, not folded in — it is a build-time contract, not a bump.
+             jasperfx#886/#897 — compliance fact wording. -->
+
+        <!-- JasperFx 2.74.0 (from 2.72.0, spanning 2.73.0/.1/.2).
+
+             NOT AUTOMATIC — this bump is RED without the fisher#307 change beside it:
+             jasperfx#871/#878 lifted a canonical ArchivedStreamException into JasperFx.Events, and
+             StreamArchivingCompliance now asserts THAT type rather than merely that the commit
+             failed. So Fisher.Exceptions.ArchivedStreamException has to subclass it, and the two
+             land together rather than as a bump and a follow-up. Worth knowing which way the lift
+             went: it took FISHER's type as the canonical shape — named for the condition, carrying
+             the id, naming the remedy — over Marten's generic InvalidStreamOperationException and
+             Polecat's message-matching InvalidStreamException.
+
+             UNBLOCKS, consumed separately:
+             jasperfx#858/#862 — a store-agnostic JasperFx.Events.StubEventStream<T>. Fisher's
+             IEventStream<T> IS the JasperFx type, so the stub satisfies it with no Fisher code at
+             all; fisher#302 is the docs page that uses it.
+
+             ONE SOURCE BREAK, and it is a name collision rather than a behaviour change:
+             jasperfx#882 lifted a canonical DisabledTenantException into JasperFx.MultiTenancy, and
+             Fisher has had one of its own since fisher#58. Any file importing both namespaces is
+             CS0104 — three lines in tenant_registry.cs here, qualified rather than papered over with
+             an alias so the collision stays visible. Adopting it the way fisher#307 adopts the
+             archiving one is fisher#321, deliberately not folded in: that is an inheritance decision
+             about a public type, not a bump.
+
+             INHERITED, no Fisher change needed:
+             jasperfx#879 — the canonical stream exception messages name a remedy. Fisher's own
+             wording is unaffected (each of its subclasses goes through the message-overriding
+             constructor precisely so an upstream rewording cannot move it), and every Fisher
+             exception test still passes unedited, which is what says the protection works.
+             jasperfx#881 — StaticTenantSource throws UnknownTenantIdException. Fisher supplies its
+             own ITenantSource implementations, so this is inert here; fisher#309 already put Fisher's
+             UnknownTenantException on that shared base.
+             jasperfx#859/#861/#863 — an Event Model source disagreement names the source rather than
+             only the rung, and EventModelClaim's two-argument constructor is restored. Fisher
+             registers a ProjectionEventModelSource, so it gets the better diagnostic for free.
+
+             INERT:
+             jasperfx#884 (RuntimeCompiler's CodeGenerationException) is about runtime code
+             generation, which Fisher does not do — projection dispatch is source-generated.
+             jasperfx#880 is XML comments on AutoCreate. jasperfx#867 is a Wolverine codegen fix and
+             jasperfx#865/#866 are the publish pipeline. -->
+        <!-- JasperFx 2.96.1 (from 2.95.1, spanning 2.96.0). No compliance suite changed.
+
+             INHERITED, no Fisher change needed:
+             jasperfx#1087 — the aggregate source generator Fisher's projection dispatch rides builds a
+             missing aggregate through its constructor, so a required member's initializer such as
+             `= []` survives an Apply-only event, and a Create taking object, a supertype or an
+             interface owns the null-snapshot case instead of failing to compile with CS8120.
+             jasperfx#1083/#1084 (2.96.0) — an Event Model source disagreement that is really an
+             observed origin confirming a declared one is no longer reported as a disagreement.
+
+             INERT:
+             jasperfx#1086 shares Roslyn metadata references in JasperFx.RuntimeCompiler, which Fisher
+             does not use. -->
+        <!-- JasperFx 2.98.0 (from 2.97.0; 2.97.1 was tagged but never reached NuGet). No compile break.
+             EventProjectionRegistrationCompliance grew from 3 to 9 facts (jasperfx#1102) and they were green
+             on the bump alone; no suite was added.
+
+             INHERITED, no Fisher change needed:
+             jasperfx#1101/#1105 - with correlation ids on, slice.PublishMessage(message) carries the id all
+             of the slice's events agree on, through the MessageMetadata overloads FisherProjectionBatch and
+             the session's message sink already carry.
+             jasperfx#1107 - fan-out and ReplaceEvent clones keep their correlation and causation ids.
+             jasperfx#1098 - raised events go only to the stream they were raised to.
+             jasperfx#1100 - stopping the high water agent cancels its poll wait.
+             jasperfx#1102/#1106/#1108 - PublishedTypes on SubscriptionDescriptor, and a scoped projection
+             or a composite describing itself as registered, all reach Fisher through TryCreateUsage.
+             No Fisher test expectation moved.
+
+             INERT:
+             jasperfx#1099/#1103 fold an HTTP endpoint and a message handler in the Event Model, which
+             Fisher contributes to but does not assert on. -->
+        <PackageVersion Include="JasperFx" Version="2.98.0" />
+        <PackageVersion Include="JasperFx.Events" Version="2.98.0" />
+        <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
+             suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
+             Fisher's own session types. See src/Fisher.Tests/Compliance. -->
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.98.0" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.98.0" />
+        <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
+             vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.98.0" />
+
+        <!-- Weasel 9.46.0 (from 9.42.0, spanning 9.43.0, 9.44.0, 9.45.0 and 9.45.1). JasperFx floor
+             2.90.2, which Fisher already pins. Reaching Fisher:
+             weasel#706/#708 — a migration file (db-patch, WriteMigrationFileAsync) creates only the
+             schemas it changes, and its .drop.sql companion never drops a schema; TableBase.PrimaryKeyName
+             is empty for a table that declares no primary key. SQLite has no schemas to drop, so the
+             first half is inert here.
+             weasel#723 — SchemaMigration re-reads the catalog when Migrator.IsConcurrentIntrospectionFailure
+             says a read raced a rewrite. Only Firebird answers true, so inert for Weasel.Sqlite.
+             weasel#724 — MultiCommandDataReader.GetFieldType keeps DbDataReader's trim annotation, so a
+             trimmed or native publish stops reporting IL2093 against Weasel.Core.
+             INERT: weasel#700/#701 and #703/#704 (SQL Server advisory lock monitor, idempotent function
+             scripts), #707 (SQL Server clustered identity), #710 (System.Security.Cryptography.Pkcs pin
+             for SQL Server and Oracle), #718 (PostgreSQL partitioned index resume) and #719 (PostgreSQL
+             advisory lock holder scope). -->
+        <!-- Weasel 9.42.0 (from 9.41.0). Nothing for Fisher to act on: weasel#695 (SQL Server advisory
+             locks end with their session), weasel#696/#698 (PostgreSQL table storage parameters) and
+             weasel#697 ([DynamicDependency] rooting for the Identifications factories under Native AOT,
+             which Fisher does not call). Green on the bump.
+
+             Weasel 9.41.0 (from 9.40.0). Additive: weasel#689/#690's non-generic IIdentification
+             facade and Identifications.For… factories, for Type-based identity under Native AOT.
+             Fisher does not call them yet; see fisher#430.
+
+             Weasel.Sqlite: schema management, table definitions, migrations, PRAGMA-applying data
+             source. Weasel.Storage: the dialect-neutral closed-shape document + event storage
+             runtime extracted from Marten, which Fisher plugs a SQLite dialect into rather than
+             hand-writing storage.
+
+             9.31.0 is a real floor rather than a preference: it carries the lifts Fisher now
+             consumes instead of its own copies — SystemTextJsonSerializer and the public
+             StorageSerializerAdapter (weasel#555) and the generic ITransactionParticipant
+             (weasel#561). It also carries weasel#574, which brings the shared flat-table
+             DecrementMemberMap into line with fisher#183; Fisher does not use that DSL yet, but the
+             agreement is what makes adopting it later cost nothing.
+
+             9.40.0 (from 9.36.0, spanning 9.37–9.39). The change Fisher acts on is weasel#675:
+             ICommandBuilder.ParameterCount, which LiteralRenderingCommandBuilder answers with a
+             definite 0 rather than inheriting the "unknown" default (fisher#389). Also in the span:
+             creation scripts written in dependency order with guarded foreign keys (weasel#677/#681),
+             a TableDelta for a table that does not exist yet answering instead of throwing
+             (weasel#658), and the migration lock released when an apply fails (weasel#659).
+             JasperFx floor still 2.76.0.
+
+             9.36.0 (from 9.35.2) is a drift release whose SQLite half is migration behaviour, and
+             it takes JasperFx 2.76.0 as its floor — which is why the two move together here:
+             weasel#546 — delete-all with resetIdentity no longer fails at prepare time on a file with
+             no sqlite_sequence. Fisher's cleaners delete in their own order (fisher#6) rather than
+             through Migrator's delete-all, so this is inert for Fisher's own paths.
+             weasel#648 — a rebuilt table rolls back by rebuilding, not by recreating it empty. Reaches
+             Fisher through db-patch's .drop.sql companion (fisher#172).
+             weasel#639/#640 — add-only rebuilds keep undeclared objects, and PreserveIdentifierCase
+             pairs case-insensitively. Both are EF Core MapToTable defaults; Fisher's tables set
+             neither, so inert here.
+             high_water_contiguity_audit.a_table_rebuild_carries_the_autoincrement_counter_forward is
+             the fact that would notice if a rebuild change ever stopped carrying sqlite_sequence
+             forward, and it stays green.
+
+             9.35.2 is weasel#634 alone — an exhausted DropSchema retry is reported rather than
+             returned as success. Fisher drops no schemas (SQLite has none), so it is inert here.
+
+             9.35.1 (from 9.32.0, spanning 9.33.0/9.34.0/9.35.0) is a message-and-diagnostics wave,
+             inherited whole with no Fisher change. Nothing in it is a behaviour change Fisher has to
+             answer, and the whole suite is green unedited.
+
+             Reaching Fisher:
+             weasel#595 — a numeric-revision ConcurrencyException always carries the UpdateRevision
+             hint. Fisher's "strictly greater" rule (fisher#228) is the one an application meets by
+             re-storing an instance that still carries its loaded revision, and the message now names
+             the remedy rather than only the failure. Met while writing
+             tenant_scoped_concurrency_guards, which is as good a demonstration as a test.
+             weasel#596 — the per-event append gets the exception-transform hook the stream insert
+             already had. Fisher's FisherQuickAppendEventsOperation is an IExceptionTransform, so both
+             halves of an append now translate rather than only one.
+             weasel#601/#602 — the assert path always throws DatabaseValidationException, and six
+             user-facing message defects. Fisher's AssertDatabaseMatchesConfigurationAsync and
+             AssertDatabaseMatchesConfigurationOnStartup (fisher#172) are the callers.
+             weasel#597/#600 — the AutoCreate table is corrected, and AutoCreate.All warns before it
+             drops and recreates an object. Fisher honours AutoCreate.None on its own on-demand paths
+             (fisher#81), so this is the other end of the same setting.
+
+             INERT: weasel#593/#620/#624 (sqlcmd and GO lines), #598/#599/#616 (SQL Server
+             permissions and sp_getapplock), #594/#614 (Postgres concurrent index builds and the
+             advisory lock), and #615/#621/#625/#627/#628/#629 (Weasel.EntityFrameworkCore, which
+             Fisher.EntityFrameworkCore does not reference — it takes
+             Microsoft.EntityFrameworkCore.Relational alone). -->
+        <!-- Weasel 9.48.0 (from 9.47.1). ADOPTED as-is, no Fisher code changes. Almost all of this
+
+             The JasperFx floor: Weasel.Core 9.48.0 declares JasperFx >= 2.98.0 and Weasel.Storage
+             declares JasperFx.Events >= 2.98.0, both read from the published nuspec. Already satisfied
+             here, because the JasperFx 2.98.0 bump landed on its own ahead of this one; at 2.97.0 the
+             restore fails outright with NU1605, a package downgrade promoted to an error, rather than
+             resolving quietly upward.
+             release is SQL Server, MySQL or Oracle; what reaches Weasel.Sqlite is the parameter-type
+             work, and even there SQLite's type affinity absorbs most of it.
+
+             weasel#758/#759 — the parameter-type catch-all. SqliteProvider's private resolver ended in
+             `?? SqliteType.Text`, which can never return null, so determineParameterType always
+             reported success and every fall-through branch after the first was dead code, taking
+             weasel#404's "null means unmapped, defer to the driver" with it. An unmapped type now
+             defers, and ToParameterType THROWS for one rather than answering Text. Fisher's one call
+             site is SqliteStorageDialect.TypeForType, which short-circuits Guid to Text itself
+             and otherwise passes the id and column types Weasel maps, so the throwing path needs a
+             type Weasel has no mapping for at all.
+
+             weasel#761 — an enum parameter now resolves by EnumStorage, defaulting to the integer
+             type, and arrays defer instead of binding as Text. Measured as INERT on SQLite rather
+             than assumed: type affinity stores the underlying integer whether the parameter is bound
+             as Text or Integer, so an enum lands identically either way. The new
+             ToParameterType/TryGetDbType/TryGetDbTypeForValue overloads taking an EnumStorage are
+             additive, defaulted on the interface.
+
+             INERT: weasel#762 (SQL Server string Unicode precedence, documentation only), weasel#763
+             (DateOnly/TimeOnly on MySQL and Oracle), weasel#764, weasel#765 and weasel#766 (SQL
+             Server partitioning culture, partition DDL re-runnability and sp_getapplock), and
+             MySqlConnector 2.6.1 for GHSA-473q-m89c-ghf8, which no Fisher package resolves.
+
+             Riding along: JasperFx / JasperFx.Events 2.98.0. -->
+        <PackageVersion Include="Weasel.Sqlite" Version="9.48.0" />
+        <PackageVersion Include="Weasel.Storage" Version="9.48.0" />
+
+        <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+        <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
+             GHSA-2m69-gcr7-jv3q) with 3.0.3, which ships the patched SQLite 3.50.x build. That
+             build is also what puts JSONB and the json1 functions Fisher's storage relies on
+             unconditionally in the box. -->
+        <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+
+        <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+        <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+        <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
+        <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
+        <PackageVersion Include="Polly.Core" Version="8.6.5" />
+
+        <!-- EF Core, for Fisher.EntityFrameworkCore. Pinned to the 9.x line rather than 10.x
+             because the package multi-targets net9.0 and net10.0 as everything here does, and EF
+             Core 10 is net10-only. 9.x targets net8.0, so it loads on both. Relational only in the
+             package itself — the provider is the application's choice, and forcing
+             Microsoft.EntityFrameworkCore.Sqlite on a consumer would be Fisher deciding which EF
+             provider their DbContext uses. The tests reference the Sqlite provider because a test
+             needs a real one. -->
+        <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.14" />
+        <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.14" />
+
+        <!-- Benchmarking (Fisher.Benchmarks only) -->
+        <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+
+        <!-- Testing -->
+        <PackageVersion Include="NSubstitute" Version="5.3.0" />
+        <PackageVersion Include="Shouldly" Version="4.3.0" />
+        <!--
+          Microsoft Testing Platform extensions, replacing coverlet.collector and the TRX logger,
+          both of which are VSTest-only.
+
+          BOTH ARE PINNED TO THE MTP 1.x LINE, NOT THE LATEST. xunit.v3 3.2.2 is built against
+          Microsoft.Testing.Platform 1.x — its packages are literally named xunit.v3.core.mtp-v1.
+          The 2.x releases of these extensions drag the platform assembly up to 2.x while
+          Microsoft.Testing.Platform.MSBuild stays behind, and every test run then dies at startup
+          with a TypeLoadException on IDataConsumer. 1.9.1 and 18.0.6 are the last MTP 1.x
+          releases; move them forward only when xunit.v3 ships an mtp-v2 build.
+        -->
+        <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.0.6" />
+        <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="1.9.1" />
+        <!-- Test projects reference xunit.v3; Fisher.TestUtils, a plain library that only authors
+             custom attributes, references xunit.v3.extensibility.core instead — xunit.v3 forces
+             OutputType=Exe onto whatever references it, which is wrong for a library. -->
+        <PackageVersion Include="xunit.v3" Version="3.2.2" />
+        <PackageVersion Include="xunit.v3.extensibility.core" Version="3.2.2" />
+
+        <!-- The Nuke build (build/) ONLY — never referenced by a shipped package or a test project.
+             JasperFx/bobcat#565: the suites run through Bobcat's Supervisor, which drives each MTP test
+             executable as worker processes over the platform's JSON-RPC server mode. It takes no
+             Microsoft.Testing.Platform reference of its own, so the MTP 1.x pin above is unaffected:
+             the supervisor speaks the wire, it does not host the platform.
+
+             1.0.0-rc.1 (from 0.60.4) retired two of fisher#451's stopgaps: the supervisor folds a
+             collapsed theory's rows worst-first and reports them (bobcat#649, replacing
+             build/CollapsedResultsGuard.cs), and RunReport.WriteTrx writes the TRX (bobcat#699,
+             replacing build/SupervisedTrx.cs). The ledger is keyed by display name (bobcat#730) and
+             now travels as a CI artifact instead of being committed. From 1.0.0-rc.2 Bobcat references
+             no JasperFx at all (bobcat#744, docs/compatibility.md), so it puts no JasperFx floor into
+             the build project's restore and build/build.csproj needs no VersionOverride. -->
+        <PackageVersion Include="Bobcat.Supervisor" Version="1.0.0" />
+        <PackageVersion Include="Nuke.Common" Version="10.1.0" />
+        <!-- Nuke.Common's transitive NuGet.Packaging 6.12.1 and System.Security.Cryptography.Xml/Pkcs
+             9.0.x carry published advisories (NU1901-NU1903). Lifted for the build project only. -->
+        <PackageVersion Include="NuGet.Packaging" Version="6.14.3" />
+        <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
+        <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.13" />
+    </ItemGroup>
+</Project>
