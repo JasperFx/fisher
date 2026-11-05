@@ -128,6 +128,11 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     private static string NaturalKeySuffixFor(Type aggregateType)
         => $"natural_key_{ToEventTypeName(aggregateType.Name)}";
 
+    /// <summary>
+    ///     The natural keys the registered aggregate projections declare.
+    /// </summary>
+    internal IReadOnlyList<NaturalKeyDefinition> NaturalKeyDefinitions() => _options.Projections.NaturalKeys;
+
     internal IEnumerable<NaturalKeyTable> BuildNaturalKeyTables(
         IEnumerable<NaturalKeyDefinition> definitions)
         => definitions.Select(definition => new NaturalKeyTable(this, definition));

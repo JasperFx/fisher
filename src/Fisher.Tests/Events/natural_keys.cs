@@ -45,6 +45,7 @@ public partial class natural_keys : IAsyncLifetime
             {
                 o.DatabaseSchemaName = "tenanted";
                 o.Events.TenancyStyle = TenancyStyle.Conjoined;
+                o.Schema.For<Order>().MultiTenanted();
             }
 
             o.Projections.Add(new OrderProjection(), ProjectionLifecycle.Inline);
@@ -199,6 +200,60 @@ public partial class natural_keys : IAsyncLifetime
 
         await Should.ThrowAsync<UnknownNaturalKeyException>(() =>
             check.Events.FetchForWritingByNaturalKey<Order, string>("ORD-ARCHIVED", Token));
+    }
+
+    /// <summary>
+    ///     fisher#522: the lookup has no foreign key, so a tombstone has to remove the row itself or the
+    ///     key can never be claimed again.
+    /// </summary>
+    [Fact]
+    public async Task a_tombstoned_streams_natural_key_can_be_claimed_by_a_new_stream()
+    {
+        var streamId = await StartOrder("ORD-TOMB");
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.TombstoneStream(streamId);
+            await session.SaveChangesAsync(Token);
+        }
+
+        var newStream = await StartOrder("ORD-TOMB");
+
+        await using var check = _store.LightweightSession();
+        (await check.Events.FetchForWritingByNaturalKey<Order, string>("ORD-TOMB", Token))
+            .Id.ShouldBe(newStream);
+    }
+
+    [Fact]
+    public async Task under_conjoined_tenancy_only_the_tombstoned_tenants_key_goes()
+    {
+        await using var store = StoreFor(conjoined: true);
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        var streamId = Guid.NewGuid();
+        foreach (var tenant in new[] { "a", "b" })
+        {
+            await using var session = store.LightweightSession(tenant);
+            session.Events.StartStream<Order>(tenant == "a" ? streamId : Guid.NewGuid(), new OrderPlaced("ORD-SHARED"));
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using (var session = store.LightweightSession("a"))
+        {
+            session.Events.TombstoneStream(streamId);
+            await session.SaveChangesAsync(Token);
+        }
+
+        // Tenant b keeps its key
+        await using (var b = store.LightweightSession("b"))
+        {
+            await b.Events.FetchForWritingByNaturalKey<Order, string>("ORD-SHARED", Token);
+        }
+
+        // Tenant a can claim it again
+        var again = await StartOrder("ORD-SHARED", store, "a");
+        await using var a = store.LightweightSession("a");
+        (await a.Events.FetchForWritingByNaturalKey<Order, string>("ORD-SHARED", Token)).Id.ShouldBe(again);
     }
 
     [Fact]
