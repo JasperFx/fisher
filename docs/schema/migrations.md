@@ -32,7 +32,7 @@ Three questions this answers that nothing else could:
 | What exactly would change? | `migration.Deltas` |
 | Give me the DDL as a file | `await store.Advanced.WriteMigrationFileAsync("patch.sql")` |
 
-`WriteMigrationFileAsync` is the programmatic form of the `db-patch` command — the **delta** against
+`WriteMigrationFileAsync` is the programmatic form of the [`db-patch`](https://weasel.jasperfx.net/cli/db-patch.html) command — the **delta** against
 the database as it stands, so a store already up to date writes a file with nothing in it to run.
 That is the difference from `WriteCreationScriptToFileAsync`, which describes the configuration and
 never looks at the database.
@@ -150,7 +150,15 @@ opts.AutoCreateSchemaObjects = AutoCreate.None;
 await store.Advanced.WriteCreationScriptToFileAsync("schema.sql");
 ```
 
-See [Exporting Schema Definition](/schema/exporting).
+See [Exporting Schema Definition](/schema/exporting). From the command line the same two artefacts are
+`dotnet run -- `[`db-dump`](https://weasel.jasperfx.net/cli/db-dump.html) for the whole schema and
+`dotnet run -- `[`db-patch`](https://weasel.jasperfx.net/cli/db-patch.html) for the delta with a rollback file.
+
+The other controlled shape is to keep the application on `None` and run the migration as its own deployment step,
+`dotnet run -- `[`db-apply`](https://weasel.jasperfx.net/cli/db-apply.html) or `dotnet run -- resources setup`, which apply
+even under `None` because they are the explicit instruction to. Either way,
+`dotnet run -- `[`db-assert`](https://weasel.jasperfx.net/cli/db-assert.html) is the gate that proves the deployed file matches.
+See [Database Management](/schema/#from-the-command-line).
 
 ::: tip
 For an embedded store this matters less than it does on a server — the database ships with the

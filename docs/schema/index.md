@@ -1,9 +1,22 @@
 # Database Management
 
-Fisher manages its own schema through [Weasel.Sqlite](https://github.com/JasperFx/weasel). All DDL
+Fisher manages its own schema through [Weasel.Sqlite](https://weasel.jasperfx.net/). All DDL
 goes through Weasel's table definitions and migrations — there is no hand-written `CREATE TABLE`
 anywhere — which is what makes `AutoCreate.None` honoured everywhere for free rather than at each call
 site's discretion.
+
+It also means Fisher has the same four ways of getting the schema into place as every other Critter Stack store:
+
+| Approach | How | Typical use |
+| :--- | :--- | :--- |
+| Lazily, on first use | `AutoCreateSchemaObjects = AutoCreate.CreateOrUpdate`, the default | Development, and most embedded deployments |
+| Once at startup | `.ApplyAllDatabaseChangesOnStartup()` on `AddFisher()`, or `services.AddResourceSetupOnStartup()` for every JasperFx [stateful resource](https://shared-libs.jasperfx.net/cli/resources.html) in the application at once | Development, tests, and applications that own their database file |
+| As a deployment step | `dotnet run -- `[`db-apply`](https://weasel.jasperfx.net/cli/db-apply.html) or `dotnet run -- resources setup`, with the application on `AutoCreate.None` | A server deployment where the schema is applied before the new version starts |
+| From reviewed SQL | `dotnet run -- `[`db-patch`](https://weasel.jasperfx.net/cli/db-patch.html) or [`db-dump`](https://weasel.jasperfx.net/cli/db-dump.html), applied by something other than the application | When the schema should be reviewed and checked in |
+
+`dotnet run -- `[`db-assert`](https://weasel.jasperfx.net/cli/db-assert.html) checks without changing anything, whatever the approach.
+Fisher's own behaviour under each is below; the Weasel documentation has the engine-level view of the
+[migration model and `AutoCreate` policy](https://weasel.jasperfx.net/core/schema-migrations.html).
 
 ## Applying the schema
 
@@ -48,6 +61,36 @@ write would make the strictest configuration the one with the fewest guarantees.
 To see the difference rather than throw on it, see
 [Previewing a migration](/schema/migrations#previewing-a-migration).
 
+## From the command line
+
+With `RunJasperFxCommands(args)` as the last line of `Program.cs`, a host that calls `AddFisher(...)` has
+Weasel's [command line tools](https://weasel.jasperfx.net/cli/) and JasperFx's `resources` command:
+
+```bash
+dotnet run -- db-list              # the databases this host manages; one per tenant under database-per-tenant
+dotnet run -- db-apply             # apply every outstanding migration
+dotnet run -- db-assert            # non-zero exit if any database differs from the configuration
+dotnet run -- db-patch patch.sql   # the delta against the live database, plus a rollback file
+dotnet run -- db-dump schema.sql   # the whole schema as DDL
+
+dotnet run -- resources list       # every stateful resource in the application
+dotnet run -- resources check      # verify each one
+dotnet run -- resources setup      # create or migrate each one
+```
+
+| | |
+| :--- | :--- |
+| [`db-apply`](https://weasel.jasperfx.net/cli/db-apply.html), [`db-assert`](https://weasel.jasperfx.net/cli/db-assert.html), [`db-patch`](https://weasel.jasperfx.net/cli/db-patch.html), [`db-dump`](https://weasel.jasperfx.net/cli/db-dump.html), [`db-list`](https://weasel.jasperfx.net/cli/db-list.html) | Weasel's, and act on Weasel databases only. Fisher registers every database it manages with Weasel |
+| [`resources`](https://shared-libs.jasperfx.net/cli/resources.html) | JasperFx's stateful resource model. The Fisher store is one resource; on a Wolverine host its message storage and any broker queues are others, and one `resources setup` provisions all of them |
+
+`db-apply` and `resources setup` are an *explicit* instruction to migrate, so both treat `AutoCreate.None` as
+`CreateOrUpdate`. `db-assert` and `resources check` never change anything.
+
+::: tip
+On SQLite the "database" is a file, so `db-apply` against a path that does not exist yet creates the file
+and the schema in one step. Under database-per-tenant every known tenant file is walked, one at a time.
+:::
+
 ## AutoCreate
 
 ```cs
@@ -70,8 +113,8 @@ must never lose a schema object. It refuses the migration rather than applying i
 ::: tip
 **`None` stops implicit migrations, not explicit ones.** The first-use creation of a document table or
 of the event tables checks and throws under `None`. But `ApplyAllConfiguredChangesToDatabaseAsync()`,
-`db-apply` and `resources setup` treat `None` as `CreateOrUpdate`, because calling them is the
-instruction to apply.
+[`db-apply`](https://weasel.jasperfx.net/cli/db-apply.html) and [`resources setup`](https://shared-libs.jasperfx.net/cli/resources.html)
+treat `None` as `CreateOrUpdate`, because calling them is the instruction to apply.
 
 `AutoCreate.None` **wins over** `ApplyAllDatabaseChangesOnStartup()`. The hosted service starts and
 does nothing, rather than the registration quietly overriding your policy.
