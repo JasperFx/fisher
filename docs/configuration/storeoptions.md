@@ -72,8 +72,8 @@ never lose a schema object, use `CreateOnly`. It refuses the migration instead o
 `None` stops the **implicit** migrations: the first-use creation of a document table on read or write,
 and of the event tables on first append. Under `None` those check, and throw naming what is missing.
 
-It does **not** stop an **explicit** apply. `ApplyAllConfiguredChangesToDatabaseAsync()`, `db-apply` and
-`resources setup` treat `None` as `CreateOrUpdate`, because calling them *is* the instruction to change
+It does **not** stop an **explicit** apply. `ApplyAllConfiguredChangesToDatabaseAsync()`, [`db-apply`](https://weasel.jasperfx.net/cli/db-apply.html) and
+[`resources setup`](https://shared-libs.jasperfx.net/cli/resources.html) treat `None` as `CreateOrUpdate`, because calling them *is* the instruction to change
 the schema. The one exception is `ApplyAllDatabaseChangesOnStartup()`, a registration rather than a
 call, which `None` switches off.
 :::

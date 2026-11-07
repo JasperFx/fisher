@@ -6,7 +6,9 @@ var ddl = store.Advanced.ToDatabaseScript();
 await store.Advanced.WriteCreationScriptToFileAsync("schema.sql");
 ```
 
-The script creates every table, index and constraint the store's configuration describes.
+The script creates every table, index and constraint the store's configuration describes. From the command
+line, `dotnet run -- `[`db-dump`](https://weasel.jasperfx.net/cli/db-dump.html)` schema.sql` writes the same thing, and
+`--by-feature` splits it one file per feature.
 
 ## Use it for a controlled deployment
 

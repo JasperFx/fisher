@@ -67,7 +67,8 @@ services.AddFisher(options =>
 <sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/getting_started_samples.cs#L75-L83' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_getting_started_add_daemon' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
-See [Bootstrapping Fisher](/configuration/hostbuilder) for every overload.
+See [Bootstrapping Fisher](/configuration/hostbuilder) for every overload, and [Database Management](/schema/) for the
+alternatives to migrating at startup: `db-apply` or `resources setup` as a deployment step, or a reviewed `db-patch` script.
 
 ::: tip
 `AddFisher()` registers `IDocumentStore` as a singleton, and `IDocumentSession` / `IQuerySession` as
