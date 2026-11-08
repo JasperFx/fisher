@@ -83,6 +83,16 @@ dotnet run -- resources setup      # create or migrate each one
 | [`db-apply`](https://weasel.jasperfx.net/cli/db-apply.html), [`db-assert`](https://weasel.jasperfx.net/cli/db-assert.html), [`db-patch`](https://weasel.jasperfx.net/cli/db-patch.html), [`db-dump`](https://weasel.jasperfx.net/cli/db-dump.html), [`db-list`](https://weasel.jasperfx.net/cli/db-list.html) | Weasel's, and act on Weasel databases only. Fisher registers every database it manages with Weasel |
 | [`resources`](https://shared-libs.jasperfx.net/cli/resources.html) | JasperFx's stateful resource model. The Fisher store is one resource; on a Wolverine host its message storage and any broker queues are others, and one `resources setup` provisions all of them |
 
+::: tip The command line itself
+`RunJasperFxCommands` and the rest of the command line come from JasperFx; its
+[command line documentation](https://shared-libs.jasperfx.net/cli/) covers setup,
+[writing your own commands](https://shared-libs.jasperfx.net/cli/writing-commands),
+[arguments and flags](https://shared-libs.jasperfx.net/cli/arguments-flags),
+[environment checks](https://shared-libs.jasperfx.net/cli/environment-checks) and `describe`. Since JasperFx 2.101.0
+the commands also run from a Native AOT binary: see [Native AOT](https://shared-libs.jasperfx.net/cli/#native-aot)
+there and [the command line](/configuration/native-aot#the-command-line) on Fisher's Native AOT page.
+:::
+
 `db-apply` and `resources setup` are an *explicit* instruction to migrate, so both treat `AutoCreate.None` as
 `CreateOrUpdate`. `db-assert` and `resources check` never change anything.
 
