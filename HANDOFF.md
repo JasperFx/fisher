@@ -12,10 +12,36 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**2996 tests green on net9.0 and net10.0** — 2925 in `Fisher.Tests`, 40 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 783 of
-them are shared cross-store compliance tests — 552 event sourcing and 231 document.
-On JasperFx **2.101.0** / Weasel **9.49.0**.
+**3012 tests green on net9.0 and net10.0** — 2941 in `Fisher.Tests`, 40 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 795 of
+them are shared cross-store compliance tests — 564 event sourcing and 231 document.
+On JasperFx **2.102.0** / Weasel **9.49.0**.
+
+## The JasperFx 2.102.0 bump — pending event ages (jasperfx#1150)
+
+**No compile break: `IEventDatabase.FetchFirstEventTimestampsAfterAsync` ships with a throwing default and the
+new fixture gate defaults off.** Fisher implements it and turns `SupportsPendingEventAges` on, so
+`PendingEventAgeCompliance` is enrolled, 12 of 12 green and none skipped: its archived facts run because
+Fisher archives, and its conjoined fact runs because Fisher has conjoined event tenancy. It is what lets a
+monitoring console report a shard's lag in time rather than in events: for each `(tenant, sequence)` it asks
+for, the timestamp of the first live event after that sequence, or null when the shard is caught up.
+
+- **One statement for the whole list.** The positions are bound as one JSON array of `[sequence, tenant]`
+  pairs that `json_each` unpacks, the way a load-many binds its ids, and each gets a correlated
+  `seq_id > ? and is_archived = 0 order by seq_id limit 1`. One connection, one command, and no parameter
+  limit to chunk around: `pending_event_ages.a_long_list_is_answered_in_one_call` asks about 40,000.
+- **Each lookup is a seek, never a count or a scan.** The two predicates are exactly the two columns of
+  `ix_fi_events_archived_seq` `(is_archived, seq_id)`, the index `FisherEventLoader` pages through, so no new
+  index. `pending_event_ages.each_lookup_is_an_index_seek` pins the `EXPLAIN QUERY PLAN`, with and without
+  conjoined tenancy. Archived events are left out because the daemon never loads them.
+- **The tenant is a predicate only under conjoined tenancy**, as in every other event read. Under single
+  tenancy it is ignored (`a_tenant_is_ignored_under_single_tenancy`), and under a database per tenant the
+  file already is the tenant. A null tenant means every tenant. `tenant_id` is not in the index, so one
+  tenant's lookup walks the index past other tenants' events, in `seq_id` order, until it reaches its own.
+- **The timestamp goes through `SqliteTimestamp`**, as the row readers parse it, so it equals the
+  `IEvent.Timestamp` a stream read gives for the same event.
+- **A file with no event table answers every position as caught up**, like the other diagnostic reads
+  (fisher#332). `diagnostic_reads_without_schema.pending_event_ages_answer_caught_up` pins it.
 
 ## The JasperFx 2.95.0 bump — the CritterWatch 1.1 checklist (fisher#475), and fisher#372
 
@@ -1004,11 +1030,14 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.101.0 ships 64 suites; Fisher enrolls **63 of them, 783 tests**.
-Fisher passes **783 of them, across all
-63 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 2.102.0 ships 65 suites; Fisher enrolls **64 of them, 795 tests**.
+Fisher passes **795 of them, across all
+64 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
+
+**2.102.0 added `PendingEventAgeCompliance`, 12 tests, and cost one `IEventDatabase` member**
+(jasperfx#1150). See "The JasperFx 2.102.0 bump" at the top of this file.
 
 **2.98.0 added six tests to `EventProjectionRegistrationCompliance` and cost nothing.** They pin
 `SubscriptionDescriptor.PublishedTypes` (jasperfx#1102) through `TryCreateUsage`, and all six were green on
@@ -1158,9 +1187,9 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 63 suites, 783 tests
+### Green — 64 suites, 795 tests
 
-Event sourcing — 49 suites, 552 tests:
+Event sourcing — 50 suites, 564 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1180,6 +1209,7 @@ Event sourcing — 49 suites, 552 tests:
 | `FetchForWritingCompliance` | 18 |
 | `StreamQueryPlanCompliance` | 13 |
 | `FetchLatestCompliance` | 12 |
+| `PendingEventAgeCompliance` | 12 |
 | `AlwaysEnforceConsistencyCompliance` | 11 |
 | `ConjoinedEventTenancyCompliance` | 22 |
 | `EventDataMaskingCompliance` | 11 |

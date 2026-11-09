@@ -2,6 +2,7 @@ using JasperFx.Descriptors;
 using JasperFx.Events;
 using JasperFx.Events.Daemon;
 using JasperFx.Events.Projections;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace Fisher.Storage;
@@ -647,6 +648,137 @@ public partial class FisherDatabase : IEventDatabase
             var result = await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
             return result is null or DBNull ? null : (long?)Convert.ToInt64(result);
         }, (long?)null, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     jasperfx#1150: for each position, the timestamp of the first event after it, which is the age
+    ///     of the oldest event a shard at that position has not processed yet. Null when there is none.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>One statement for the whole list.</b> The positions go in as one JSON array that
+    ///         <c>json_each</c> unpacks, the same way a load-many binds its ids, and each one gets a
+    ///         correlated <c>seq_id &gt; @n order by seq_id limit 1</c>. A monitoring console asks this
+    ///         for every shard and tenant on a timer, so it is one connection and one command however
+    ///         many positions there are, and no parameter limit to chunk around.
+    ///     </para>
+    ///     <para>
+    ///         <b>Each lookup is a seek, never a count or a scan.</b> <c>is_archived = 0</c> and
+    ///         <c>seq_id &gt; @n</c> are exactly the two columns of the <c>(is_archived, seq_id)</c> index
+    ///         the event loader pages through, so SQLite seeks to the first live event and stops.
+    ///         <c>pending_event_ages.each_lookup_is_an_index_seek</c> pins the plan. Archived events are
+    ///         left out because the daemon never loads them, so none can be waiting on a shard.
+    ///     </para>
+    ///     <para>
+    ///         <b>The tenant is a predicate only under conjoined tenancy</b>, as everywhere else in Fisher's
+    ///         event reads. Under a database per tenant this file already is the tenant, and under single
+    ///         tenancy there is no tenant to filter by, so the tenant is ignored. A null tenant means every
+    ///         tenant. The tenant term is not in the index, so a tenant whose next event sits behind other
+    ///         tenants' walks the index past theirs, in seq_id order, and stops at its own.
+    ///     </para>
+    ///     <para>
+    ///         The timestamp is parsed by <see cref="SqliteTimestamp" />, as the row readers do, so it
+    ///         equals the <see cref="IEvent.Timestamp" /> a stream read gives for the same event. A file
+    ///         with no event table answers every position as caught up, like the other diagnostic reads
+    ///         (fisher#332).
+    ///     </para>
+    /// </remarks>
+    public async Task<IReadOnlyList<PendingEventAge>> FetchFirstEventTimestampsAfterAsync(
+        IReadOnlyList<(string? TenantId, long Sequence)> positions, CancellationToken token = default)
+    {
+        if (positions.Count == 0)
+        {
+            return Array.Empty<PendingEventAge>();
+        }
+
+        var timestamps = await ReadWhenStorageExistsAsync(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = FirstEventTimestampsAfterSql();
+            command.Parameters.AddWithValue("@positions", WritePositions(positions));
+
+            var found = new DateTimeOffset?[positions.Count];
+
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                if (!reader.IsDBNull(1))
+                {
+                    found[reader.GetInt32(0)] = SqliteTimestamp.FromDatabaseValue(reader.GetString(1));
+                }
+            }
+
+            return found;
+        }, new DateTimeOffset?[positions.Count], token).ConfigureAwait(false);
+
+        var ages = new PendingEventAge[positions.Count];
+        for (var i = 0; i < positions.Count; i++)
+        {
+            ages[i] = new PendingEventAge(positions[i].TenantId, positions[i].Sequence, timestamps[i]);
+        }
+
+        return ages;
+    }
+
+    /// <summary>
+    ///     The statement behind <see cref="FetchFirstEventTimestampsAfterAsync" />. Each row is a
+    ///     position's index in the list and the timestamp of its first event, or null.
+    /// </summary>
+    internal string FirstEventTimestampsAfterSql()
+    {
+        var tenantFilter = _events.TenancyStyle == JasperFx.MultiTenancy.TenancyStyle.Conjoined
+            ? " and (p.tenant_id is null or e.tenant_id = p.tenant_id)"
+            : "";
+
+        return $"""
+                select p.position, (
+                    select e.timestamp from {_events.EventsTableName} e
+                    where e.seq_id > p.seq_id and e.is_archived = 0{tenantFilter}
+                    order by e.seq_id
+                    limit 1)
+                from (
+                    select key as position, json_extract(value, '$[0]') as seq_id, json_extract(value, '$[1]') as tenant_id
+                    from json_each(@positions)) p
+                """;
+    }
+
+    /// <summary>
+    ///     The positions as a JSON array of <c>[sequence, tenant]</c> pairs, a null tenant as JSON null.
+    /// </summary>
+    /// <remarks>
+    ///     <see cref="Utf8JsonWriter" /> rather than <c>JsonSerializer</c>, for Native AOT, as in
+    ///     <see cref="SqliteJsonArrays" />.
+    /// </remarks>
+    private static string WritePositions(IReadOnlyList<(string? TenantId, long Sequence)> positions)
+    {
+        var buffer = new System.Buffers.ArrayBufferWriter<byte>();
+
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartArray();
+
+            foreach (var (tenantId, sequence) in positions)
+            {
+                writer.WriteStartArray();
+                writer.WriteNumberValue(sequence);
+
+                if (tenantId is null)
+                {
+                    writer.WriteNullValue();
+                }
+                else
+                {
+                    writer.WriteStringValue(tenantId);
+                }
+
+                writer.WriteEndArray();
+            }
+
+            writer.WriteEndArray();
+        }
+
+        return System.Text.Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
     /// <summary>

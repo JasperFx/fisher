@@ -95,6 +95,16 @@ public class diagnostic_reads_without_schema : IAsyncLifetime
         (await _store.Database.FindEventStoreFloorAtTimeAsync(DateTimeOffset.UtcNow, Token)).ShouldBeNull();
     }
 
+    /// <remarks>jasperfx#1150. A file with no events has nothing pending, so every position is caught up.</remarks>
+    [Fact]
+    public async Task pending_event_ages_answer_caught_up()
+    {
+        var ages = await _store.Database.FetchFirstEventTimestampsAfterAsync([(null, 0), ("acme", 3)], Token);
+
+        ages.Select(x => (x.TenantId, x.Sequence)).ShouldBe([(null, 0L), ("acme", 3L)]);
+        ages.ShouldAllBe(x => x.IsCaughtUp);
+    }
+
     [Fact]
     public async Task dead_letter_reads_answer_nothing()
     {

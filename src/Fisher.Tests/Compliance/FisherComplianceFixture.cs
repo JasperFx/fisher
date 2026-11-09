@@ -591,6 +591,17 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override bool SupportsProjectionFloors => true;
 
     /// <summary>
+    ///     jasperfx#1150 — <c>FetchFirstEventTimestampsAfterAsync</c>, the age of the oldest event a
+    ///     shard has not processed yet.
+    /// </summary>
+    /// <remarks>
+    ///     One statement over <c>json_each</c> for the whole list, each position a seek on the
+    ///     <c>(is_archived, seq_id)</c> index the event loader already pages through. See the remarks on
+    ///     <c>FisherDatabase.FetchFirstEventTimestampsAfterAsync</c>.
+    /// </remarks>
+    public override bool SupportsPendingEventAges => true;
+
+    /// <summary>
     ///     fisher#42 — Fisher subclasses JasperFx's projection scenario harness and exposes it on
     ///     <c>Advanced.EventProjectionScenarioAsync</c>.
     /// </summary>
