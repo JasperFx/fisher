@@ -15,7 +15,7 @@ scoreboard and the things that are true right now but not obvious from either.
 **3012 tests green on net9.0 and net10.0** — 2941 in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 795 of
 them are shared cross-store compliance tests — 564 event sourcing and 231 document.
-On JasperFx **2.102.0** / Weasel **9.49.0**.
+On JasperFx **2.102.0** / Weasel **9.50.0**.
 
 ## The JasperFx 2.102.0 bump — pending event ages (jasperfx#1150)
 
