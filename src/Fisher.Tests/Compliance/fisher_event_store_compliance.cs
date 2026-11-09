@@ -8,9 +8,9 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and sixty-three are enrolled from
- * JasperFx.Events.ComplianceTests 2.101.0, which itself ships sixty-four concrete suites across
- * sixty-three files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
+ * Suites were added one at a time as Fisher grew into them, and sixty-four are enrolled from
+ * JasperFx.Events.ComplianceTests 2.102.0, which itself ships sixty-five concrete suites across
+ * sixty-four files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
  * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
@@ -639,6 +639,17 @@ public class document_store_diagnostics_compliance
 
 public class projection_floor_compliance
     : ProjectionFloorCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * jasperfx#1150 (JasperFx 2.102.0) — IEventDatabase.FetchFirstEventTimestampsAfterAsync, the timestamp of
+ * the first live event after each position, which turns a shard's lag in events into a lag in time. Fisher
+ * answers the whole list in one json_each statement, each position a seek on the (is_archived, seq_id)
+ * index; pending_event_ages pins the plan and the single-tenancy and missing-table answers the suite does
+ * not reach.
+ */
+
+public class pending_event_age_compliance
+    : PendingEventAgeCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
 /*
  * jasperfx#785 (JasperFx 2.93.0), fisher#471 — the soft-delete operators and the metadata a store stamps
