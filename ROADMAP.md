@@ -3,12 +3,25 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **thirteen open issues: eleven are the Fisher 2.0 milestone, and the other two are small or
-waiting.** The 2.0 issues are Fisher's share of the Critter Stack .NET 11 release train. Of the other two, one
-is blocked upstream and one is taking JasperFx 2.100's compliance additions. 1.5.0 closed both of 1.4.0's
+Status: **twelve open issues: eleven are the Fisher 2.0 milestone, and the other one is blocked
+upstream.** The 2.0 issues are Fisher's share of the Critter Stack .NET 11 release train. 1.28.0 took JasperFx
+2.100's compliance additions ([#519](https://github.com/JasperFx/fisher/issues/519)). 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
+
+**1.29.0 moves to JasperFx 2.102.0 and Weasel 9.50.0.** It implements JasperFx 2.102.0's
+`IEventDatabase.FetchFirstEventTimestampsAfterAsync` ([#527](https://github.com/JasperFx/fisher/pull/527)), the
+age of the oldest event a shard has not processed, so a monitoring console can report projection lag as time.
+It answers every position in one statement with one index seek per position, and enrolls `PendingEventAgeCompliance`.
+JasperFx 2.101.0 runs the command line from a Native AOT binary, and Weasel 9.50.0 adds the `db-*` commands to it
+([#526](https://github.com/JasperFx/fisher/pull/526), [#528](https://github.com/JasperFx/fisher/pull/528)).
+
+**1.28.0 frees a tombstoned stream's natural key** ([#522](https://github.com/JasperFx/fisher/issues/522)), so a new
+stream can claim it, and takes JasperFx 2.100's compliance additions ([#519](https://github.com/JasperFx/fisher/issues/519)),
+including tenant switching and the suite inventory. `SupportsHoldingAnAppendOpen` stays off, because a held append
+takes SQLite's only write lock. `EventStoreUsage` reports the event store's `TenancyStyle`. On JasperFx 2.100.0 and
+Weasel 9.49.0.
 
 **1.27.0 leaves archived events out of every default event read**, as Marten and Polecat do
 ([#511](https://github.com/JasperFx/fisher/pull/511)), and only a predicate's own parameter can opt back in
@@ -324,7 +337,7 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is thirteen items, eleven of them the Fisher 2.0 milestone.
+What is left is twelve items, eleven of them the Fisher 2.0 milestone.
 
 **Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.0, Weasel 10.0, `net10.0;net11.0`):
 [#459](https://github.com/JasperFx/fisher/issues/459) build and pack targets,
@@ -340,9 +353,6 @@ adopting the lifted shared bases, [#466](https://github.com/JasperFx/fisher/issu
 
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.
-
-[#519](https://github.com/JasperFx/fisher/issues/519) takes JasperFx 2.100's compliance additions: tombstoned
-natural keys, in-flight appends, tenant switching and the suite inventory.
 <!-- /open-issues -->
 
 [#243](https://github.com/JasperFx/fisher/issues/243) and
