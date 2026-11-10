@@ -30,4 +30,30 @@ public interface ISerializer : Weasel.Core.ISerializer
     [RequiresUnreferencedCode("Default ISerializer uses STJ reflection; AOT consumers should supply a source-generator-backed ISerializer impl.")]
     [RequiresDynamicCode("Default ISerializer uses STJ reflection which requires runtime code generation.")]
     object FromJson(Type type, string json);
+
+    /// <summary>
+    ///     Deserialize UTF-8 JSON held in a span, without first materializing a string (fisher#461).
+    /// </summary>
+    /// <remarks>
+    ///     Default-implemented through the stream overload so existing implementations keep compiling; a
+    ///     serializer that can parse a span directly should override it.
+    /// </remarks>
+    [RequiresUnreferencedCode("Default ISerializer uses STJ reflection; AOT consumers should supply a source-generator-backed ISerializer impl.")]
+    [RequiresDynamicCode("Default ISerializer uses STJ reflection which requires runtime code generation.")]
+    T FromJson<T>(ReadOnlySpan<byte> utf8Json)
+    {
+        using var stream = new MemoryStream(utf8Json.ToArray(), writable: false);
+        return FromJson<T>(stream);
+    }
+
+    /// <summary>
+    ///     Deserialize UTF-8 JSON held in a span to the specified type.
+    /// </summary>
+    [RequiresUnreferencedCode("Default ISerializer uses STJ reflection; AOT consumers should supply a source-generator-backed ISerializer impl.")]
+    [RequiresDynamicCode("Default ISerializer uses STJ reflection which requires runtime code generation.")]
+    object FromJson(Type type, ReadOnlySpan<byte> utf8Json)
+    {
+        using var stream = new MemoryStream(utf8Json.ToArray(), writable: false);
+        return FromJson(type, stream);
+    }
 }
