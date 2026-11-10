@@ -341,7 +341,7 @@ that is tracked in its own issue and has not landed yet; they are listed so the 
 
 ### Target frameworks: `net10.0` and `net11.0`
 
-Fisher, `Fisher.AspNetCore` and `Fisher.EntityFrameworkCore` now target `net10.0;net11.0`. **`net9.0` is
+Fisher, `Fisher.AspNetCore`, `Fisher.EntityFrameworkCore` and the new `Fisher.Aspire.Hosting` now target `net10.0;net11.0`. **`net9.0` is
 dropped**, so an application still on .NET 9 stays on Fisher 1.x. Nothing about the on-disk format depends
 on the target framework.
 
@@ -376,27 +376,30 @@ bump. This entry will state, once the behaviour is measured against a Fisher fil
 existing database and the opt-out; until then, treat the setting as new behaviour for projection
 side effects and check the daemon after upgrading.
 
-### Types that move to shared packages (**pending**)
+### Types that move to shared packages
 
-These are tracked in fisher#465 and fisher#530. Until they merge, the Fisher 1 names still compile.
+Landed in 2.0.0-alpha.1 (fisher#465 via #538, fisher#530 via #544). The Fisher 1 names are gone.
 
-| Fisher 1 | Fisher 2 | Tracked in |
-| :--- | :--- | :--- |
-| `Fisher.BulkInsertMode` | the shared `Weasel.Core.BulkInsertMode` | fisher#465 |
-| `Fisher.Patching.IPatchExpression<T>` | the shared JasperFx patch-expression contract | fisher#465 |
-| `Fisher.Exceptions.*` types that derive from a `JasperFx.Events` exception | the `JasperFx.Events` type itself, thrown directly | fisher#530 |
+| Fisher 1 | Fisher 2 |
+| :--- | :--- |
+| `Fisher.BulkInsertMode` | the shared `Weasel.Core.BulkInsertMode` |
+| `Fisher.Patching.IPatchExpression<T>` | the shared JasperFx patch-expression contract |
+| `Fisher.Exceptions.*` types that derived from a `JasperFx.Events` exception | the `JasperFx.Events` type itself, thrown directly |
 
-The mechanical change for each is a `using` and, for the exceptions, a `catch` of the base type; members
-are unchanged. No table or column is involved.
+One exception keeps a Fisher type for now: `StreamLockedException` stays Fisher's until JasperFx.Events carries the
+list of streams that lost the lock (jasperfx#1172). The mechanical change for the rest is a `using` and, for the
+exceptions, a `catch` of the `JasperFx.Events` type; members are unchanged. No table or column is involved.
 
-### Union-typed properties and events (**pending**, `net11.0` only)
+### Union-typed properties and events (`net11.0` only)
 
-fisher#466 adds LINQ over C# union-typed members through `json_extract` / `json_type`. Unions are a C# 15 /
+Landed in 2.0.0-alpha.1 (fisher#466 via #536): LINQ over C# union-typed members through `json_extract` / `json_type`, with a type test and case access, and clear refusals for the shapes SQLite cannot answer. Unions are a C# 15 /
 .NET 11 language feature, so this is available on the `net11.0` build only. It adds a capability and
 changes nothing for an application that does not use unions.
 
-### Hosting: `AddFisher(name)` and .NET Aspire (**pending**)
+### Hosting: `AddFisher(name)` and .NET Aspire
 
-fisher#468 adds an `AddFisher(name)` hosting helper for Aspire, and documents the `CommunityToolkit`
-`AddSqliteConnection` path, OpenTelemetry registration and the high-water health check. The existing
+Landed in 2.0.0-alpha.1 (fisher#468 via #541) as the new `Fisher.Aspire.Hosting` package: an AppHost-side
+`AddFisher(name, path)` that publishes the file path as a connection-string resource, `WithVolume` for the
+file's volume, and [Aspire](/configuration/aspire) documents the `CommunityToolkit` `AddSqliteConnection`
+path, OpenTelemetry registration and the high-water health check. The existing
 `AddFisher(...)` registration in this guide is unchanged.
