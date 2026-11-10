@@ -12,10 +12,20 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3012 tests green on net10.0 and net11.0** — 2941 in `Fisher.Tests`, 40 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 795 of
-them are shared cross-store compliance tests — 564 event sourcing and 231 document.
-On JasperFx **2.102.0** / Weasel **9.50.0**.
+**3041 tests green on net10.0 and 3068 on net11.0** — 2970 (net10.0) / 2997 (net11.0) in `Fisher.Tests`, 40 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 811 of
+them are shared cross-store compliance tests — 580 event sourcing and 231 document.
+The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
+On JasperFx **3.0.0** / Weasel **10.0.0-alpha.1**.
+
+## The JasperFx 3.0.0 bump — Fisher 2.0 on net10.0;net11.0 (fisher#460, fisher#530, fisher#465)
+
+The major: `net9.0` dropped, JasperFx **3.0.0**, Weasel **10.0.0-alpha.1**, SQLitePCLRaw bundle 3.0.5.
+`JasperFx.Events.ComplianceTests` 3.0.0 ships 65 suites and Fisher enrolls all 65: `ProjectionStepThroughCompliance`
+(4 tests) is new and enrolled; `SingleTenantedEventSlicingCompliance`, the one suite 2.x shipped that Fisher could
+not enroll, no longer ships. Three enrolled suites grew on the bump: `StreamArchivingCompliance` 20 → 27,
+`FetchForWritingCompliance` 18 → 21, `EventDataMaskingCompliance` 11 → 13. Fisher's exception types are
+JasperFx.Events' own (fisher#530); `StreamLockedException` stays Fisher's until jasperfx#1172 adds `StreamIds`.
 
 ## The JasperFx 2.102.0 bump — pending event ages (jasperfx#1150)
 
@@ -1030,9 +1040,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 2.102.0 ships 65 suites; Fisher enrolls **64 of them, 795 tests**.
-Fisher passes **795 of them, across all
-64 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 3.0.0 ships 65 suites; Fisher enrolls **65 of them, 811 tests**.
+Fisher passes **811 of them, across all
+65 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -1187,9 +1197,9 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 64 suites, 795 tests
+### Green — 65 suites, 811 tests
 
-Event sourcing — 50 suites, 564 tests:
+Event sourcing — 51 suites, 580 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1199,20 +1209,21 @@ Event sourcing — 50 suites, 564 tests:
 | `StringStreamIdentityCompliance` | 21 |
 | `EventStoreExplorerCompliance` | 18 |
 | `NaturalKeyCompliance` | 19 |
-| `StreamArchivingCompliance` | 20 |
+| `StreamArchivingCompliance` | 27 |
 | `StreamTombstoningCompliance` | 9 |
 | `ProjectionFloorCompliance` | 9 |
+| `ProjectionStepThroughCompliance` | 4 |
 | `StreamStateQueryCompliance` | 15 |
 | `EventDataQueryCompliance` | 9 |
 | `AggregateWriteCacheCompliance` | 14 |
 | `StrongTypedIdentityCompliance` | 14 |
-| `FetchForWritingCompliance` | 18 |
+| `FetchForWritingCompliance` | 21 |
 | `StreamQueryPlanCompliance` | 13 |
 | `FetchLatestCompliance` | 12 |
 | `PendingEventAgeCompliance` | 12 |
 | `AlwaysEnforceConsistencyCompliance` | 11 |
 | `ConjoinedEventTenancyCompliance` | 22 |
-| `EventDataMaskingCompliance` | 11 |
+| `EventDataMaskingCompliance` | 13 |
 | `RebuildAndCatchUpCompliance` | 11 |
 | `StreamCompactingCompliance` | 13 |
 | `StreamReadCompliance` | 11 |
