@@ -137,9 +137,11 @@ than open.
 So a `FetchForWriting` handle taken at version 2 could commit after a tombstone and recreate the
 stream with only the late events. Its aggregate then started mid-life, which is how CritterWatch's
 evicted services came back without a registration event. Polecat reads a missing row as version 0
-and refuses, and so does Fisher now. **Zero is not refused**: it is what `FetchForWriting` records
-for a stream that did not exist yet, so "start it if absent" still works.
-`writing_to_aggregates.an_expected_version_of_zero_still_creates_a_missing_stream` pins that side.
+and refuses, and so does Fisher now. **A starting version of zero is not refused**: it is what
+`FetchForWriting` records for a stream that did not exist yet, so "start it if absent" still works.
+The rule is a row of JasperFx's `ClientSideAppendPlanner` table now (fisher#464), which cites this issue.
+`writing_to_aggregates.an_expected_starting_version_of_zero_still_creates_a_missing_stream` pins that
+side — spelled `Append(id, 1, e)` since `Append`'s argument became the version *after* the append.
 
 **Losing the *file's* write lock is a different failure from losing a version guard, and it now has
 the Critter Stack's vocabulary** (fisher#306). Contention is still retried by
@@ -320,7 +322,7 @@ Working, with tests:
   appends** (`Exceptions.ArchivedStreamException`, which subclasses the lifted
   `JasperFx.Events.ArchivedStreamException` since fisher#307 — the lift took Fisher's type as its
   canonical shape), because archiving is not a soft delete
-  you can keep writing through. Checked in `AppendPlanner.PlanStream` before the version guard and
+  you can keep writing through. Decided by `ClientSideAppendPlanner`'s table before the version guard and
   deliberately *not* for a `StartStream`, where an archived id is still an id in use and
   `ExistingStreamIdCollisionException` is the more useful answer. An `Archived` event reaching a
   single stream projection that owns the stream archives it too, through
@@ -898,17 +900,17 @@ Six things that are decisions rather than mechanics:
     object with a mistyped member is liable to deserialize to a default-valued event instead of
     failing, because the serializer's naming policy decides which keys are read — which is how the
     first version of these tests passed against a store that raised nothing.
-  **`Weasel.Storage.EventLoaderBase` (weasel#566) is not adopted yet, and that is a judgement rather
-  than an oversight.** The base is well shaped for Fisher — the paging, skip accounting, ceiling
-  calculation and cancellation translation are all there behind an `IEventPagingDialect` seam, and it
-  carries `ReportLastObservedSequence` (jasperfx#667), which Fisher genuinely lacks: a full batch whose
-  every row was skipped currently takes a ceiling from a page with no surviving event. What it would
-  cost is a SQLite `IEventPagingDialect` (page SQL *and* the skip-ahead probe, which Fisher has no
-  caller for), a mapping of the loader's constructor-time allow-list work onto `EventTypeAllowList` —
-  including fisher#191's expansion of a transformation's *source* names, which is the half that fails
-  silently if it is lost — and a home for the `DaemonTrace.Record` call, for which the base offers no
-  hook. Worth its own node with fisher#153 and fisher#191 pinned first, since both are regressions the
-  compliance suites structurally cannot catch.
+  **`FisherEventLoader` is a `Weasel.Storage.EventLoaderBase` (weasel#566) since fisher#464.** The paging,
+  skip accounting, ceiling calculation and cancellation translation are the base's; Fisher supplies
+  `SqliteEventPagingDialect` (page SQL and the `order by seq_id limit 1` skip-ahead probe), the row
+  hydration, the unknown-type exception, the dead letter for an unreadable body (`RecordSkippedEventAsync`)
+  and the `DaemonTrace` points (around `LoadAsync`). It reports `EventPage.LastObservedSequence`
+  (jasperfx#667), so a full batch whose every row was skipped no longer claims the high-water mark.
+  ⚠️ **fisher#191's upcast-source widening lives in the dialect**, which renders the shared allow list's
+  `AliasesIncludingUpcastSources` (weasel#743) rather than `Aliases`. Rendering `Aliases` alone compiles,
+  passes every compliance suite, and makes `upcasting.a_subscription_filtered_on_the_new_type_receives_the_upcast_old_rows`
+  time out — verified. The allow list also adds `Archived` and `Compacted<T>` for a single-stream
+  aggregate projection, which the old loader did not.
 - **The generic interface's `IEventDatabase` parameter carries the answer** (fisher#57), where for a
   long time every one of them was ignored on the true-enough grounds that a Fisher store was one file.
   Under database-per-tenant it is not, and ignoring it would read one tenant's events and write every
@@ -1152,7 +1154,17 @@ several. Wait on the listener's own signal.
 into it, and the batch flushes in whichever hook its delivery guarantee needs. Both of Fisher's commit
 paths bracket their transaction the same way — `FisherSession.SaveChangesAsync` and
 `FisherProjectionBatch.ExecuteAsync` each call `BeforeCommitAsync` as the last thing inside the
-transaction and `AfterCommitAsync` after it commits. Type names match Polecat's exactly, because
+transaction and `AfterCommitAsync` after it commits.
+
+**`FisherProjectionBatch` is a JasperFx `ProjectionBatchBase<IDocumentSession>` since fisher#464**
+(jasperfx#1045), and Fisher's `IMessageOutbox` / `IMessageBatch` derive from the shared
+`JasperFx.Events.Documents` ones (the outbox's shared member is a forwarding default). The base owns the
+session list, the lazily-created message batch, raised-event dedupe and the post-commit order; Fisher keeps
+the SQLite transaction, the guarded progression write and planning raised events under the write lock
+(`AppendOrigin.RaisedByProjection`). Two behaviour changes came with it: **outside
+`ShardExecutionMode.Continuous` a batch publishes nothing and raises nothing** (a rebuild replays history),
+and in the batch **participants' `BeforeCommitAsync` now run before the outbox's**, which the base requires
+to be last. Type names match Polecat's exactly, because
 messaging is not dialect-specific and projection code should port between the stores unchanged.
 
 - **`NulloMessageOutbox` is the intended end state, not a placeholder** (fisher#8, closed wontfix).
@@ -1199,9 +1211,8 @@ hook take 500 ms turns the race deterministic, which is how the fix was verified
 re-running and hoping.
 
 `IProjectionBatch.PublishMessageAsync` hands over an `object`, but `IMessageSink.PublishAsync<T>` is
-generic, so `MessagePublishing` closes it over the runtime message type and caches the compiled
-delegate per type. Polecat does the same via polecat#46, with `FastExpressionCompiler` where Fisher
-uses the BCL's `Expression.Compile` — not worth a dependency for one call site.
+generic, so JasperFx's `MessagePublishing` (lifted by jasperfx#1045; Fisher's copy is deleted) closes it
+over the runtime message type and caches the compiled delegate per type.
 
 ### Event rewriting
 
@@ -1254,7 +1265,8 @@ operation that decides what replaces them, so there is no public surface for it.
 
 ### Stream compacting
 
-`Events/Protected/StreamCompacting.cs` (fisher#10) — replaces a stream's events with a single
+`Events/Protected/FisherStreamCompacting.cs` (fisher#10), Fisher's half of JasperFx's
+`StreamCompactingExecution<TSession>` since fisher#464 — replaces a stream's events with a single
 `Compacted<T>` event carrying the aggregate state. Reached by `session.Events.CompactStreamAsync<T>`,
 and by `IEventStore.CompactStreamAsync` for tooling. Ported from Polecat's, which is the request
 shape's other consumer.
@@ -1296,6 +1308,10 @@ somewhere first, and it runs before anything destructive is queued.
 information out of events already stored. JasperFx 2.41.0 lifted the *request* shape
 (`IEventDataMasking`) because Marten's and Polecat's were identical; **the rule registry was not
 lifted**, so `EventGraph.Masking.cs` is a port of Polecat's rather than a use of something shared.
+The *execution* is shared since fisher#464: `FisherEventDataMasking` is Fisher's half of JasperFx's
+`EventDataMaskingBase<TSession>` (jasperfx#1048) — the session, the archived-inclusive reads, and a
+`TryMask` that calls `EventGraph.TryMask`, so it binds to Fisher's own rule list while the #1043 registry
+lift is unadopted. `SupportsMaskingArchivedEvents` is on in the compliance fixture.
 
 The whole batch runs in one session, so an erasure is either done or not done — a partial one is a
 compliance answer that is neither.
@@ -1315,7 +1331,8 @@ compliance answer that is neither.
   storage and an `IEvent` queryable would need a parallel provider to serve one caller.
 - **An event is rewritten only when a rule matched it**, and headers follow the same gate — so
   `AddHeader` marks the events that were masked, not the events that were looked at.
-- **The same event reached by two sources is masked once**, deduplicated by sequence.
+- **The same event reached by two sources is masked once**, deduplicated by (tenant, sequence) — the
+  shared base's key, which it took from Fisher.
   `an_event_reached_by_two_sources_is_masked_once` pins it with a deliberately non-idempotent rule,
   because an idempotent one would agree either way.
 - **A batch naming no stream and no filter throws** rather than masking everything.
@@ -1528,8 +1545,12 @@ compares a `DateOnly`, and runs both projection step-through methods — all nat
   step property by reflection: a generic hop returns `ProjectionTimelineRaw` directly.
   `replay_by_name_renders_state_through_the_stores_serializer` pins agreement with the typed path.
   A consumer that keyed on the PascalCase names sees camelCase, so this belongs in the release notes.
-- ⚠️ **The step-through's `MakeGenericMethod` lives in a non-generic helper, because ILC 10.0.1 crashed
-  on the old spelling.** `MakeGenericMethod(typeof(TState))` inside the generic interface method made
+- ⚠️ **Historical since fisher#464, which replaced all three step-through bodies with JasperFx's
+  `Projections.StepThrough(...)` (jasperfx#1049) and deleted `InvokeReplay` with them.** Fisher no longer
+  closes anything over `TState` here; whether the shared step-through is clean under ILC is upstream's,
+  and the native smoke has not run it since. The note below is kept for the ILC crash it records.
+  The step-through's `MakeGenericMethod` lived in a non-generic helper, because ILC 10.0.1 crashed
+  on the old spelling. `MakeGenericMethod(typeof(TState))` inside the generic interface method made
   ILC throw `IndexOutOfRangeException` from `MakeGenericMethodSite.InstantiateDependencies` as soon as
   the method was reachable. So no native publish of an application calling either step-through method
   produced a binary. `InvokeReplay(string, Type, …)` hands the analyzer a plain `Type`, and it warns
@@ -4741,6 +4762,10 @@ all, including the zero-infrastructure embedded configuration that is Fisher's b
 - **A console's id is converted through the mapping's identity type before it is bound.** Fourth
   appearance of the uppercase-Guid trap: `fi_doc_*.id` holds the lowercase canonical form under a
   case-sensitive collation, so binding the caller's string directly matches nothing.
+- **The step-through is JasperFx's `ProjectionStepThrough` since fisher#464** (jasperfx#1049), built in
+  `DocumentStore.ProjectionReplay.cs` over Fisher's event-type lookup and a `ProjectionStateSerializer` on
+  the store's own serializer; `ProjectionStepThroughCompliance` is enrolled. The two points below are
+  the shared class's behaviour now, and were Fisher's first.
 - **Projection replay copies the aggregate at every step**, and this is the one thing Polecat's does
   not. JasperFx's aggregation mutates the aggregate in place, so a timeline built from live references
   shows the *final* state at every step — the single thing a step-through exists not to do. The copy
@@ -6347,36 +6372,39 @@ The mechanics, because they are not what the package's name suggests:
 
 ### Session metadata on appended events
 
-`AppendPlanner.ApplySessionMetadata` copies the session's correlation id, causation id, user name and
-headers onto each event that does not already carry its own, each gated on its `Enable*` option. The
+`ClientSideAppendPlanner.Stamp` (JasperFx, jasperfx#1051, adopted in fisher#464) copies the session's
+correlation id, causation id, user name and headers onto each event that does not already carry its own,
+each gated on its `Enable*` option; `FisherSession` is the `IMetadataContext` it reads. A session header
+no longer replaces an event's own header of the same name (`TryAdd`), which is a 2.0 behaviour change. The
 session seeds correlation/causation from `Activity.Current` (`RootId` and `ParentId`) at construction,
 so tracing context reaches events with no application code; an explicit assignment afterwards wins.
 
 **A stream carrying no events is dropped from the unit of work — unless it asked not to be.**
-`CollectActionableStreams` keeps only streams with at least one event, and `CollectGuardOnlyStreams`
-beside it keeps the ones flagged `IEventStream.AlwaysEnforceConsistency` with an
-`ExpectedVersionOnServer` set, so their version is re-read and checked under the write lock with no
-append written. Until fisher#184 the flag did nothing at all: it is on the shared `IEventStream`,
+The shared planner classifies such a stream as `StreamAppendWork.Nothing`, unless it is flagged
+`IEventStream.AlwaysEnforceConsistency` with an `ExpectedVersionOnServer` set, which is
+`StreamAppendWork.VerifyVersion`: re-read and checked under the write lock with no append written. Until fisher#184 the flag did nothing at all: it is on the shared `IEventStream`,
 Fisher forwarded it to the `StreamAction` faithfully, and nothing else in the store ever read it.
 That is invisible to any ordinary append test, because appending a single event brings the ordinary
 guard back — the flag's whole subject is the *empty* case, "I read this stream, decided on the
 strength of what I read to write nothing, and that decision is only sound if the stream has not
 moved". `AlwaysEnforceConsistencyCompliance` is what found it.
 
-This duplicates the private `StreamAction.ProcessMetadata`, which is normally reached through
-`StreamAction.PrepareEvents` — and Fisher **cannot** use `PrepareEvents`. In Quick mode it numbers
+Historical, and the reason the planner lift exists: Fisher used to duplicate the private
+`StreamAction.ProcessMetadata`, which is normally reached through `StreamAction.PrepareEvents` — and Fisher
+**cannot** use `PrepareEvents`. In Quick mode it numbers
 events only when `ExpectedVersionOnServer` is already set, because Marten and Polecat let the database
 assign versions while Fisher numbers them client-side from the version it just read. Pre-setting
 `ExpectedVersionOnServer` to make it number them would make the optimistic-concurrency check inside
 the same method compare that value against itself and pass unconditionally. Keeping version
-assignment and metadata application apart is what keeps the guard real; the cost is that a new
-metadata field in JasperFx will not reach Fisher's events until this method learns about it.
+assignment and metadata application apart is what keeps the guard real; the cost was that a new
+metadata field in JasperFx would not reach Fisher's events until Fisher's copy learned about it. Since
+fisher#464 the stamping is JasperFx's own `ClientSideAppendPlanner.Stamp`, so that cost is gone.
 
 #### `Timestamp`, and that cost coming due — fisher#119
 
 **The cost named above is not hypothetical, and `Timestamp` is the field it came due on.**
 `PrepareEvents` stamps it (as `EventSlice` does for a projection's raised events) and
-`ApplySessionMetadata` did not — so an event reached an inline projection carrying
+Fisher's old `ApplySessionMetadata` did not — so an event reached an inline projection carrying
 `DateTimeOffset.MinValue`, and every read model recording `e.Timestamp` baked in a year-0001 date.
 Worse than merely wrong: **the same projection produced different documents inline and rebuilt**,
 because replay reads the column, so the divergence was invisible until somebody looked at a date.
