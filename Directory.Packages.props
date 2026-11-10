@@ -453,9 +453,12 @@
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
-             GHSA-2m69-gcr7-jv3q) with 3.0.3, which ships the patched SQLite 3.50.x build. That
-             build is also what puts JSONB and the json1 functions Fisher's storage relies on
-             unconditionally in the box. -->
+             GHSA-2m69-gcr7-jv3q) with the 3.0.x line, which ships the patched SQLite 3.50.x+ build.
+             That build is also what puts JSONB and the json1 functions Fisher's storage relies on
+             unconditionally in the box. fisher#462 / weasel#739: the bundle decision is to STAY on
+             bundle_e_sqlite3 (no SQLite3MC swap, no cap on Microsoft.Data.Sqlite); Microsoft.Data.Sqlite
+             11 depends on this same 3.0.5. native_sqlite_bundle asserts the >= 3.44 floor. Keep this at
+             or above whatever the newest Microsoft.Data.Sqlite we reference asks for. -->
         <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
 
         <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />

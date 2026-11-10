@@ -187,3 +187,11 @@ A *declared column* is rescued by SQLite's affinity rules, which is why a duplic
 behaves correctly even when bound raw. There is no affinity inside `json_extract`, so an undeclared
 member is not.
 :::
+
+## The native SQLite build
+
+Fisher runs on the `SQLitePCLRaw.bundle_e_sqlite3` 3.0.x bundle that `Microsoft.Data.Sqlite` brings. It does
+not swap in SQLite3MC (an encrypted build) and does not cap `Microsoft.Data.Sqlite`; an application that
+wants encryption at rest can reference `SQLite3MC.PCLRaw.provider` itself, since it is built on the same
+SQLitePCLRaw 3.0.x line. Fisher needs SQLite 3.44 or newer for the json1 functions it relies on, and its
+test suite asserts that floor against the bundle it runs on.
