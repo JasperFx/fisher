@@ -37,7 +37,7 @@ public partial class EventOperations
         var request = new StreamCompactingRequest<T>(streamId);
         configure?.Invoke(request);
 
-        return StreamCompacting.ExecuteAsync(request, _session);
+        return FisherStreamCompacting.CompactAsync(request, _session);
     }
 
     /// <inheritdoc cref="CompactStreamAsync{T}(Guid, Action{StreamCompactingRequest{T}})" />
@@ -49,6 +49,6 @@ public partial class EventOperations
         var request = new StreamCompactingRequest<T>(streamKey);
         configure?.Invoke(request);
 
-        return StreamCompacting.ExecuteAsync(request, _session);
+        return FisherStreamCompacting.CompactAsync(request, _session);
     }
 }

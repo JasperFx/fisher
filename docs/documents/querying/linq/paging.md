@@ -28,6 +28,10 @@ page.HasNextPage;
 page.FirstItemOnPage;  // 1-based, or 0 when the page is empty
 ```
 
+`IPagedList<T>` is `JasperFx.Pagination.IPagedList<T>`, shared with Polecat. Fisher 1.x declared its own
+`Fisher.Pagination.IPagedList<T>` with the same members, so code naming the type needs
+`using JasperFx.Pagination;` in place of `using Fisher.Pagination;`.
+
 Underneath it is `limit m offset n`. T-SQL's `TOP(n)` / `OFFSET … FETCH NEXT` split collapses to one
 form here, and SQLite needs no `ORDER BY (SELECT NULL)` filler.
 

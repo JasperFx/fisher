@@ -29,14 +29,14 @@ namespace Fisher.Internal;
 ///     <para>
 ///         The source is named <c>Fisher</c>, matching the meter and the <c>fisher</c> metrics prefix
 ///         the store already reports through <c>IEventStore</c>. An application subscribes with
-///         <c>AddSource("Fisher")</c>.
+///         <c>AddSource("Fisher")</c>. ⚠️ <b>There is one source of that name in the process, and it is
+///         <c>StoreOptions.OpenTelemetry.ActivitySource</c></b> (jasperfx#1054, fisher#465). This class held a
+///         static one and <c>DocumentStore</c> another for <c>IEventStore</c>, so a listener on the name heard
+///         two; the shared options keep one per name for the whole process, so a second store reuses it.
 ///     </para>
 /// </remarks>
 internal static class FisherTracing
 {
-    /// <summary>The source an application subscribes to with <c>AddSource("Fisher")</c>.</summary>
-    internal static readonly ActivitySource Source =
-        new("Fisher", typeof(FisherTracing).Assembly.GetName().Version?.ToString());
 
     internal const string SaveChanges = "fisher.save_changes";
     internal const string Query = "fisher.query";
@@ -52,7 +52,7 @@ internal static class FisherTracing
     /// </remarks>
     internal static Activity? StartOperation(string name, StoreOptions options)
     {
-        var activity = Source.StartActivity(name, ActivityKind.Client);
+        var activity = options.OpenTelemetry.ActivitySource.StartActivity(name, ActivityKind.Client);
 
         if (activity is null)
         {

@@ -28,8 +28,16 @@ namespace Fisher.Services;
 ///         settled which instrument that is, and <see cref="TrackConnections" /> for the one inherited
 ///         member Fisher refuses rather than silently ignores.
 ///     </para>
+///     <para>
+///         <b>The meter, the activity source and the change-set counters are JasperFx's</b>
+///         (jasperfx#1054, fisher#465). The base owns the process's one <see cref="Meter" /> and one
+///         <see cref="ActivitySource" /> named <c>Fisher</c>, and <c>ExportCounterOnChangeSets</c>,
+///         <c>Applications</c> and <c>RecordCommit</c> are <c>OpenTelemetryOptions&lt;IChangeSet&gt;</c>'s,
+///         lifted from this class and Marten's. What stays here is Fisher's: the write-lock instruments and
+///         the <c>Track…</c> shorthands over its own change set.
+///     </para>
 /// </remarks>
-public sealed class OpenTelemetryOptions: JasperFx.OpenTelemetry.OpenTelemetryOptions
+public sealed class OpenTelemetryOptions: JasperFx.OpenTelemetry.OpenTelemetryOptions<IChangeSet>
 {
     /// <summary>The meter name an application subscribes to with <c>AddMeter("Fisher")</c>.</summary>
     public const string MeterName = "Fisher";
@@ -84,17 +92,6 @@ public sealed class OpenTelemetryOptions: JasperFx.OpenTelemetry.OpenTelemetryOp
     ///     the same moment the flat-table rename happens and for the same reason.
     /// </remarks>
     internal string StoreName { get; set; } = "Main";
-
-    /// <summary>
-    ///     Actions applied to every committed <see cref="IChangeSet" />, from
-    ///     <see cref="ExportCounterOnChangeSets{T}" /> and its shorthands.
-    /// </summary>
-    /// <remarks>
-    ///     Empty until something opts in, and <c>DocumentStore</c> registers the listener that drives
-    ///     them only when it is not — so a store with no counters has no extra listener and therefore
-    ///     no extra work at commit.
-    /// </remarks>
-    internal List<Action<IChangeSet>> Applications { get; } = [];
 
     /// <summary>
     ///     <b>Not supported on Fisher.</b> Setting this to anything but
@@ -242,25 +239,6 @@ public sealed class OpenTelemetryOptions: JasperFx.OpenTelemetry.OpenTelemetryOp
         {
             { StoreTag, StoreName }, { ExceptionTypeTag, exception?.GetType().Name }
         });
-    }
-
-    /// <summary>
-    ///     Add a counter applied to every committed unit of work. Mirrors Marten's
-    ///     <c>ExportCounterOnChangeSets</c>.
-    /// </summary>
-    /// <remarks>
-    ///     The extension point behind <see cref="TrackEventCounters" /> and
-    ///     <see cref="TrackDocumentCounters" />, and the one to reach for when what you want to chart is
-    ///     specific to your own model.
-    /// </remarks>
-    public void ExportCounterOnChangeSets<T>(string name, string units, Action<Counter<T>, IChangeSet> record)
-        where T : struct
-    {
-        ArgumentNullException.ThrowIfNull(record);
-
-        var counter = Meter.CreateCounter<T>(name, units);
-
-        Applications.Add(commit => record(counter, commit));
     }
 
     /// <summary>

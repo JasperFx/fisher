@@ -122,6 +122,16 @@ These are the decisions that don't transfer from the sibling stores, and the rea
 | Unit of work | parallel, aggregates failures | strictly sequential (one writer per file) |
 | Transient retry | none needed | real Polly retry on `SQLITE_BUSY` / `SQLITE_LOCKED` |
 
+**Audit of fisher#463's three code items (2026-11-10): none needed a change.**
+`FisherVersionTracker`, `FisherSession._operationsLock` and `_lazyLock` already use `System.Threading.Lock`.
+`ReusedCommand` is already per connection-and-transaction, being constructed inside each execute loop, so a
+shared map would add lifetime risk for nothing. `HiloSequence.EnsureTableSync` blocks on the migration because
+`IIdentification.AssignIfMissing` and `HiloSequenceBase`'s sync advance are synchronous contracts; it is
+the only sync-over-async left in the write path and runs once per sequence. The fourth item, a `Channel<T>`
+single-writer queue in front of `BEGIN IMMEDIATE`, is a benchmark-first design question (it would change
+per-session failure and enlisted-session semantics) and is NOT done; the baseline to beat is
+`ConcurrentWritersScenario` (8 writers ~1.8x the wall clock of 1 writer, see `Fisher.Benchmarks/Results.md`).
+
 **`AppendExclusive` / `FetchForExclusiveWriting` / `WriteExclusivelyToAggregate` are the optimistic
 methods.** Marten and Polecat take a row lock so a competing session waits its turn. SQLite has no
 row locks and one writer per database file, so the equivalent would be holding a `BEGIN IMMEDIATE`
@@ -137,9 +147,11 @@ than open.
 So a `FetchForWriting` handle taken at version 2 could commit after a tombstone and recreate the
 stream with only the late events. Its aggregate then started mid-life, which is how CritterWatch's
 evicted services came back without a registration event. Polecat reads a missing row as version 0
-and refuses, and so does Fisher now. **Zero is not refused**: it is what `FetchForWriting` records
-for a stream that did not exist yet, so "start it if absent" still works.
-`writing_to_aggregates.an_expected_version_of_zero_still_creates_a_missing_stream` pins that side.
+and refuses, and so does Fisher now. **A starting version of zero is not refused**: it is what
+`FetchForWriting` records for a stream that did not exist yet, so "start it if absent" still works.
+The rule is a row of JasperFx's `ClientSideAppendPlanner` table now (fisher#464), which cites this issue.
+`writing_to_aggregates.an_expected_starting_version_of_zero_still_creates_a_missing_stream` pins that
+side — spelled `Append(id, 1, e)` since `Append`'s argument became the version *after* the append.
 
 **Losing the *file's* write lock is a different failure from losing a version guard, and it now has
 the Critter Stack's vocabulary** (fisher#306). Contention is still retried by
@@ -264,7 +276,10 @@ directly. Do not reintroduce it.
 ### One execution and one reader per operation, and what that immunizes
 
 `FisherSession.ExecuteBatchAsync` executes each queued operation **on its own, against its own
-reader**, sharing only the transaction. The reasons are in its remarks — operations bind by position,
+reader**, sharing only the transaction. Its exception mapping and rethrow are Weasel's
+`OperationBatchExecutor.TryTransform` / `ThrowIfAny` (fisher#465), but the loop stays Fisher's:
+`ExecuteEachAsync` has nowhere to put the session logger's lines around each command, and the failure
+line is written with the provider's exception *before* the transform. The reasons are in its remarks — operations bind by position,
 and Fisher's append ends in a SELECT — and the consequence is worth stating separately, because it is
 what a whole class of bug needs (fisher#66).
 
@@ -327,7 +342,7 @@ Working, with tests:
 - `ArchiveStream` / `UnArchiveStream` / `TombstoneStream` — and **an archived stream refuses further
   appends** (`JasperFx.Events.ArchivedStreamException`, thrown directly since fisher#530 — the
   lift took Fisher's type as its canonical shape in fisher#307), because archiving is not a soft delete
-  you can keep writing through. Checked in `AppendPlanner.PlanStream` before the version guard and
+  you can keep writing through. Decided by `ClientSideAppendPlanner`'s table before the version guard and
   deliberately *not* for a `StartStream`, where an archived id is still an id in use and
   `ExistingStreamIdCollisionException` is the more useful answer. An `Archived` event reaching a
   single stream projection that owns the stream archives it too, through
@@ -354,6 +369,9 @@ Working, with tests:
 - **LINQ** — `session.Query<T>()` over `json_extract`: where, ordering, paging, projections, grouping,
   aggregates and **joins** (`Join` / `GroupJoin(...).SelectMany(...)`, chained across any number of
   tables), with async terminals
+- **C# 15 unions (net11 only)** — a union appended as an event is stored as its active case, and a
+  union-typed document member is queryable by type test and case access; see "Union-typed members and
+  events"
 - **DCB tags** — tag tables, tagged appends, `QueryByTagsAsync`, `EventsExistAsync`,
   `AssignTagWhere`, `AggregateByTagsAsync`, `FetchForWritingByTags` with its consistency guard, and
   batched queries
@@ -905,17 +923,17 @@ Six things that are decisions rather than mechanics:
     object with a mistyped member is liable to deserialize to a default-valued event instead of
     failing, because the serializer's naming policy decides which keys are read — which is how the
     first version of these tests passed against a store that raised nothing.
-  **`Weasel.Storage.EventLoaderBase` (weasel#566) is not adopted yet, and that is a judgement rather
-  than an oversight.** The base is well shaped for Fisher — the paging, skip accounting, ceiling
-  calculation and cancellation translation are all there behind an `IEventPagingDialect` seam, and it
-  carries `ReportLastObservedSequence` (jasperfx#667), which Fisher genuinely lacks: a full batch whose
-  every row was skipped currently takes a ceiling from a page with no surviving event. What it would
-  cost is a SQLite `IEventPagingDialect` (page SQL *and* the skip-ahead probe, which Fisher has no
-  caller for), a mapping of the loader's constructor-time allow-list work onto `EventTypeAllowList` —
-  including fisher#191's expansion of a transformation's *source* names, which is the half that fails
-  silently if it is lost — and a home for the `DaemonTrace.Record` call, for which the base offers no
-  hook. Worth its own node with fisher#153 and fisher#191 pinned first, since both are regressions the
-  compliance suites structurally cannot catch.
+  **`FisherEventLoader` is a `Weasel.Storage.EventLoaderBase` (weasel#566) since fisher#464.** The paging,
+  skip accounting, ceiling calculation and cancellation translation are the base's; Fisher supplies
+  `SqliteEventPagingDialect` (page SQL and the `order by seq_id limit 1` skip-ahead probe), the row
+  hydration, the unknown-type exception, the dead letter for an unreadable body (`RecordSkippedEventAsync`)
+  and the `DaemonTrace` points (around `LoadAsync`). It reports `EventPage.LastObservedSequence`
+  (jasperfx#667), so a full batch whose every row was skipped no longer claims the high-water mark.
+  ⚠️ **fisher#191's upcast-source widening lives in the dialect**, which renders the shared allow list's
+  `AliasesIncludingUpcastSources` (weasel#743) rather than `Aliases`. Rendering `Aliases` alone compiles,
+  passes every compliance suite, and makes `upcasting.a_subscription_filtered_on_the_new_type_receives_the_upcast_old_rows`
+  time out — verified. The allow list also adds `Archived` and `Compacted<T>` for a single-stream
+  aggregate projection, which the old loader did not.
 - **The generic interface's `IEventDatabase` parameter carries the answer** (fisher#57), where for a
   long time every one of them was ignored on the true-enough grounds that a Fisher store was one file.
   Under database-per-tenant it is not, and ignoring it would read one tenant's events and write every
@@ -1159,7 +1177,17 @@ several. Wait on the listener's own signal.
 into it, and the batch flushes in whichever hook its delivery guarantee needs. Both of Fisher's commit
 paths bracket their transaction the same way — `FisherSession.SaveChangesAsync` and
 `FisherProjectionBatch.ExecuteAsync` each call `BeforeCommitAsync` as the last thing inside the
-transaction and `AfterCommitAsync` after it commits. Type names match Polecat's exactly, because
+transaction and `AfterCommitAsync` after it commits.
+
+**`FisherProjectionBatch` is a JasperFx `ProjectionBatchBase<IDocumentSession>` since fisher#464**
+(jasperfx#1045), and Fisher's `IMessageOutbox` / `IMessageBatch` derive from the shared
+`JasperFx.Events.Documents` ones (the outbox's shared member is a forwarding default). The base owns the
+session list, the lazily-created message batch, raised-event dedupe and the post-commit order; Fisher keeps
+the SQLite transaction, the guarded progression write and planning raised events under the write lock
+(`AppendOrigin.RaisedByProjection`). Two behaviour changes came with it: **outside
+`ShardExecutionMode.Continuous` a batch publishes nothing and raises nothing** (a rebuild replays history),
+and in the batch **participants' `BeforeCommitAsync` now run before the outbox's**, which the base requires
+to be last. Type names match Polecat's exactly, because
 messaging is not dialect-specific and projection code should port between the stores unchanged.
 
 - **`NulloMessageOutbox` is the intended end state, not a placeholder** (fisher#8, closed wontfix).
@@ -1206,9 +1234,8 @@ hook take 500 ms turns the race deterministic, which is how the fix was verified
 re-running and hoping.
 
 `IProjectionBatch.PublishMessageAsync` hands over an `object`, but `IMessageSink.PublishAsync<T>` is
-generic, so `MessagePublishing` closes it over the runtime message type and caches the compiled
-delegate per type. Polecat does the same via polecat#46, with `FastExpressionCompiler` where Fisher
-uses the BCL's `Expression.Compile` — not worth a dependency for one call site.
+generic, so JasperFx's `MessagePublishing` (lifted by jasperfx#1045; Fisher's copy is deleted) closes it
+over the runtime message type and caches the compiled delegate per type.
 
 ### Event rewriting
 
@@ -1261,7 +1288,8 @@ operation that decides what replaces them, so there is no public surface for it.
 
 ### Stream compacting
 
-`Events/Protected/StreamCompacting.cs` (fisher#10) — replaces a stream's events with a single
+`Events/Protected/FisherStreamCompacting.cs` (fisher#10), Fisher's half of JasperFx's
+`StreamCompactingExecution<TSession>` since fisher#464 — replaces a stream's events with a single
 `Compacted<T>` event carrying the aggregate state. Reached by `session.Events.CompactStreamAsync<T>`,
 and by `IEventStore.CompactStreamAsync` for tooling. Ported from Polecat's, which is the request
 shape's other consumer.
@@ -1303,6 +1331,10 @@ somewhere first, and it runs before anything destructive is queued.
 information out of events already stored. JasperFx 2.41.0 lifted the *request* shape
 (`IEventDataMasking`) because Marten's and Polecat's were identical; **the rule registry was not
 lifted**, so `EventGraph.Masking.cs` is a port of Polecat's rather than a use of something shared.
+The *execution* is shared since fisher#464: `FisherEventDataMasking` is Fisher's half of JasperFx's
+`EventDataMaskingBase<TSession>` (jasperfx#1048) — the session, the archived-inclusive reads, and a
+`TryMask` that calls `EventGraph.TryMask`, so it binds to Fisher's own rule list while the #1043 registry
+lift is unadopted. `SupportsMaskingArchivedEvents` is on in the compliance fixture.
 
 The whole batch runs in one session, so an erasure is either done or not done — a partial one is a
 compliance answer that is neither.
@@ -1322,7 +1354,8 @@ compliance answer that is neither.
   storage and an `IEvent` queryable would need a parallel provider to serve one caller.
 - **An event is rewritten only when a rule matched it**, and headers follow the same gate — so
   `AddHeader` marks the events that were masked, not the events that were looked at.
-- **The same event reached by two sources is masked once**, deduplicated by sequence.
+- **The same event reached by two sources is masked once**, deduplicated by (tenant, sequence) — the
+  shared base's key, which it took from Fisher.
   `an_event_reached_by_two_sources_is_masked_once` pins it with a deliberately non-idempotent rule,
   because an idempotent one would agree either way.
 - **A batch naming no stream and no filter throws** rather than masking everything.
@@ -1380,7 +1413,16 @@ with `FOREIGN KEY constraint failed` (fisher#6). Tags go first, dead letters las
 
 Weasel.Storage supplies the selectors and the write operations but **not** an
 `IDocumentStorage<T,TId>` implementation to hold them together — Marten and Polecat each write their
-own, and `FisherDocumentStorage<TDoc,TId>` is Fisher's. Around it:
+own, and `FisherDocumentStorage<TDoc,TId>` is Fisher's.
+
+⚠️ **That stopped being true in Weasel 10, and Fisher has not moved yet** (fisher#465 left it out).
+Weasel.Storage now ships the closed-shape family itself (`ClosedShapeDocumentProviderFactory`,
+`IClosedShapeStorageRules<TDoc,TId>`, `ProviderGraphBase`), relocated from Marten. Its leaves are
+`internal` and built only through the factory, so adopting it is not a base-class swap: what Fisher's
+storages carry beyond the shared contract — `UndeleteForId` / `RestoreForId`, the `IFisherDocumentStorage`
+surface, `MappedVersionFor` off Fisher's metadata mapping, `SubClassFisherStorage`'s wrapping — has to
+move onto a rules implementation or beside it, with `SqliteGuidIdentification`'s lowercasing and the
+positional `?` contract held throughout. Around it:
 
 - `DocumentProviderRegistry` (`IProviderGraph`) caches one `DocumentProvider<T>` per document type,
   holding all four flavors. Which one a session resolves is `SessionOptions.Tracking`'s answer — see
@@ -1535,8 +1577,12 @@ compares a `DateOnly`, and runs both projection step-through methods — all nat
   step property by reflection: a generic hop returns `ProjectionTimelineRaw` directly.
   `replay_by_name_renders_state_through_the_stores_serializer` pins agreement with the typed path.
   A consumer that keyed on the PascalCase names sees camelCase, so this belongs in the release notes.
-- ⚠️ **The step-through's `MakeGenericMethod` lives in a non-generic helper, because ILC 10.0.1 crashed
-  on the old spelling.** `MakeGenericMethod(typeof(TState))` inside the generic interface method made
+- ⚠️ **Historical since fisher#464, which replaced all three step-through bodies with JasperFx's
+  `Projections.StepThrough(...)` (jasperfx#1049) and deleted `InvokeReplay` with them.** Fisher no longer
+  closes anything over `TState` here; whether the shared step-through is clean under ILC is upstream's,
+  and the native smoke has not run it since. The note below is kept for the ILC crash it records.
+  The step-through's `MakeGenericMethod` lived in a non-generic helper, because ILC 10.0.1 crashed
+  on the old spelling. `MakeGenericMethod(typeof(TState))` inside the generic interface method made
   ILC throw `IndexOutOfRangeException` from `MakeGenericMethodSite.InstantiateDependencies` as soon as
   the method was reachable. So no native publish of an application calling either step-through method
   produced a binary. `InvokeReplay(string, Type, …)` hands the analyzer a plain `Type`, and it warns
@@ -1742,6 +1788,54 @@ revert a `Select` of a `Uri` to a whole-document read.
   `Select(x => x.Address)` and `new { x.Id, x.Tags }` threw `JsonException`. They go to the serializer as
   they are now. The decision reads the text as well as the target, because a type with a string converter
   is a non-scalar target stored as a JSON string. Found through a Native AOT probe and not AOT-specific.
+
+### Union-typed members and events — fisher#466
+
+net11 only, and nothing is `#if`'d in `src/Fisher`: `UnionTypes.IsUnion` is false before .NET 11, so no
+shape below can match there. The tests are `#if NET11_0_OR_GREATER` under `Fisher.Tests/Unions/`, and
+SDK 11.0.100 takes the `union` keyword at `LangVersion latest`.
+
+**Events.** `EventGraph.BuildEvent` does not end in JasperFx's base, so it calls `UnionTypes.Unwrap`
+itself (jasperfx#1166's note to downstream stores). Each case is stored under its own event type name
+and the JSON does not change, because System.Text.Json writes the bare case anyway. `AddEventType` of a
+union registers its cases. `Apply(TUnion)` needs nothing from Fisher, since the source generator splits it
+per case. `QueryEventDataAsync<TUnion>` cannot be written: it is class-constrained and a union is a
+struct, so querying a case is the only spelling.
+
+**Document members.** These go over Weasel's `SqliteUnionSqlDialect` (weasel#744). Fisher supplies the
+two halves it left to the stores: building each `UnionCaseTest`, and the LINQ translation.
+
+- ⚠️ **C# refuses a union pattern in an expression tree** (`x.Payment is Card` is CS8122). Every
+  translatable shape goes through `Value`: `x.P.Value is Card` (a `TypeIs`), `((Card)x.P.Value).Last4`
+  and `(int)x.P.Value` (a `Convert` of `Value`), and `x.P.Value == null`. `UnionMemberAccess`
+  recognises them.
+- ⚠️ **A case member's locator carries the case's type test**, as `(case when <test> then json_extract(...) end)`.
+  A case member sits at the plain path `member.caseMember`, so without the test
+  `((Deposited)x.Last.Value).Amount > 5` matches a `Withdrawn` row's `amount` too. A row of another case
+  reads the member as NULL. The member is then typed by `CreateScalarMember`, so timestamps, enums and
+  decimals inside a case compare as they do anywhere else. Removing the wrapper fails two tests.
+- ⚠️ **A property is required only when it is always written.** The default `WhenWritingNull` omits a
+  null reference, so requiring it would drop that case's own rows. Absence is always safe: a property a
+  case does not have is never in its JSON.
+- **Indistinguishable cases are refused by name**, never answered with a test that matches both. That
+  covers two primitive cases of one JSON kind (`int`/`long`, `string`/`Guid`), and two object cases
+  where neither always writes a property the other lacks (`Deposited(Amount)` against
+  `Note(Amount, string? Reason)`).
+- **Also refused by name:**
+  - a bare `Value`;
+  - the whole union as a value, wherever a member resolves to a column (pinned for `OrderBy`);
+  - a type that is not a case;
+  - an object case compared whole;
+  - a collection inside a case;
+  - a nested union.
+- `x.P.Value == null` is `coalesce(json_type(...), 'null') = 'null'`, so a missing key counts as null, as
+  it does everywhere else in Fisher's LINQ.
+- ⚠️ **System.Text.Json cannot deserialize a union with two object cases without a type classifier.**
+  The test's `Account` cannot be loaded, so its facts select ids. That is also what keeps them about the
+  SQL.
+
+The Bobcat specs the issue names are deliberately left out (a person's ruling on the node). Fisher has
+no Bobcat spec project, and `CritterStackSpec` would pull Wolverine into Fisher.
 
 ### LINQ joins
 
@@ -2191,6 +2285,11 @@ can do neither, but is stable under concurrent writes and does not degrade as th
   payload carries no type information, so a hand-edited cursor can change values but not what they are
   read as. Every value then binds as a parameter. The `v1:` base64-JSON format is byte-identical to
   Polecat's so a cursor is portable between the stores.
+- **The cursor's encoding is JasperFx's `CursorCodec`** (jasperfx#1054, fisher#465), lifted from this
+  code and Polecat's. `FisherCursorCodec` overrides only what is Fisher's: a Guid as lowercase text and a
+  timestamp as `SqliteTimestamp` text on the way out, the slot types SQLite binds on the way in, and
+  Fisher's `BadLinqExpressionException`. The seek predicate stays in `CursorPagination`.
+  `ToPagedListAsync` returns `JasperFx.Pagination.IPagedList<T>`; Fisher's own copy is gone.
 - **`CursorPage<T>` is typed where Polecat's `CursorPageResult` is pre-rendered JSON.** Polecat's shape
   exists to feed a `StreamPagedByCursor` HTTP result in its ASP.NET Core package; Fisher has neither
   that package (fisher#49) nor JSON-returning reads (fisher#28), so a JSON result would be a shape with
@@ -2847,10 +2946,16 @@ store's own configuration. The first three run in `DocumentMapping`'s constructo
 - **`ForDocument<T>` is not `Schema.For<T>()`**, and the difference is the one that matters: it does
   not create the mapping. A type nothing ever stores stays unmapped and gets no table. It means "if
   you store one of these, store it like so".
-- **`SeedInitialDataOnStartup()` refuses to be registered before
-  `ApplyAllDatabaseChangesOnStartup()`.** Hosted services start in registration order, so the other
-  way round writes to tables that do not exist yet — and that presents as `no such table`, which names
-  the table and not the mistake.
+- **Seeding always runs after the schema step, whichever opt-in was called first** (fisher#465). The
+  three startup opt-ins configure one `FisherStoreActivator` per store, over JasperFx's
+  `StoreActivator<TStore, TDatabase>`, which migrates or asserts and then seeds. Fisher 1.x registered
+  three hosted services that started in registration order and refused `SeedInitialDataOnStartup()`
+  before `ApplyAllDatabaseChangesOnStartup()` for that reason; the refusal went with the cause.
+  - **The store is the activator's single "database"**, as the base's remarks offer, because
+    `ApplyAllConfiguredChangesToDatabaseAsync` already spans every tenant and its
+    `TenantMigrationException` is the per-tenant report. `AutoCreate.None` still skips the apply,
+    asserting is still not gated on it, and apply and assert are still refused together — now for an
+    ancillary store as well as the primary one.
 - **No "already seeded" marker, deliberately.** A seeder that upserts by a known id is idempotent for
   free, which is what every useful seeder does; a marker table would be a table nobody asked for
   holding a claim Fisher cannot verify. Both siblings say the same.
@@ -4521,6 +4626,13 @@ registration surface was missing.
 `Internal/FisherTracing.cs` (fisher#48) — an `ActivitySource` named `Fisher`, spans around
 `SaveChangesAsync`, a LINQ execution and a document load, and a retry event on the enclosing span.
 
+⚠️ **There is one `ActivitySource` and one `Meter` named `Fisher` in the process, and they are
+`StoreOptions.OpenTelemetry`'s** (jasperfx#1054, fisher#465). `FisherTracing` held a static source and
+`DocumentStore` built a second source and a second meter for `IEventStore`, so a listener on the name
+heard two of each. JasperFx's `OpenTelemetryOptions` keeps one per name for the process, so a second
+store reuses them. `otel_counters.every_surface_hands_out_the_one_meter_and_activity_source` pins it; do
+not construct another.
+
 **The instinct is that tracing is for network calls and an embedded store has none. That is backwards
 for what operators actually hit.** SQLite serialises writers per file, so the interesting question
 about a slow Fisher call is almost always how long it waited for the write lock — and a request that
@@ -4605,6 +4717,9 @@ creates it**, so a store that opts into nothing pays a null field read per commi
   `StoreName` is stamped onto the options in `DocumentStore`'s constructor rather than read from
   `StoreOptions`, because these options are constructed *inside* that constructor and the name is not
   final until an `IConfigureFisher` contribution has run.
+- **The change-set counters are JasperFx's `OpenTelemetryOptions<IChangeSet>`** (fisher#465):
+  `ExportCounterOnChangeSets`, `Applications` and `RecordCommit` are the base's, lifted from this class
+  and Marten's, and `FisherCommitMetrics` is one call to `RecordCommit`.
 - **The change-set counters are a session listener** (`FisherCommitMetrics`), registered only when
   something opted in — so a store with no counters carries no extra listener, and an empty unit of work
   fires no listeners at all. A failing counter is caught and logged rather than thrown: it runs after
@@ -4748,6 +4863,10 @@ all, including the zero-infrastructure embedded configuration that is Fisher's b
 - **A console's id is converted through the mapping's identity type before it is bound.** Fourth
   appearance of the uppercase-Guid trap: `fi_doc_*.id` holds the lowercase canonical form under a
   case-sensitive collation, so binding the caller's string directly matches nothing.
+- **The step-through is JasperFx's `ProjectionStepThrough` since fisher#464** (jasperfx#1049), built in
+  `DocumentStore.ProjectionReplay.cs` over Fisher's event-type lookup and a `ProjectionStateSerializer` on
+  the store's own serializer; `ProjectionStepThroughCompliance` is enrolled. The two points below are
+  the shared class's behaviour now, and were Fisher's first.
 - **Projection replay copies the aggregate at every step**, and this is the one thing Polecat's does
   not. JasperFx's aggregation mutates the aggregate in place, so a timeline built from live references
   shows the *final* state at every step — the single thing a step-through exists not to do. The copy
@@ -5740,6 +5859,10 @@ The statements are the ones `SqliteDocumentStorageDescriptorBuilder` already bui
 session — a second set of write SQL is exactly where the positional `?` contract would drift apart
 unnoticed.
 
+**`BulkInsertMode` is `Weasel.Core.BulkInsertMode`** (fisher#465); Fisher's three-value copy is gone.
+The shared enum's fourth value, `OverwriteIfVersionMatches`, is refused by name with
+`NotSupportedException` rather than falling through to an unguarded upsert.
+
 - **`batchSize` is a ceiling on how long the write lock is held, not a throughput knob.** One writer
   per file means a single transaction over a very large set blocks every other writer for its whole
   duration. The trade is that **bulk insert is not atomic across batches** — a failure part way leaves
@@ -5778,6 +5901,15 @@ needs a PL/pgSQL patch function), no `JSON_MODIFY` shape differences, and it com
 duplicated field follows a patch with nothing to refresh**, because fisher#2 made duplicated fields
 `VIRTUAL` generated columns over `data` — both siblings must update theirs inside the patch SQL. That
 is the clearest dividend of that decision.
+
+**The interface is `JasperFx.Events.IPatchExpression<T>`** (jasperfx#331, fisher#465); Fisher's own
+copy is gone. Three defaults moved to Marten's meaning on the way: `Insert` with no index appends,
+`Remove` takes the first match unless given `RemoveAction.RemoveAll`, and `Duplicate` copies the
+source's stored value (`Set` then `Duplicate` is 1.x's spelling). The overloads Fisher lacked are json1
+too: a dictionary entry is a quoted path segment (`$.licences."bree.land"`), and an element predicate
+is parsed by `ChildCollections.ParseElementPredicate` — the LINQ `Any(...)` parser — against the
+`json_each` alias it expects, recorded in `PatchOperation` as a fragment that binds its own
+parameters. The nullable `Increment` overloads are extension methods in `Fisher.Patching`.
 
 **What a patch costs, said plainly:** `json_set` re-renders the document, so a patched row is no longer
 byte-identical to what the serializer would have written and a new or renamed key lands at the end. It
@@ -6354,36 +6486,39 @@ The mechanics, because they are not what the package's name suggests:
 
 ### Session metadata on appended events
 
-`AppendPlanner.ApplySessionMetadata` copies the session's correlation id, causation id, user name and
-headers onto each event that does not already carry its own, each gated on its `Enable*` option. The
+`ClientSideAppendPlanner.Stamp` (JasperFx, jasperfx#1051, adopted in fisher#464) copies the session's
+correlation id, causation id, user name and headers onto each event that does not already carry its own,
+each gated on its `Enable*` option; `FisherSession` is the `IMetadataContext` it reads. A session header
+no longer replaces an event's own header of the same name (`TryAdd`), which is a 2.0 behaviour change. The
 session seeds correlation/causation from `Activity.Current` (`RootId` and `ParentId`) at construction,
 so tracing context reaches events with no application code; an explicit assignment afterwards wins.
 
 **A stream carrying no events is dropped from the unit of work — unless it asked not to be.**
-`CollectActionableStreams` keeps only streams with at least one event, and `CollectGuardOnlyStreams`
-beside it keeps the ones flagged `IEventStream.AlwaysEnforceConsistency` with an
-`ExpectedVersionOnServer` set, so their version is re-read and checked under the write lock with no
-append written. Until fisher#184 the flag did nothing at all: it is on the shared `IEventStream`,
+The shared planner classifies such a stream as `StreamAppendWork.Nothing`, unless it is flagged
+`IEventStream.AlwaysEnforceConsistency` with an `ExpectedVersionOnServer` set, which is
+`StreamAppendWork.VerifyVersion`: re-read and checked under the write lock with no append written. Until fisher#184 the flag did nothing at all: it is on the shared `IEventStream`,
 Fisher forwarded it to the `StreamAction` faithfully, and nothing else in the store ever read it.
 That is invisible to any ordinary append test, because appending a single event brings the ordinary
 guard back — the flag's whole subject is the *empty* case, "I read this stream, decided on the
 strength of what I read to write nothing, and that decision is only sound if the stream has not
 moved". `AlwaysEnforceConsistencyCompliance` is what found it.
 
-This duplicates the private `StreamAction.ProcessMetadata`, which is normally reached through
-`StreamAction.PrepareEvents` — and Fisher **cannot** use `PrepareEvents`. In Quick mode it numbers
+Historical, and the reason the planner lift exists: Fisher used to duplicate the private
+`StreamAction.ProcessMetadata`, which is normally reached through `StreamAction.PrepareEvents` — and Fisher
+**cannot** use `PrepareEvents`. In Quick mode it numbers
 events only when `ExpectedVersionOnServer` is already set, because Marten and Polecat let the database
 assign versions while Fisher numbers them client-side from the version it just read. Pre-setting
 `ExpectedVersionOnServer` to make it number them would make the optimistic-concurrency check inside
 the same method compare that value against itself and pass unconditionally. Keeping version
-assignment and metadata application apart is what keeps the guard real; the cost is that a new
-metadata field in JasperFx will not reach Fisher's events until this method learns about it.
+assignment and metadata application apart is what keeps the guard real; the cost was that a new
+metadata field in JasperFx would not reach Fisher's events until Fisher's copy learned about it. Since
+fisher#464 the stamping is JasperFx's own `ClientSideAppendPlanner.Stamp`, so that cost is gone.
 
 #### `Timestamp`, and that cost coming due — fisher#119
 
 **The cost named above is not hypothetical, and `Timestamp` is the field it came due on.**
 `PrepareEvents` stamps it (as `EventSlice` does for a projection's raised events) and
-`ApplySessionMetadata` did not — so an event reached an inline projection carrying
+Fisher's old `ApplySessionMetadata` did not — so an event reached an inline projection carrying
 `DateTimeOffset.MinValue`, and every read model recording `e.Timestamp` baked in a year-0001 date.
 Worse than merely wrong: **the same projection produced different documents inline and rebuilt**,
 because replay reads the column, so the divergence was invisible until somebody looked at a date.

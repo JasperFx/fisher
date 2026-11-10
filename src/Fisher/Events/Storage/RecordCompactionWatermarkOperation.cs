@@ -10,7 +10,7 @@ namespace Fisher.Events.Storage;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         Queued by <see cref="Protected.StreamCompacting" /> alongside the snapshot replace and the
+///         Queued by <see cref="Protected.FisherStreamCompacting" /> alongside the snapshot replace and the
 ///         deletes, so the watermark commits atomically with the compaction it describes — a watermark
 ///         that could commit without its compaction (or the reverse) would make
 ///         <c>Version - CompactedVersion</c> lie in exactly the window a compaction policy reads it.

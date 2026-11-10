@@ -1,3 +1,4 @@
+using Weasel.Core;
 using Fisher.Linq;
 using Fisher.Linq.SoftDeletes;
 using JasperFx;

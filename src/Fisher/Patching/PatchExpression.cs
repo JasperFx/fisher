@@ -1,13 +1,26 @@
 using System.Linq.Expressions;
 using Fisher.Linq.Members;
+using Fisher.Linq.Parsing.Methods;
 using Fisher.Storage;
+using JasperFx.Events;
 
 namespace Fisher.Patching;
 
 /// <summary>
-///     Changing part of a stored document without loading it (fisher#35).
+///     Fisher's implementation of the shared <see cref="IPatchExpression{T}" /> — changing part of a stored
+///     document without loading it (fisher#35, fisher#465).
 /// </summary>
 /// <remarks>
+///     <para>
+///         <b>The interface is <c>JasperFx.Events.IPatchExpression&lt;T&gt;</c></b> (jasperfx#331), shared
+///         with Marten and Polecat, and Fisher's own copy is gone as of 2.0. Adopting it changed three
+///         defaults, each to Marten's meaning: <c>Insert</c> with no index appends rather than inserting at
+///         the front, <c>Remove</c> takes the first match unless told <see cref="RemoveAction.RemoveAll" />,
+///         and <c>Duplicate</c> copies the source member's stored value rather than setting a value
+///         everywhere (<c>Set</c> then <c>Duplicate</c> is the old spelling). The nullable
+///         <c>Increment</c> overloads the shared interface does not declare are extension methods on
+///         <see cref="PatchExpressionExtensions" />.
+///     </para>
 ///     <para>
 ///         <b>This is one of the strongest cases for SQLite specifically.</b> Every operation is a
 ///         single json1 function inside one <c>update … set data = …</c>: no server function to install
@@ -25,115 +38,12 @@ namespace Fisher.Patching;
 ///         added or renamed lands at the end. It avoids the deserialize/mutate/serialize round trip, not
 ///         the row rewrite. Do not let "patching avoids the round trip" imply "patching is cheap".
 ///     </para>
+///     <para>
+///         The string overloads take the <em>stored</em> key — <c>"name"</c>, not <c>"Name"</c>, under the
+///         default camelCase policy — because the point of them is reaching keys the type no longer has a
+///         member for.
+///     </para>
 /// </remarks>
-public interface IPatchExpression<T>
-{
-    /// <summary>Set a member to a value, creating the path if it is absent.</summary>
-    IPatchExpression<T> Set<TValue>(Expression<Func<T, TValue>> member, TValue value);
-
-    /// <summary>
-    ///     Set a value at a stored JSON key, named as it appears in <c>data</c>.
-    /// </summary>
-    /// <remarks>
-    ///     The string is the <em>stored</em> key — <c>"name"</c>, not <c>"Name"</c>, under the default
-    ///     camelCase policy — because the point of the by-name overloads is reaching keys the type no
-    ///     longer has a member for. The lambda overload is the one that resolves through the naming
-    ///     policy for you.
-    /// </remarks>
-    IPatchExpression<T> Set<TValue>(string storedKey, TValue value);
-
-    /// <summary>Copy one member's new value into several places at once.</summary>
-    IPatchExpression<T> Duplicate<TValue>(Expression<Func<T, TValue>> source, TValue value,
-        params Expression<Func<T, TValue>>[] destinations);
-
-    /// <summary>
-    ///     Add to a numeric member. An absent member counts as zero rather than staying absent.
-    /// </summary>
-    IPatchExpression<T> Increment(Expression<Func<T, int>> member, int increment = 1);
-
-    /// <inheritdoc cref="Increment(Expression{Func{T,int}},int)" />
-    IPatchExpression<T> Increment(Expression<Func<T, long>> member, long increment = 1);
-
-    /// <inheritdoc cref="Increment(Expression{Func{T,int}},int)" />
-    IPatchExpression<T> Increment(Expression<Func<T, double>> member, double increment = 1);
-
-    /// <inheritdoc cref="Increment(Expression{Func{T,int}},int)" />
-    IPatchExpression<T> Increment(Expression<Func<T, decimal>> member, decimal increment = 1);
-
-    /// <inheritdoc cref="Increment(Expression{Func{T,int}},int)" />
-    /// <remarks>
-    ///     The nullable overloads exist because a null or absent member is the case the operation has
-    ///     to get right — <c>json_extract</c> returns SQL NULL for both, and <c>NULL + n</c> is NULL.
-    ///     It counts as zero.
-    /// </remarks>
-    IPatchExpression<T> Increment(Expression<Func<T, int?>> member, int increment = 1);
-
-    /// <inheritdoc cref="Increment(Expression{Func{T,int?}},int)" />
-    IPatchExpression<T> Increment(Expression<Func<T, long?>> member, long increment = 1);
-
-    /// <inheritdoc cref="Increment(Expression{Func{T,int?}},int)" />
-    IPatchExpression<T> Increment(Expression<Func<T, double?>> member, double increment = 1);
-
-    /// <inheritdoc cref="Increment(Expression{Func{T,int?}},int)" />
-    IPatchExpression<T> Increment(Expression<Func<T, decimal?>> member, decimal increment = 1);
-
-    /// <summary>
-    ///     Append to an array member. An absent member becomes a one-element array.
-    /// </summary>
-    IPatchExpression<T> Append<TElement>(Expression<Func<T, IEnumerable<TElement>>> member, TElement value);
-
-    /// <inheritdoc cref="Append{TElement}" />
-    IPatchExpression<T> AppendIfNotExists<TElement>(Expression<Func<T, IEnumerable<TElement>>> member,
-        TElement value);
-
-    /// <summary>
-    ///     Insert into an array member at <paramref name="index" />, shifting the rest along
-    ///     (fisher#52).
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         <b><c>json_insert</c> is not the mechanism, which is why this arrived after the rest.</b>
-    ///         It only inserts where the path does not already exist, so at an occupied index it is a
-    ///         silent no-op — <c>json_insert('{"t":["a","b"]}', '$.t[1]', json('"z"'))</c> returns the
-    ///         document unchanged. <c>json_replace</c> would overwrite rather than shift, which is a
-    ///         different operation. So the array is rebuilt, the way <see cref="Remove{TElement}" />
-    ///         rebuilds it, with the new element placed by ordinal.
-    ///     </para>
-    ///     <para>
-    ///         <b>An index past the end appends rather than throwing.</b> A <c>List&lt;T&gt;</c> would
-    ///         throw, but a patch does not read the document — refusing would mean a round trip to learn
-    ///         a length, which is the whole cost patching exists to avoid. A negative index is refused,
-    ///         because it names no position at all.
-    ///     </para>
-    ///     <para>
-    ///         An absent or empty member becomes a one-element array, as <see cref="Append{TElement}" />
-    ///         does.
-    ///     </para>
-    /// </remarks>
-    IPatchExpression<T> Insert<TElement>(Expression<Func<T, IEnumerable<TElement>>> member,
-        TElement value, int index = 0);
-
-    /// <summary>
-    ///     Remove every element of an array member equal to <paramref name="value" />.
-    /// </summary>
-    /// <remarks>
-    ///     Every match, not the first. json1 has no way to address "the first element equal to x" for
-    ///     removal, so the array is rebuilt without the matching elements — and dropping only one
-    ///     occurrence would mean deciding which, which the rebuild has no way to express.
-    /// </remarks>
-    IPatchExpression<T> Remove<TElement>(Expression<Func<T, IEnumerable<TElement>>> member, TElement value);
-
-    /// <summary>Rename a member, keeping its value.</summary>
-    /// <remarks>The renamed key moves to the end of the object — json1 cannot rename in place.</remarks>
-    IPatchExpression<T> Rename(string oldName, Expression<Func<T, object>> newMember);
-
-    /// <summary>Remove a member entirely.</summary>
-    IPatchExpression<T> Delete<TValue>(Expression<Func<T, TValue>> member);
-
-    /// <inheritdoc cref="Set{TValue}(string,TValue)" />
-    IPatchExpression<T> Delete(string storedKey);
-}
-
 internal sealed class PatchExpression<T> : IPatchExpression<T> where T : notnull
 {
     private readonly MemberFactory _members;
@@ -148,113 +58,234 @@ internal sealed class PatchExpression<T> : IPatchExpression<T> where T : notnull
         _operation = operation;
     }
 
-    public IPatchExpression<T> Set<TValue>(Expression<Func<T, TValue>> member, TValue value)
-        => SetPath(PathOf(member), value);
+    // ---- Set / Duplicate ----
 
-    public IPatchExpression<T> Set<TValue>(string storedKey, TValue value)
-        => SetPath(PathOfStoredKey(storedKey), value);
+    public IPatchExpression<T> Set<TValue>(Expression<Func<T, TValue>> expression, TValue value)
+        => SetPath(PathOf(expression), value);
 
-    public IPatchExpression<T> Duplicate<TValue>(Expression<Func<T, TValue>> source, TValue value,
-        params Expression<Func<T, TValue>>[] destinations)
+    public IPatchExpression<T> Set<TValue>(string name, TValue value)
+        => SetPath(PathOfStoredKey(name), value);
+
+    public IPatchExpression<T> Set<TParent, TValue>(string name, Expression<Func<T, TParent>> expression,
+        TValue value)
+        => SetPath(ChildPath(PathOf(expression), name), value);
+
+    /// <summary>
+    ///     Copy the source member's <em>stored</em> value to every destination.
+    /// </summary>
+    /// <remarks>
+    ///     <c>-&gt;</c> rather than <c>json_extract</c>, because it always returns JSON text, and the
+    ///     surrounding <c>json(...)</c> then carries an object or array across as one rather than as a
+    ///     string. An absent source copies as JSON null, as Marten's does.
+    /// </remarks>
+    public IPatchExpression<T> Duplicate<TElement>(Expression<Func<T, TElement>> expression,
+        params Expression<Func<T, TElement>>[] destinations)
     {
-        SetPath(PathOf(source), value);
+        ArgumentNullException.ThrowIfNull(destinations);
+
+        if (destinations.Length == 0)
+        {
+            throw new ArgumentException("Duplicate needs at least one destination.", nameof(destinations));
+        }
+
+        var source = PathOf(expression);
 
         foreach (var destination in destinations)
         {
-            SetPath(PathOf(destination), value);
+            var target = PathOf(destination);
+            _operation.Add((inner, _) => $"json_set({inner}, '{target}', json(({inner}) -> '{source}'))");
         }
 
         return this;
     }
 
-    public IPatchExpression<T> Increment(Expression<Func<T, int>> member, int increment = 1)
-        => IncrementPath(PathOf(member), increment);
+    // ---- Increment ----
 
-    public IPatchExpression<T> Increment(Expression<Func<T, long>> member, long increment = 1)
-        => IncrementPath(PathOf(member), increment);
+    public IPatchExpression<T> Increment(Expression<Func<T, int>> expression, int increment = 1)
+        => IncrementPath(PathOf(expression), increment);
 
-    public IPatchExpression<T> Increment(Expression<Func<T, double>> member, double increment = 1)
-        => IncrementPath(PathOf(member), increment);
+    public IPatchExpression<T> Increment(Expression<Func<T, long>> expression, long increment = 1)
+        => IncrementPath(PathOf(expression), increment);
 
-    public IPatchExpression<T> Increment(Expression<Func<T, decimal>> member, decimal increment = 1)
-        => IncrementPath(PathOf(member), (double)increment);
+    public IPatchExpression<T> Increment(Expression<Func<T, double>> expression, double increment = 1)
+        => IncrementPath(PathOf(expression), increment);
 
-    public IPatchExpression<T> Increment(Expression<Func<T, int?>> member, int increment = 1)
-        => IncrementPath(PathOf(member), increment);
+    public IPatchExpression<T> Increment(Expression<Func<T, float>> expression, float increment = 1)
+        => IncrementPath(PathOf(expression), (double)increment);
 
-    public IPatchExpression<T> Increment(Expression<Func<T, long?>> member, long increment = 1)
-        => IncrementPath(PathOf(member), increment);
+    public IPatchExpression<T> Increment(Expression<Func<T, decimal>> expression, decimal increment = 1)
+        => IncrementPath(PathOf(expression), (double)increment);
 
-    public IPatchExpression<T> Increment(Expression<Func<T, double?>> member, double increment = 1)
-        => IncrementPath(PathOf(member), increment);
+    /// <summary>
+    ///     The nullable overloads Fisher 1.x declared, reached through <see cref="PatchExpressionExtensions" />.
+    /// </summary>
+    internal IPatchExpression<T> IncrementNullable(LambdaExpression expression, object increment)
+        => IncrementPath(PathOf(expression), increment);
 
-    public IPatchExpression<T> Increment(Expression<Func<T, decimal?>> member, decimal increment = 1)
-        => IncrementPath(PathOf(member), (double)increment);
+    // ---- Append ----
 
-    public IPatchExpression<T> Append<TElement>(Expression<Func<T, IEnumerable<TElement>>> member,
-        TElement value)
+    public IPatchExpression<T> Append<TElement>(Expression<Func<T, IEnumerable<TElement>>> expression,
+        TElement element)
+        => AppendPath(PathOf(expression), element);
+
+    public IPatchExpression<T> Append<TElement>(Expression<Func<T, IDictionary<string, TElement>>> expression,
+        string key, TElement element)
+        => SetPath(KeyPath(PathOf(expression), key), element);
+
+    public IPatchExpression<T> AppendIfNotExists<TElement>(Expression<Func<T, IEnumerable<TElement>>> expression,
+        TElement element)
     {
-        var path = PathOf(member);
-
-        // '[#]' is SQLite's append index, and json_insert creates the array when the member is absent.
-        _operation.Add((inner, bind) =>
-            $"json_insert({inner}, '{path}[#]', json({bind(Json(value))}))");
-
-        return this;
-    }
-
-    public IPatchExpression<T> AppendIfNotExists<TElement>(
-        Expression<Func<T, IEnumerable<TElement>>> member, TElement value)
-    {
-        var path = PathOf(member);
+        var path = PathOf(expression);
 
         _operation.Add((inner, bind) =>
         {
-            var parameter = bind(Json(value));
+            var parameter = bind(Json(element));
 
-            return $"case when exists(select 1 from json_each(json_extract({inner}, '{path}')) "
-                   + $"where value = json_extract(json({parameter}), '$')) then {inner} "
+            return $"case when {ContainsValueSql(inner, path, parameter)} then {inner} "
                    + $"else json_insert({inner}, '{path}[#]', json({parameter})) end";
         });
 
         return this;
     }
 
-    public IPatchExpression<T> Insert<TElement>(Expression<Func<T, IEnumerable<TElement>>> member,
-        TElement value, int index = 0)
+    /// <remarks>
+    ///     <c>json_insert</c>, which writes only where the path is absent — so an existing key keeps its
+    ///     value, and an absent dictionary is created with the one entry.
+    /// </remarks>
+    public IPatchExpression<T> AppendIfNotExists<TElement>(
+        Expression<Func<T, IDictionary<string, TElement>>> expression, string key, TElement element)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(index);
+        var path = KeyPath(PathOf(expression), key);
 
-        var path = PathOf(member);
-
-        // Ordinals are doubled so the new element can sit strictly between two of them: an existing
-        // element keeps 2k below the insertion point and takes 2k+2 at or above it, and the new one is
-        // 2*index+1. An index past the end simply lands above every existing ordinal, which is why
-        // that case appends with no length to check.
-        _operation.Add((inner, bind) =>
-            $"json_set({inner}, '{path}', (select json_group_array(json(v)) from ("
-            + $"select case when key < {index} then key * 2 else key * 2 + 2 end as ord, "
-            + $"{ElementSql} as v from json_each(json_extract({inner}, '{path}')) "
-            + $"union all select {index} * 2 + 1, json({bind(Json(value))}) order by ord)))");
+        _operation.Add((inner, bind) => $"json_insert({inner}, '{path}', json({bind(Json(element))}))");
 
         return this;
     }
 
-    public IPatchExpression<T> Remove<TElement>(Expression<Func<T, IEnumerable<TElement>>> member,
-        TElement value)
+    public IPatchExpression<T> AppendIfNotExists<TElement>(Expression<Func<T, IEnumerable<TElement>>> expression,
+        TElement element, Expression<Func<TElement, bool>> predicate)
     {
-        var path = PathOf(member);
+        var (path, alias, filter) = ElementPredicate(expression, predicate, nameof(AppendIfNotExists));
 
-        // Rebuilt rather than removed in place: json1 cannot address "the element equal to x" as a
-        // path.
-        //
-        // `is not` rather than `<>`, because a JSON null element reads back as SQL NULL and `NULL <> x`
-        // is NULL rather than true — so every removal silently dropped every null in the array, and
-        // Remove(member, null) removed nothing.
         _operation.Add((inner, bind) =>
-            $"json_set({inner}, '{path}', coalesce((select json_group_array(json({ElementSql})) "
-            + $"from json_each(json_extract({inner}, '{path}')) "
-            + $"where value is not json_extract(json({bind(Json(value))}), '$')), json_array()))");
+            $"case when {MatchesSql(inner, path, alias, bind(filter))} then {inner} "
+            + $"else json_insert({inner}, '{path}[#]', json({bind(Json(element))})) end");
+
+        return this;
+    }
+
+    // ---- Insert ----
+
+    /// <summary>
+    ///     Insert into an array member at <paramref name="index" />, shifting the rest along (fisher#52);
+    ///     with no index, append.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b><c>json_insert</c> is not the mechanism.</b> It only inserts where the path does not
+    ///         already exist, so at an occupied index it is a silent no-op, and <c>json_replace</c> would
+    ///         overwrite rather than shift. So the array is rebuilt with the new element placed by ordinal.
+    ///     </para>
+    ///     <para>
+    ///         <b>An index past the end appends rather than throwing.</b> A patch does not read the
+    ///         document, so refusing would mean a round trip to learn a length. A negative index is refused.
+    ///     </para>
+    /// </remarks>
+    public IPatchExpression<T> Insert<TElement>(Expression<Func<T, IEnumerable<TElement>>> expression,
+        TElement element, int? index = null)
+    {
+        var path = PathOf(expression);
+
+        if (index is null)
+        {
+            return AppendPath(path, element);
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegative(index.Value, nameof(index));
+
+        _operation.Add((inner, bind) => InsertAtSql(inner, path, index.Value, bind(Json(element))));
+
+        return this;
+    }
+
+    public IPatchExpression<T> InsertIfNotExists<TElement>(Expression<Func<T, IEnumerable<TElement>>> expression,
+        TElement element, int? index = null)
+    {
+        if (index is null)
+        {
+            return AppendIfNotExists(expression, element);
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegative(index.Value, nameof(index));
+
+        var path = PathOf(expression);
+
+        _operation.Add((inner, bind) =>
+        {
+            var parameter = bind(Json(element));
+
+            return $"case when {ContainsValueSql(inner, path, parameter)} then {inner} "
+                   + $"else {InsertAtSql(inner, path, index.Value, parameter)} end";
+        });
+
+        return this;
+    }
+
+    public IPatchExpression<T> InsertIfNotExists<TElement>(Expression<Func<T, IEnumerable<TElement>>> expression,
+        TElement element, Expression<Func<TElement, bool>> predicate, int? index = null)
+    {
+        if (index is not null)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(index.Value, nameof(index));
+        }
+
+        var (path, alias, filter) = ElementPredicate(expression, predicate, nameof(InsertIfNotExists));
+
+        _operation.Add((inner, bind) =>
+        {
+            var parameter = bind(Json(element));
+            var insert = index is null
+                ? $"json_insert({inner}, '{path}[#]', json({parameter}))"
+                : InsertAtSql(inner, path, index.Value, parameter);
+
+            return $"case when {MatchesSql(inner, path, alias, bind(filter))} then {inner} else {insert} end";
+        });
+
+        return this;
+    }
+
+    // ---- Remove ----
+
+    /// <summary>
+    ///     Remove the first, or every, element of an array member equal to <paramref name="element" />.
+    /// </summary>
+    /// <remarks>
+    ///     Rebuilt rather than removed in place: json1 cannot address "the element equal to x" as a path.
+    ///     <c>is</c> rather than <c>=</c>, because a JSON null element reads back as SQL NULL — the old
+    ///     <c>&lt;&gt;</c> silently dropped every null in the array.
+    /// </remarks>
+    public IPatchExpression<T> Remove<TElement>(Expression<Func<T, IEnumerable<TElement>>> expression,
+        TElement element, RemoveAction action = RemoveAction.RemoveFirst)
+    {
+        var path = PathOf(expression);
+
+        _operation.Add((inner, bind) =>
+            RemoveSql(inner, path, "each_r", $"each_r.value is json_extract(json({bind(Json(element))}), '$')",
+                action));
+
+        return this;
+    }
+
+    public IPatchExpression<T> Remove<TElement>(Expression<Func<T, IDictionary<string, TElement>>> expression,
+        string key)
+        => DeletePath(KeyPath(PathOf(expression), key));
+
+    public IPatchExpression<T> Remove<TElement>(Expression<Func<T, IEnumerable<TElement>>> expression,
+        Expression<Func<TElement, bool>> predicate, RemoveAction action = RemoveAction.RemoveFirst)
+    {
+        var (path, alias, filter) = ElementPredicate(expression, predicate, nameof(Remove));
+
+        _operation.Add((inner, bind) => RemoveSql(inner, path, alias, bind(filter), action));
 
         return this;
     }
@@ -284,10 +315,10 @@ internal sealed class PatchExpression<T> : IPatchExpression<T> where T : notnull
         "case type when 'true' then 'true' when 'false' then 'false' "
         + "when 'object' then value when 'array' then value else json_quote(value) end";
 
-    public IPatchExpression<T> Rename(string oldName, Expression<Func<T, object>> newMember)
+    public IPatchExpression<T> Rename(string oldName, Expression<Func<T, object>> expression)
     {
         var from = PathOfStoredKey(oldName);
-        var to = PathOf(newMember);
+        var to = PathOf(expression);
 
         _operation.Add((inner, _) =>
             $"json_remove(json_set({inner}, '{to}', json_extract({inner}, '{from}')), '{from}')");
@@ -295,10 +326,75 @@ internal sealed class PatchExpression<T> : IPatchExpression<T> where T : notnull
         return this;
     }
 
-    public IPatchExpression<T> Delete<TValue>(Expression<Func<T, TValue>> member)
-        => DeletePath(PathOf(member));
+    public IPatchExpression<T> Delete(string name) => DeletePath(PathOfStoredKey(name));
 
-    public IPatchExpression<T> Delete(string storedKey) => DeletePath(PathOfStoredKey(storedKey));
+    public IPatchExpression<T> Delete<TParent>(string name, Expression<Func<T, TParent>> expression)
+        => DeletePath(ChildPath(PathOf(expression), name));
+
+    public IPatchExpression<T> Delete<TElement>(Expression<Func<T, TElement>> expression)
+        => DeletePath(PathOf(expression));
+
+    private IPatchExpression<T> AppendPath(string path, object? element)
+    {
+        // '[#]' is SQLite's append index, and json_insert creates the array when the member is absent.
+        _operation.Add((inner, bind) => $"json_insert({inner}, '{path}[#]', json({bind(Json(element))}))");
+
+        return this;
+    }
+
+    /// <summary>
+    ///     Ordinals are doubled so the new element can sit strictly between two of them: an existing
+    ///     element keeps 2k below the insertion point and takes 2k+2 at or above it, and the new one is
+    ///     2*index+1. An index past the end lands above every existing ordinal, so it appends.
+    /// </summary>
+    private static string InsertAtSql(string inner, string path, int index, string parameter)
+        => $"json_set({inner}, '{path}', (select json_group_array(json(v)) from ("
+           + $"select case when key < {index} then key * 2 else key * 2 + 2 end as ord, "
+           + $"{ElementSql} as v from json_each(json_extract({inner}, '{path}')) "
+           + $"union all select {index} * 2 + 1, json({parameter}) order by ord)))";
+
+    private static string ContainsValueSql(string inner, string path, string parameter)
+        => $"exists(select 1 from json_each(json_extract({inner}, '{path}')) "
+           + $"where value = json_extract(json({parameter}), '$'))";
+
+    private static string MatchesSql(string inner, string path, string alias, string filter)
+        => $"exists(select 1 from json_each(json_extract({inner}, '{path}')) as {alias} where {filter})";
+
+    /// <summary>
+    ///     Rebuild the array without the matching elements — every one, or only the one with the lowest
+    ///     index.
+    /// </summary>
+    private static string RemoveSql(string inner, string path, string alias, string filter, RemoveAction action)
+    {
+        var source = $"json_each(json_extract({inner}, '{path}')) as {alias}";
+        var keep = action == RemoveAction.RemoveAll
+            ? $"not coalesce({filter}, 0)"
+            : $"{alias}.key is not (select min({alias}.key) from {source} where {filter})";
+
+        return $"json_set({inner}, '{path}', coalesce((select json_group_array(json({ElementSqlFor(alias)})) "
+               + $"from {source} where {keep}), json_array()))";
+    }
+
+    private static string ElementSqlFor(string alias)
+        => $"case {alias}.type when 'true' then 'true' when 'false' then 'false' "
+           + $"when 'object' then {alias}.value when 'array' then {alias}.value else json_quote({alias}.value) end";
+
+    /// <summary>
+    ///     An element predicate, parsed by the same machinery a LINQ <c>Any(...)</c> over the member uses,
+    ///     against the <c>json_each</c> alias that machinery expects.
+    /// </summary>
+    private (string Path, string Alias, Weasel.Core.SqlGeneration.ISqlFragment Filter) ElementPredicate<TElement>(
+        Expression<Func<T, IEnumerable<TElement>>> expression, Expression<Func<TElement, bool>> predicate,
+        string operatorName)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+
+        var path = PathOf(expression);
+        var collection = ChildCollections.ResolveCollection(_members, MemberOf(expression), operatorName);
+        var filter = ChildCollections.ParseElementPredicate(collection, predicate, operatorName);
+
+        return (path, collection.Alias, filter);
+    }
 
     private IPatchExpression<T> SetPath(string path, object? value)
     {
@@ -346,6 +442,9 @@ internal sealed class PatchExpression<T> : IPatchExpression<T> where T : notnull
     ///     naming policy. The same rule fisher#16 established for indexes.
     /// </remarks>
     private string PathOf(LambdaExpression member)
+        => PathFromLocator(_members.ResolveMember(MemberOf(member)).RawLocator);
+
+    private static MemberExpression MemberOf(LambdaExpression member)
     {
         var body = member.Body;
 
@@ -354,13 +453,31 @@ internal sealed class PatchExpression<T> : IPatchExpression<T> where T : notnull
             body = convert.Operand;
         }
 
-        if (body is not MemberExpression memberExpression)
-        {
-            throw new JasperFx.BadLinqExpressionException(
-                "A patch target must be a document member — for example x => x.Name.");
-        }
+        return body as MemberExpression
+               ?? throw new JasperFx.BadLinqExpressionException(
+                   "A patch target must be a document member — for example x => x.Name.");
+    }
 
-        return PathFromLocator(_members.ResolveMember(memberExpression).RawLocator);
+    /// <summary>
+    ///     A stored key under a resolved parent path, for the overloads that name a key relative to a
+    ///     member.
+    /// </summary>
+    private static string ChildPath(string parentPath, string name)
+        => parentPath + PathOfStoredKey(name)[1..];
+
+    /// <summary>
+    ///     One dictionary entry's path. The key is quoted, so it may hold a dot or a space; a quote
+    ///     character of either kind is refused, since it would close the quoting or the string literal
+    ///     the path is written into.
+    /// </summary>
+    private static string KeyPath(string dictionaryPath, string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+
+        return key.Contains('"') || key.Contains('\'') || key.Contains('\\')
+            ? throw new ArgumentException("A dictionary key in a patch cannot contain a quote or a backslash.",
+                nameof(key))
+            : $"{dictionaryPath}.\"{key}\"";
     }
 
     /// <summary>

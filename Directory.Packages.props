@@ -448,6 +448,7 @@
         <!-- TODO(fisher#460): the net11 train pins Weasel.* to 10.0.0-alpha.1, which was published
              nowhere (nuget.org, polecat-local, stoat-local) when this was written. Held at 9.50.0 so
              the repo restores and tests; move both lines when alpha.1 exists. -->
+        <PackageVersion Include="Aspire.Hosting" Version="13.6.4" />
         <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.1" />
         <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.1" />
 
@@ -477,15 +478,14 @@
     <ItemGroup>
         <PackageVersion Include="Polly.Core" Version="8.6.5" />
 
-        <!-- EF Core, for Fisher.EntityFrameworkCore. Pinned to the 9.x line rather than 10.x
-             because the package multi-targets net9.0 and net10.0 as everything here does, and EF
-             Core 10 is net10-only. 9.x targets net8.0, so it loads on both. Relational only in the
-             package itself — the provider is the application's choice, and forcing
-             Microsoft.EntityFrameworkCore.Sqlite on a consumer would be Fisher deciding which EF
-             provider their DbContext uses. The tests reference the Sqlite provider because a test
-             needs a real one. -->
-        <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.14" />
-        <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.14" />
+        <!-- EF Core, for Fisher.EntityFrameworkCore. Floored at 10.0.0 now that the package targets
+             net10.0;net11.0 (fisher#467); EF Core 10 is net10+, so the 9.x pin that existed for net9.0
+             is gone. Relational only in the package itself — the provider is the application's choice,
+             and forcing Microsoft.EntityFrameworkCore.Sqlite on a consumer would be Fisher deciding
+             which EF provider their DbContext uses. The tests reference the Sqlite provider because a
+             test needs a real one. -->
+        <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.0" />
+        <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
 
         <!-- Benchmarking (Fisher.Benchmarks only) -->
         <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />

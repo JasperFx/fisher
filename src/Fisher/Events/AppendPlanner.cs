@@ -1,7 +1,8 @@
-using System.Text.Json;
 using Fisher.Internal;
 using Fisher.Storage;
+using JasperFx;
 using JasperFx.Events;
+using JasperFx.Events.Appending;
 using JasperFx.MultiTenancy;
 using Microsoft.Data.Sqlite;
 using Weasel.Storage;
@@ -13,6 +14,15 @@ namespace Fisher.Events;
 /// </summary>
 /// <remarks>
 ///     <para>
+///         <b>The decisions are the shared <see cref="ClientSideAppendPlanner" />'s</b> (jasperfx#1051): which
+///         stream is refused and why, how events are numbered, what metadata they are stamped with. What
+///         stays here is reading the stream rows, under the write lock, and turning each written step into a
+///         <see cref="Storage.FisherQuickAppendEventsOperation" />. Three rules Fisher established are rows of
+///         that table now: a missing stream row refuses a non-zero expected version (fisher#378), an archived
+///         stream refuses an append and a Start on an archived id is a collision (fisher#184), and a stream
+///         flagged <c>AlwaysEnforceConsistency</c> with no events is still version-checked (fisher#184).
+///     </para>
+///     <para>
 ///         Running this at flush time rather than at <c>Append</c> time is what lets event versions be
 ///         assigned from the stream's actual current version, and it collapses several appends to one
 ///         stream into a single stream-row write.
@@ -21,488 +31,205 @@ namespace Fisher.Events;
 ///         The version read and the write must not race. Marten holds an advisory lock and Polecat
 ///         reads under <c>UPDLOCK, HOLDLOCK</c>; SQLite has neither, so the planner runs inside the
 ///         session's write transaction and takes SQLite's exclusive write lock immediately by issuing
-///         <c>BEGIN IMMEDIATE</c>. Under the default deferred transaction the lock would only be taken
-///         at the first write — after the version read — leaving a window in which two sessions both
-///         read version N and both try to write N+1.
+///         <c>BEGIN IMMEDIATE</c>.
 ///     </para>
 /// </remarks>
 internal sealed class AppendPlanner
 {
     private readonly EventGraph _graph;
     private readonly FisherSession _session;
+    private readonly AppendOrigin _origin;
 
-    public AppendPlanner(FisherSession session)
+    public AppendPlanner(FisherSession session, AppendOrigin origin = AppendOrigin.UnitOfWork)
     {
         _session = session;
         _graph = session.EventGraph;
+        _origin = origin;
     }
 
     /// <summary>
-    ///     Assign versions and build one append operation per stream.
+    ///     Read every stream row, plan, apply, and build one append operation per written stream.
     /// </summary>
+    /// <remarks>
+    ///     Must run inside the write transaction: the version read and the write it decides have to be under
+    ///     one lock. A refusal throws before anything is stamped, so a refused unit of work leaves every
+    ///     action as it was.
+    /// </remarks>
     public async Task<IReadOnlyList<Weasel.Storage.IStorageOperation>> PlanAsync(
         IReadOnlyCollection<StreamAction> streams, SqliteConnection connection, SqliteTransaction transaction,
         CancellationToken token)
     {
-        var actionable = CollectActionableStreams(streams);
-        var guardOnly = CollectGuardOnlyStreams(streams);
+        var context = ContextFor();
+        var needed = streams
+            .Where(x => ClientSideAppendPlanner.WorkFor(x, context.Tenancy) != StreamAppendWork.Nothing)
+            .ToList();
 
-        if (actionable.Count == 0 && guardOnly.Count == 0)
+        if (needed.Count == 0)
         {
             return [];
         }
 
-        // One set-based read for every stream in the unit of work, not one scalar query per stream.
-        // This read runs inside the write transaction, holding SQLite's exclusive write lock, so
-        // shrinking N round trips to one is worth the most exactly here. The guard-only streams ride
-        // along in the same read rather than costing a second one.
-        var states = await ReadCurrentStatesAsync([.. actionable, .. guardOnly], connection, transaction, token)
-            .ConfigureAwait(false);
+        var rows = await ReadRowsAsync(needed, connection, transaction, token).ConfigureAwait(false);
 
-        var operations = new List<Weasel.Storage.IStorageOperation>(actionable.Count);
+        var plan = ClientSideAppendPlanner.Plan(streams, rows.For, context);
+        plan.Apply();
 
-        foreach (var stream in actionable)
+        var operations = new List<Weasel.Storage.IStorageOperation>();
+
+        foreach (var step in plan.Writes)
         {
-            var mode = PlanStream(stream, states[stream]);
-
-            var operation = (Storage.FisherQuickAppendEventsOperation)QuickAppendEvents(stream);
-            operation.Mode = mode;
+            var operation = (Storage.FisherQuickAppendEventsOperation)QuickAppendEvents(step.Stream);
+            operation.Mode = step.Verdict == StreamAppendVerdict.InsertStream
+                ? StreamRowWrite.Insert
+                : StreamRowWrite.Update;
             operations.Add(operation);
-        }
-
-        foreach (var stream in guardOnly)
-        {
-            AssertVersionUnmoved(stream, states[stream].Version ?? 0);
         }
 
         return operations;
     }
 
     /// <summary>
-    ///     Number each stream's events from its current server version, before the write transaction
-    ///     opens, so inline projections fold events that already know their versions.
+    ///     Number the session's pending events ahead of the inline projections, outside the write lock.
     /// </summary>
     /// <remarks>
-    ///     Deliberately does not guard anything. The authoritative version read, the optimistic
-    ///     concurrency check and the final numbering all still happen inside the write transaction in
-    ///     <see cref="PlanAsync" />; this only makes a best-effort assignment early so a projection has
-    ///     something to read. If a racing writer moves the stream on in between, the numbers assigned
-    ///     here are simply overwritten and the commit fails on the real guard.
+    ///     <para>
+    ///         Inline projections need each event's version, but Fisher normally learns versions inside the
+    ///         write transaction. This reads the current versions early so projections have something to work
+    ///         with.
+    ///     </para>
+    ///     <para>
+    ///         <b>This is not a weakened concurrency guard.</b> <see cref="PlanAsync" /> re-reads and
+    ///         re-numbers inside the transaction and the expected-version check runs there, so a writer that
+    ///         raced in between still fails the commit.
+    ///     </para>
+    ///     <para>
+    ///         The timestamp is stamped here too (fisher#119) and only where unset, so the in-transaction pass
+    ///         keeps it: what an inline projection folded is what the row persists.
+    ///     </para>
     /// </remarks>
     public async Task AssignVersionsAheadOfProjectionsAsync(IReadOnlyList<StreamAction> streams,
         CancellationToken token)
     {
-        var actionable = CollectActionableStreams(streams);
+        var withEvents = streams.Where(x => x.Events.Count > 0).ToList();
 
-        if (actionable.Count == 0)
+        if (withEvents.Count == 0)
         {
             return;
         }
 
         var connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
 
-        // One set-based read for the whole pass, mirroring PlanAsync. Deliberately NOT merged with
-        // the in-transaction read and NOT used to seed it: this pass runs outside the write lock so
-        // inline projections have versions to fold, and the authoritative read, the optimistic
-        // concurrency check and the final numbering must all still happen under the lock — seeding
-        // one from the other is exactly the race the class remarks forbid.
-        //
-        // "Outside the write lock" is only possible when the session owns its transaction and has
-        // not opened it yet. An enlisted session (SessionOptions.ForTransaction) is already inside
-        // the caller's transaction, on the caller's connection, and Microsoft.Data.Sqlite refuses to
-        // execute a command whose Transaction is unset while its connection has one pending — the
-        // reason ConfigureCommandAsync sets it on every other command the session runs. So this read
-        // joins the enlisted transaction when there is one and stays a plain autocommit read when
-        // there is not (fisher#300). Nothing about the race above changes: the read is still not the
-        // guard, and the caller already holds the lock the guard runs under.
-        var states = await ReadCurrentStatesAsync(actionable, connection, _session.EnlistedTransaction, token)
+        // The caller's transaction for an enlisted session (fisher#300), null for an owned one.
+        var rows = await ReadRowsAsync(withEvents, connection, _session.EnlistedTransaction, token)
             .ConfigureAwait(false);
 
-        foreach (var stream in actionable)
-        {
-            AssignVersions(stream, states[stream].Version ?? 0);
-        }
+        ClientSideAppendPlanner.NumberAhead(withEvents, rows.For, ContextFor());
     }
 
-    /// <summary>
-    ///     The streams carrying no events that still have to be checked — a stream fetched for writing,
-    ///     flagged <see cref="StreamAction.AlwaysEnforceConsistency" />, and then left alone.
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         <b>These used to be dropped along with every other event-less stream, and the flag
-    ///         therefore did nothing</b> — found by <c>AlwaysEnforceConsistencyCompliance</c>
-    ///         (jasperfx#762), which is the only thing that could have: the flag is on the shared
-    ///         <c>IEventStream</c>, Fisher forwarded it to the <c>StreamAction</c> faithfully, and
-    ///         nothing else in the store ever read it. A store that ignores it passes every ordinary
-    ///         append test, because appending a single event brings the ordinary version guard back.
-    ///     </para>
-    ///     <para>
-    ///         The subject of the flag is precisely the empty case: "I read this stream, decided on the
-    ///         strength of what I read to write nothing, and that decision is only sound if the stream
-    ///         has not moved." Without it a no-op commit is silently unconditional.
-    ///     </para>
-    ///     <para>
-    ///         <see cref="StreamAction.ExpectedVersionOnServer" /> has to be set for the check to mean
-    ///         anything, and <c>FetchForWriting</c> is what sets it — a stream reached any other way has
-    ///         nothing to compare against. A stream that does not exist yet is fetched at expected
-    ///         version 0 and reads back as 0, so turning the flag on does not turn "not created yet"
-    ///         into a conflict.
-    ///     </para>
-    ///     <para>
-    ///         Session metadata is deliberately not applied to these, unlike
-    ///         <see cref="CollectActionableStreams" />: there are no events to stamp.
-    ///     </para>
-    /// </remarks>
-    private static List<StreamAction> CollectGuardOnlyStreams(IReadOnlyCollection<StreamAction> streams)
+    private ClientSideAppendContext ContextFor() => new()
     {
-        var guarded = new List<StreamAction>();
+        Metadata = _session,
 
-        foreach (var stream in streams)
-        {
-            if (stream.Events.Count == 0 && stream is
-                    { AlwaysEnforceConsistency: true, ExpectedVersionOnServer: not null })
-            {
-                guarded.Add(stream);
-            }
-        }
+        // Read once per unit of work, round-tripped through SqliteTimestamp so the value an inline
+        // projection sees is exactly what the millisecond-precision column will hold (fisher#119).
+        Timestamp = SqliteTimestamp.FromDatabaseValue(
+            SqliteTimestamp.ToDatabaseValue(_graph.TimeProvider.GetUtcNow())),
+        AppendMode = EventAppendMode.Quick,
+        Tenancy = _graph.TenancyStyle,
+        Origin = _origin,
+        Refusals = FisherAppendRefusals.Instance
+    };
 
-        return guarded;
-    }
-
-    /// <summary>
-    ///     Fail the commit if the stream has moved since it was fetched.
-    /// </summary>
-    /// <remarks>
-    ///     Deliberately the same exception the ordinary append guard raises, so a caller catching
-    ///     <c>ConcurrencyException</c> around a unit of work does not have to learn a second type for
-    ///     the empty case.
-    /// </remarks>
-    private static void AssertVersionUnmoved(StreamAction stream, long currentVersion)
+    private sealed class FisherAppendRefusals : AppendRefusals
     {
-        if (stream.ExpectedVersionOnServer is { } expected && expected != currentVersion)
-        {
-            throw new EventStreamUnexpectedMaxEventIdException(
-                stream.Key is not null ? stream.Key : stream.Id,
-                stream.AggregateType,
-                expected,
-                currentVersion);
-        }
+        internal static readonly FisherAppendRefusals Instance = new();
+
+        public override Exception Collision(object id, Type? aggregateType)
+            => new JasperFx.Events.ExistingStreamIdCollisionException(id);
+
+        public override Exception Archived(object id) => new JasperFx.Events.ArchivedStreamException(id);
     }
 
-    /// <summary>
-    ///     The streams that will actually be written — everything with at least one event, with the
-    ///     session's metadata applied. Both planning passes share this so they agree about which
-    ///     streams a version read has to cover.
-    /// </summary>
-    private List<StreamAction> CollectActionableStreams(IReadOnlyCollection<StreamAction> streams)
+    // ---- reading the stream rows ----
+
+    private sealed class StreamRows
     {
-        var actionable = new List<StreamAction>(streams.Count);
+        private readonly EventGraph _graph;
+        private readonly HashSet<(string Id, string? Tenant)> _read = [];
+        private readonly Dictionary<(string Id, string? Tenant), StreamRowSnapshot> _found = new();
 
-        foreach (var stream in streams)
+        public StreamRows(EventGraph graph)
         {
-            if (stream.Events.Count == 0)
-            {
-                continue;
-            }
-
-            ApplySessionMetadata(stream);
-            actionable.Add(stream);
+            _graph = graph;
         }
 
-        return actionable;
+        public void MarkRead(string id, string? tenant) => _read.Add((id, tenant));
+
+        public void Found(string id, string? tenant, long version, bool isArchived)
+            => _found[(id, tenant)] = StreamRowSnapshot.FromRow(version, isArchived);
+
+        public StreamRowSnapshot For(StreamAction stream)
+        {
+            var key = (DatabaseIdFor(_graph, stream), TenantKey(_graph, stream));
+
+            if (_found.TryGetValue(key, out var row)) return row;
+
+            return _read.Contains(key) ? StreamRowSnapshot.Missing : StreamRowSnapshot.NotRead;
+        }
     }
 
-    private Storage.StreamWriteMode PlanStream(StreamAction stream, StreamRowState state)
+    private static string? TenantKey(EventGraph graph, StreamAction stream)
+        => graph.TenancyStyle == TenancyStyle.Conjoined ? stream.TenantId : null;
+
+    private async Task<StreamRows> ReadRowsAsync(IReadOnlyList<StreamAction> streams, SqliteConnection connection,
+        SqliteTransaction? transaction, CancellationToken token)
     {
-        var currentVersion = state.Version;
+        var rows = new StreamRows(_graph);
 
-        // Archiving is not a soft delete you can keep writing through (fisher#184). Checked before the
-        // version guard, because "this stream is closed" is the more specific answer and the version is
-        // beside the point once it is true — and checked here rather than in the SQL because the append
-        // is one upsert with no branch to hang it off.
-        //
-        // NOT for a Start, though, and the ordering below is what keeps that true: an archived id is
-        // still an id in use, so starting over it is a collision, and answering "archived" there would
-        // tell the caller to unarchive when what they actually need is a different id.
-        //
-        // The refusal is JasperFx.Events.ArchivedStreamException now (jasperfx#871, in 2.74.0), and
-        // the lift took FISHER's type as the canonical shape over Marten's generic
-        // InvalidStreamOperationException and Polecat's message-matching InvalidStreamException.
-        // StreamArchivingCompliance asserts the shared type rather than merely that the commit failed,
-        // so JasperFx.Events.ArchivedStreamException subclasses it — see that type for why it keeps
-        // its own wording.
-        if (stream.ActionType == StreamActionType.Start)
+        // Conjoined tenancy keys a stream row on (tenant_id, id), so one stream id can exist once per
+        // tenant; reading by id alone would hand one tenant another tenant's version.
+        foreach (var group in streams.GroupBy(x => TenantKey(_graph, x)))
         {
-            if (currentVersion is not null)
+            var ids = group.Select(x => DatabaseIdFor(_graph, x)).Distinct(StringComparer.Ordinal).ToList();
+
+            foreach (var id in ids)
             {
-                throw new JasperFx.Events.ExistingStreamIdCollisionException(
-                    stream.Key is not null ? stream.Key : stream.Id);
+                rows.MarkRead(id, group.Key);
             }
 
-            AssignVersions(stream, 0);
-            return Storage.StreamWriteMode.Insert;
-        }
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = group.Key is null
+                ? $"select id, version, is_archived from {_graph.StreamsTableName} where id in (select value from json_each(@ids))"
+                : $"select id, version, is_archived from {_graph.StreamsTableName} where tenant_id = @tenant_id and id in (select value from json_each(@ids))";
 
-        if (currentVersion is null)
-        {
-            // An expected version above zero is a claim that the stream exists at that version, and a
-            // missing row contradicts it as plainly as a different version would (fisher#378). This
-            // used to be dropped: FetchForWriting at version 2, a tombstone committed in between, and
-            // the append then recreated the stream holding only the late events, so its aggregate
-            // started mid-life with nothing to say why. Polecat compares a missing row as version 0
-            // and refuses; so does this. Zero is still "not created yet", which is what FetchForWriting
-            // records for a stream that did not exist when it was fetched.
-            if (stream.ExpectedVersionOnServer is { } expectedOnMissing and not 0)
+            // One parameter however many streams the unit of work touched, rather than a placeholder per
+            // id against SQLite's host-parameter limit.
+            command.Parameters.Add(new SqliteParameter("ids", SqliteJsonArrays.Write(ids))
             {
-                throw new EventStreamUnexpectedMaxEventIdException(
-                    stream.Key is not null ? stream.Key : stream.Id,
-                    stream.AggregateType,
-                    expectedOnMissing,
-                    0);
+                SqliteType = SqliteType.Text
+            });
+
+            if (group.Key is not null)
+            {
+                command.Parameters.Add(new SqliteParameter("tenant_id", group.Key) { SqliteType = SqliteType.Text });
             }
 
-            // Appending to a stream that does not exist yet creates it, matching Marten and Polecat:
-            // Append is not an assertion that the stream is already there.
-            AssignVersions(stream, 0);
-            stream.ExpectedVersionOnServer = null;
-            return Storage.StreamWriteMode.Insert;
+            await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                rows.Found(reader.GetString(0), group.Key, reader.GetInt64(1), reader.GetInt64(2) != 0);
+            }
         }
 
-        if (state.IsArchived)
-        {
-            throw new JasperFx.Events.ArchivedStreamException(stream.Key is not null ? stream.Key : stream.Id);
-        }
-
-        if (stream.ExpectedVersionOnServer is { } expected && expected != currentVersion.Value)
-        {
-            throw new EventStreamUnexpectedMaxEventIdException(
-                stream.Key is not null ? stream.Key : stream.Id,
-                stream.AggregateType,
-                expected,
-                currentVersion.Value);
-        }
-
-        stream.ExpectedVersionOnServer = currentVersion.Value;
-        AssignVersions(stream, currentVersion.Value);
-
-        return Storage.StreamWriteMode.Update;
+        return rows;
     }
 
-    /// <summary>
-    ///     Copy the session's tracing and user metadata onto every event that does not already carry
-    ///     its own.
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         Mirrors the private <c>StreamAction.ProcessMetadata</c>, which Fisher reaches only
-    ///         through <c>StreamAction.PrepareEvents</c> — and cannot use. <c>PrepareEvents</c> assigns
-    ///         event versions only when <c>ExpectedVersionOnServer</c> is already set, because Marten
-    ///         and Polecat let the database assign them; Fisher numbers events client-side from the
-    ///         version it just read. Forcing <c>PrepareEvents</c> to number them would mean setting
-    ///         <c>ExpectedVersionOnServer</c> to the current version first, which makes the optimistic
-    ///         concurrency check inside the same method compare that value against itself and pass
-    ///         unconditionally. Keeping the two apart is what keeps the guard real.
-    ///     </para>
-    ///     <para>
-    ///         Each field is gated on its own <c>Enable*</c> option, because a disabled column is not
-    ///         written at all — stamping the envelope anyway would report metadata on append that no
-    ///         longer exists after a round trip.
-    ///     </para>
-    ///     <para>
-    ///         <b>This used to stamp the stream's own identity as well, and no longer needs to.</b>
-    ///         fisher#72: <c>StreamAction.Append(graph, string, …)</c> appended straight to the backing
-    ///         list where the <c>Guid</c> overload beside it went through <c>AddEvent</c>, so every
-    ///         event appended to a string-identified stream reached an inline projection with an empty
-    ///         <c>StreamKey</c> — the normal way such a projection learns which entity it is projecting,
-    ///         and silent, because the document was written with a blank key rather than anything
-    ///         throwing. Fixed upstream by
-    ///         <see href="https://github.com/JasperFx/jasperfx/issues/663">jasperfx#663</see> and
-    ///         shipped in <b>JasperFx 2.48.0</b>, which routes both string overloads through
-    ///         <c>AddEvents</c>; the workaround here is gone, and the behaviour is pinned by
-    ///         <c>event_envelope_metadata_in_projections</c> rather than by this method. Do not
-    ///         reintroduce it — and note that removing it is what makes 2.48.0 a real floor rather than
-    ///         a preference.
-    ///     </para>
-    /// </remarks>
-    private void ApplySessionMetadata(StreamAction stream)
-    {
-        // One reading per stream, not per event: the events of one append share a moment the
-        // same way they share a transaction. Guarded so a caller that stamped its own value
-        // (or a retry re-entering this method) is left alone — and mirrored by the append
-        // operation, which persists this value instead of the column default whenever it is
-        // set, so what an inline projection folded is what a rebuild will read back.
-        // Round-tripped through the storage format up front: the column keeps milliseconds,
-        // so stamping raw ticks here would leave the inline view sub-millisecond ahead of
-        // every later read of the same event.
-        var timestamp = SqliteTimestamp.FromDatabaseValue(
-            SqliteTimestamp.ToDatabaseValue(_graph.TimeProvider.GetUtcNow()));
-
-        foreach (var @event in stream.Events)
-        {
-            if (@event.Timestamp == default)
-            {
-                @event.Timestamp = timestamp;
-            }
-
-            if (_session.CorrelationIdEnabled)
-            {
-                @event.CorrelationId ??= _session.CorrelationId;
-            }
-
-            if (_session.CausationIdEnabled)
-            {
-                @event.CausationId ??= _session.CausationId;
-            }
-
-            if (_session.UserNameEnabled)
-            {
-                @event.UserName ??= _session.CurrentUserName;
-            }
-
-            if (!_session.HeadersEnabled || !(_session.Headers?.Count > 0))
-            {
-                continue;
-            }
-
-            foreach (var header in _session.Headers)
-            {
-                @event.SetHeader(header.Key, header.Value);
-            }
-        }
-    }
-
-    /// <summary>
-    ///     Number the stream's events from <paramref name="startingVersion" /> and record the resulting
-    ///     stream version.
-    /// </summary>
-    private static void AssignVersions(StreamAction stream, long startingVersion)
-    {
-        var version = startingVersion;
-
-        foreach (var @event in stream.Events)
-        {
-            version++;
-            @event.Version = version;
-        }
-
-        stream.Version = version;
-    }
-
-    /// <summary>
-    ///     A stream's row as the planner needs it: its version, or null when the row does not exist,
-    ///     and whether it has been archived.
-    /// </summary>
-    /// <remarks>
-    ///     The two travel together because they come from the same row and are both decided before any
-    ///     event is written. <c>is_archived</c> joined the read for the archived-append refusal
-    ///     (fisher#184); the version half is unchanged.
-    /// </remarks>
-    private readonly record struct StreamRowState(long? Version, bool IsArchived);
-
-    /// <summary>
-    ///     Every stream's current version and archived flag in one set-based read — a null version for
-    ///     a stream whose row does not exist.
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         Replaces one interpolated scalar query per stream, which with inline projections on cost
-    ///         a multi-stream save 2N round trips — N of them under the exclusive write lock. The ids
-    ///         travel as a JSON array unpacked by <c>json_each</c>, the same shape
-    ///         <c>FisherDocumentStorage</c>'s load-many uses, so the parameter count does not vary with
-    ///         the stream count.
-    ///     </para>
-    ///     <para>
-    ///         Semantics are exactly the per-stream read's: a missing row reads as null (create, or
-    ///         collide on <c>Start</c>), and there is deliberately no <c>is_archived</c> <em>filter</em>
-    ///         — an archived stream's version is still its version. The flag is read rather than
-    ///         filtered on precisely so the refusal can name it.
-    ///     </para>
-    ///     <para>
-    ///         Under conjoined tenancy the read is one statement per distinct tenant in the unit of
-    ///         work, because the row key is <c>(tenant_id, id)</c> and one save can span tenants via
-    ///         <c>ForTenant</c>. A single-tenant save — the ordinary case — is still one statement.
-    ///     </para>
-    /// </remarks>
-    private async Task<Dictionary<StreamAction, StreamRowState>> ReadCurrentStatesAsync(
-        IReadOnlyList<StreamAction> streams, SqliteConnection connection, SqliteTransaction? transaction,
-        CancellationToken token)
-    {
-        var states = new Dictionary<StreamAction, StreamRowState>(streams.Count);
-
-        foreach (var stream in streams)
-        {
-            states[stream] = default;
-        }
-
-        if (streams.Count == 0)
-        {
-            return states;
-        }
-
-        if (_graph.TenancyStyle == TenancyStyle.Conjoined)
-        {
-            foreach (var tenant in streams.GroupBy(x => x.TenantId))
-            {
-                await ReadStatesAsync([.. tenant], tenant.Key, connection, transaction, states, token)
-                    .ConfigureAwait(false);
-            }
-        }
-        else
-        {
-            await ReadStatesAsync(streams, tenantId: null, connection, transaction, states, token)
-                .ConfigureAwait(false);
-        }
-
-        return states;
-    }
-
-    private async Task ReadStatesAsync(IReadOnlyList<StreamAction> streams, string? tenantId,
-        SqliteConnection connection, SqliteTransaction? transaction,
-        Dictionary<StreamAction, StreamRowState> states, CancellationToken token)
-    {
-        // Keyed by the database's own rendering of the id — for a Guid identity that is the lowercase
-        // canonical text SqliteStorageDialect writes, so the row that comes back matches the key that
-        // went in without any per-row parsing.
-        var byDatabaseId = new Dictionary<string, StreamAction>(streams.Count, StringComparer.Ordinal);
-
-        foreach (var stream in streams)
-        {
-            byDatabaseId[DatabaseIdFor(stream)] = stream;
-        }
-
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = tenantId is null
-            ? $"select id, version, is_archived from {_graph.StreamsTableName} where id in (select value from json_each(@ids))"
-            : $"select id, version, is_archived from {_graph.StreamsTableName} where tenant_id = @tenant_id and id in (select value from json_each(@ids))";
-
-        // fisher#398: not JsonSerializer.Serialize, whose reflection-based overload failed every
-        // append in a Native AOT image. See SqliteJsonArrays.
-        command.Parameters.Add(new SqliteParameter("ids", SqliteJsonArrays.Write(byDatabaseId.Keys))
-        {
-            SqliteType = SqliteType.Text
-        });
-
-        if (tenantId is not null)
-        {
-            command.Parameters.Add(new SqliteParameter("tenant_id", tenantId) { SqliteType = SqliteType.Text });
-        }
-
-        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
-
-        while (await reader.ReadAsync(token).ConfigureAwait(false))
-        {
-            // Explicit, as everywhere else Fisher reads its own columns: is_archived is INTEGER 0/1
-            // rather than a BOOLEAN, so GetBoolean would be leaning on the provider's coercion rules
-            // where the write path converted deliberately.
-            states[byDatabaseId[reader.GetString(0)]] =
-                new StreamRowState(reader.GetInt64(1), reader.GetInt64(2) != 0);
-        }
-    }
-
-    private string DatabaseIdFor(StreamAction stream)
-        => _graph.StreamIdentity == StreamIdentity.AsGuid
+    // The lowercase canonical form fi_streams.id holds — an uppercase Guid would match nothing under
+    // SQLite's case-sensitive default collation.
+    private static string DatabaseIdFor(EventGraph graph, StreamAction stream)
+        => graph.StreamIdentity == StreamIdentity.AsGuid
             ? (string)SqliteStorageDialect<Guid>.ToDatabaseValue(stream.Id)
             : stream.Key!;
 

@@ -16,12 +16,6 @@ namespace Fisher.Events.Storage;
 ///     Whether the closed-shape append writes the stream row with an INSERT (new stream) or an UPDATE
 ///     (existing stream). Decided by the append planner after its version read.
 /// </summary>
-internal enum StreamWriteMode
-{
-    Insert,
-    Update
-}
-
 /// <summary>
 ///     SQLite batched append for the closed-shape Quick event storage — the dialect-supplied
 ///     counterpart of Marten's Postgres <c>QuickAppendEventsOperation</c> and Polecat's SQL Server
@@ -45,186 +39,135 @@ internal enum StreamWriteMode
 ///         transaction is exclusive, so no other writer can interleave) but would be a silent
 ///         correctness trap if that ever stopped being true.
 ///     </para>
+///     <para>
+///         <b>The command shape is the shared <see cref="PerEventQuickAppendOperationBase" />'s</b> (weasel#743):
+///         stream row, one insert per event, metadata columns through <see cref="IEventMetadataBinder" />s,
+///         the read-back, and the insert-only collision transform. What is Fisher's is the column set, the
+///         SQLite bindings, the binary body, and the read-back's SQL.
+///     </para>
 /// </remarks>
-internal sealed class FisherQuickAppendEventsOperation
-    : Weasel.Storage.IStorageOperation, IExceptionTransform
+internal sealed class FisherQuickAppendEventsOperation : PerEventQuickAppendOperationBase
 {
+    private const string CoreColumns = "id, stream_id, version, data, type, timestamp, tenant_id, dotnet_type";
+
     private readonly QuickEventStorageDescriptor _descriptor;
     private readonly EventGraph _graph;
 
+    // Each event's binary body, computed once in WriteCoreValues and bound last in the suffix.
+    private readonly byte[]?[] _binary;
+
     public FisherQuickAppendEventsOperation(EventGraph graph, QuickEventStorageDescriptor descriptor,
-        StreamAction stream)
+        StreamAction stream) : base(stream, FisherEventMetadataBinder.For(graph.EventOptions, descriptor.Dialect))
     {
         _graph = graph;
         _descriptor = descriptor;
-        Stream = stream;
+        _binary = new byte[stream.Events.Count][];
     }
 
-    public StreamAction Stream { get; }
-
-    /// <summary>Set by the planner: INSERT a new stream row, or UPDATE the existing one's version.</summary>
-    public StreamWriteMode Mode { get; set; } = StreamWriteMode.Insert;
-
-    public Type DocumentType => typeof(IEvent);
-
-    public OperationRole Role() => OperationRole.Events;
-
-    public void ConfigureCommand(ICommandBuilder builder, IStorageSession session)
+    // Stream row write reuses the dialect's descriptor closures so that SQL stays in one place.
+    protected override void WriteInsertStream(ICommandBuilder builder, IStorageSession session)
     {
-        // Stream row write reuses the dialect's descriptor closures so that SQL stays in one place.
-        if (Mode == StreamWriteMode.Insert)
+        _descriptor.ConfigureInsertStreamCommand(builder, Stream);
+        builder.Append(";");
+    }
+
+    protected override void WriteUpdateStreamVersion(ICommandBuilder builder, IStorageSession session)
+    {
+        _descriptor.ConfigureUpdateStreamVersionCommand(builder, Stream);
+        builder.Append(";");
+    }
+
+    protected override void WriteEventInsertPrefix(ICommandBuilder builder, IEvent @event, int ordinal)
+    {
+        builder.Append("insert into ");
+        builder.Append(_graph.EventsTableName);
+        builder.Append(" (");
+        builder.Append(ComposeColumnList(CoreColumns, MetadataBinders));
+
+        // Unconditional, because the column is (fisher#93): an explicit null for a JSON event is what lets
+        // the read path decide encoding per row rather than per type.
+        //
+        // ⚠️ LAST, and it has to be — the value is bound last, in the suffix. fisher#43 named it ninth
+        // while binding it last, so a store with any metadata column enabled wrote a binary event's BLOB
+        // into correlation_id. The column list and the bind order are one contract.
+        builder.Append(", data_binary) values (");
+    }
+
+    protected override void WriteCoreValues(ICommandBuilder builder, IEvent @event, IStorageSession session)
+    {
+        // A binary body goes into data_binary and leaves data holding the JSON placeholder; a JSON body does
+        // the reverse. Which one this event is comes off the event type's registered serializer, so a
+        // stream can mix the two freely.
+        var ordinal = indexOf(@event);
+        var binary = _binary[ordinal] = _graph.BinaryEncoderFor(@event);
+
+        Bind(builder, @event.Id, StorageColumnType.Guid);
+
+        builder.Append(", ");
+        if (_descriptor.IsGuidStreamIdentity)
         {
-            _descriptor.ConfigureInsertStreamCommand(builder, Stream);
+            Bind(builder, Stream.Id, StorageColumnType.Guid);
         }
         else
         {
-            _descriptor.ConfigureUpdateStreamVersionCommand(builder, Stream);
+            Bind(builder, Stream.Key!, StorageColumnType.String);
         }
 
-        builder.Append(";");
+        builder.Append(", ");
+        Bind(builder, @event.Version, StorageColumnType.Long);
 
-        var options = _graph.EventOptions;
+        builder.Append(", ");
+        Bind(builder,
+            binary is null ? session.Serializer.ToJson(@event.Data) : EventsTable.JsonPlaceholder,
+            StorageColumnType.Json);
 
-        foreach (var @event in Stream.Events)
+        builder.Append(", ");
+        Bind(builder, @event.EventTypeName, StorageColumnType.String);
+
+        builder.Append(", ");
+        if (@event.Timestamp != default)
         {
-            builder.Append("insert into ");
-            builder.Append(_graph.EventsTableName);
-            // A binary body goes into data_binary and leaves data holding the JSON placeholder; a JSON
-            // body does the reverse. Which one this event is comes off the event type's registered
-            // serializer, so a stream can mix the two freely.
-            var binary = _graph.BinaryEncoderFor(@event);
-
-            builder.Append(" (id, stream_id, version, data, type, timestamp, tenant_id, dotnet_type");
-
-            if (options.EnableCorrelationId)
-            {
-                builder.Append(", correlation_id");
-            }
-
-            if (options.EnableCausationId)
-            {
-                builder.Append(", causation_id");
-            }
-
-            if (options.EnableHeaders)
-            {
-                builder.Append(", headers");
-            }
-
-            if (options.EnableUserName)
-            {
-                builder.Append(", user_name");
-            }
-
-            // Unconditional, because the column is (fisher#93): an explicit null for a JSON event is
-            // what lets the read path decide encoding per row rather than per type.
-            //
-            // ⚠️ LAST, and it has to be — the value below is bound last. fisher#43 named it ninth here
-            // while binding it last, so a store with any of the four metadata columns enabled wrote a
-            // binary event's BLOB into correlation_id and its correlation id into data_binary. Nothing
-            // caught it because the binary tests enabled no metadata and the metadata tests appended no
-            // binary event. The column list and the bind order are one contract.
-            builder.Append(", data_binary");
-
-            builder.Append(") values (");
-
-            Bind(builder, @event.Id, StorageColumnType.Guid);
-
-            builder.Append(", ");
-            if (_descriptor.IsGuidStreamIdentity)
-            {
-                Bind(builder, Stream.Id, StorageColumnType.Guid);
-            }
-            else
-            {
-                Bind(builder, Stream.Key!, StorageColumnType.String);
-            }
-
-            builder.Append(", ");
-            Bind(builder, @event.Version, StorageColumnType.Long);
-
-            builder.Append(", ");
-
-            Bind(builder,
-                binary is null ? session.Serializer.ToJson(@event.Data) : EventsTable.JsonPlaceholder,
-                StorageColumnType.Json);
-
-            builder.Append(", ");
-            Bind(builder, @event.EventTypeName, StorageColumnType.String);
-
-            builder.Append(", ");
-            if (@event.Timestamp != default)
-            {
-                // The value AppendPlanner.ApplySessionMetadata stamped before inline projections
-                // ran. Persisting it (rather than the server-side now) is what keeps the inline
-                // and replay views of e.Timestamp identical.
-                Bind(builder, SqliteTimestamp.ToDatabaseValue(@event.Timestamp), StorageColumnType.String);
-            }
-            else
-            {
-                builder.Append(SqliteTimestamp.NowExpression);
-            }
-
-            builder.Append(", ");
-            Bind(builder, @event.TenantId ?? Stream.TenantId, StorageColumnType.String);
-
-            builder.Append(", ");
-            Bind(builder, @event.DotNetTypeName, StorageColumnType.String);
-
-            if (options.EnableCorrelationId)
-            {
-                builder.Append(", ");
-                Bind(builder, (object?)@event.CorrelationId ?? DBNull.Value, StorageColumnType.String);
-            }
-
-            if (options.EnableCausationId)
-            {
-                builder.Append(", ");
-                Bind(builder, (object?)@event.CausationId ?? DBNull.Value, StorageColumnType.String);
-            }
-
-            if (options.EnableHeaders)
-            {
-                builder.Append(", ");
-                object headers = @event.Headers is { Count: > 0 }
-                    ? session.Serializer.ToJson(@event.Headers)
-                    : DBNull.Value;
-                Bind(builder, headers, StorageColumnType.Json);
-            }
-
-            if (options.EnableUserName)
-            {
-                builder.Append(", ");
-                Bind(builder, (object?)@event.UserName ?? DBNull.Value, StorageColumnType.String);
-            }
-
-            // Last, because it is the last column in the list above — the two orders are one contract,
-            // as everywhere else Fisher builds a positional insert.
-            //
-            // Bound as a byte[] parameter rather than composed into the SQL: Microsoft.Data.Sqlite maps
-            // it to a real BLOB, so a payload of arbitrary bytes (gzip output, MessagePack) survives.
-            // Any route through a text encoding here corrupts exactly those and nothing else.
-            builder.Append(", ");
-            if (binary is null)
-            {
-                builder.Append("null");
-            }
-            else
-            {
-                builder.AppendParameter(binary);
-            }
-
-            builder.Append(");");
+            // The value the planner stamped before inline projections ran. Persisting it (rather than the
+            // server-side now) is what keeps the inline and replay views of e.Timestamp identical.
+            Bind(builder, SqliteTimestamp.ToDatabaseValue(@event.Timestamp), StorageColumnType.String);
+        }
+        else
+        {
+            builder.Append(SqliteTimestamp.NowExpression);
         }
 
-        WriteSequenceReadBack(builder);
+        builder.Append(", ");
+        Bind(builder, @event.TenantId ?? Stream.TenantId, StorageColumnType.String);
+
+        builder.Append(", ");
+        Bind(builder, @event.DotNetTypeName, StorageColumnType.String);
+    }
+
+    protected override void WriteEventInsertSuffix(ICommandBuilder builder, IEvent @event, int ordinal)
+    {
+        // Last, because data_binary is the last column in the list — the two orders are one contract.
+        //
+        // Bound as a byte[] parameter rather than composed into the SQL: Microsoft.Data.Sqlite maps it to a
+        // real BLOB, so a payload of arbitrary bytes (gzip output, MessagePack) survives. Any route through
+        // a text encoding here corrupts exactly those and nothing else.
+        builder.Append(", ");
+        if (_binary[ordinal] is { } binary)
+        {
+            builder.AppendParameter(binary);
+        }
+        else
+        {
+            builder.Append("null");
+        }
+
+        builder.Append(");");
     }
 
     /// <summary>
     ///     The trailing single-result-set SELECT that reads the assigned sequences back. See the class
     ///     remarks for why this is a re-read rather than a RETURNING clause.
     /// </summary>
-    private void WriteSequenceReadBack(ICommandBuilder builder)
+    protected override void WriteSequenceReadback(ICommandBuilder builder, IStorageSession session)
     {
         var events = Stream.Events;
 
@@ -254,54 +197,40 @@ internal sealed class FisherQuickAppendEventsOperation
         builder.Append(" order by version;");
     }
 
+    private int indexOf(IEvent @event)
+    {
+        var events = Stream.Events;
+        for (var i = 0; i < events.Count; i++)
+        {
+            if (ReferenceEquals(events[i], @event)) return i;
+        }
+
+        throw new InvalidOperationException("The event is not one of this stream's.");
+    }
+
     private void Bind(ICommandBuilder builder, object value, StorageColumnType type)
     {
-        // Guids are TEXT in this schema; convert before binding so the value matches what the
-        // column holds rather than the 16-byte BLOB Microsoft.Data.Sqlite would otherwise write.
+        // Guids are TEXT in this schema; convert before binding so the value matches what the column holds
+        // rather than the 16-byte BLOB Microsoft.Data.Sqlite would otherwise write.
         var parameter = builder.AppendParameter(SqliteStorageDialect<Guid>.ToDatabaseValue(value));
         _descriptor.Dialect.SetParameterType(parameter, type);
     }
 
-    public async Task PostprocessAsync(DbDataReader reader, IList<Exception> exceptions, CancellationToken token)
-    {
-        // Single result set, one row per event in version order.
-        var events = Stream.Events;
-        var i = 0;
-
-        while (i < events.Count && await reader.ReadAsync(token).ConfigureAwait(false))
-        {
-            events[i].Sequence = await reader.GetFieldValueAsync<long>(0, token).ConfigureAwait(false);
-            i++;
-        }
-    }
-
     /// <summary>
     ///     Map a SQLite primary-key violation on the stream INSERT to
-    ///     <see cref="JasperFx.Events.ExistingStreamIdCollisionException" />.
+    ///     <see cref="JasperFx.Events.ExistingStreamIdCollisionException" />. The base calls this for an insert only.
     /// </summary>
     /// <remarks>
-    ///     Matching needs the EXTENDED result code. The primary code for every constraint failure is
-    ///     the same <c>SQLITE_CONSTRAINT</c> (19) — a NOT NULL violation and a duplicate stream id are
-    ///     indistinguishable at that level — so only <c>SQLITE_CONSTRAINT_PRIMARYKEY</c> (1555)
-    ///     identifies this case.
+    ///     Matching needs the EXTENDED result code. The primary code for every constraint failure is the same
+    ///     <c>SQLITE_CONSTRAINT</c> (19), so only <c>SQLITE_CONSTRAINT_PRIMARYKEY</c> (1555) identifies this.
     /// </remarks>
-    public bool TryTransform(Exception original, out Exception? transformed)
+    protected override Exception? TransformInsertStreamException(Exception original)
     {
-        if (Mode == StreamWriteMode.Insert)
-        {
-            var sqlite = original as SqliteException ?? original.InnerException as SqliteException;
+        var sqlite = original as SqliteException ?? original.InnerException as SqliteException;
 
-            if (sqlite is { SqliteExtendedErrorCode: SqliteConstraintPrimaryKey })
-            {
-                transformed = new JasperFx.Events.ExistingStreamIdCollisionException(Stream.Key is not null
-                    ? Stream.Key
-                    : Stream.Id);
-                return true;
-            }
-        }
-
-        transformed = null;
-        return false;
+        return sqlite is { SqliteExtendedErrorCode: SqliteConstraintPrimaryKey }
+            ? new JasperFx.Events.ExistingStreamIdCollisionException(Stream.Key is not null ? Stream.Key : Stream.Id)
+            : null;
     }
 
     /// <summary>SQLITE_CONSTRAINT_PRIMARYKEY — extended result code 1555.</summary>

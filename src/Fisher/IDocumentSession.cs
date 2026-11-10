@@ -495,16 +495,16 @@ public interface IDocumentOperations : IQuerySession, IDocumentWriteOperations
     ///         what the serializer would have written and a new or renamed key lands at the end.
     ///     </para>
     /// </remarks>
-    Patching.IPatchExpression<T> Patch<T>(Guid id) where T : notnull;
+    JasperFx.Events.IPatchExpression<T> Patch<T>(Guid id) where T : notnull;
 
     /// <inheritdoc cref="Patch{T}(Guid)" />
-    Patching.IPatchExpression<T> Patch<T>(string id) where T : notnull;
+    JasperFx.Events.IPatchExpression<T> Patch<T>(string id) where T : notnull;
 
     /// <inheritdoc cref="Patch{T}(Guid)" />
-    Patching.IPatchExpression<T> Patch<T>(int id) where T : notnull;
+    JasperFx.Events.IPatchExpression<T> Patch<T>(int id) where T : notnull;
 
     /// <inheritdoc cref="Patch{T}(Guid)" />
-    Patching.IPatchExpression<T> Patch<T>(long id) where T : notnull;
+    JasperFx.Events.IPatchExpression<T> Patch<T>(long id) where T : notnull;
 
     /// <summary>
     ///     Patch every document matching a predicate.
@@ -514,7 +514,7 @@ public interface IDocumentOperations : IQuerySession, IDocumentWriteOperations
     ///     last — after the tenant scope and the soft-delete guard — because a compound predicate is
     ///     parenthesised and so cannot swallow them.
     /// </remarks>
-    Patching.IPatchExpression<T> Patch<T>(Expression<Func<T, bool>> predicate) where T : notnull;
+    JasperFx.Events.IPatchExpression<T> Patch<T>(Expression<Func<T, bool>> predicate) where T : notnull;
 
     /// <summary>
     ///     Queue arbitrary SQL to run in this unit of work's transaction, alongside the documents and

@@ -114,6 +114,30 @@ public class otel_counters : IAsyncLifetime
         }
     }
 
+    // ---- one Meter and one ActivitySource named "Fisher" (jasperfx#1054, fisher#465) ----
+
+    /// <summary>
+    ///     A listener on the name used to hear two sources and two meters: one each from the options, the
+    ///     tracing holder and the <c>IEventStore</c> surface. The shared options keep one of each per name
+    ///     for the process, so a second store reuses them rather than building its own.
+    /// </summary>
+    [Fact]
+    public void every_surface_hands_out_the_one_meter_and_activity_source()
+    {
+        using var other = DocumentStore.For(options => options.ConnectionString = _database.ConnectionString);
+
+        var eventStore = (JasperFx.Events.IEventStore)_store;
+
+        eventStore.Meter.ShouldBeSameAs(_store.Options.OpenTelemetry.Meter);
+        eventStore.ActivitySource.ShouldBeSameAs(_store.Options.OpenTelemetry.ActivitySource);
+
+        ((JasperFx.Events.IEventStore)other).Meter.ShouldBeSameAs(eventStore.Meter);
+        ((JasperFx.Events.IEventStore)other).ActivitySource.ShouldBeSameAs(eventStore.ActivitySource);
+
+        eventStore.ActivitySource.Name.ShouldBe("Fisher");
+        eventStore.Meter.Name.ShouldBe("Fisher");
+    }
+
     // ---- the write lock, which is the instrument this node exists for ----
 
     [Fact]

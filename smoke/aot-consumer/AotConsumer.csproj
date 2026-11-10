@@ -27,12 +27,14 @@
 
     <ItemGroup>
         <ProjectReference Include="../../src/Fisher/Fisher.csproj" />
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
-        <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" Condition="'$(TargetFramework)' != 'net11.0'" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-rc.3.26522.148" Condition="'$(TargetFramework)' == 'net11.0'" />
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" Condition="'$(TargetFramework)' != 'net11.0'" />
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="11.0.0-rc.3.26522.148" Condition="'$(TargetFramework)' == 'net11.0'" />
         <!-- fisher#398. A project reference does not carry the analyzer the Fisher package bundles, so
              the generator is referenced here as an application referencing JasperFx directly would.
              Kept in step with Directory.Packages.props by hand. -->
-        <PackageReference Include="JasperFx.Events.SourceGenerator" Version="2.101.0" PrivateAssets="all" />
+        <PackageReference Include="JasperFx.Events.SourceGenerator" Version="3.0.0" PrivateAssets="all" />
     </ItemGroup>
 
 </Project>

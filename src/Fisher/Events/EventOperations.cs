@@ -13,7 +13,7 @@ namespace Fisher.Events;
 ///     <see cref="AppendPlanner" /> during <c>SaveChangesAsync</c>, at which point the current server
 ///     version of each existing stream is known and event versions can be assigned.
 /// </remarks>
-public partial class EventOperations : IEventStoreOperations
+public partial class EventOperations : EventOperationsBase, IEventStoreOperations
 {
     private readonly Dictionary<object, StreamAction> _streams = new();
     private readonly FisherSession _session;
@@ -157,134 +157,55 @@ public partial class EventOperations : IEventStoreOperations
         _session.QueueOperation(Graph.TombstoneStreamOperation(streamKey, TenantId));
     }
 
-    // ---- StartStream ----
+    // ---- the shared write surface (jasperfx#1047) ----
+    //
+    // StartStream, Append, AppendOptimistic, AppendExclusive, FetchForWriting, FetchForExclusiveWriting,
+    // WriteToAggregate and WriteExclusivelyToAggregate are EventOperationsBase's, which validates every
+    // overload the same way on every store before anything is read. What is Fisher's is below: tracking
+    // the actions in the session (stamped with THIS instance's tenant, which is a tenant scope's under
+    // ForTenant), reading a version, and the fold.
+    //
+    // ⚠️ Append(stream, expectedVersion, ...) now means the version AFTER the append, as on Marten and
+    // Polecat. Fisher used to read it as the version before.
 
-    public StreamAction StartStream<TAggregate>(Guid id, params object[] events) where TAggregate : class
-        => StartStream(typeof(TAggregate), id, events);
+    protected override StreamIdentity StreamIdentity => Graph.StreamIdentity;
 
-    public StreamAction StartStream<TAggregate>(Guid id, IEnumerable<object> events) where TAggregate : class
-        => StartStream(typeof(TAggregate), id, events.ToArray());
-
-    public StreamAction StartStream(Type aggregateType, Guid id, IEnumerable<object> events)
-        => StartStream(aggregateType, id, events.ToArray());
-
-    public StreamAction StartStream(Type aggregateType, Guid id, params object[] events)
+    protected override StreamAction StartStreamCore(Type? aggregateType, Guid id, object[] events)
     {
-        var stream = StartStream(id, events);
-        stream.AggregateType = aggregateType;
-        return stream;
-    }
-
-    public StreamAction StartStream<TAggregate>(string streamKey, IEnumerable<object> events) where TAggregate : class
-        => StartStream(typeof(TAggregate), streamKey, events.ToArray());
-
-    public StreamAction StartStream<TAggregate>(string streamKey, params object[] events) where TAggregate : class
-        => StartStream(typeof(TAggregate), streamKey, events);
-
-    public StreamAction StartStream(Type aggregateType, string streamKey, IEnumerable<object> events)
-        => StartStream(aggregateType, streamKey, events.ToArray());
-
-    public StreamAction StartStream(Type aggregateType, string streamKey, params object[] events)
-    {
-        var stream = StartStream(streamKey, events);
-        stream.AggregateType = aggregateType;
-        return stream;
-    }
-
-    public StreamAction StartStream(Guid id, IEnumerable<object> events) => StartStream(id, events.ToArray());
-
-    public StreamAction StartStream(Guid id, params object[] events)
-    {
-        AssertGuidIdentity();
-
         var stream = StreamAction.Start(Graph, id, events);
         stream.TenantId = TenantId;
+        stream.AggregateType = aggregateType;
 
         return Track(id, stream);
     }
 
-    public StreamAction StartStream(string streamKey, IEnumerable<object> events)
-        => StartStream(streamKey, events.ToArray());
-
-    public StreamAction StartStream(string streamKey, params object[] events)
+    protected override StreamAction StartStreamCore(Type? aggregateType, string streamKey, object[] events)
     {
-        AssertStringIdentity();
-
         var stream = StreamAction.Start(Graph, streamKey, events);
         stream.TenantId = TenantId;
+        stream.AggregateType = aggregateType;
 
         return Track(streamKey, stream);
     }
 
-    public StreamAction StartStream<TAggregate>(IEnumerable<object> events) where TAggregate : class
-        => StartStream(typeof(TAggregate), events.ToArray());
+    protected override StreamAction AppendCore(Guid stream, object[] events)
+        => AppendTo(stream, () => StreamAction.Append(Graph, stream, events), events);
 
-    public StreamAction StartStream<TAggregate>(params object[] events) where TAggregate : class
-        => StartStream(typeof(TAggregate), events);
+    protected override StreamAction AppendCore(string stream, object[] events)
+        => AppendTo(stream, () => StreamAction.Append(Graph, stream, events), events);
 
-    public StreamAction StartStream(Type aggregateType, IEnumerable<object> events)
-        => StartStream(aggregateType, events.ToArray());
+    // SQLite has no row lock, so "exclusive" is the optimistic read here: the version guard runs inside
+    // the write transaction, and a loser fails rather than waiting (see CLAUDE.md, "Exclusive append").
+    // A missing stream is NonExistentStreamException, which AppendOptimistic has always thrown.
+    protected override Task<long> ReadStreamVersionCore<TId>(TId stream, bool exclusive, CancellationToken token)
+        => RequireStreamVersionAsync(stream, token);
 
-    public StreamAction StartStream(Type aggregateType, params object[] events)
-    {
-        var stream = StartStream(events);
-        stream.AggregateType = aggregateType;
-        return stream;
-    }
+    protected override Task<IEventStream<T>> FetchForWritingCore<T, TId>(TId id, long? expectedVersion,
+        bool exclusive, CancellationToken cancellation)
+        => FetchForWritingAsync<T>(id, expectedVersion, cancellation);
 
-    public StreamAction StartStream(IEnumerable<object> events) => StartStream(events.ToArray());
+    protected override Task SaveChangesCore(CancellationToken cancellation) => _session.SaveChangesAsync(cancellation);
 
-    public StreamAction StartStream(params object[] events)
-        => Graph.StreamIdentity == StreamIdentity.AsGuid
-            ? StartStream(Guid.NewGuid(), events)
-            : StartStream(Guid.NewGuid().ToString(), events);
-
-    // ---- Append ----
-
-    public StreamAction Append(Guid stream, IEnumerable<object> events) => Append(stream, events.ToArray());
-
-    public StreamAction Append(Guid stream, params object[] events)
-    {
-        AssertGuidIdentity();
-        return AppendTo(stream, () => StreamAction.Append(Graph, stream, events), events);
-    }
-
-    public StreamAction Append(string stream, IEnumerable<object> events) => Append(stream, events.ToArray());
-
-    public StreamAction Append(string stream, params object[] events)
-    {
-        AssertStringIdentity();
-        return AppendTo(stream, () => StreamAction.Append(Graph, stream, events), events);
-    }
-
-    public StreamAction Append(Guid stream, long expectedVersion, IEnumerable<object> events)
-        => Append(stream, expectedVersion, events.ToArray());
-
-    public StreamAction Append(Guid stream, long expectedVersion, params object[] events)
-    {
-        var action = Append(stream, events);
-        action.ExpectedVersionOnServer = expectedVersion;
-        return action;
-    }
-
-    public StreamAction Append(string stream, long expectedVersion, IEnumerable<object> events)
-        => Append(stream, expectedVersion, events.ToArray());
-
-    public StreamAction Append(string stream, long expectedVersion, params object[] events)
-    {
-        var action = Append(stream, events);
-        action.ExpectedVersionOnServer = expectedVersion;
-        return action;
-    }
-
-    /// <summary>
-    ///     Append to a stream already tracked in this unit of work, or start tracking it.
-    /// </summary>
-    /// <remarks>
-    ///     Two appends to the same stream in one session must merge into one <see cref="StreamAction" />.
-    ///     Leaving them separate would produce two stream-row writes for the same stream in one
-    ///     transaction, the second of which would fail its expected-version guard.
-    /// </remarks>
     private StreamAction AppendTo(object key, Func<StreamAction> create, object[] events)
     {
         if (_streams.TryGetValue(key, out var existing))

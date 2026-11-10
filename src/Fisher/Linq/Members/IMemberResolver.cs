@@ -32,4 +32,19 @@ internal interface IMemberResolver
     ///     than rebuilding one.
     /// </remarks>
     string TableQualifier => "";
+
+    /// <summary>
+    ///     A member of one case of a union-typed member, read through <c>(Case)x.Member.Value</c>
+    ///     (fisher#466). Only document and event-body JSON has union members.
+    /// </summary>
+    IQueryableMember ResolveUnionCase(MemberExpression unionMember, Type caseType)
+        => throw new BadLinqExpressionException(
+            $"Cannot translate the union case access '({caseType.Name}){unionMember}.Value' here.");
+
+    /// <summary>
+    ///     <c>x.Member.Value is Case</c>, or <c>x.Member.Value == null</c> when <paramref name="caseType" />
+    ///     is null (fisher#466).
+    /// </summary>
+    Weasel.Core.SqlGeneration.ISqlFragment ResolveUnionTypeTest(MemberExpression unionMember, Type? caseType)
+        => throw new BadLinqExpressionException($"Cannot translate a type test of '{unionMember}.Value' here.");
 }

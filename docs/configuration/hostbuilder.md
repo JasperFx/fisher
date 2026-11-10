@@ -80,10 +80,11 @@ than the registration quietly overriding your schema policy.
 
 Runs every registered `IInitialData`. See [Initial Baseline Data](/documents/initial-data).
 
-::: warning
-This **refuses to be registered before** `ApplyAllDatabaseChangesOnStartup()`. Hosted services start
-in registration order, so the other way round writes to tables that do not exist yet — and that
-presents as `no such table`, which names the table and not the mistake.
+::: tip
+The three startup opt-ins configure **one** hosted service per store — JasperFx's `StoreActivator`,
+which applies or asserts the schema and then seeds, in that order, whichever was called first. Fisher
+1.x registered three hosted services that started in registration order, and refused this call before
+`ApplyAllDatabaseChangesOnStartup()` for that reason.
 :::
 
 ### AddAsyncDaemon

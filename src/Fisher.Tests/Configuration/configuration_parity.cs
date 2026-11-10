@@ -281,20 +281,50 @@ public class configuration_parity : IAsyncLifetime
     }
 
     /// <remarks>
-    ///     Hosted services start in registration order, so seeding before the schema is applied writes
-    ///     to tables that do not exist. Refused by name rather than left to present as
-    ///     <c>no such table</c> at startup, which would name the table and not the mistake.
+    ///     Fisher 1.x registered one hosted service per opt-in, which started in registration order, so
+    ///     calling this first would have seeded before the migration and was refused by name. Since
+    ///     fisher#465 the three opt-ins configure one <c>StoreActivator</c>, whose order is its own: the
+    ///     seeder sees the migrated schema whichever call came first. Checked inside the seeder, before it
+    ///     writes, because a write would create the table on demand and hide the order.
     /// </remarks>
     [Fact]
-    public void seeding_before_the_schema_is_applied_is_refused_by_name()
+    public async Task seeding_registered_before_the_migration_still_runs_after_it()
     {
-        var services = new ServiceCollection();
+        bool? tableExistedWhenSeeding = null;
 
-        var ex = Should.Throw<InvalidOperationException>(()
-            => services.AddFisher(options => options.ConnectionString = _database.ConnectionString)
-                .SeedInitialDataOnStartup());
+        using var host = await Host.CreateDefaultBuilder()
+            .ConfigureServices(services =>
+            {
+                services.AddFisher(options =>
+                    {
+                        options.ConnectionString = _database.ConnectionString;
+                        options.AutoCreateSchemaObjects = AutoCreate.All;
+                        options.Schema.For<PlainAngler>();
 
-        ex.Message.ShouldContain("ApplyAllDatabaseChangesOnStartup");
+                        options.InitialData.Add(async (store, token) =>
+                        {
+                            await using (var connection = new SqliteConnection(_database.ConnectionString))
+                            {
+                                await connection.OpenAsync(token);
+                                await using var command = connection.CreateCommand();
+                                command.CommandText =
+                                    "select count(*) from sqlite_master where name = 'fi_doc_plainangler'";
+                                tableExistedWhenSeeding = Convert.ToInt64(await command.ExecuteScalarAsync(token)) == 1;
+                            }
+
+                            await using var session = store.LightweightSession();
+                            session.Store(new PlainAngler { Id = SeedId, Email = "seeded@shire" });
+                            await session.SaveChangesAsync(token);
+                        });
+                    })
+                    .SeedInitialDataOnStartup()
+                    .ApplyAllDatabaseChangesOnStartup();
+            })
+            .StartAsync(Token);
+
+        tableExistedWhenSeeding.ShouldBe(true);
+
+        await host.StopAsync(Token);
     }
 
     private static readonly Guid SeedId = Guid.Parse("aa000000-0000-0000-0000-000000000001");

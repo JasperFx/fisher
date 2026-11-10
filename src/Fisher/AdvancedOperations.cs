@@ -151,7 +151,7 @@ public class AdvancedOperations
     {
         ArgumentNullException.ThrowIfNull(configure);
 
-        var batch = new Events.Protected.EventDataMasking(_store);
+        var batch = new Events.Protected.FisherEventDataMasking(_store);
         configure(batch);
 
         return batch.ApplyAsync(token);
@@ -192,13 +192,45 @@ public class AdvancedOperations
     ///         a second set of write SQL is exactly where the positional <c>?</c> contract documented
     ///         in CLAUDE.md would drift apart unnoticed.
     ///     </para>
+    ///     <para>
+    ///         <b><see cref="BulkInsertMode" /> is Weasel.Core's</b> (fisher#465). Fisher had its own copy of
+    ///         the enum until 2.0, with three of the four values; the shared one adds
+    ///         <see cref="BulkInsertMode.OverwriteIfVersionMatches" />, which Fisher does not implement and
+    ///         refuses by name rather than letting it fall through to an unguarded upsert.
+    ///     </para>
+    ///     <para>
+    ///         <b><see cref="BulkInsertMode.IgnoreDuplicates" /> is implemented by filtering, not by
+    ///         <c>insert or ignore</c></b> (fisher#53). Both siblings reach for a statement — Marten
+    ///         <c>on conflict do nothing</c>, Polecat a temp table and a <c>MERGE</c> — and Fisher cannot,
+    ///         because its four write statements are built by <c>SqliteDocumentStorageDescriptorBuilder</c>
+    ///         and consumed by Weasel's shared closed-shape operations <em>by name</em>. So each batch reads
+    ///         which of its ids are already stored and queues only the rest. The probe deliberately ignores
+    ///         the soft-delete and hierarchy filters an ordinary load applies (a soft-deleted or sub-class row
+    ///         still occupies the primary key) and does scope by tenant. It is not inside the write
+    ///         transaction, and that window is not silent: a concurrent insert of the same id fails with its
+    ///         unique-constraint violation rather than being skipped. Closing it would mean holding
+    ///         <c>BEGIN IMMEDIATE</c> across the probe through an enlisted session, which forfeits the
+    ///         <c>SQLITE_BUSY</c> retry.
+    ///     </para>
     /// </remarks>
+    /// <exception cref="NotSupportedException">
+    ///     <paramref name="mode" /> is <see cref="BulkInsertMode.OverwriteIfVersionMatches" />.
+    /// </exception>
     public async Task BulkInsertAsync<T>(IReadOnlyCollection<T> documents,
         BulkInsertMode mode = BulkInsertMode.InsertsOnly, int batchSize = 1000,
         string? tenantId = null, CancellationToken token = default) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(documents);
         ArgumentOutOfRangeException.ThrowIfLessThan(batchSize, 1);
+
+        if (mode is not (BulkInsertMode.InsertsOnly or BulkInsertMode.IgnoreDuplicates
+            or BulkInsertMode.OverwriteExisting))
+        {
+            throw new NotSupportedException(
+                $"Fisher's bulk insert does not support BulkInsertMode.{mode}. Use InsertsOnly, IgnoreDuplicates "
+                + "or OverwriteExisting; for a version-checked write, Store documents carrying their expected "
+                + "version through a session with optimistic concurrency.");
+        }
 
         if (documents.Count == 0)
         {

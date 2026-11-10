@@ -36,6 +36,10 @@ discovered.
 | `InsertsOnly` | Plain inserts. A duplicate id fails. |
 | `IgnoreDuplicates` | Documents whose id is already stored are skipped. |
 | `OverwriteExisting` | Upserts. |
+| `OverwriteIfVersionMatches` | Refused with `NotSupportedException`. |
+
+`BulkInsertMode` is `Weasel.Core.BulkInsertMode`, shared with Marten and Polecat, so a file using it
+needs `using Weasel.Core;`. Fisher 1.x had its own `Fisher.BulkInsertMode` with the first three values.
 
 ### IgnoreDuplicates
 

@@ -330,8 +330,25 @@ partial class Build
         {
             ["TMPDIR"] = path,
             ["TMP"] = path,
-            ["TEMP"] = path
+            ["TEMP"] = path,
+            // Microsoft.Testing.Platform 2.x extensions (TrxReport, CodeCoverage) open a Unix domain socket
+            // under TMPDIR, and a Unix socket path is capped at 103 bytes. A lane directory under the
+            // repository (.nuke/temp/lanes/<project>-<tfm>/lane-N/ plus a 32-character pipe name) is longer
+            // than that on this machine and on GitHub's runners, and the host then aborts before it ever
+            // connects to the supervisor, which only sees a 60-second silence. Give the pipes a short home.
+            ["TESTINGPLATFORM_PIPE_DIRECTORY"] = pipeDirectoryFor(directory)
         };
+    }
+
+    /// <summary>A short directory for the platform's named pipes: /tmp/fisher-pipes/&lt;project-tfm&gt;/&lt;lane&gt;.</summary>
+    static string pipeDirectoryFor(AbsolutePath laneDirectory)
+    {
+        var root = OperatingSystem.IsWindows()
+            ? Path.Combine(Path.GetTempPath(), "fisher-pipes")
+            : "/tmp/fisher-pipes";
+        var directory = Path.Combine(root, laneDirectory.Parent!.Name, laneDirectory.Name);
+        Directory.CreateDirectory(directory);
+        return directory;
     }
 
     // ─── Test host resolution ──────────────────────────────────────────

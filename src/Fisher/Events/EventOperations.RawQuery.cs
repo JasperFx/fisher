@@ -672,7 +672,7 @@ public partial class EventOperations
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         while (await reader.ReadAsync(token).ConfigureAwait(false))
         {
-            var body = _session.FisherSerializer.FromJson<T>(reader.GetString(0));
+            var body = _session.FisherSerializer.FromJson<T>(reader, 0);
 
             if (body is not null)
             {

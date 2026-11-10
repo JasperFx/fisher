@@ -1,41 +1,16 @@
+using JasperFx.Pagination;
+
 namespace Fisher.Pagination;
 
 /// <summary>
-///     A page of results plus everything needed to render a pager (fisher#27).
+///     Offset paging's result (fisher#27), as JasperFx's shared <see cref="IPagedList{T}" />.
 /// </summary>
 /// <remarks>
-///     Offset paging: it can jump to an arbitrary page and it reports a total. Neither is true of
-///     keyset paging, and keyset paging is stable under concurrent writes where this is not — so the
-///     two answer different questions and Fisher carries both, as Polecat and Marten do.
+///     Fisher declared its own <c>Fisher.Pagination.IPagedList&lt;T&gt;</c> until 2.0. Polecat's was the
+///     same interface, and jasperfx#1054 lifted it to <c>JasperFx.Pagination</c> (fisher#465). Offset paging
+///     can jump to an arbitrary page and reports a total; keyset paging (<see cref="CursorPage{T}" />)
+///     can do neither but is stable under concurrent writes, so Fisher carries both.
 /// </remarks>
-public interface IPagedList<out T> : IReadOnlyList<T>
-{
-    /// <summary>How many items match the query, ignoring paging.</summary>
-    long TotalItemCount { get; }
-
-    /// <summary>How many pages of <see cref="PageSize" /> the total makes.</summary>
-    int PageCount { get; }
-
-    /// <summary>The 1-based page this is.</summary>
-    int PageNumber { get; }
-
-    int PageSize { get; }
-
-    bool HasPreviousPage { get; }
-
-    bool HasNextPage { get; }
-
-    bool IsFirstPage { get; }
-
-    bool IsLastPage { get; }
-
-    /// <summary>The 1-based index of this page's first item in the whole result, or 0 when empty.</summary>
-    int FirstItemOnPage { get; }
-
-    /// <inheritdoc cref="FirstItemOnPage" />
-    int LastItemOnPage { get; }
-}
-
 internal sealed class PagedList<T> : IPagedList<T>
 {
     private readonly IReadOnlyList<T> _items;

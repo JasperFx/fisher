@@ -40,10 +40,14 @@ internal static class SqliteJsonArrays
                 switch (value)
                 {
                     case Guid guid:
-                        writer.WriteStringValue(guid.ToString());
-                        break;
-                    case string text:
+                        // TryFormat into a stack buffer: the lowercase canonical "D" form, with no
+                        // intermediate string (fisher#461).
+                        Span<char> text = stackalloc char[36];
+                        guid.TryFormat(text, out _, "D");
                         writer.WriteStringValue(text);
+                        break;
+                    case string str:
+                        writer.WriteStringValue(str);
                         break;
                     case int number:
                         writer.WriteNumberValue(number);

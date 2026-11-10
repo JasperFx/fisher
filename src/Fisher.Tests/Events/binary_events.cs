@@ -75,6 +75,48 @@ public class binary_events : IAsyncLifetime
     }
 
     /// <remarks>
+    ///     fisher#43's column-list / bind-order contract with every optional metadata column on: the BLOB has
+    ///     to land in <c>data_binary</c> and each metadata value in its own column. The append's command shape
+    ///     is the shared <c>PerEventQuickAppendOperationBase</c>'s now, which writes the metadata binders
+    ///     before Fisher's suffix binds the body, so this is the pin that the two still line up.
+    /// </remarks>
+    [Fact]
+    public async Task a_binary_event_with_every_metadata_column_on_lands_each_value_in_its_column()
+    {
+        await using var store = StoreFor(options =>
+        {
+            options.Events.DefaultBinarySerializer = _serializer;
+            options.Events.EnableCorrelationId = true;
+            options.Events.EnableCausationId = true;
+            options.Events.EnableHeaders = true;
+            options.Events.EnableUserName = true;
+            options.DatabaseSchemaName = "binary_metadata";
+        });
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        var streamId = Guid.NewGuid();
+
+        await using (var session = store.LightweightSession())
+        {
+            session.CorrelationId = "corr-1";
+            session.CausationId = "cause-1";
+            session.CurrentUserName = "pip";
+            session.SetHeader("tide", "high");
+            session.Events.StartStream(streamId, new SoundingTaken(7, "fathoms"));
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using var query = store.LightweightSession();
+        var @event = (await query.Events.FetchStreamAsync(streamId, token: Token)).Single();
+
+        @event.Data.ShouldBeOfType<SoundingTaken>().Depth.ShouldBe(7);
+        @event.CorrelationId.ShouldBe("corr-1");
+        @event.CausationId.ShouldBe("cause-1");
+        @event.UserName.ShouldBe("pip");
+        @event.Headers!["tide"].ToString().ShouldBe("high");
+    }
+
+    /// <remarks>
     ///     The column shape is the decision fisher#43 asked to make first: a separate nullable BLOB
     ///     column rather than BLOBs mixed into <c>data</c>. This asserts both halves — the binary row
     ///     holds the JSON placeholder in <c>data</c> and a BLOB in <c>data_binary</c>, and the JSON row

@@ -216,7 +216,7 @@ public static class QueryableExtensions
     ///         page is empty.
     ///     </para>
     /// </remarks>
-    public static async Task<Pagination.IPagedList<T>> ToPagedListAsync<T>(this IQueryable<T> queryable,
+    public static async Task<JasperFx.Pagination.IPagedList<T>> ToPagedListAsync<T>(this IQueryable<T> queryable,
         int pageNumber, int pageSize, CancellationToken token = default) where T : notnull
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(pageNumber, 1);
