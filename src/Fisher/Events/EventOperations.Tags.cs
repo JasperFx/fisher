@@ -75,8 +75,11 @@ public partial class EventOperations
             ? null
             : await Graph.AggregatorFor<T>().BuildAsync(events, _session, null, cancellation).ConfigureAwait(false);
 
-        var boundary = new Tags.FisherEventBoundary<T>(_session, Graph, query, aggregate, events);
-        _session.TrackBoundary(boundary.Query, boundary.LastSeenSequence);
+        // The shared boundary (jasperfx#1044). Built over THIS operations instance, which under ForTenant is
+        // the tenant scope's, because that decides the tenant of what the boundary appends. It enforces
+        // nothing itself: the guard is the tracked LastSeenSequence, checked at SaveChangesAsync.
+        var boundary = new EventBoundary<T>(this, Graph, Graph.TagTypes, aggregate, events);
+        _session.TrackBoundary(query, boundary.LastSeenSequence);
 
         return boundary;
     }
