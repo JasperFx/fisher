@@ -535,7 +535,7 @@ public class full_text_search : IAsyncLifetime
     {
         await using var session = _store.QuerySession();
 
-        var exception = await Should.ThrowAsync<Fisher.Linq.BadLinqExpressionException>(() =>
+        var exception = await Should.ThrowAsync<JasperFx.BadLinqExpressionException>(() =>
             session.Query<Plain>().Where(x => x.Search("anything")).ToListAsync(Token));
 
         exception.Message.ShouldContain("declares no full-text index");
@@ -547,7 +547,7 @@ public class full_text_search : IAsyncLifetime
     {
         await using var session = _store.QuerySession();
 
-        var exception = await Should.ThrowAsync<Fisher.Linq.BadLinqExpressionException>(() =>
+        var exception = await Should.ThrowAsync<JasperFx.BadLinqExpressionException>(() =>
             session.Query<Article>().Where(x => x.NgramSearch("ombat")).ToListAsync(Token));
 
         exception.Message.ShouldContain("Trigram tokenizer");
@@ -559,7 +559,7 @@ public class full_text_search : IAsyncLifetime
     {
         await using var session = _store.QuerySession();
 
-        var exception = await Should.ThrowAsync<Fisher.Linq.BadLinqExpressionException>(() =>
+        var exception = await Should.ThrowAsync<JasperFx.BadLinqExpressionException>(() =>
             session.Query<Part>().Where(x => x.PrefixSearch("WID")).ToListAsync(Token));
 
         exception.Message.ShouldContain("Trigram");
@@ -571,7 +571,7 @@ public class full_text_search : IAsyncLifetime
     {
         await using var session = _store.QuerySession();
 
-        var exception = await Should.ThrowAsync<Fisher.Linq.BadLinqExpressionException>(() =>
+        var exception = await Should.ThrowAsync<JasperFx.BadLinqExpressionException>(() =>
             session.Query<Part>().Where(x => x.NgramSearch("ab")).ToListAsync(Token));
 
         exception.Message.ShouldContain("at least three characters");
@@ -582,7 +582,7 @@ public class full_text_search : IAsyncLifetime
     {
         await using var session = _store.QuerySession();
 
-        var exception = await Should.ThrowAsync<Fisher.Linq.BadLinqExpressionException>(() =>
+        var exception = await Should.ThrowAsync<JasperFx.BadLinqExpressionException>(() =>
             session.Query<Article>().Where(x => x.WebStyleSearch("-fox")).ToListAsync(Token));
 
         exception.Message.ShouldContain("only exclusions");

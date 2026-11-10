@@ -156,7 +156,7 @@ public class projection_side_effects : IAsyncLifetime
 
         session.Events.StartStream(streamId, new QuestStarted("Second"));
 
-        await Should.ThrowAsync<Fisher.Exceptions.ExistingStreamIdCollisionException>(async () =>
+        await Should.ThrowAsync<JasperFx.Events.ExistingStreamIdCollisionException>(async () =>
             await session.SaveChangesAsync(TestContext.Current.CancellationToken));
 
         _outbox.Batch!.Hooks.ShouldBeEmpty();

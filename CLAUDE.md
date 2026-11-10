@@ -148,7 +148,15 @@ what changed is what a caller sees once the retries were not enough — `Fisher.
 deriving from the lifted `JasperFx.Events.StreamLockedException`, where a raw `SqliteException` saying
 "database is locked" used to escape. Marten and Polecat both surface their lock contention as that
 type, so a store-agnostic `catch` and a Wolverine `OnException<StreamLockedException>()` policy —
-matched with `ex is T` — now behave the same on all three. Three decisions in it:
+matched with `ex is T` — now behave the same on all three. **It is the one derived copy of a shared event exception left** (fisher#530). The others —
+`ExistingStreamIdCollisionException`, `NonExistentStreamException`, `UnknownEventTypeException`,
+`EventDeserializationFailureException`, `ArchivedStreamException`, `DuplicateNaturalKeyException` and
+`BadLinqExpressionException` — are deleted and Fisher throws the JasperFx types directly, with their
+canonical messages. `StreamIds` has no member on the shared type, and the rule is to lift it into
+JasperFx.Events first rather than drop it; until then the subclass stays. Do not reintroduce a Fisher
+subclass of any of the others.
+
+Three decisions in it:
 
 - **A documents-only unit of work keeps the raw `SqliteException`.** A `StreamLockedException` naming
   no stream would say less than the driver already does.
@@ -317,9 +325,8 @@ Working, with tests:
 - Reads: `FetchStreamAsync` (version / from-version / timestamp bounded), `FetchStreamStateAsync`,
   `LoadAsync`, both stream identity styles
 - `ArchiveStream` / `UnArchiveStream` / `TombstoneStream` — and **an archived stream refuses further
-  appends** (`Exceptions.ArchivedStreamException`, which subclasses the lifted
-  `JasperFx.Events.ArchivedStreamException` since fisher#307 — the lift took Fisher's type as its
-  canonical shape), because archiving is not a soft delete
+  appends** (`JasperFx.Events.ArchivedStreamException`, thrown directly since fisher#530 — the
+  lift took Fisher's type as its canonical shape in fisher#307), because archiving is not a soft delete
   you can keep writing through. Checked in `AppendPlanner.PlanStream` before the version guard and
   deliberately *not* for a `StartStream`, where an archived id is still an id in use and
   `ExistingStreamIdCollisionException` is the more useful answer. An `Archived` event reaching a
@@ -875,8 +882,8 @@ Six things that are decisions rather than mechanics:
   `SkipSerializationErrors` had nothing to catch: a body that would not parse escaped the loader as a
   bare `JsonException`, `ResilientEventLoader` wrapped it in `EventLoaderException` after its retries,
   and the shard paused as `ShardFailureCategory.Other` with no dead letter — a documented policy that
-  was silently a no-op. `Fisher.Exceptions.EventDeserializationFailureException` subclasses the shared
-  type (so the category, the sequence and `ToDeadLetterEvent` are the base's) and is raised from
+  was silently a no-op. `JasperFx.Events.EventDeserializationFailureException` (thrown directly since fisher#530, so the
+  category, the sequence and `ToDeadLetterEvent` are all the shared type's) is raised from
   **`FisherEventsRowReader.ReadEventCore`**, the single hydration point every read path converges on —
   the same argument the upcasting hook makes one line above, and where Marten puts it too. Only the
   loader acts on the policy; everywhere else the gain is that the exception names the sequence and the
@@ -6155,7 +6162,7 @@ right, that nothing local had a reason to question:
 - **`AlwaysEnforceConsistency` did nothing.** See "Session metadata on appended events" and the
   append planner: `CollectActionableStreams` kept only streams with at least one event, so the flag's
   entire subject — a stream fetched, flagged, and then left alone — was dropped along with its guard.
-- **Appending to an archived stream landed.** Now `Exceptions.ArchivedStreamException`, raised from
+- **Appending to an archived stream landed.** Now `JasperFx.Events.ArchivedStreamException`, raised from
   `AppendPlanner.PlanStream` — and deliberately not for a `StartStream`, where an archived id is
   still an id in use and the collision is the more useful answer.
 - **`FisherProjectionStorage.ArchiveStream` was empty**, with a comment answering a different

@@ -230,13 +230,13 @@ internal sealed class AppendPlanner
         // the lift took FISHER's type as the canonical shape over Marten's generic
         // InvalidStreamOperationException and Polecat's message-matching InvalidStreamException.
         // StreamArchivingCompliance asserts the shared type rather than merely that the commit failed,
-        // so Fisher.Exceptions.ArchivedStreamException subclasses it — see that type for why it keeps
+        // so JasperFx.Events.ArchivedStreamException subclasses it — see that type for why it keeps
         // its own wording.
         if (stream.ActionType == StreamActionType.Start)
         {
             if (currentVersion is not null)
             {
-                throw new Exceptions.ExistingStreamIdCollisionException(
+                throw new JasperFx.Events.ExistingStreamIdCollisionException(
                     stream.Key is not null ? stream.Key : stream.Id);
             }
 
@@ -271,7 +271,7 @@ internal sealed class AppendPlanner
 
         if (state.IsArchived)
         {
-            throw new Exceptions.ArchivedStreamException(stream.Key is not null ? stream.Key : stream.Id);
+            throw new JasperFx.Events.ArchivedStreamException(stream.Key is not null ? stream.Key : stream.Id);
         }
 
         if (stream.ExpectedVersionOnServer is { } expected && expected != currentVersion.Value)

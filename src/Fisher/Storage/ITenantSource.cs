@@ -298,7 +298,7 @@ public sealed class InMemoryTenantSource : ITenantSource
 ///     </para>
 ///     <para>
 ///         Through the protected message-overriding constructor, so the canonical wording cannot
-///         silently move Fisher's — the discipline <c>ExistingStreamIdCollisionException</c> records.
+///         silently move Fisher's.
 ///         The two do differ, and deliberately: Fisher's names the tenant's <em>database file</em> and
 ///         says it is untouched, which is the thing an operator actually wants to know about a store
 ///         whose tenants are files and which never deletes one.

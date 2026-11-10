@@ -161,7 +161,7 @@ public class inline_snapshot_reads_when_starting_streams : IAsyncLifetime
     {
         var id = await aPartyAsync("Find the ring");
 
-        await Should.ThrowAsync<Fisher.Exceptions.ExistingStreamIdCollisionException>(() =>
+        await Should.ThrowAsync<JasperFx.Events.ExistingStreamIdCollisionException>(() =>
             snapshotReadsDuringAsync(session =>
                 session.Events.StartStream<QuestParty>(id, new QuestStarted("Impostor"))));
 

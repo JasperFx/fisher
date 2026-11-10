@@ -119,7 +119,7 @@ opts.Projections.Errors.SkipSerializationErrors = true;   // the default
 ```
 
 With it on, the row is quarantined into [`fi_dead_letters`](/events/storage#dead-letters) and the
-shard carries on. With it off the loader throws `Fisher.Exceptions.EventDeserializationFailureException`
+shard carries on. With it off the loader throws `JasperFx.Events.EventDeserializationFailureException`
 — which derives from `JasperFx.Events.EventDeserializationFailureException` and carries the sequence,
 the stored event type alias and the serializer's own exception — and the shard pauses classified
 `EventSerialization` rather than `Other`.

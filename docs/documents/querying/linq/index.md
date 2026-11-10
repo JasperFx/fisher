@@ -17,7 +17,7 @@ rather than falling back to client-side evaluation. That is deliberate: a silent
 every row of the table to answer a query that looked cheap.
 :::
 
-`Fisher.Linq.BadLinqExpressionException` derives from `JasperFx.BadLinqExpressionException`, so
+Fisher throws `JasperFx.BadLinqExpressionException`, the type Marten and Polecat throw too, so
 store-agnostic code can catch the refusal without naming Fisher:
 
 ```csharp

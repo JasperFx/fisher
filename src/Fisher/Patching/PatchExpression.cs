@@ -356,7 +356,7 @@ internal sealed class PatchExpression<T> : IPatchExpression<T> where T : notnull
 
         if (body is not MemberExpression memberExpression)
         {
-            throw new Linq.BadLinqExpressionException(
+            throw new JasperFx.BadLinqExpressionException(
                 "A patch target must be a document member — for example x => x.Name.");
         }
 
@@ -396,7 +396,7 @@ internal sealed class PatchExpression<T> : IPatchExpression<T> where T : notnull
 
         return locator.StartsWith(prefix, StringComparison.Ordinal) && locator.EndsWith("')", StringComparison.Ordinal)
             ? locator[prefix.Length..^2]
-            : throw new Linq.BadLinqExpressionException(
+            : throw new JasperFx.BadLinqExpressionException(
                 $"Fisher cannot patch through the locator '{locator}' — a patch addresses a JSON path, "
                 + "and this member does not resolve to one.");
     }

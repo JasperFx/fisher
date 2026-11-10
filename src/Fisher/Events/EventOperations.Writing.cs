@@ -114,7 +114,7 @@ public partial class EventOperations
     ///     <para>
     ///         An archived stream comes back with a null <see cref="IEventStream{T}.Aggregate" /> and its
     ///         real version, and an append through it is refused at commit with
-    ///         <see cref="ArchivedStreamException" />, not by starting a new stream.
+    ///         <see cref="JasperFx.Events.ArchivedStreamException" />, not by starting a new stream.
     ///     </para>
     /// </remarks>
     public Task<IEventStream<T>> FetchForWriting<T>(Guid id, CancellationToken cancellation = default)
@@ -815,7 +815,7 @@ public partial class EventOperations
 
     private async Task<long> RequireStreamVersionAsync(object streamId, CancellationToken token)
         => (await ReadStreamRowAsync(streamId, token).ConfigureAwait(false)).Version
-           ?? throw new Fisher.Exceptions.NonExistentStreamException(streamId);
+           ?? throw new JasperFx.Events.NonExistentStreamException(streamId);
 
     /// <summary>
     ///     Whether <typeparamref name="TId" /> is exactly the type <typeparamref name="T" /> declares as

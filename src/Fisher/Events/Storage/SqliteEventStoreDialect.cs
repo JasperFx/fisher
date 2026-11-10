@@ -165,7 +165,7 @@ internal sealed class SqliteEventStoreDialect : IEventStoreSqlDialect
 
     /// <summary>
     ///     Maps a SQLite primary-key violation on the <c>fi_streams</c> insert to
-    ///     <see cref="ExistingStreamIdCollisionException" />; returns null for anything else.
+    ///     <see cref="JasperFx.Events.ExistingStreamIdCollisionException" />; returns null for anything else.
     /// </summary>
     private static Exception? MapInsertStreamException(Exception original, StreamAction stream)
     {
@@ -173,7 +173,7 @@ internal sealed class SqliteEventStoreDialect : IEventStoreSqlDialect
 
         if (sqlite is { SqliteExtendedErrorCode: FisherQuickAppendEventsOperation.SqliteConstraintPrimaryKey })
         {
-            return new Fisher.Exceptions.ExistingStreamIdCollisionException(stream.Key is not null ? stream.Key : stream.Id);
+            return new JasperFx.Events.ExistingStreamIdCollisionException(stream.Key is not null ? stream.Key : stream.Id);
         }
 
         return null;

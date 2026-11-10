@@ -17,7 +17,7 @@ namespace Fisher.Events;
 ///     <para>
 ///         The predicate half is <see cref="EventOperations.QueryEventsAsync(System.Linq.Expressions.Expression{System.Func{IEvent, bool}}, CancellationToken)" />'s:
 ///         the <see cref="EventMemberFactory" /> resolves <see cref="IEvent" /> members to columns, and
-///         anything it cannot resolve throws <see cref="BadLinqExpressionException" /> naming the member,
+///         anything it cannot resolve throws <see cref="JasperFx.BadLinqExpressionException" /> naming the member,
 ///         never matching every event. The body is <c>object</c> here and is not reachable; a predicate on
 ///         one event type's members stays on <c>QueryEventData&lt;T&gt;</c>.
 ///     </para>

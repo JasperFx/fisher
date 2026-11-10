@@ -193,7 +193,7 @@ internal sealed class FisherEventLoader : IEventLoader
                 }
 
                 var (sequence, dotNetTypeName) = FisherEventsRowReader.ReadUnresolvedIdentity(reader);
-                throw new Fisher.Exceptions.UnknownEventTypeException(dotNetTypeName ?? "(null)", sequence);
+                throw new JasperFx.Events.UnknownEventTypeException(dotNetTypeName ?? "(null)", sequence);
             }
 
             if (_allowedEventTypeNames != null && !_allowedEventTypeNames.Contains(@event.EventTypeName))
