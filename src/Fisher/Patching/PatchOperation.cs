@@ -143,7 +143,18 @@ internal sealed class PatchOperation : Weasel.Storage.IStorageOperation
         {
             if (i % 2 == 1)
             {
-                builder.AppendParameter(_values[int.Parse(segments[i])]);
+                var value = _values[int.Parse(segments[i])];
+
+                // An element predicate (fisher#465) is a parsed fragment rather than a value: it writes its
+                // own SQL and binds its own parameters, at exactly this point in the statement.
+                if (value is ISqlFragment fragment)
+                {
+                    fragment.Apply(builder);
+                }
+                else
+                {
+                    builder.AppendParameter(value);
+                }
             }
             else
             {

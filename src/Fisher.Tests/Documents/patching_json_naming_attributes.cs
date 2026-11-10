@@ -175,7 +175,7 @@ public class patching_json_naming_attributes : IAsyncLifetime
     {
         await using (var session = _store.LightweightSession())
         {
-            session.Patch<Guide>(_frodo).Duplicate(x => x.Name, "Underhill", x => x.Nickname);
+            session.Patch<Guide>(_frodo).Set(x => x.Name, "Underhill").Duplicate(x => x.Name, x => x.Nickname);
             await session.SaveChangesAsync(Token);
         }
 

@@ -1,4 +1,6 @@
 using Fisher.Linq;
+using Fisher.Patching;
+using JasperFx.Events;
 using Fisher.Linq.SoftDeletes;
 using JasperFx;
 
@@ -165,7 +167,28 @@ public class patching_documents : IAsyncLifetime
     }
 
     [Fact]
-    public async Task remove_takes_every_match()
+    public async Task remove_all_takes_every_match()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Append(x => x.Flies, "dun");
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Remove(x => x.Flies, "dun", RemoveAction.RemoveAll);
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Flies.ShouldBe(["olive"]);
+    }
+
+    /// <summary>
+    ///     The shared interface's default (fisher#465). Fisher 1.x only ever removed every match.
+    /// </summary>
+    [Fact]
+    public async Task remove_takes_the_first_match_by_default()
     {
         await using (var session = _store.LightweightSession())
         {
@@ -179,7 +202,128 @@ public class patching_documents : IAsyncLifetime
             await session.SaveChangesAsync(Token);
         }
 
-        (await Reload(_frodo)).Flies.ShouldBe(["olive"]);
+        (await Reload(_frodo)).Flies.ShouldBe(["olive", "dun"]);
+    }
+
+    [Fact]
+    public async Task remove_by_predicate()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo)
+                .Append(x => x.Spots, new Spot { Name = "Brandywine" })
+                .Append(x => x.Spots, new Spot { Name = "Withywindle" })
+                .Append(x => x.Spots, new Spot { Name = "Brandywine" });
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Remove(x => x.Spots, w => w.Name == "Brandywine");
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Spots.Select(x => x.Name).ShouldBe(["Withywindle", "Brandywine"]);
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Remove(x => x.Spots, w => w.Name == "Brandywine", RemoveAction.RemoveAll);
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Spots.Select(x => x.Name).ShouldBe(["Withywindle"]);
+    }
+
+    [Fact]
+    public async Task append_and_insert_if_not_exists_by_predicate()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo)
+                .AppendIfNotExists(x => x.Spots, new Spot { Name = "Brandywine" }, w => w.Name == "Brandywine")
+                .AppendIfNotExists(x => x.Spots, new Spot { Name = "Brandywine", Depth = 9 }, w => w.Name == "Brandywine")
+                .InsertIfNotExists(x => x.Spots, new Spot { Name = "Withywindle" }, w => w.Name == "Withywindle", 0)
+                .InsertIfNotExists(x => x.Spots, new Spot { Name = "Withywindle" }, w => w.Name == "Withywindle", 0);
+            await session.SaveChangesAsync(Token);
+        }
+
+        var spots = (await Reload(_frodo)).Spots;
+        spots.Select(x => x.Name).ShouldBe(["Withywindle", "Brandywine"]);
+        spots[1].Depth.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task insert_if_not_exists_by_value()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo)
+                .InsertIfNotExists(x => x.Flies, "dun", 0)
+                .InsertIfNotExists(x => x.Flies, "first", 0)
+                .InsertIfNotExists(x => x.Flies, "last");
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Flies.ShouldBe(["first", "dun", "olive", "last"]);
+    }
+
+    [Fact]
+    public async Task dictionary_append_and_remove()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo)
+                .Append(x => x.Licences, "shire", 1)
+                .Append(x => x.Licences, "bree.land", 2)
+                .AppendIfNotExists(x => x.Licences, "shire", 99)
+                .AppendIfNotExists(x => x.Licences, "rivendell", 3);
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Licences.ShouldBe(new Dictionary<string, int>
+        {
+            ["shire"] = 1, ["bree.land"] = 2, ["rivendell"] = 3
+        });
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Remove(x => x.Licences, "bree.land");
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Licences.Keys.ShouldBe(["shire", "rivendell"], ignoreOrder: true);
+    }
+
+    [Fact]
+    public async Task set_and_delete_relative_to_a_parent()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Set("name", x => x.Home, "Withywindle");
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Home.Name.ShouldBe("Withywindle");
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Delete("name", x => x.Home);
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Home.Name.ShouldBe("");
+    }
+
+    [Fact]
+    public async Task increment_a_float()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Increment(x => x.Weight, 1.5f);
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Weight.ShouldBe(1.5f);
     }
 
     // ---- Insert at an index, and what the rebuild has to preserve (fisher#52) ----
@@ -189,7 +333,7 @@ public class patching_documents : IAsyncLifetime
     {
         await using (var session = _store.LightweightSession())
         {
-            session.Patch<Angler>(_frodo).Insert(x => x.Flies, "first");
+            session.Patch<Angler>(_frodo).Insert(x => x.Flies, "first", 0);
             await session.SaveChangesAsync(Token);
         }
 
@@ -216,6 +360,22 @@ public class patching_documents : IAsyncLifetime
     ///     Past the end appends rather than throwing: a patch does not read the document, so there is
     ///     no length to check without the round trip patching exists to avoid.
     /// </summary>
+    /// <summary>
+    ///     The shared interface's meaning of no index, which is Marten's (fisher#465). Fisher 1.x inserted
+    ///     at the front.
+    /// </summary>
+    [Fact]
+    public async Task insert_with_no_index_appends()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo).Insert(x => x.Flies, "last");
+            await session.SaveChangesAsync(Token);
+        }
+
+        (await Reload(_frodo)).Flies.ShouldBe(["dun", "olive", "last"]);
+    }
+
     [Fact]
     public async Task insert_past_the_end_appends()
     {
@@ -353,15 +513,29 @@ public class patching_documents : IAsyncLifetime
     }
 
     [Fact]
-    public async Task duplicate_writes_every_destination()
+    public async Task duplicate_copies_the_stored_value_to_every_destination()
     {
         await using (var session = _store.LightweightSession())
         {
-            session.Patch<Angler>(_frodo).Duplicate(x => x.Name, "Ring-bearer", x => x.Nickname);
+            session.Patch<Angler>(_frodo).Duplicate(x => x.Name, x => x.Nickname);
             await session.SaveChangesAsync(Token);
         }
 
         var angler = await Reload(_frodo);
+        angler.Name.ShouldBe("Frodo");
+        angler.Nickname.ShouldBe("Frodo");
+
+        // Set then Duplicate is the Fisher 1.x Duplicate(source, value, destinations): the copy reads the
+        // accumulated expression, so it sees the value the Set just wrote.
+        await using (var session = _store.LightweightSession())
+        {
+            session.Patch<Angler>(_frodo)
+                .Set(x => x.Name, "Ring-bearer")
+                .Duplicate(x => x.Name, x => x.Nickname);
+            await session.SaveChangesAsync(Token);
+        }
+
+        angler = await Reload(_frodo);
         angler.Name.ShouldBe("Ring-bearer");
         angler.Nickname.ShouldBe("Ring-bearer");
     }
@@ -534,6 +708,12 @@ public class patching_documents : IAsyncLifetime
         public string Name { get; set; } = "";
     }
 
+    public class Spot
+    {
+        public string Name { get; set; } = "";
+        public int Depth { get; set; }
+    }
+
     public class Angler
     {
         public Guid Id { get; set; }
@@ -560,6 +740,12 @@ public class patching_documents : IAsyncLifetime
         public object?[] Mixed { get; set; } = [];
 
         public Water Home { get; set; } = new();
+
+        public List<Spot> Spots { get; set; } = [];
+
+        public Dictionary<string, int> Licences { get; set; } = [];
+
+        public float Weight { get; set; }
     }
 
     public class Guarded

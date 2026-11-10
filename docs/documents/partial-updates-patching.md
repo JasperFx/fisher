@@ -42,25 +42,55 @@ breaks the byte-exactness the [JSON reads](/documents/querying/query-json) promi
 
 ## The operations
 
+`Patch<T>` returns `JasperFx.Events.IPatchExpression<T>`, the interface Marten and Polecat implement
+too, so patch code reads the same against all three stores.
+
 ```cs
 .Set(x => x.Name, "new name")
 .Set("legacyKey", value)                  // by stored key
+.Set("name", x => x.Home, value)          // a stored key under a member
 
-.Increment(x => x.Count)                  // int, long, double, decimal, and their nullables
+.Increment(x => x.Count)                  // int, long, double, float, decimal
 .Increment(x => x.Total, 5m)
+.Increment(x => x.MaybeCount)             // the nullable overloads, from Fisher.Patching
 
 .Append(x => x.Tags, "urgent")
 .AppendIfNotExists(x => x.Tags, "urgent")
-.Insert(x => x.Tags, "urgent", index: 2)
-.Remove(x => x.Tags, "urgent")
+.AppendIfNotExists(x => x.Spots, spot, s => s.Name == spot.Name)
+.Insert(x => x.Tags, "urgent", index: 2)  // no index appends
+.InsertIfNotExists(x => x.Tags, "urgent", index: 0)
+.Remove(x => x.Tags, "urgent")            // the first match
+.Remove(x => x.Tags, "urgent", RemoveAction.RemoveAll)
+.Remove(x => x.Spots, s => s.Depth > 10, RemoveAction.RemoveAll)
+
+.Append(x => x.Licences, "shire", 1)      // a dictionary entry
+.AppendIfNotExists(x => x.Licences, "shire", 1)
+.Remove(x => x.Licences, "shire")
 
 .Rename("oldName", x => x.NewName)
 
 .Delete(x => x.Obsolete)
 .Delete("legacyKey")
+.Delete("name", x => x.Home)
 
-.Duplicate(x => x.Source, value, x => x.CopyA, x => x.CopyB)
+.Duplicate(x => x.Source, x => x.CopyA, x => x.CopyB)  // copies the stored value
 ```
+
+::: warning Moving from Fisher 1.x
+Fisher 1.x had its own `Fisher.Patching.IPatchExpression<T>`. Adopting the shared one changed three
+defaults, each to Marten's meaning:
+
+- `Insert` with no index **appends**; 1.x inserted at the front. Pass `0` for the old behaviour.
+- `Remove` takes the **first** match; 1.x removed every match. Pass `RemoveAction.RemoveAll`.
+- `Duplicate` copies the source member's **stored** value and takes no value of its own. 1.x's
+  `Duplicate(source, value, destinations)` is now `Set(source, value).Duplicate(source, destinations)`.
+
+The nullable `Increment` overloads are extension methods in `Fisher.Patching`, since the shared
+interface does not declare them.
+:::
+
+Element predicates go through the same parser a LINQ `Any(...)` over the member does, so they support
+and refuse exactly what that does.
 
 ### The by-name overloads take the *stored* key
 
