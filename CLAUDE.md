@@ -122,6 +122,16 @@ These are the decisions that don't transfer from the sibling stores, and the rea
 | Unit of work | parallel, aggregates failures | strictly sequential (one writer per file) |
 | Transient retry | none needed | real Polly retry on `SQLITE_BUSY` / `SQLITE_LOCKED` |
 
+**Audit of fisher#463's three code items (2026-11-10): none needed a change.**
+`FisherVersionTracker`, `FisherSession._operationsLock` and `_lazyLock` already use `System.Threading.Lock`.
+`ReusedCommand` is already per connection-and-transaction, being constructed inside each execute loop, so a
+shared map would add lifetime risk for nothing. `HiloSequence.EnsureTableSync` blocks on the migration because
+`IIdentification.AssignIfMissing` and `HiloSequenceBase`'s sync advance are synchronous contracts; it is
+the only sync-over-async left in the write path and runs once per sequence. The fourth item, a `Channel<T>`
+single-writer queue in front of `BEGIN IMMEDIATE`, is a benchmark-first design question (it would change
+per-session failure and enlisted-session semantics) and is NOT done; the baseline to beat is
+`ConcurrentWritersScenario` (8 writers ~1.8x the wall clock of 1 writer, see `Fisher.Benchmarks/Results.md`).
+
 **`AppendExclusive` / `FetchForExclusiveWriting` / `WriteExclusivelyToAggregate` are the optimistic
 methods.** Marten and Polecat take a row lock so a competing session waits its turn. SQLite has no
 row locks and one writer per database file, so the equivalent would be holding a `BEGIN IMMEDIATE`
