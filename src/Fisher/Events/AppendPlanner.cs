@@ -80,8 +80,8 @@ internal sealed class AppendPlanner
         {
             var operation = (Storage.FisherQuickAppendEventsOperation)QuickAppendEvents(step.Stream);
             operation.Mode = step.Verdict == StreamAppendVerdict.InsertStream
-                ? Storage.StreamWriteMode.Insert
-                : Storage.StreamWriteMode.Update;
+                ? StreamRowWrite.Insert
+                : StreamRowWrite.Update;
             operations.Add(operation);
         }
 
