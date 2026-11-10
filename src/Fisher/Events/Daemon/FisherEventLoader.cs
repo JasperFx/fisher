@@ -1,4 +1,7 @@
+using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
+using Microsoft.Data.Sqlite;
+using Weasel.Storage;
 using Fisher.Events.Internal;
 using Fisher.Exceptions;
 using Fisher.Storage;
@@ -12,6 +15,14 @@ namespace Fisher.Events.Daemon;
 ///     Pages events out of <c>fi_events</c> by sequence for the async daemon.
 /// </summary>
 /// <remarks>
+///     <para>
+///         <b>The paging, skip accounting, ceiling calculation and cancellation translation are the shared
+///         <see cref="EventLoaderBase" />'s</b> (weasel#566). Fisher supplies the SQL through
+///         <see cref="SqliteEventPagingDialect" />, the row hydration, the dead letter for an unreadable body
+///         and the trace points. Adopting the base also brings <c>EventPage.LastObservedSequence</c>
+///         (jasperfx#667): a full batch whose every row was skipped takes its ceiling from the last row read
+///         rather than claiming the high-water mark.
+///     </para>
 ///     <para>
 ///         The bare inner loader. Retry and load metrics are layered on by JasperFx's
 ///         <c>ResilientEventLoader</c> decorator when the store builds it, so nothing here handles
@@ -38,182 +49,82 @@ namespace Fisher.Events.Daemon;
     Justification = "Class-level: hydrates IEvent batches through the row reader, which routes to ISerializer.FromJson. Event types are preserved by EventGraph registration on the caller side per the AOT publishing guide.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
     Justification = "Class-level: ISerializer.FromJson and Event<T> construction are annotated RDC. AOT consumers register concrete event types ahead of time.")]
-internal sealed class FisherEventLoader : IEventLoader
+internal sealed class FisherEventLoader : EventLoaderBase
 {
     private readonly FisherDatabase _database;
     private readonly StoreOptions _options;
     private readonly EventGraph _events;
-    private readonly HashSet<string>? _allowedEventTypeNames;
-    private readonly string[]? _allowedTypeNameParameters;
-    private readonly string _typeFilterSql = string.Empty;
+    private readonly EventHydrationContext _context;
+    private readonly MetadataSlots _slots;
+    private readonly bool _isGuid;
 
     internal FisherEventLoader(FisherDatabase database, StoreOptions options, EventFilterable? filtering = null)
+        : base(new SqliteEventPagingDialect(options), new EventLoaderOptions
+        {
+            // Matching on the stored type alias rather than the .NET type name, so a renamed CLR type with
+            // a stable alias still matches. The dialect widens it with upcast source names (fisher#191).
+            EventTypes = EventTypeAllowList.For(options.EventGraph, filtering)
+        })
     {
         _database = database;
         _options = options;
         _events = options.EventGraph;
-
-        // A subscription that names its event types reads only those. Matching on the stored type
-        // alias rather than the .NET type name, so a renamed CLR type with a stable alias still
-        // matches — the same choice the DCB tag queries make.
-        if (filtering?.IncludedEventTypes is { Count: > 0 } included)
-        {
-            _allowedEventTypeNames = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var type in included)
-            {
-                _allowedEventTypeNames.Add(_events.EventMappingFor(type).EventTypeName);
-            }
-
-            // ⚠️ An upcast target's SOURCE names have to be allowed too, or the filter excludes
-            // exactly the rows upcasting exists to read (fisher#191). A projection that folds the new
-            // schema declares the new types, and every row written before the migration carries the
-            // OLD name — so a shard filtered on the declared set alone reads nothing at all from the
-            // history it was pointed at, silently, and reports itself caught up.
-            //
-            // The wrong-looking alternative is to leave the SQL filter alone and rely on the
-            // in-memory check below, which does see the hydrated (upcast) event. It would not help:
-            // the filter is pushed into SQLite precisely so non-matching rows never leave it, and the
-            // old-named rows never would.
-            foreach (var transformation in _events.Upcasters.AllTransformations)
-            {
-                if (included.Contains(transformation.EventType))
-                {
-                    _allowedEventTypeNames.Add(transformation.EventTypeName);
-                }
-            }
-
-            // The filter is pushed into SQL so non-matching rows never leave SQLite — a
-            // subscription scoped to a few event types in a busy store would otherwise deserialize
-            // essentially the whole event log to produce nothing. Marten pushes the same filter
-            // down as its EventTypeFilter fragment.
-            //
-            // The page's ceiling accounting stays correct with the filter server-side, and it is
-            // worth spelling out why. EventPage.CalculateCeiling's contract is "a page that did not
-            // fill the batch exhausted everything up to the bound it was given": a filtered query
-            // returning fewer than batch_size MATCHING rows really has scanned the whole
-            // (floor, high-water] range, so taking the high-water mark as the ceiling steps the
-            // floor past every non-matching sequence in it — that is what keeps a shard from
-            // stalling on a run of filtered-out events. A full page takes the last matched
-            // sequence, and the non-matching rows above it are re-scanned by the next request,
-            // which never re-delivers anything (they still do not match).
-            //
-            // The set is materialized into a stable array because a HashSet's enumeration order is
-            // unspecified — the parameter names in the SQL and the values bound each LoadAsync
-            // must line up.
-            _allowedTypeNameParameters = _allowedEventTypeNames.ToArray();
-            var markers = string.Join(", ",
-                Enumerable.Range(0, _allowedTypeNameParameters.Length).Select(i => $"@t{i}"));
-            _typeFilterSql = $" and type in ({markers})";
-        }
+        _context = new EventHydrationContext(_events, _options.Serializer, string.Empty,
+            JasperFx.StorageConstants.DefaultTenantId);
+        _slots = MetadataSlots.For(_options.Events);
+        _isGuid = _events.StreamIdentity == StreamIdentity.AsGuid;
     }
 
-    public async Task<EventPage> LoadAsync(EventRequest request, CancellationToken token)
+    /// <summary>
+    ///     The aliases the page SQL filters on, upcast sources included. Exposed for the loader tests.
+    /// </summary>
+    internal IReadOnlyList<string> AllowedEventTypeNames
+        => ((SqliteEventPagingDialect)Dialect).AllowedAliases(Options.EventTypes);
+
+    public override async Task<EventPage> LoadAsync(EventRequest request, CancellationToken token)
     {
-        var page = new EventPage(request.Floor);
-        var skipped = 0;
-
-        var sql = $"""
-                   select {FisherEventsRowReader.ComposeSelectColumns(_options.Events)}
-                   from {_events.EventsTableName}
-                   where seq_id > @floor and seq_id <= @ceiling and is_archived = 0{_typeFilterSql}
-                   order by seq_id
-                   limit @batch_size
-                   """;
-
-        await using var connection = await _database.OpenConnectionAsync(token).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.CommandTimeout = _options.CommandTimeout;
-        command.Parameters.AddWithValue("@floor", request.Floor);
-        command.Parameters.AddWithValue("@ceiling", request.HighWater);
-        command.Parameters.AddWithValue("@batch_size", request.BatchSize);
-
-        if (_allowedTypeNameParameters is not null)
-        {
-            for (var i = 0; i < _allowedTypeNameParameters.Length; i++)
-            {
-                command.Parameters.AddWithValue($"@t{i}", _allowedTypeNameParameters[i]);
-            }
-        }
-
-        var ctx = new EventHydrationContext(_events, _options.Serializer, string.Empty,
-            JasperFx.StorageConstants.DefaultTenantId);
-        var slots = MetadataSlots.For(_options.Events);
-        var isGuid = _events.StreamIdentity == StreamIdentity.AsGuid;
-
-        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
-        while (await reader.ReadAsync(token).ConfigureAwait(false))
-        {
-            IEvent? @event;
-
-            try
-            {
-                @event = await FisherEventsRowReader
-                    .ReadEventAcrossStreams(reader, ctx, slots, isGuid, token).ConfigureAwait(false);
-            }
-            catch (JasperFx.Events.EventDeserializationFailureException e)
-            {
-                // fisher#308. The body is there and will not parse — a data or serializer problem,
-                // governed by SkipSerializationErrors, which is a different operator action from an
-                // unregistered event type and is why the two have separate policies. Before this the
-                // raw JsonException escaped the page, ResilientEventLoader wrapped it in
-                // EventLoaderException after its retries, and the shard paused as
-                // ShardFailureCategory.Other with no dead letter — so the flag, which defaults to
-                // true, was silently a no-op.
-                if (!request.ErrorOptions.SkipSerializationErrors)
-                {
-                    // Rethrown as itself, so the shard failure is classified EventSerialization off
-                    // the exception's own IEventFailureContext rather than the daemon having to know
-                    // Fisher's exception types.
-                    throw;
-                }
-
-                // Quarantined on its own connection, outside anything this page is doing — the same
-                // rule the apply-error dead letter follows, and for the same reason.
-                await _database.StoreDeadLetterEventAsync(null!, e.ToDeadLetterEvent(request.Name), token)
-                    .ConfigureAwait(false);
-
-                Diagnostics.DaemonTrace.Record("loader.skipped_bad_body", request.Name.Identity,
-                    e.Sequence);
-
-                skipped++;
-                continue;
-            }
-
-            if (@event is null)
-            {
-                // dotnet_type named a type this process cannot resolve. The stream reads skip such a
-                // row unconditionally so a deployment can still read events it does not know about;
-                // the daemon must not, because silently skipping one would leave the projection
-                // permanently wrong with no signal. Honour the configured policy instead.
-                if (request.ErrorOptions.SkipUnknownEvents)
-                {
-                    skipped++;
-                    continue;
-                }
-
-                var (sequence, dotNetTypeName) = FisherEventsRowReader.ReadUnresolvedIdentity(reader);
-                throw new Fisher.Exceptions.UnknownEventTypeException(dotNetTypeName ?? "(null)", sequence);
-            }
-
-            if (_allowedEventTypeNames != null && !_allowedEventTypeNames.Contains(@event.EventTypeName))
-            {
-                // Belt and braces: the SQL type filter above already excludes these rows, so this
-                // only fires if the rendered filter and the set ever disagree. Counting it as
-                // skipped keeps the ceiling honest either way — the row consumed a slot of the
-                // page's range.
-                skipped++;
-                continue;
-            }
-
-            page.Add(@event);
-        }
-
-        page.CalculateCeiling(request.BatchSize, request.HighWater, skipped);
+        var page = await base.LoadAsync(request, token).ConfigureAwait(false);
 
         Diagnostics.DaemonTrace.Record("loader.page", request.Name.Identity,
             request.Floor, page.Ceiling, page.Count);
 
         return page;
     }
+
+    protected override async ValueTask<DbConnection> OpenConnectionAsync(CancellationToken token)
+        => await _database.OpenConnectionAsync(token).ConfigureAwait(false);
+
+    protected override void ConfigureCommand(DbCommand command)
+        => command.CommandTimeout = _options.CommandTimeout;
+
+    protected override ValueTask<IEvent?> ReadEventAsync(DbDataReader reader, CancellationToken token)
+        => FisherEventsRowReader.ReadEventAcrossStreams((SqliteDataReader)reader, _context, _slots, _isGuid, token);
+
+    // dotnet_type named a type this process cannot resolve. The stream reads skip such a row
+    // unconditionally so a deployment can still read events it does not know about; the daemon must not,
+    // because silently skipping one would leave the projection permanently wrong with no signal. The base
+    // honours SkipUnknownEvents and otherwise throws this.
+    protected override Exception UnresolvedEventTypeException(DbDataReader reader, long sequence)
+    {
+        var (_, dotNetTypeName) = FisherEventsRowReader.ReadUnresolvedIdentity((SqliteDataReader)reader);
+        return new Fisher.Exceptions.UnknownEventTypeException(dotNetTypeName ?? "(null)", sequence);
+    }
+
+    // fisher#308. A body that is there and will not parse is governed by SkipSerializationErrors, which the
+    // base classifies off the exception's own IEventFailureContext. Quarantined on its own connection,
+    // outside anything this page is doing — the same rule the apply-error dead letter follows.
+    protected override async ValueTask RecordSkippedEventAsync(Exception ex, EventRequest request,
+        CancellationToken token)
+    {
+        if (ex is JasperFx.Events.EventDeserializationFailureException e)
+        {
+            await _database.StoreDeadLetterEventAsync(null!, e.ToDeadLetterEvent(request.Name), token)
+                .ConfigureAwait(false);
+
+            Diagnostics.DaemonTrace.Record("loader.skipped_bad_body", request.Name.Identity, e.Sequence);
+        }
+    }
+
+    protected override void ReportLastObservedSequence(EventPage page, long? lastObservedSequence)
+        => page.LastObservedSequence = lastObservedSequence;
 }
