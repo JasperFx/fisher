@@ -256,7 +256,10 @@ directly. Do not reintroduce it.
 ### One execution and one reader per operation, and what that immunizes
 
 `FisherSession.ExecuteBatchAsync` executes each queued operation **on its own, against its own
-reader**, sharing only the transaction. The reasons are in its remarks — operations bind by position,
+reader**, sharing only the transaction. Its exception mapping and rethrow are Weasel's
+`OperationBatchExecutor.TryTransform` / `ThrowIfAny` (fisher#465), but the loop stays Fisher's:
+`ExecuteEachAsync` has nowhere to put the session logger's lines around each command, and the failure
+line is written with the provider's exception *before* the transform. The reasons are in its remarks — operations bind by position,
 and Fisher's append ends in a SELECT — and the consequence is worth stating separately, because it is
 what a whole class of bug needs (fisher#66).
 
@@ -1373,7 +1376,16 @@ with `FOREIGN KEY constraint failed` (fisher#6). Tags go first, dead letters las
 
 Weasel.Storage supplies the selectors and the write operations but **not** an
 `IDocumentStorage<T,TId>` implementation to hold them together — Marten and Polecat each write their
-own, and `FisherDocumentStorage<TDoc,TId>` is Fisher's. Around it:
+own, and `FisherDocumentStorage<TDoc,TId>` is Fisher's.
+
+⚠️ **That stopped being true in Weasel 10, and Fisher has not moved yet** (fisher#465 left it out).
+Weasel.Storage now ships the closed-shape family itself (`ClosedShapeDocumentProviderFactory`,
+`IClosedShapeStorageRules<TDoc,TId>`, `ProviderGraphBase`), relocated from Marten. Its leaves are
+`internal` and built only through the factory, so adopting it is not a base-class swap: what Fisher's
+storages carry beyond the shared contract — `UndeleteForId` / `RestoreForId`, the `IFisherDocumentStorage`
+surface, `MappedVersionFor` off Fisher's metadata mapping, `SubClassFisherStorage`'s wrapping — has to
+move onto a rules implementation or beside it, with `SqliteGuidIdentification`'s lowercasing and the
+positional `?` contract held throughout. Around it:
 
 - `DocumentProviderRegistry` (`IProviderGraph`) caches one `DocumentProvider<T>` per document type,
   holding all four flavors. Which one a session resolves is `SessionOptions.Tracking`'s answer — see
@@ -2184,6 +2196,11 @@ can do neither, but is stable under concurrent writes and does not degrade as th
   payload carries no type information, so a hand-edited cursor can change values but not what they are
   read as. Every value then binds as a parameter. The `v1:` base64-JSON format is byte-identical to
   Polecat's so a cursor is portable between the stores.
+- **The cursor's encoding is JasperFx's `CursorCodec`** (jasperfx#1054, fisher#465), lifted from this
+  code and Polecat's. `FisherCursorCodec` overrides only what is Fisher's: a Guid as lowercase text and a
+  timestamp as `SqliteTimestamp` text on the way out, the slot types SQLite binds on the way in, and
+  Fisher's `BadLinqExpressionException`. The seek predicate stays in `CursorPagination`.
+  `ToPagedListAsync` returns `JasperFx.Pagination.IPagedList<T>`; Fisher's own copy is gone.
 - **`CursorPage<T>` is typed where Polecat's `CursorPageResult` is pre-rendered JSON.** Polecat's shape
   exists to feed a `StreamPagedByCursor` HTTP result in its ASP.NET Core package; Fisher has neither
   that package (fisher#49) nor JSON-returning reads (fisher#28), so a JSON result would be a shape with
@@ -2840,10 +2857,16 @@ store's own configuration. The first three run in `DocumentMapping`'s constructo
 - **`ForDocument<T>` is not `Schema.For<T>()`**, and the difference is the one that matters: it does
   not create the mapping. A type nothing ever stores stays unmapped and gets no table. It means "if
   you store one of these, store it like so".
-- **`SeedInitialDataOnStartup()` refuses to be registered before
-  `ApplyAllDatabaseChangesOnStartup()`.** Hosted services start in registration order, so the other
-  way round writes to tables that do not exist yet — and that presents as `no such table`, which names
-  the table and not the mistake.
+- **Seeding always runs after the schema step, whichever opt-in was called first** (fisher#465). The
+  three startup opt-ins configure one `FisherStoreActivator` per store, over JasperFx's
+  `StoreActivator<TStore, TDatabase>`, which migrates or asserts and then seeds. Fisher 1.x registered
+  three hosted services that started in registration order and refused `SeedInitialDataOnStartup()`
+  before `ApplyAllDatabaseChangesOnStartup()` for that reason; the refusal went with the cause.
+  - **The store is the activator's single "database"**, as the base's remarks offer, because
+    `ApplyAllConfiguredChangesToDatabaseAsync` already spans every tenant and its
+    `TenantMigrationException` is the per-tenant report. `AutoCreate.None` still skips the apply,
+    asserting is still not gated on it, and apply and assert are still refused together — now for an
+    ancillary store as well as the primary one.
 - **No "already seeded" marker, deliberately.** A seeder that upserts by a known id is idempotent for
   free, which is what every useful seeder does; a marker table would be a table nobody asked for
   holding a claim Fisher cannot verify. Both siblings say the same.
@@ -4514,6 +4537,13 @@ registration surface was missing.
 `Internal/FisherTracing.cs` (fisher#48) — an `ActivitySource` named `Fisher`, spans around
 `SaveChangesAsync`, a LINQ execution and a document load, and a retry event on the enclosing span.
 
+⚠️ **There is one `ActivitySource` and one `Meter` named `Fisher` in the process, and they are
+`StoreOptions.OpenTelemetry`'s** (jasperfx#1054, fisher#465). `FisherTracing` held a static source and
+`DocumentStore` built a second source and a second meter for `IEventStore`, so a listener on the name
+heard two of each. JasperFx's `OpenTelemetryOptions` keeps one per name for the process, so a second
+store reuses them. `otel_counters.every_surface_hands_out_the_one_meter_and_activity_source` pins it; do
+not construct another.
+
 **The instinct is that tracing is for network calls and an embedded store has none. That is backwards
 for what operators actually hit.** SQLite serialises writers per file, so the interesting question
 about a slow Fisher call is almost always how long it waited for the write lock — and a request that
@@ -4598,6 +4628,9 @@ creates it**, so a store that opts into nothing pays a null field read per commi
   `StoreName` is stamped onto the options in `DocumentStore`'s constructor rather than read from
   `StoreOptions`, because these options are constructed *inside* that constructor and the name is not
   final until an `IConfigureFisher` contribution has run.
+- **The change-set counters are JasperFx's `OpenTelemetryOptions<IChangeSet>`** (fisher#465):
+  `ExportCounterOnChangeSets`, `Applications` and `RecordCommit` are the base's, lifted from this class
+  and Marten's, and `FisherCommitMetrics` is one call to `RecordCommit`.
 - **The change-set counters are a session listener** (`FisherCommitMetrics`), registered only when
   something opted in — so a store with no counters carries no extra listener, and an empty unit of work
   fires no listeners at all. A failing counter is caught and logged rather than thrown: it runs after
@@ -5733,6 +5766,10 @@ The statements are the ones `SqliteDocumentStorageDescriptorBuilder` already bui
 session — a second set of write SQL is exactly where the positional `?` contract would drift apart
 unnoticed.
 
+**`BulkInsertMode` is `Weasel.Core.BulkInsertMode`** (fisher#465); Fisher's three-value copy is gone.
+The shared enum's fourth value, `OverwriteIfVersionMatches`, is refused by name with
+`NotSupportedException` rather than falling through to an unguarded upsert.
+
 - **`batchSize` is a ceiling on how long the write lock is held, not a throughput knob.** One writer
   per file means a single transaction over a very large set blocks every other writer for its whole
   duration. The trade is that **bulk insert is not atomic across batches** — a failure part way leaves
@@ -5771,6 +5808,15 @@ needs a PL/pgSQL patch function), no `JSON_MODIFY` shape differences, and it com
 duplicated field follows a patch with nothing to refresh**, because fisher#2 made duplicated fields
 `VIRTUAL` generated columns over `data` — both siblings must update theirs inside the patch SQL. That
 is the clearest dividend of that decision.
+
+**The interface is `JasperFx.Events.IPatchExpression<T>`** (jasperfx#331, fisher#465); Fisher's own
+copy is gone. Three defaults moved to Marten's meaning on the way: `Insert` with no index appends,
+`Remove` takes the first match unless given `RemoveAction.RemoveAll`, and `Duplicate` copies the
+source's stored value (`Set` then `Duplicate` is 1.x's spelling). The overloads Fisher lacked are json1
+too: a dictionary entry is a quoted path segment (`$.licences."bree.land"`), and an element predicate
+is parsed by `ChildCollections.ParseElementPredicate` — the LINQ `Any(...)` parser — against the
+`json_each` alias it expects, recorded in `PatchOperation` as a fragment that binds its own
+parameters. The nullable `Increment` overloads are extension methods in `Fisher.Patching`.
 
 **What a patch costs, said plainly:** `json_set` re-renders the document, so a patched row is no longer
 byte-identical to what the serializer would have written and a new or renamed key lands at the end. It
