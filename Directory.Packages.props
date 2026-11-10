@@ -301,16 +301,16 @@
              INERT:
              jasperfx#1099/#1103 fold an HTTP endpoint and a message handler in the Event Model, which
              Fisher contributes to but does not assert on. -->
-        <PackageVersion Include="JasperFx" Version="2.102.0" />
-        <PackageVersion Include="JasperFx.Events" Version="2.102.0" />
+        <PackageVersion Include="JasperFx" Version="3.0.0" />
+        <PackageVersion Include="JasperFx.Events" Version="3.0.0" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="2.102.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="2.102.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="3.0.0" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="3.0.0" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="2.102.0" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="3.0.0" />
 
         <!-- Weasel 9.46.0 (from 9.42.0, spanning 9.43.0, 9.44.0, 9.45.0 and 9.45.1). JasperFx floor
              2.90.2, which Fisher already pins. Reaching Fisher:
@@ -445,6 +445,9 @@
 
              INERT: Weasel.EntityFrameworkCore's db-ef-migration, which Fisher.EntityFrameworkCore
              does not reference. -->
+        <!-- TODO(fisher#460): the net11 train pins Weasel.* to 10.0.0-alpha.1, which was published
+             nowhere (nuget.org, polecat-local, stoat-local) when this was written. Held at 9.50.0 so
+             the repo restores and tests; move both lines when alpha.1 exists. -->
         <PackageVersion Include="Weasel.Sqlite" Version="9.50.0" />
         <PackageVersion Include="Weasel.Storage" Version="9.50.0" />
 
@@ -459,6 +462,16 @@
         <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
         <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
         <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
+        <!-- net11.0: JasperFx 3.0.0's net11.0 build depends on Microsoft.Extensions.Hosting
+             11.0.0-rc.3.26522.148, so a 10.0.0 pin on net11.0 fails restore with NU1605. -->
+    </ItemGroup>
+    <ItemGroup Condition="'$(TargetFramework)' == 'net11.0'">
+        <PackageVersion Update="Microsoft.Extensions.DependencyInjection" Version="11.0.0-rc.3.26522.148" />
+        <PackageVersion Update="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.0-rc.3.26522.148" />
+        <PackageVersion Update="Microsoft.Extensions.Hosting" Version="11.0.0-rc.3.26522.148" />
+        <PackageVersion Update="Microsoft.Extensions.Hosting.Abstractions" Version="11.0.0-rc.3.26522.148" />
+    </ItemGroup>
+    <ItemGroup>
         <PackageVersion Include="Polly.Core" Version="8.6.5" />
 
         <!-- EF Core, for Fisher.EntityFrameworkCore. Pinned to the 9.x line rather than 10.x
@@ -488,13 +501,13 @@
           with a TypeLoadException on IDataConsumer. 1.9.1 and 18.0.6 are the last MTP 1.x
           releases; move them forward only when xunit.v3 ships an mtp-v2 build.
         -->
-        <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.0.6" />
-        <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="1.9.1" />
+        <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />
+        <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="2.5.1" />
         <!-- Test projects reference xunit.v3; Fisher.TestUtils, a plain library that only authors
              custom attributes, references xunit.v3.extensibility.core instead — xunit.v3 forces
              OutputType=Exe onto whatever references it, which is wrong for a library. -->
-        <PackageVersion Include="xunit.v3" Version="3.2.2" />
-        <PackageVersion Include="xunit.v3.extensibility.core" Version="3.2.2" />
+        <PackageVersion Include="xunit.v3" Version="4.0.2" />
+        <PackageVersion Include="xunit.v3.extensibility.core" Version="4.0.2" />
 
         <!-- The Nuke build (build/) ONLY — never referenced by a shipped package or a test project.
              JasperFx/bobcat#565: the suites run through Bobcat's Supervisor, which drives each MTP test

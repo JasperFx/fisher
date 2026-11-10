@@ -25,8 +25,8 @@ partial class Build : NukeBuild
     /// <c>dotnet test fisher.slnx</c>, which runs them serially on purpose (TestTfmsInParallel=false).
     /// CI runs one per matrix leg.
     /// </summary>
-    [Parameter("Target framework(s) to test - net9.0 and net10.0 by default")]
-    readonly string[] Framework = ["net9.0", "net10.0"];
+    [Parameter("Target framework(s) to test - net10.0 and net11.0 by default")]
+    readonly string[] Framework = ["net10.0", "net11.0"];
 
     static AbsolutePath Solution => RootDirectory / "fisher.slnx";
 
@@ -34,7 +34,7 @@ partial class Build : NukeBuild
         .Executes(() =>
         {
             // Every target framework, not just the ones under test: Fisher.Benchmarks is net10.0-only,
-            // so a solution-wide -f net9.0 fails with NETSDK1005 (see fisher.yml's Build step).
+            // so a solution-wide -f net11.0 fails with NETSDK1005 (see fisher.yml's Build step).
             DotNetBuild(s => s
                 .SetProjectFile(Solution)
                 .SetConfiguration(Configuration));

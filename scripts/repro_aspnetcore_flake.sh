@@ -10,7 +10,7 @@
 #
 #   ./scripts/repro_aspnetcore_flake.sh [iterations] [load-runners] [tfm]
 #
-# Defaults: 20 iterations, 3 concurrent load runners (the reported number), net9.0.
+# Defaults: 20 iterations, 3 concurrent load runners (the reported number), net10.0.
 # Exit 0 = never reproduced (and says so -- that is a real result, not a pass).
 # Exit 1 = reproduced; the TRX path and the failing test names are printed.
 
@@ -18,7 +18,7 @@ set -uo pipefail
 
 ITERATIONS="${1:-20}"
 LOAD_RUNNERS="${2:-3}"
-TFM="${3:-net9.0}"
+TFM="${3:-net10.0}"
 
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
