@@ -330,3 +330,73 @@ Fisher's own positioning is **SQLite in production** — edge, embedded, desktop
 where it is a first-class answer rather than a compromise.
 
 See [Integration Testing](/testing/integration).
+
+## Upgrading from Fisher 1 to Fisher 2
+
+Fisher 2.0 is the Fisher half of the Critter Stack's .NET 11 release train: JasperFx 3.0, Weasel 10.0,
+Marten 10.0, Polecat 6.0, Fisher 2.0 and Wolverine 7.0 move together. Each entry below says what changes,
+what it does to an existing database file, and how to opt out. Entries marked **pending** describe work
+that is tracked in its own issue and has not landed yet; they are listed so the guide is complete the day
+2.0 ships, and each will be rewritten when its change merges.
+
+### Target frameworks: `net10.0` and `net11.0`
+
+Fisher, `Fisher.AspNetCore` and `Fisher.EntityFrameworkCore` now target `net10.0;net11.0`. **`net9.0` is
+dropped**, so an application still on .NET 9 stays on Fisher 1.x. Nothing about the on-disk format depends
+on the target framework.
+
+JasperFx 3.0's `net11.0` build depends on the .NET 11 `Microsoft.Extensions.*` packages, so an application
+targeting `net11.0` has to reference the matching 11.x hosting and dependency-injection packages, or
+restore fails with `NU1605`.
+
+Test projects move with the stack: xunit.v3 4.x on Microsoft Testing Platform 2 (Fisher's own suite did,
+which is why the old "stay on MTP 1.x" note is gone).
+
+### JasperFx 3.0 and Weasel 10
+
+Fisher 2 requires JasperFx 3.0.0 and Weasel.Sqlite / Weasel.Storage 10.0. An application referencing
+either directly has to move them together; mixing a 2.x JasperFx with Fisher 2 does not restore.
+
+### The native SQLite build
+
+**No change of provider.** Fisher stays on the `SQLitePCLRaw.bundle_e_sqlite3` 3.0.x bundle that
+`Microsoft.Data.Sqlite` brings (3.0.5, the version Microsoft.Data.Sqlite 11 also depends on). It does not
+switch to SQLite3MC and does not cap `Microsoft.Data.Sqlite`. Fisher needs SQLite 3.44 or newer for the
+json1 functions, and its tests assert that floor against the bundle in use.
+
+An application that wants encryption at rest references `SQLite3MC.PCLRaw.provider` itself, which is built
+on the same SQLitePCLRaw 3.0.x line. See [SQLite configuration](/configuration/sqlite#the-native-sqlite-build).
+There is no schema effect.
+
+### Event-store defaults: `GateSideEffectsBehindPriorVersion` (**pending**)
+
+jasperfx#1075 turns `GateSideEffectsBehindPriorVersion` **on by default for every event store** in
+JasperFx 3.0, Fisher included. Fisher does not set it itself, so the default arrives with the JasperFx
+bump. This entry will state, once the behaviour is measured against a Fisher file, the effect on an
+existing database and the opt-out; until then, treat the setting as new behaviour for projection
+side effects and check the daemon after upgrading.
+
+### Types that move to shared packages (**pending**)
+
+These are tracked in fisher#465 and fisher#530. Until they merge, the Fisher 1 names still compile.
+
+| Fisher 1 | Fisher 2 | Tracked in |
+| :--- | :--- | :--- |
+| `Fisher.BulkInsertMode` | the shared `Weasel.Core.BulkInsertMode` | fisher#465 |
+| `Fisher.Patching.IPatchExpression<T>` | the shared JasperFx patch-expression contract | fisher#465 |
+| `Fisher.Exceptions.*` types that derive from a `JasperFx.Events` exception | the `JasperFx.Events` type itself, thrown directly | fisher#530 |
+
+The mechanical change for each is a `using` and, for the exceptions, a `catch` of the base type; members
+are unchanged. No table or column is involved.
+
+### Union-typed properties and events (**pending**, `net11.0` only)
+
+fisher#466 adds LINQ over C# union-typed members through `json_extract` / `json_type`. Unions are a C# 15 /
+.NET 11 language feature, so this is available on the `net11.0` build only. It adds a capability and
+changes nothing for an application that does not use unions.
+
+### Hosting: `AddFisher(name)` and .NET Aspire (**pending**)
+
+fisher#468 adds an `AddFisher(name)` hosting helper for Aspire, and documents the `CommunityToolkit`
+`AddSqliteConnection` path, OpenTelemetry registration and the high-water health check. The existing
+`AddFisher(...)` registration in this guide is unchanged.
