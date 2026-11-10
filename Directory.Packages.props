@@ -448,6 +448,7 @@
         <!-- TODO(fisher#460): the net11 train pins Weasel.* to 10.0.0-alpha.1, which was published
              nowhere (nuget.org, polecat-local, stoat-local) when this was written. Held at 9.50.0 so
              the repo restores and tests; move both lines when alpha.1 exists. -->
+        <PackageVersion Include="Aspire.Hosting" Version="13.6.4" />
         <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.1" />
         <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.1" />
 

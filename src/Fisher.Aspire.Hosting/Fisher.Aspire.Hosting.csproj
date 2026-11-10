@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <Description>.NET Aspire AppHost hosting helper for Fisher SQLite stores</Description>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <RootNamespace>Fisher.Aspire.Hosting</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- AppHost-side only: no reference to Fisher itself. The AppHost describes a file; the
+             service project is what opens it. -->
+        <PackageReference Include="Aspire.Hosting" />
+    </ItemGroup>
+
+</Project>

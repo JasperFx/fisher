@@ -61,6 +61,7 @@ const config: UserConfig<DefaultTheme.Config> = {
           collapsed: true,
           items: [
             { text: 'Bootstrapping Fisher', link: '/configuration/hostbuilder' },
+            { text: 'Hosting with Aspire', link: '/configuration/aspire' },
             { text: 'Configuring Document Storage', link: '/configuration/storeoptions' },
             { text: 'SQLite and PRAGMA Settings', link: '/configuration/sqlite' },
             { text: 'JSON Serialization', link: '/configuration/json' },
