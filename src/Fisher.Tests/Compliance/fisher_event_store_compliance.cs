@@ -8,10 +8,9 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and sixty-four are enrolled from
- * JasperFx.Events.ComplianceTests 2.102.0, which itself ships sixty-five concrete suites across
- * sixty-four files -- MultiDatabaseExplorerCompliance is one file holding two arms. One is not
- * enrolled: SingleTenantedEventSlicingCompliance, for the precondition reason set out below.
+ * Suites were added one at a time as Fisher grew into them, and sixty-five are enrolled from
+ * JasperFx.Events.ComplianceTests 3.0.0, which itself ships sixty-five concrete suites: every one
+ * it ships. MultiDatabaseExplorerCompliance is one file holding two arms.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
  * reason recorded at the flag on FisherComplianceFixture rather than here:
@@ -21,12 +20,9 @@ namespace Fisher.Tests.Compliance;
  * same questions through QueryEventsAsync, AssignTagWhere and AggregateByTagsAsync, all of which are
  * covered by suites that are enrolled and green.
  *
- * SingleTenantedEventSlicingCompliance's non-enrollment is a precondition rather than a behaviour,
- * and that distinction is the reason it is recorded here rather than gated: the suite plants events
- * whose tenant ids disagree on a single-tenanted store and drives the daemon over them, and Fisher
- * cannot construct that state at all -- see jasperfx#727. Its own guard reads the events back and
- * skips when the store normalised the tenant ids away, so enrolling it would be forty-odd facts that
- * skip themselves. It is not a suite Fisher declines on behaviour.
+ * Through 2.x one shipped suite was not enrolled: SingleTenantedEventSlicingCompliance, whose
+ * precondition (events whose tenant ids disagree on a single-tenanted store, jasperfx#727) Fisher
+ * cannot construct. JasperFx 3.0.0 no longer ships it, so nothing is excused any more.
  *
  * Nothing in the fixture throws any more, but the discipline stands for the next seam member that
  * arrives ahead of the feature: a member Fisher cannot honour throws a NotSupportedException naming

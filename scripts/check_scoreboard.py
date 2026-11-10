@@ -195,6 +195,14 @@ def find(pattern: str, text: str, group: int = 1) -> str | None:
     return match.group(group) if match else None
 
 
+def per_tfm(pattern: str, text: str, tfm: str) -> str | None:
+    """A claim written as '<net10 count> ... <net11 count>': the group for the framework under test."""
+    match = re.search(pattern, text)
+    if match is None:
+        return None
+    return match.group(1) if tfm == "net10.0" else match.group(2)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tfm", required=True)
@@ -290,23 +298,28 @@ def main() -> int:
                 "restore the 'N tests green on net10.0 and net11.0' header."
             )
 
+        # One count when both frameworks run the same tests; since Fisher 2.0 net11.0 also runs the
+        # C# 15 union tests, so the header may carry a count per framework and this picks --tfm's.
         failures.expect(
             "HANDOFF header, total tests",
-            find(r"\*\*(\d+) tests green on net10\.0 and net11\.0\*\*", handoff),
+            find(r"\*\*(\d+) tests green on net10\.0 and net11\.0\*\*", handoff)
+            or per_tfm(r"\*\*(\d+) tests green on net10\.0 and (\d+) on net11\.0\*\*", handoff, args.tfm),
             grand_total,
         )
 
     # ---- what HANDOFF.md claims ----------------------------------------------------------------
 
     per_project = re.search(
-        r"(\d+)\s+in\s*\n?`Fisher\.Tests`,\s*(\d+)\s+in\s+`Fisher\.AspNetCore\.Tests`\s+and\s+(\d+)\s+in\s+"
-        r"`Fisher\.EntityFrameworkCore\.Tests`",
+        r"(?:(\d+) \(net10\.0\) / (\d+) \(net11\.0\)|(\d+))\s+in\s*\n?`Fisher\.Tests`,\s*(\d+)\s+in\s+"
+        r"`Fisher\.AspNetCore\.Tests`\s+and\s+(\d+)\s+in\s+`Fisher\.EntityFrameworkCore\.Tests`",
         handoff,
     )
     if per_project is None:
         failures.expect("HANDOFF header, per-project split", None, str(totals))
     else:
-        for assembly, claimed in zip(ASSEMBLIES, per_project.groups()):
+        net10, net11, single, aspnet, efcore = per_project.groups()
+        fisher_tests = single if single is not None else (net10 if args.tfm == "net10.0" else net11)
+        for assembly, claimed in zip(ASSEMBLIES, (fisher_tests, aspnet, efcore)):
             failures.expect(f"HANDOFF header, {assembly}", claimed, totals[assembly])
 
     failures.expect(
@@ -401,7 +414,7 @@ def main() -> int:
     # ---- versions ------------------------------------------------------------------------------
     for label, package, pattern in [
         ("HANDOFF header, JasperFx version", "JasperFx", r"On JasperFx \*\*([\d.]+)\*\*"),
-        ("HANDOFF header, Weasel version", "Weasel.Sqlite", r"/ Weasel \*\*([\d.]+)\*\*"),
+        ("HANDOFF header, Weasel version", "Weasel.Sqlite", r"/ Weasel \*\*([\w.-]+)\*\*"),
     ]:
         pinned = package_version(packages, package)
         if pinned is None:
@@ -455,9 +468,11 @@ def main() -> int:
             "not have -- name the shortfall and point at HANDOFF's red list."
         )
 
+    readme_count = re.search(r"alongside its own ([\d,]+)(?: \(([\d,]+) on net11\.0\))?", readme)
     failures.expect(
         "README, Fisher.Tests count",
-        find(r"alongside its own ([\d,]+)", readme),
+        None if readme_count is None
+        else (readme_count.group(2) if args.tfm == "net11.0" and readme_count.group(2) else readme_count.group(1)),
         totals["Fisher.Tests"],
     )
 
