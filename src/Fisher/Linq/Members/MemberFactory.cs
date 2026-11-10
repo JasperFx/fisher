@@ -3,9 +3,12 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Fisher.Linq.SqlGeneration;
 using Fisher.Serialization;
 using Fisher.Storage;
 using Weasel.Core;
+using Weasel.Core.SqlGeneration;
+using Weasel.Storage;
 
 namespace Fisher.Linq.Members;
 
@@ -139,6 +142,13 @@ internal class MemberFactory : IMemberResolver
 
     public IQueryableMember ResolveMember(MemberExpression expression)
     {
+        // fisher#466: a union's Value has no single SQL type. It is only meaningful under a type test or
+        // a cast to one of its cases, which the parsers recognise before they get here.
+        if (UnionMemberAccess.TryMatchValueAccess(expression, out var bareUnion))
+        {
+            throw new BadLinqExpressionException(UnionMemberAccess.RefuseBareValue(bareUnion));
+        }
+
         // The identity lives in its own column, not in the JSON body.
         if (expression.Expression is ParameterExpression && IsIdentityMember(expression.Member))
         {
@@ -177,7 +187,159 @@ internal class MemberFactory : IMemberResolver
             }
         }
 
+        // fisher#466: ((Card)x.Payment.Value).Last4, read through a cast to one of a union's cases.
+        if (TryResolveCaseMember(expression, out var caseMember))
+        {
+            return caseMember;
+        }
+
         return ResolveMember(ChainOf(expression));
+    }
+
+    private bool TryResolveCaseMember(MemberExpression expression, out IQueryableMember member)
+    {
+        member = null!;
+        var chain = new List<MemberInfo>();
+        MemberExpression? current = expression;
+
+        while (current?.Expression != null)
+        {
+            chain.Insert(0, current.Member);
+
+            if (UnionMemberAccess.TryMatchCaseConversion(current.Expression, out var unionMember, out var caseType))
+            {
+                member = ResolveUnionCase(unionMember, caseType, chain.ToArray());
+                return true;
+            }
+
+            current = current.Expression as MemberExpression;
+        }
+
+        return false;
+    }
+
+    /// <inheritdoc />
+    public IQueryableMember ResolveUnionCase(MemberExpression unionMember, Type caseType)
+        => ResolveUnionCase(unionMember, caseType, []);
+
+    /// <summary>
+    ///     A member of one case of a union-typed document member (fisher#466), or the case itself when it
+    ///     is a primitive.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         ⚠️ <b>The locator carries the case's type test</b>, as
+    ///         <c>(case when &lt;test&gt; then json_extract(...) end)</c>. A case member lives at the plain
+    ///         path <c>member.caseMember</c> because System.Text.Json writes the bare case, so without the
+    ///         test <c>((Deposited)x.Last.Value).Amount &gt; 5</c> would also match a <c>Withdrawn</c> row
+    ///         carrying an <c>amount</c>. A row holding another case reads the member as NULL, so it matches
+    ///         no comparison, and only a null test.
+    ///     </para>
+    ///     <para>
+    ///         The member is then typed by <see cref="CreateScalarMember" /> like any other, so a timestamp
+    ///         inside a case still compares through <c>strftime</c>, an enum by its storage, and a decimal
+    ///         as a number.
+    ///     </para>
+    /// </remarks>
+    private IQueryableMember ResolveUnionCase(MemberExpression unionMember, Type caseType, MemberInfo[] caseChain)
+    {
+        var unionType = unionMember.Type;
+        var segments = UnionPathSegments(unionMember);
+        var test = UnionCaseTests.For(unionType, caseType, _serializerOptions, _enumStorage == EnumStorage.AsString);
+
+        var memberType = caseChain.Length == 0 ? caseType : GetMemberType(caseChain[^1]);
+        var described = caseChain.Length == 0
+            ? $"({caseType.Name}){unionMember}.Value"
+            : $"(({caseType.Name}){unionMember}.Value).{string.Join(".", caseChain.Select(x => x.Name))}";
+
+        if (caseChain.Length == 0 && test.Kind is UnionCaseJsonKind.Object or UnionCaseJsonKind.Array)
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot translate '{described}' as a value: the {caseType.Name} case is a JSON "
+                + $"{test.Kind.ToString().ToLowerInvariant()}. Test for the case with '{unionMember}.Value is "
+                + $"{caseType.Name}', or compare a member of it.");
+        }
+
+        if (UnionMemberAccess.IsUnionTyped(memberType))
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot translate '{described}': it is itself a union. Querying a union nested inside "
+                + "another union's case is not supported.");
+        }
+
+        if (memberType != typeof(string) && CollectionMember.TryGetElementType(memberType, out _))
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot translate '{described}': a collection inside a union case is not supported, because "
+                + "its elements would be read without the case's type test. Test the case and query a scalar "
+                + "member of it, or load the documents and filter in memory.");
+        }
+
+        var typeTest = SqliteUnionSqlDialect.Instance.TypeTest(_dataExpression, segments, test);
+        var path = ("$." + string.Join(".", segments.Concat(caseChain.Select(GetJsonPropertyName))))
+            .Replace("'", "''");
+
+        return CreateScalarMember($"(case when {typeTest} then json_extract({_dataExpression}, '{path}') end)",
+            memberType);
+    }
+
+    /// <inheritdoc />
+    public ISqlFragment ResolveUnionTypeTest(MemberExpression unionMember, Type? caseType)
+    {
+        var segments = UnionPathSegments(unionMember);
+
+        // The default union: System.Text.Json writes it as null, and a missing key is the same answer
+        // here as everywhere else in Fisher's LINQ.
+        if (caseType == null)
+        {
+            var path = ("$." + string.Join(".", segments)).Replace("'", "''");
+            return new WhereFragment($"coalesce(json_type({_dataExpression}, '{path}'), 'null') = 'null'");
+        }
+
+        var test = UnionCaseTests.For(unionMember.Type, caseType, _serializerOptions,
+            _enumStorage == EnumStorage.AsString);
+        return ((IUnionSqlDialect)SqliteUnionSqlDialect.Instance).TypeTestFragment(_dataExpression, segments, test);
+    }
+
+    /// <summary>
+    ///     The serialized JSON path of a union-typed member, one segment per property. A
+    ///     <see cref="Nullable{T}" />'s <c>Value</c> is the member itself, as it is everywhere else.
+    /// </summary>
+    private List<string> UnionPathSegments(MemberExpression unionMember)
+    {
+        var segments = new List<string>();
+        Expression? current = unionMember;
+
+        while (current is MemberExpression member)
+        {
+            if (member.Member.Name == nameof(Nullable<int>.Value)
+                && member.Expression is MemberExpression nullable
+                && Nullable.GetUnderlyingType(nullable.Type) != null)
+            {
+                current = nullable;
+                continue;
+            }
+
+            segments.Insert(0, GetJsonPropertyName(member.Member));
+
+            if (member.Expression is ParameterExpression)
+            {
+                return segments;
+            }
+
+            if (member.Expression != null
+                && UnionMemberAccess.TryMatchCaseConversion(member.Expression, out _, out _))
+            {
+                throw new BadLinqExpressionException(
+                    $"Cannot translate '{unionMember}': it is a union inside another union's case. Querying a "
+                    + "nested union is not supported.");
+            }
+
+            current = member.Expression;
+        }
+
+        throw new BadLinqExpressionException(
+            $"Cannot translate '{unionMember}': a union member has to be a member of the document.");
     }
 
     /// <summary>
@@ -199,6 +361,13 @@ internal class MemberFactory : IMemberResolver
 
     public IQueryableMember ResolveMember(MemberInfo[] chain)
     {
+        // fisher#466: the whole union has no single SQL type; only its cases do.
+        if (UnionMemberAccess.IsUnionTyped(GetMemberType(chain[^1])))
+        {
+            throw new BadLinqExpressionException(
+                UnionMemberAccess.RefuseWholeUnion(chain[^1].Name, GetMemberType(chain[^1])));
+        }
+
         var member = CreateMember(BuildJsonPath(chain), GetMemberType(chain[^1]));
         var duplicate = _mapping?.DuplicateFor(chain);
 

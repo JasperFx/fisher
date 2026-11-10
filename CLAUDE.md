@@ -357,6 +357,9 @@ Working, with tests:
 - **LINQ** — `session.Query<T>()` over `json_extract`: where, ordering, paging, projections, grouping,
   aggregates and **joins** (`Join` / `GroupJoin(...).SelectMany(...)`, chained across any number of
   tables), with async terminals
+- **C# 15 unions (net11 only)** — a union appended as an event is stored as its active case, and a
+  union-typed document member is queryable by type test and case access; see "Union-typed members and
+  events"
 - **DCB tags** — tag tables, tagged appends, `QueryByTagsAsync`, `EventsExistAsync`,
   `AssignTagWhere`, `AggregateByTagsAsync`, `FetchForWritingByTags` with its consistency guard, and
   batched queries
@@ -1745,6 +1748,54 @@ revert a `Select` of a `Uri` to a whole-document read.
   `Select(x => x.Address)` and `new { x.Id, x.Tags }` threw `JsonException`. They go to the serializer as
   they are now. The decision reads the text as well as the target, because a type with a string converter
   is a non-scalar target stored as a JSON string. Found through a Native AOT probe and not AOT-specific.
+
+### Union-typed members and events — fisher#466
+
+net11 only, and nothing is `#if`'d in `src/Fisher`: `UnionTypes.IsUnion` is false before .NET 11, so no
+shape below can match there. The tests are `#if NET11_0_OR_GREATER` under `Fisher.Tests/Unions/`, and
+SDK 11.0.100 takes the `union` keyword at `LangVersion latest`.
+
+**Events.** `EventGraph.BuildEvent` does not end in JasperFx's base, so it calls `UnionTypes.Unwrap`
+itself (jasperfx#1166's note to downstream stores). Each case is stored under its own event type name
+and the JSON does not change, because System.Text.Json writes the bare case anyway. `AddEventType` of a
+union registers its cases. `Apply(TUnion)` needs nothing from Fisher, since the source generator splits it
+per case. `QueryEventDataAsync<TUnion>` cannot be written: it is class-constrained and a union is a
+struct, so querying a case is the only spelling.
+
+**Document members.** These go over Weasel's `SqliteUnionSqlDialect` (weasel#744). Fisher supplies the
+two halves it left to the stores: building each `UnionCaseTest`, and the LINQ translation.
+
+- ⚠️ **C# refuses a union pattern in an expression tree** (`x.Payment is Card` is CS8122). Every
+  translatable shape goes through `Value`: `x.P.Value is Card` (a `TypeIs`), `((Card)x.P.Value).Last4`
+  and `(int)x.P.Value` (a `Convert` of `Value`), and `x.P.Value == null`. `UnionMemberAccess`
+  recognises them.
+- ⚠️ **A case member's locator carries the case's type test**, as `(case when <test> then json_extract(...) end)`.
+  A case member sits at the plain path `member.caseMember`, so without the test
+  `((Deposited)x.Last.Value).Amount > 5` matches a `Withdrawn` row's `amount` too. A row of another case
+  reads the member as NULL. The member is then typed by `CreateScalarMember`, so timestamps, enums and
+  decimals inside a case compare as they do anywhere else. Removing the wrapper fails two tests.
+- ⚠️ **A property is required only when it is always written.** The default `WhenWritingNull` omits a
+  null reference, so requiring it would drop that case's own rows. Absence is always safe: a property a
+  case does not have is never in its JSON.
+- **Indistinguishable cases are refused by name**, never answered with a test that matches both. That
+  covers two primitive cases of one JSON kind (`int`/`long`, `string`/`Guid`), and two object cases
+  where neither always writes a property the other lacks (`Deposited(Amount)` against
+  `Note(Amount, string? Reason)`).
+- **Also refused by name:**
+  - a bare `Value`;
+  - the whole union as a value, wherever a member resolves to a column (pinned for `OrderBy`);
+  - a type that is not a case;
+  - an object case compared whole;
+  - a collection inside a case;
+  - a nested union.
+- `x.P.Value == null` is `coalesce(json_type(...), 'null') = 'null'`, so a missing key counts as null, as
+  it does everywhere else in Fisher's LINQ.
+- ⚠️ **System.Text.Json cannot deserialize a union with two object cases without a type classifier.**
+  The test's `Account` cannot be loaded, so its facts select ids. That is also what keeps them about the
+  SQL.
+
+The Bobcat specs the issue names are deliberately left out (a person's ruling on the node). Fisher has
+no Bobcat spec project, and `CritterStackSpec` would pull Wolverine into Fisher.
 
 ### LINQ joins
 

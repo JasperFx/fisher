@@ -249,6 +249,12 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
             return e;
         }
 
+        // A C# 15 union is stored as its active case (jasperfx#1166, fisher#466): each case gets its own
+        // event type name, and the JSON is unchanged because System.Text.Json writes the bare case
+        // anyway. JasperFx's base BuildEvent does this, and this override does not end in it, so it has
+        // to unwrap for itself. Before .NET 11 no type is a union and this hands the value back.
+        eventData = UnionTypes.Unwrap(eventData);
+
         return EventMappingFor(eventData.GetType()).Wrap(eventData);
     }
 
@@ -413,7 +419,15 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
         }
     }
 
-    public override void AddEventType(Type eventType) => EventMappingFor(eventType);
+    public override void AddEventType(Type eventType)
+    {
+        // A union is never stored as itself (BuildEvent unwraps it), so registering one means registering
+        // each of its cases, which is what the base does and what this override has to repeat.
+        foreach (var type in eventType.ExpandToCaseTypes())
+        {
+            EventMappingFor(type);
+        }
+    }
 
     /// <summary>
     ///     Every event type this graph has been told about.

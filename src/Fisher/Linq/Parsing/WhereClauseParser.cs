@@ -59,6 +59,7 @@ internal class WhereClauseParser
             MethodCallExpression methodCall => ParseMethodCall(methodCall),
             MemberExpression member when IsBooleanMember(member) => ParseBooleanMember(member, true),
             ConstantExpression { Value: bool boolValue } => new WhereFragment(boolValue ? "1=1" : "1=0"),
+            TypeBinaryExpression { NodeType: ExpressionType.TypeIs } typeIs => ParseTypeIs(typeIs),
             _ => throw new BadLinqExpressionException(
                 $"Unsupported expression in a where clause: {expression.NodeType} ({expression.GetType().Name}). "
                 + Alternatives)
@@ -120,8 +121,53 @@ internal class WhereClauseParser
             $"Unsupported binary operator in a where clause: {binary.NodeType}. " + Alternatives);
     }
 
+    /// <summary>
+    ///     <c>x.Payment.Value is Card</c>: the only type test an expression tree can carry over a union,
+    ///     because C# refuses a union pattern there (fisher#466).
+    /// </summary>
+    private ISqlFragment ParseTypeIs(TypeBinaryExpression typeIs)
+    {
+        if (Members.UnionMemberAccess.TryMatchValueAccess(typeIs.Expression, out var unionMember)
+            && IsDocumentMember(unionMember))
+        {
+            return _memberFactory.ResolveUnionTypeTest(unionMember, typeIs.TypeOperand);
+        }
+
+        throw new BadLinqExpressionException(
+            $"Cannot translate the type test '{typeIs}'. A type test is supported only against the Value of "
+            + "a union-typed member, as in 'x.Payment.Value is Card'; any other stored JSON carries nothing "
+            + "to test a CLR type against. " + Alternatives);
+    }
+
+    /// <summary>
+    ///     <c>x.Payment.Value == null</c>: the default union, or no value at all (fisher#466).
+    /// </summary>
+    private bool TryParseUnionNullTest(Expression memberSide, Expression valueSide, string op,
+        out ISqlFragment? fragment)
+    {
+        fragment = null;
+
+        if (op is not ("=" or "!=")
+            || !Members.UnionMemberAccess.TryMatchValueAccess(StripConvert(memberSide), out var unionMember)
+            || !IsDocumentMember(unionMember)
+            || StripConvert(valueSide) is not ConstantExpression { Value: null })
+        {
+            return false;
+        }
+
+        var isNull = _memberFactory.ResolveUnionTypeTest(unionMember, null);
+        fragment = op == "=" ? isNull : new NotFragment(isNull);
+        return true;
+    }
+
     private ISqlFragment ParseComparison(BinaryExpression binary, string op)
     {
+        if (TryParseUnionNullTest(binary.Left, binary.Right, op, out var unionNull)
+            || TryParseUnionNullTest(binary.Right, binary.Left, op, out unionNull))
+        {
+            return unionNull!;
+        }
+
         // x.Number % 2 == 0
         if (TryParseModulo(binary, op, out var moduloFragment))
         {
@@ -496,6 +542,21 @@ internal class WhereClauseParser
         member = null;
         value = null;
 
+        // (int)x.Payment.Value > 3: a primitive case of a union, possibly widened again by the compiler
+        // (fisher#466). The cast is the case, so it is found before StripConvert throws it away.
+        for (var current = memberExpr;
+             current is UnaryExpression { NodeType: ExpressionType.Convert } convert;
+             current = convert.Operand)
+        {
+            if (Members.UnionMemberAccess.TryMatchCaseConversion(current, out var unionMember, out var caseType)
+                && IsDocumentMember(unionMember))
+            {
+                member = _memberFactory.ResolveUnionCase(unionMember, caseType);
+                value = ExtractValue(valueExpr);
+                return true;
+            }
+        }
+
         if (StripConvert(memberExpr) is not MemberExpression me || !IsDocumentMember(me))
         {
             return false;
@@ -545,7 +606,8 @@ internal class WhereClauseParser
                 return true;
             }
 
-            current = current.Expression as MemberExpression;
+            // A member of a union case is read through a cast of the union's Value (fisher#466).
+            current = Members.UnionMemberAccess.ParentOf(current) as MemberExpression;
         }
 
         return false;
