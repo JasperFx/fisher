@@ -44,14 +44,12 @@ namespace Fisher;
 /// </remarks>
 public partial class DocumentStore : IEventStore
 {
-    private static readonly Meter _meter = new("Fisher", typeof(DocumentStore).Assembly.GetName().Version?.ToString());
+    // fisher#465 / jasperfx#1054: the options' Meter and ActivitySource, which are the process's one of each
+    // named "Fisher". This class used to construct a second pair of the same name, so a listener subscribed
+    // to "Fisher" heard both.
+    Meter IEventStore.Meter => Options.OpenTelemetry.Meter;
 
-    private static readonly ActivitySource _activitySource =
-        new("Fisher", typeof(DocumentStore).Assembly.GetName().Version?.ToString());
-
-    Meter IEventStore.Meter => _meter;
-
-    ActivitySource IEventStore.ActivitySource => _activitySource;
+    ActivitySource IEventStore.ActivitySource => Options.OpenTelemetry.ActivitySource;
 
     string IEventStore.MetricsPrefix => "fisher";
 

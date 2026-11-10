@@ -112,7 +112,7 @@ public partial class DocumentStore : IDocumentStore
 
         if (options.OpenTelemetry.Applications.Count > 0)
         {
-            options.Listeners.Add(new Services.FisherCommitMetrics(options.OpenTelemetry.Applications));
+            options.Listeners.Add(new Services.FisherCommitMetrics(options.OpenTelemetry));
         }
     }
 

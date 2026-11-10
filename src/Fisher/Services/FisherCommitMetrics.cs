@@ -4,9 +4,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Fisher.Services;
 
 /// <summary>
-///     Applies the counters registered through
-///     <see cref="OpenTelemetryOptions.ExportCounterOnChangeSets{T}" /> to every committed unit of work
-///     (fisher#208).
+///     Applies the counters registered through <c>ExportCounterOnChangeSets</c> to every committed unit of
+///     work (fisher#208), through the shared <c>OpenTelemetryOptions&lt;IChangeSet&gt;.RecordCommit</c>
+///     (jasperfx#1054, fisher#465), which catches and logs each application on its own.
 /// </summary>
 /// <remarks>
 ///     <para>
@@ -30,12 +30,12 @@ namespace Fisher.Services;
 /// </remarks>
 internal sealed class FisherCommitMetrics: IDocumentSessionListener
 {
-    private readonly IReadOnlyList<Action<IChangeSet>> _applications;
+    private readonly OpenTelemetryOptions _options;
     private readonly ILogger _logger;
 
-    public FisherCommitMetrics(IReadOnlyList<Action<IChangeSet>> applications, ILogger? logger = null)
+    public FisherCommitMetrics(OpenTelemetryOptions options, ILogger? logger = null)
     {
-        _applications = applications;
+        _options = options;
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -44,17 +44,7 @@ internal sealed class FisherCommitMetrics: IDocumentSessionListener
 
     public Task AfterCommitAsync(IDocumentSession session, IChangeSet commit, CancellationToken token)
     {
-        for (var i = 0; i < _applications.Count; i++)
-        {
-            try
-            {
-                _applications[i](commit);
-            }
-            catch (Exception e)
-            {
-                _logger.LogError(e, "Fisher failed to record a commit metric");
-            }
-        }
+        _options.RecordCommit(commit, _logger);
 
         return Task.CompletedTask;
     }
