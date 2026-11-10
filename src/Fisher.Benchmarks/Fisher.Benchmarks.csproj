@@ -2,7 +2,7 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <!-- Single-targeted, overriding the repo-wide net9.0;net10.0 pair: a perf harness is run,
+        <!-- Single-targeted, overriding the repo-wide net10.0;net11.0 pair: a perf harness is run,
              not shipped, and one TFM keeps `dotnet run` unambiguous. -->
         <TargetFrameworks></TargetFrameworks>
         <TargetFramework>net10.0</TargetFramework>

@@ -15,13 +15,8 @@ namespace Fisher.Tests;
 /// </summary>
 public class compliance_suite_inventory
 {
-    // Only SingleTenantedEventSlicingCompliance, for the precondition reason in fisher_event_store_compliance.cs.
-    private static readonly Dictionary<Type, string> EventExcuses = new()
-    {
-        [typeof(SingleTenantedEventSlicingCompliance<,,>)] =
-            "Fisher cannot construct the state the suite plants (events whose tenant ids disagree on a " +
-            "single-tenanted store); see jasperfx#727"
-    };
+    // JasperFx 3.0.0 no longer ships SingleTenantedEventSlicingCompliance, so nothing is excused.
+    private static readonly Dictionary<Type, string> EventExcuses = new();
 
     [Fact]
     public void every_event_suite_is_enrolled_or_excused()

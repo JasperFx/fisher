@@ -44,20 +44,20 @@ jobs:
         # Fisher multi-targets, and the two frameworks are exercised as separate jobs rather than
         # via a single `dotnet test`. Directory.Build.props sets TestTfmsInParallel=false because the
         # suites share database files; naming one framework per job sidesteps that entirely.
-        tfm: [ net9.0, net10.0 ]
+        tfm: [ net10.0, net11.0 ]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # Both runtimes: the 10.0 SDK builds either target framework, but running the net9.0 test
-      # executable needs the .NET 9 runtime present as well.
+      # Both runtimes: the 11.0 SDK builds either target framework, but running the net10.0 test
+      # executable needs the .NET 10 runtime present as well.
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: |
-            9.0.x
             10.0.x
+            11.0.x
 
       # The lane balancer's known durations travel as a CI artifact, never a commit (bobcat#730): the
       # newest successful main run's ledger for this framework, folded forward by the build and
@@ -82,7 +82,7 @@ jobs:
       # does is defined there, not here; build/SupervisedTests.cs says why each setting is what it is.
       #
       #   - Built without -f: Fisher.Benchmarks is deliberately net10.0-only, and a solution-wide
-      #     `-f net9.0` fails on it with NETSDK1005. The suites then run for this leg's framework only.
+      #     `-f net11.0` fails on it with NETSDK1005. The suites then run for this leg's framework only.
       #   - Each suite's MTP executable is driven as worker processes, partitioned by test class, each
       #     worker with a temp directory of its own (.nuke/temp/lanes/<suite>-<tfm>/lane-N), so every
       #     lane's SQLite files are its own. Fisher.Tests asks for 2 workers; the build clamps any count
@@ -185,8 +185,8 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: |
-            9.0.x
             10.0.x
+            11.0.x
 
       - name: Pack
         run: dotnet pack src/Fisher/Fisher.csproj -c Release -o ./artifacts

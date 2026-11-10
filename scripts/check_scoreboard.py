@@ -275,24 +275,24 @@ def main() -> int:
 
         failures.expect(
             "HANDOFF header, total tests (red wording)",
-            find(r"\*\*(\d+) tests on net9\.0 and net10\.0\*\*", handoff),
+            find(r"\*\*(\d+) tests on net10\.0 and net11\.0\*\*", handoff),
             grand_total,
         )
         failures.expect(
             "HANDOFF header, red count",
-            find(r"\*\*\d+ tests on net9\.0 and net10\.0\*\*, (\w+) of them red", handoff),
+            find(r"\*\*\d+ tests on net10\.0 and net11\.0\*\*, (\w+) of them red", handoff),
             number_word(len(red)),
         )
     else:
         if declared:
             failures.add(
                 "HANDOFF declares red tests but the run is green. Remove the '### Red' section and "
-                "restore the 'N tests green on net9.0 and net10.0' header."
+                "restore the 'N tests green on net10.0 and net11.0' header."
             )
 
         failures.expect(
             "HANDOFF header, total tests",
-            find(r"\*\*(\d+) tests green on net9\.0 and net10\.0\*\*", handoff),
+            find(r"\*\*(\d+) tests green on net10\.0 and net11\.0\*\*", handoff),
             grand_total,
         )
 

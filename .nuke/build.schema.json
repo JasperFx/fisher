@@ -113,7 +113,7 @@
         },
         "Framework": {
           "type": "array",
-          "description": "Target framework(s) to test - net9.0 and net10.0 by default",
+          "description": "Target framework(s) to test - net10.0 and net11.0 by default",
           "items": {
             "type": "string"
           }

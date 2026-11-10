@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project>
     <PropertyGroup>
-        <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
+        <TargetFrameworks>net10.0;net11.0</TargetFrameworks>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <!-- The published version comes from the release TAG: publish.yml passes
@@ -42,8 +42,8 @@
         <!-- Without this a failing test prints only the path to a log file CI never publishes,
              and the assertion and stack trace go nowhere visible. -->
         <TestingPlatformShowTestsFailure>true</TestingPlatformShowTestsFailure>
-        <!-- Fisher's suites share database files between target frameworks; running the net9.0 and
-             net10.0 suites concurrently makes them delete each other's files mid-test. -->
+        <!-- Fisher's suites share database files between target frameworks; running the net10.0 and
+             net11.0 suites concurrently makes them delete each other's files mid-test. -->
         <TestTfmsInParallel>false</TestTfmsInParallel>
     </PropertyGroup>
 </Project>

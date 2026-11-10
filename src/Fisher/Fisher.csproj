@@ -56,10 +56,10 @@
     <!-- Runs per-TFM, which is where $(PkgJasperFx_Events_SourceGenerator) is resolved — it is not
          set during the outer pack evaluation. The analyzer is TFM-agnostic and goes to one path, so
          it must be contributed exactly once; the condition on a single target framework is what
-         stops the net9.0 and net10.0 passes both claiming analyzers/dotnet/cs and failing pack with
+         stops the net10.0 and net11.0 passes both claiming analyzers/dotnet/cs and failing pack with
          a duplicate package file. -->
     <Target Name="_BundleEventsSourceGeneratorAnalyzer"
-            Condition="'$(TargetFramework)' == 'net9.0' And '$(PkgJasperFx_Events_SourceGenerator)' != ''">
+            Condition="'$(TargetFramework)' == 'net10.0' And '$(PkgJasperFx_Events_SourceGenerator)' != ''">
         <ItemGroup>
             <TfmSpecificPackageFile Include="$(PkgJasperFx_Events_SourceGenerator)\analyzers\dotnet\cs\JasperFx.Events.SourceGenerator.dll">
                 <PackagePath>analyzers/dotnet/cs</PackagePath>
