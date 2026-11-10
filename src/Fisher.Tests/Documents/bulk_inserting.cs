@@ -1,3 +1,4 @@
+using Weasel.Core;
 using Fisher.Linq;
 using Fisher.Linq.SoftDeletes;
 using JasperFx;
@@ -77,6 +78,21 @@ public class bulk_inserting : IAsyncLifetime
 
         await Should.ThrowAsync<Exception>(() =>
             _store.Advanced.BulkInsertAsync(anglers, BulkInsertMode.InsertsOnly, token: Token));
+    }
+
+    [Fact]
+    public async Task overwrite_if_version_matches_is_refused_by_name()
+    {
+        // fisher#465: BulkInsertMode is Weasel.Core's, which has a fourth value Fisher does not implement.
+        // Falling through to the ordinary upsert would write over a row whose version the caller never
+        // checked, which is the one thing that mode exists to prevent.
+        var ex = await Should.ThrowAsync<NotSupportedException>(() =>
+            _store.Advanced.BulkInsertAsync(Anglers(2), BulkInsertMode.OverwriteIfVersionMatches, token: Token));
+
+        ex.Message.ShouldContain(nameof(BulkInsertMode.OverwriteIfVersionMatches));
+
+        await using var session = _store.LightweightSession();
+        (await session.Query<Angler>().CountAsync(Token)).ShouldBe(0);
     }
 
     [Fact]

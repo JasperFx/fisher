@@ -782,23 +782,23 @@ internal partial class FisherSession
 
     // ---- patching (fisher#35) ----
 
-    public Patching.IPatchExpression<T> Patch<T>(Guid id) where T : notnull => PatchById<T, Guid>(id);
+    public JasperFx.Events.IPatchExpression<T> Patch<T>(Guid id) where T : notnull => PatchById<T, Guid>(id);
 
-    public Patching.IPatchExpression<T> Patch<T>(string id) where T : notnull => PatchById<T, string>(id);
+    public JasperFx.Events.IPatchExpression<T> Patch<T>(string id) where T : notnull => PatchById<T, string>(id);
 
-    public Patching.IPatchExpression<T> Patch<T>(int id) where T : notnull => PatchById<T, int>(id);
+    public JasperFx.Events.IPatchExpression<T> Patch<T>(int id) where T : notnull => PatchById<T, int>(id);
 
-    public Patching.IPatchExpression<T> Patch<T>(long id) where T : notnull => PatchById<T, long>(id);
+    public JasperFx.Events.IPatchExpression<T> Patch<T>(long id) where T : notnull => PatchById<T, long>(id);
 
-    public Patching.IPatchExpression<T> Patch<T>(Expression<Func<T, bool>> predicate) where T : notnull
+    public JasperFx.Events.IPatchExpression<T> Patch<T>(Expression<Func<T, bool>> predicate) where T : notnull
         => PatchWhere<T>(ParsePredicate(predicate));
 
-    private Patching.IPatchExpression<T> PatchById<T, TId>(TId id)
+    private JasperFx.Events.IPatchExpression<T> PatchById<T, TId>(TId id)
         where T : notnull where TId : notnull
         => PatchWhere<T>(new Linq.SqlGeneration.ComparisonFilter("id",
             "=", Storage.SqliteStorageDialect<TId>.ToDatabaseValue(id)));
 
-    private Patching.IPatchExpression<T> PatchWhere<T>(Weasel.Core.SqlGeneration.ISqlFragment where)
+    private JasperFx.Events.IPatchExpression<T> PatchWhere<T>(Weasel.Core.SqlGeneration.ISqlFragment where)
         where T : notnull
     {
         var mapping = Options.Schema.MappingFor(typeof(T));

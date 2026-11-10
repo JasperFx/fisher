@@ -5,6 +5,7 @@ using JasperFx.Events;
 using JasperFx.Events.Daemon;
 using JasperFx.Events.Projections;
 using Microsoft.Data.Sqlite;
+using Weasel.Storage;
 
 namespace Fisher.Events.Daemon;
 
@@ -248,16 +249,10 @@ internal sealed class FisherProjectionBatch : ProjectionBatchBase<IDocumentSessi
 
             // Read rather than executed blind, so the operation's postprocess can say whether its guard
             // matched — the progression write is guarded on the range's floor (fisher#402).
-            var exceptions = new List<Exception>();
-            await using (var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false))
-            {
-                await operation.PostprocessAsync(reader, exceptions, token).ConfigureAwait(false);
-            }
-
-            if (exceptions.Count > 0)
-            {
-                throw exceptions.Count == 1 ? exceptions[0] : new AggregateException(exceptions);
-            }
+            // Weasel's per-operation executor (fisher#465): one reader, postprocessed, then whatever it
+            // collected rethrown with its stack intact.
+            await OperationBatchExecutor.ExecuteEachAsync([operation],
+                async (_, t) => await command.ExecuteReaderAsync(t).ConfigureAwait(false), token).ConfigureAwait(false);
         }
         finally
         {

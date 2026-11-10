@@ -1,5 +1,6 @@
 using System.Data.Common;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using Fisher.Events;
 using Fisher.Serialization;
 using Fisher.Storage;
@@ -1642,6 +1643,16 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     ///         the provider skips zero-<em>column</em> statements, not zero-<em>row</em> ones — so that
     ///         particular hazard is not what rules concatenation out. The marker is.)
     ///     </para>
+    ///     <para>
+    ///         <b>The exception handling is Weasel's <c>OperationBatchExecutor</c>; the loop is not</b>
+    ///         (fisher#465). <c>TryTransform</c> maps a provider exception through the operation's
+    ///         <c>IExceptionTransform</c> (how a duplicate stream id becomes
+    ///         <c>ExistingStreamIdCollisionException</c>) and <c>ThrowIfAny</c> rethrows what postprocessing
+    ///         collected. <c>ExecuteEachAsync</c> is the same per-operation shape, but it has nowhere to put
+    ///         the session logger's before, success and failure lines around each command, and the failure
+    ///         line is deliberately written with the provider's exception <em>before</em> the transform,
+    ///         which an executor that transforms inside its own catch cannot offer.
+    ///     </para>
     /// </remarks>
     private async Task ExecuteBatchAsync(SqliteConnection connection, SqliteTransaction transaction,
         IReadOnlyList<Weasel.Storage.IStorageOperation> operations, CancellationToken token)
@@ -1690,38 +1701,19 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
                     Logger.LogFailure(command, e);
                 }
 
-                throw TransformOperationException(operation, e);
+                if (Weasel.Storage.OperationBatchExecutor.TryTransform(operation, e, out var transformed))
+                {
+                    ExceptionDispatchInfo.Capture(transformed).Throw();
+                }
+
+                throw;
             }
         }
 
         LastBatchCommandCount = reused.Prepared;
         LastBatchOperationCount = operations.Count;
 
-        if (exceptions.Count == 1)
-        {
-            throw exceptions[0];
-        }
-
-        if (exceptions.Count > 1)
-        {
-            throw new AggregateException(exceptions);
-        }
-    }
-
-    /// <summary>
-    ///     Give an operation the chance to map a provider exception into a domain one — how a
-    ///     duplicate stream id becomes an <c>ExistingStreamIdCollisionException</c> rather than a raw
-    ///     constraint violation.
-    /// </summary>
-    private static Exception TransformOperationException(Weasel.Storage.IStorageOperation operation, Exception e)
-    {
-        if (operation is JasperFx.Core.Exceptions.IExceptionTransform transform &&
-            transform.TryTransform(e, out var transformed) && transformed is not null)
-        {
-            return transformed;
-        }
-
-        return e;
+        Weasel.Storage.OperationBatchExecutor.ThrowIfAny(exceptions);
     }
 
     // ---- IStorageSession ----

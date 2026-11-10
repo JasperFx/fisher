@@ -56,8 +56,7 @@ public void Apply(OrderShipped e, OrderSummary view)
 projection maps its document type, and a mapped type gets a Fisher `fi_doc_*` table in the migration —
 so the other order leaves the type with two homes.
 
-It is checked rather than documented, the same "this line has to come first" shape
-`SeedInitialDataOnStartup` has.
+It is checked rather than documented.
 :::
 
 ## Conjoined tenancy

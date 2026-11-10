@@ -27,18 +27,16 @@ builder.Services.AddFisher(opts =>
     opts.Connection("Data Source=app.db");
     opts.InitialData.Add(new SeedCountries());
 })
-.ApplyAllDatabaseChangesOnStartup()   // must come first
+.ApplyAllDatabaseChangesOnStartup()
 .SeedInitialDataOnStartup();
 ```
 
-## Order matters, and Fisher enforces it
+## Seeding runs after the schema step
 
-::: warning
-`SeedInitialDataOnStartup()` **refuses to be registered before** `ApplyAllDatabaseChangesOnStartup()`.
-
-Hosted services start in registration order, so the other way round writes to tables that do not exist
-yet — and that presents as `no such table`, which names the table and not the mistake.
-:::
+The startup opt-ins configure one activator per store, which applies (or asserts) the schema and then
+runs the seeders, in that order, whichever of the calls came first. Fisher 1.x started one hosted service
+per call in registration order, and refused `SeedInitialDataOnStartup()` before
+`ApplyAllDatabaseChangesOnStartup()` for that reason; the refusal went with the cause.
 
 ## There is no "already seeded" marker
 

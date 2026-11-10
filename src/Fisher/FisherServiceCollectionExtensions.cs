@@ -7,6 +7,7 @@ using JasperFx.Events.Daemon;
 using JasperFx.Events.EventModeling;
 using JasperFx.Events.Projections;
 using JasperFx.Events.Subscriptions;
+using JasperFx.Resources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -813,27 +814,21 @@ public sealed class FisherStoreConfigurationExpression<T> where T : class, IDocu
     /// <inheritdoc cref="FisherConfigurationExpression.ApplyAllDatabaseChangesOnStartup" />
     public FisherStoreConfigurationExpression<T> ApplyAllDatabaseChangesOnStartup()
     {
-        _services.AddSingleton<IHostedService>(sp
-            => new FisherSchemaActivator(sp.GetRequiredService<T>()));
-
+        FisherActivation<T>.For(_services).ApplyChanges();
         return this;
     }
 
     /// <inheritdoc cref="FisherConfigurationExpression.AssertDatabaseMatchesConfigurationOnStartup" />
     public FisherStoreConfigurationExpression<T> AssertDatabaseMatchesConfigurationOnStartup()
     {
-        _services.AddSingleton<IHostedService>(sp
-            => new FisherSchemaAssertionActivator(sp.GetRequiredService<T>()));
-
+        FisherActivation<T>.For(_services).AssertSchema();
         return this;
     }
 
     /// <inheritdoc cref="FisherConfigurationExpression.SeedInitialDataOnStartup" />
     public FisherStoreConfigurationExpression<T> SeedInitialDataOnStartup()
     {
-        _services.AddSingleton<IHostedService>(sp
-            => new FisherInitialDataActivator(sp.GetRequiredService<T>()));
-
+        FisherActivation<T>.For(_services).SeedInitialData();
         return this;
     }
 
@@ -939,18 +934,7 @@ public sealed class FisherConfigurationExpression
     /// </remarks>
     public FisherConfigurationExpression ApplyAllDatabaseChangesOnStartup()
     {
-        // Symmetric with the guard in AssertDatabaseMatchesConfigurationOnStartup, because which of the
-        // two was called first must not decide whether the contradiction is reported.
-        if (_services.Any(x => x.ImplementationType == typeof(FisherSchemaAssertionActivator)))
-        {
-            throw new InvalidOperationException(
-                "AssertDatabaseMatchesConfigurationOnStartup() and ApplyAllDatabaseChangesOnStartup() are "
-                + "alternatives: applying the configured changes at startup makes the assertion a check on "
-                + "the schema this same startup just wrote, which proves nothing. Keep the one that matches "
-                + "how this deployment gets its schema.");
-        }
-
-        _services.AddSingleton<IHostedService, FisherSchemaActivator>();
+        FisherActivation<IDocumentStore>.For(_services).ApplyChanges();
         return this;
     }
 
@@ -981,16 +965,7 @@ public sealed class FisherConfigurationExpression
     /// </remarks>
     public FisherConfigurationExpression AssertDatabaseMatchesConfigurationOnStartup()
     {
-        if (_services.Any(x => x.ImplementationType == typeof(FisherSchemaActivator)))
-        {
-            throw new InvalidOperationException(
-                "ApplyAllDatabaseChangesOnStartup() and AssertDatabaseMatchesConfigurationOnStartup() are "
-                + "alternatives: applying the configured changes at startup makes the assertion a check on "
-                + "the schema this same startup just wrote, which proves nothing. Keep the one that matches "
-                + "how this deployment gets its schema.");
-        }
-
-        _services.AddSingleton<IHostedService, FisherSchemaAssertionActivator>();
+        FisherActivation<IDocumentStore>.For(_services).AssertSchema();
         return this;
     }
 
@@ -999,11 +974,12 @@ public sealed class FisherConfigurationExpression
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         <b>Ordering is the whole reason this is separate from registering the seeders.</b>
-    ///         Hosted services start in registration order, so this must be called after
-    ///         <see cref="ApplyAllDatabaseChangesOnStartup" /> — a seeder writing to a table that does
-    ///         not exist yet would fail, and nothing else creates them. Calling it first is refused by
-    ///         name rather than left to present as "no such table" at startup.
+    ///         <b>Seeding always runs after the schema step, whichever was called first</b> (fisher#465).
+    ///         All three startup opt-ins configure one <c>JasperFx.Resources.StoreActivator</c> per store,
+    ///         which migrates or asserts and then seeds, in that order. Fisher 1.x registered three hosted
+    ///         services that started in registration order, and refused this call before
+    ///         <see cref="ApplyAllDatabaseChangesOnStartup" /> for that reason alone; the refusal is gone with
+    ///         the cause.
     ///     </para>
     ///     <para>
     ///         Seeders run once per host start and are expected to be idempotent; Fisher keeps no
@@ -1012,20 +988,7 @@ public sealed class FisherConfigurationExpression
     /// </remarks>
     public FisherConfigurationExpression SeedInitialDataOnStartup()
     {
-        // Either schema activator satisfies this: what a seeder needs is that the tables exist by the
-        // time it runs, and an assertion that passed is exactly that claim (fisher#172).
-        if (_services.All(x => x.ImplementationType != typeof(FisherSchemaActivator)
-                && x.ImplementationType != typeof(FisherSchemaAssertionActivator)))
-        {
-            throw new InvalidOperationException(
-                "Call ApplyAllDatabaseChangesOnStartup() (or AssertDatabaseMatchesConfigurationOnStartup()) "
-                + "before SeedInitialDataOnStartup(). Hosted "
-                + "services start in registration order, and a seeder that runs before the schema is "
-                + "applied writes to tables that do not exist yet. If the schema is applied some other "
-                + "way, run the seeders that way too.");
-        }
-
-        _services.AddSingleton<IHostedService, FisherInitialDataActivator>();
+        FisherActivation<IDocumentStore>.For(_services).SeedInitialData();
         return this;
     }
 
@@ -1101,70 +1064,128 @@ public sealed class FisherConfigurationExpression
 }
 
 /// <summary>
-///     Applies configured schema changes once, at host start.
+///     Which of the three startup steps a store opted into, registered once per store type.
 /// </summary>
-internal sealed class FisherSchemaActivator : IHostedService
+/// <remarks>
+///     The three opt-ins configure one activator rather than registering one hosted service each, so the
+///     order is the activator's (migrate or assert, then seed) rather than the registration order.
+/// </remarks>
+internal sealed class FisherActivation<T> where T : class, IDocumentStore
 {
-    private readonly IDocumentStore _store;
+    private bool _applyChanges;
+    private bool _assertSchema;
+    private bool _seedInitialData;
 
-    public FisherSchemaActivator(IDocumentStore store) => _store = store;
+    public bool ShouldApplyChanges => _applyChanges;
+    public bool ShouldAssertSchema => _assertSchema;
+    public bool ShouldSeedInitialData => _seedInitialData;
 
-    public Task StartAsync(CancellationToken cancellationToken)
-        => _store.Options.AutoCreateSchemaObjects == AutoCreate.None
-            ? Task.CompletedTask
-            : _store.ApplyAllConfiguredChangesToDatabaseAsync(cancellationToken);
+    /// <summary>
+    ///     This store's settings, registering them and the store's one activator on first use.
+    /// </summary>
+    public static FisherActivation<T> For(IServiceCollection services)
+    {
+        var existing = services
+            .Where(x => x.ServiceType == typeof(FisherActivation<T>))
+            .Select(x => x.ImplementationInstance)
+            .OfType<FisherActivation<T>>()
+            .FirstOrDefault();
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var activation = new FisherActivation<T>();
+        services.AddSingleton(activation);
+        services.AddSingleton<IHostedService>(sp => new FisherStoreActivator(sp.GetRequiredService<T>(),
+            activation.ShouldApplyChanges, activation.ShouldAssertSchema, activation.ShouldSeedInitialData,
+            sp.GetService<ILoggerFactory>()?.CreateLogger<FisherStoreActivator>()));
+
+        return activation;
+    }
+
+    public void ApplyChanges()
+    {
+        // Symmetric with AssertSchema, because which of the two was called first must not decide whether
+        // the contradiction is reported.
+        if (_assertSchema) throw Contradiction();
+        _applyChanges = true;
+    }
+
+    public void AssertSchema()
+    {
+        if (_applyChanges) throw Contradiction();
+        _assertSchema = true;
+    }
+
+    public void SeedInitialData() => _seedInitialData = true;
+
+    private static InvalidOperationException Contradiction() => new(
+        "ApplyAllDatabaseChangesOnStartup() and AssertDatabaseMatchesConfigurationOnStartup() are "
+        + "alternatives: applying the configured changes at startup makes the assertion a check on "
+        + "the schema this same startup just wrote, which proves nothing. Keep the one that matches "
+        + "how this deployment gets its schema.");
 }
 
 /// <summary>
-///     Asserts once, at host start, that every database the store spans already matches the configured
-///     schema — and stops the host if one does not (fisher#172).
+///     A store's startup: apply or assert the schema, then seed (fisher#39, fisher#172, fisher#465).
 /// </summary>
 /// <remarks>
 ///     <para>
-///         <b><see cref="AutoCreate.None" /> is not consulted, where
-///         <see cref="FisherSchemaActivator" /> honours it.</b> That is not an inconsistency: the setting
-///         says the schema is not Fisher's to change, and this changes nothing — it reads. Declining to
-///         verify because the store was told not to write would turn the strictest configuration into
-///         the one with the fewest guarantees.
+///         <b>JasperFx's <see cref="StoreActivator{TStore,TDatabase}" /></b> (jasperfx#1054), which replaced
+///         Fisher's three hosted services. The store is its own single database here, as the base's remarks
+///         describe: <see cref="IDocumentStore.ApplyAllConfiguredChangesToDatabaseAsync" /> already spans
+///         every database, and its <c>TenantMigrationException</c> is what reports which tenants are
+///         current after a partial failure. Handing the base one database per tenant would lose that.
 ///     </para>
 ///     <para>
-///         The exception propagates rather than being logged, which is the point of the opt-in: a host
-///         that starts against a drifted schema does not fail, it answers wrongly.
+///         <b><see cref="AutoCreate.None" /> wins over applying the changes</b>: the activator starts and
+///         skips the step, rather than the registration quietly overriding the schema policy.
+///     </para>
+///     <para>
+///         <b>Asserting is deliberately not gated on <see cref="AutoCreate.None" />.</b> That setting says the
+///         schema is not Fisher's to change, and asserting changes nothing. Declining to verify because the
+///         store was told not to write would turn the strictest configuration into the one with the fewest
+///         guarantees. The exception propagates, which is the point of the opt-in.
+///     </para>
+///     <para>
+///         <c>ApplicationAssemblyReuseWarning</c> is not overridden: <c>Configured</c> already logs it once
+///         per container (fisher#142), whether or not any startup step was opted into.
 ///     </para>
 /// </remarks>
-internal sealed class FisherSchemaAssertionActivator : IHostedService
+internal sealed class FisherStoreActivator : StoreActivator<IDocumentStore, IDocumentStore>
 {
-    private readonly IDocumentStore _store;
+    private readonly bool _applyChanges;
+    private readonly bool _assertSchema;
+    private readonly bool _seedInitialData;
 
-    public FisherSchemaAssertionActivator(IDocumentStore store) => _store = store;
-
-    public Task StartAsync(CancellationToken cancellationToken)
-        => _store.AssertDatabaseMatchesConfigurationAsync(cancellationToken);
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-}
-
-/// <summary>
-///     Runs the configured initial-data seeders once, at host start, after the schema activator
-///     (fisher#39).
-/// </summary>
-internal sealed class FisherInitialDataActivator : IHostedService
-{
-    private readonly IDocumentStore _store;
-
-    public FisherInitialDataActivator(IDocumentStore store) => _store = store;
-
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public FisherStoreActivator(IDocumentStore store, bool applyChanges, bool assertSchema, bool seedInitialData,
+        ILogger? logger) : base(store, logger)
     {
-        foreach (var data in _store.Options.InitialData)
-        {
-            await data.Populate(_store, cancellationToken).ConfigureAwait(false);
-        }
+        _applyChanges = applyChanges;
+        _assertSchema = assertSchema;
+        _seedInitialData = seedInitialData;
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    protected override bool ShouldApplyChangesOnStartup
+        => _applyChanges && Store.Options.AutoCreateSchemaObjects != AutoCreate.None;
+
+    protected override bool ShouldAssertDatabaseMatchesConfigurationOnStartup => _assertSchema;
+
+    protected override IEnumerable<JasperFx.IInitialData<IDocumentStore>> InitialData
+        => _seedInitialData ? Store.Options.InitialData : [];
+
+    protected override ValueTask<IReadOnlyList<IDocumentStore>> BuildDatabasesAsync(CancellationToken token)
+        => new([Store]);
+
+    protected override Task ApplyChangesAsync(IDocumentStore database, CancellationToken token)
+        => database.ApplyAllConfiguredChangesToDatabaseAsync(token);
+
+    protected override Task AssertDatabaseMatchesConfigurationAsync(IDocumentStore database, CancellationToken token)
+        => database.AssertDatabaseMatchesConfigurationAsync(token);
+
+    protected override string DescribeDatabase(IDocumentStore database) => database.Options.StoreName;
 }
 
 /// <summary>
