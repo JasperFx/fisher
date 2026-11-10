@@ -208,7 +208,7 @@ internal sealed class FisherProjectionBatch : ProjectionBatchBase<IDocumentSessi
 
         try
         {
-            var operations = await new AppendPlanner(context)
+            var operations = await new AppendPlanner(context, JasperFx.Events.Appending.AppendOrigin.RaisedByProjection)
                 .PlanAsync(raised, connection, transaction, token).ConfigureAwait(false);
 
             await context.ExecuteOperationsAsync(connection, transaction, operations, token).ConfigureAwait(false);

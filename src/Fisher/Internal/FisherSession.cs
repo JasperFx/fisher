@@ -27,6 +27,7 @@ namespace Fisher.Internal;
 ///     </para>
 /// </remarks>
 internal partial class FisherSession : IDocumentSession, ITenantOperations, IStorageSession, IEventTenancySource,
+    JasperFx.IMetadataContext,
     IAsyncDisposable
 {
     /// <summary>
