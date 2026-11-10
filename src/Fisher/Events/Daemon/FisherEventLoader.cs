@@ -75,12 +75,6 @@ internal sealed class FisherEventLoader : EventLoaderBase
         _isGuid = _events.StreamIdentity == StreamIdentity.AsGuid;
     }
 
-    /// <summary>
-    ///     The aliases the page SQL filters on, upcast sources included. Exposed for the loader tests.
-    /// </summary>
-    internal IReadOnlyList<string> AllowedEventTypeNames
-        => ((SqliteEventPagingDialect)Dialect).AllowedAliases(Options.EventTypes);
-
     public override async Task<EventPage> LoadAsync(EventRequest request, CancellationToken token)
     {
         var page = await base.LoadAsync(request, token).ConfigureAwait(false);

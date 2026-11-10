@@ -17,9 +17,8 @@ namespace Fisher.Events.Daemon;
 ///         ⚠️ <b>An upcast target's SOURCE names are allowed alongside it</b> (fisher#191). A projection that
 ///         folds the new schema declares the new types, and every row written before the migration carries
 ///         the OLD name, so a shard filtered on the declared set alone reads nothing from the history it was
-///         pointed at, silently, and reports itself caught up. The shared
-///         <see cref="EventTypeAllowList" /> is built from CLR types and has no way to name an alias whose
-///         type was deleted, which is the whole point of an upcast, so the widening happens here.
+///         pointed at, silently, and reports itself caught up. The shared <see cref="EventTypeAllowList" />
+///         computes those names (<c>AliasesIncludingUpcastSources</c>), and this renders them.
 ///     </para>
 ///     <para>
 ///         The filter is pushed into SQL so non-matching rows never leave SQLite; the ceiling accounting
@@ -30,26 +29,11 @@ internal sealed class SqliteEventPagingDialect : IEventPagingDialect
 {
     private readonly StoreOptions _options;
     private readonly EventGraph _events;
-    private readonly Dictionary<string, List<string>> _upcastSourcesByTarget = new(StringComparer.Ordinal);
 
     internal SqliteEventPagingDialect(StoreOptions options)
     {
         _options = options;
         _events = options.EventGraph;
-
-        foreach (var transformation in _events.Upcasters.AllTransformations)
-        {
-            var target = _events.EventMappingFor(transformation.EventType).EventTypeName;
-            if (!_upcastSourcesByTarget.TryGetValue(target, out var sources))
-            {
-                _upcastSourcesByTarget[target] = sources = [];
-            }
-
-            if (!sources.Contains(transformation.EventTypeName, StringComparer.Ordinal))
-            {
-                sources.Add(transformation.EventTypeName);
-            }
-        }
     }
 
     public EventPageCommand BuildPageCommand(EventPageQuery query)
@@ -114,27 +98,8 @@ internal sealed class SqliteEventPagingDialect : IEventPagingDialect
         }
     }
 
-    internal IReadOnlyList<string> AllowedAliases(EventTypeAllowList allowList)
-    {
-        if (allowList.IsEmpty)
-        {
-            return [];
-        }
-
-        var aliases = new List<string>(allowList.Aliases);
-        foreach (var alias in allowList.Aliases)
-        {
-            if (!_upcastSourcesByTarget.TryGetValue(alias, out var sources)) continue;
-
-            foreach (var source in sources)
-            {
-                if (!aliases.Contains(source, StringComparer.Ordinal))
-                {
-                    aliases.Add(source);
-                }
-            }
-        }
-
-        return aliases;
-    }
+    // The shared allow list carries the upcast sources itself (weasel#743): what is filtered on is the
+    // declared aliases plus the stored names of every transformation targeting one of them.
+    internal static IReadOnlyList<string> AllowedAliases(EventTypeAllowList allowList)
+        => allowList.IsEmpty ? [] : allowList.AliasesIncludingUpcastSources;
 }
