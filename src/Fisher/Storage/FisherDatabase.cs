@@ -140,46 +140,14 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
     private Task? _firstUseMigration;
     private readonly SemaphoreSlim _firstUseGate = new(1, 1);
 
-    /// <summary>
-    ///     Whether the current asynchronous flow is already inside a first-use migration (fisher#69).
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         The guard is about re-entrancy within one logical call — the migration opens connections
-    ///         of its own, and without this it would recurse into itself — rather than about two callers
-    ///         racing, which is what <c>_firstUseGate</c> below handles.
-    ///     </para>
-    ///     <para>
-    ///         <b><see cref="AsyncLocal{T}" /> rather than <c>[ThreadStatic]</c>, because a thread-static
-    ///         stops modelling a call stack the moment there is an <c>await</c> in it.</b> The flag is
-    ///         set on whichever thread resumed after the semaphore wait and cleared on whichever thread
-    ///         completed the migration, and those need not be the same one — which leaves the setting
-    ///         thread permanently "migrating" (and since it is static, later first-use opens scheduled
-    ///         onto it would skip the migration entirely and reach an empty file, surfacing as
-    ///         <c>no such table</c> a long way from the cause), while continuation threads never see the
-    ///         guard at all and a re-entrant open on one would block on a semaphore its own logical call
-    ///         is holding — a hang rather than an error. An <see cref="AsyncLocal{T}" /> flows into the
-    ///         migration's own asynchronous call graph, which is exactly the re-entrancy being guarded,
-    ///         and is restored when the call returns, so it cannot poison a pooled thread.
-    ///     </para>
-    ///     <para>
-    ///         <b>Neither failure was ever reproduced</b> — 2880 first-use migrations across concurrent
-    ///         waves of fresh tenants produced none — so this is a flag made to mean what it says rather
-    ///         than a fix for an observed defect. Recorded that way on purpose: the next reader should
-    ///         not go looking for the bug report.
-    ///     </para>
-    ///     <para>
-    ///         Left <c>static</c>, as the thread-static was. The recursion being guarded is this
-    ///         database's migration opening connections to this database, so an instance field would be
-    ///         marginally more precise; static additionally suppresses a migration for a second database
-    ///         reached from inside the first, which nothing does.
-    ///     </para>
-    /// </remarks>
-    private static readonly AsyncLocal<bool> _migrating = new();
+    // fisher#461: there is no re-entrancy guard here any more. The migration runs through Weasel's own
+    // connection factory, which never calls back into OpenConnectionAsync, so nothing recurses and
+    // the gate above is the only thing needed. A static AsyncLocal flag used to suppress the check
+    // for every database in the flow, which was broader than the problem it guarded.
 
     private async Task EnsureMigratedAsync(CancellationToken token)
     {
-        if (_migrating.Value || _firstUseMigration?.IsCompletedSuccessfully == true)
+        if (_firstUseMigration?.IsCompletedSuccessfully == true)
         {
             return;
         }
@@ -193,8 +161,6 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
                 return;
             }
 
-            _migrating.Value = true;
-
             // Not cached until it succeeds: a migration that failed must be retried by the next caller
             // rather than remembered as done, or one transient failure leaves the tenant permanently
             // unusable with nothing to say why.
@@ -204,7 +170,6 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
         }
         finally
         {
-            _migrating.Value = false;
             _firstUseGate.Release();
         }
     }

@@ -76,7 +76,7 @@ internal sealed class EventDataQueryProvider<T> : EventTableQueryProvider<T> whe
     };
 
     protected override T? Read(DbDataReader reader, FisherSession session)
-        => reader.IsDBNull(0) ? null : session.FisherSerializer.FromJson<T>(reader.GetString(0));
+        => reader.IsDBNull(0) ? null : session.FisherSerializer.FromJson<T>(reader, 0);
 
     /// <summary>
     ///     The event type, and under conjoined tenancy the tenant — the explicit one when

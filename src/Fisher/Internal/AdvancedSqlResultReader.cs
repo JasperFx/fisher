@@ -140,7 +140,7 @@ internal sealed class JsonReader : AdvancedSqlResultReader
     public override int ColumnCount => 1;
 
     public override object? ReadValue(DbDataReader reader, int startColumn)
-        => reader.IsDBNull(startColumn) ? null : _serializer.FromJson(_type, reader.GetString(startColumn));
+        => reader.IsDBNull(startColumn) ? null : _serializer.FromJson(_type, reader, startColumn);
 }
 
 /// <summary>
