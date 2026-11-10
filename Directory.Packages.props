@@ -448,15 +448,15 @@
         <!-- TODO(fisher#460): the net11 train pins Weasel.* to 10.0.0-alpha.1, which was published
              nowhere (nuget.org, polecat-local, stoat-local) when this was written. Held at 9.50.0 so
              the repo restores and tests; move both lines when alpha.1 exists. -->
-        <PackageVersion Include="Weasel.Sqlite" Version="9.50.0" />
-        <PackageVersion Include="Weasel.Storage" Version="9.50.0" />
+        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.1" />
+        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.1" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
              GHSA-2m69-gcr7-jv3q) with 3.0.3, which ships the patched SQLite 3.50.x build. That
              build is also what puts JSONB and the json1 functions Fisher's storage relies on
              unconditionally in the box. -->
-        <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+        <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
 
         <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
         <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
