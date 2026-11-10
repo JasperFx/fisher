@@ -360,7 +360,7 @@ public class command_line_integration : IAsyncLifetime
 
     /// <remarks>
     ///     A seeder needs the tables to exist by the time it runs, and an assertion that passed is
-    ///     exactly that claim — so it satisfies the ordering guard the same way applying does.
+    ///     exactly that claim. One activator runs the assertion and then the seeders (fisher#465).
     /// </remarks>
     [Fact]
     public void seeding_may_follow_the_assertion_as_well_as_the_migration()
