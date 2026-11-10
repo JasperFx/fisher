@@ -256,7 +256,8 @@ internal sealed class SelectProjection
 
             while (current is MemberExpression member)
             {
-                current = member.Expression;
+                // A member of a union case is read through a cast of the union's Value (fisher#466).
+                current = Members.UnionMemberAccess.ParentOf(member);
             }
 
             return current == _document;
