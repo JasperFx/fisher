@@ -24,8 +24,11 @@
     "ExecutableTarget": {
       "type": "string",
       "enum": [
+        "AotSmoke",
         "CI",
         "Compile",
+        "Pack",
+        "TakeLocalUpstream",
         "Test"
       ]
     },
@@ -104,6 +107,10 @@
           "type": "string",
           "description": "Configuration to build and test - Release by default"
         },
+        "Feed": {
+          "type": "string",
+          "description": "Folder Pack copies the .nupkg files into, and TakeLocalUpstream adds as a NuGet source"
+        },
         "Framework": {
           "type": "array",
           "description": "Target framework(s) to test - net9.0 and net10.0 by default",
@@ -115,6 +122,10 @@
           "type": "boolean",
           "description": "Fold this run's observations into artifacts/test-ledger/ (always on under CI)"
         },
+        "SingleFramework": {
+          "type": "string",
+          "description": "Target framework AotSmoke publishes for - Default is 'net10.0'"
+        },
         "TestWorkers": {
           "type": [
             "integer",
@@ -122,6 +133,18 @@
           ],
           "description": "Worker processes per suite - overrides the committed counts and the per-machine clamp",
           "format": "int32"
+        },
+        "UpstreamVersion": {
+          "type": "string",
+          "description": "TakeLocalUpstream: version of the local JasperFx packages to pin (e.g. 3.0.0-local.1)"
+        },
+        "Version": {
+          "type": "string",
+          "description": "Package version for Pack, overriding <Version> in Directory.Build.props (e.g. 2.0.0-local.1)"
+        },
+        "WeaselVersion": {
+          "type": "string",
+          "description": "TakeLocalUpstream: version of the local Weasel packages to pin (e.g. 10.0.0-local.1)"
         }
       }
     },

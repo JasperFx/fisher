@@ -434,3 +434,6 @@ docs/.vitepress/cache/
 
 # The Nuke build's scratch space: per-lane temp directories for supervised test runs (build/).
 .nuke/temp/
+
+# Machine-local NuGet feed registered by TakeLocalUpstream
+/nuget.config

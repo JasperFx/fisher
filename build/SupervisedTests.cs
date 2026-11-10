@@ -148,6 +148,10 @@ partial class Build
         {
             MaxParallelWorkers = workers,
 
+            // Announces the run to a Bobcat monitor when one answers at BOBCAT_MONITOR_URL; on a CI runner
+            // nothing listens. BOBCAT_MONITOR=0 turns it off.
+            PublishToMonitor = true,
+
             // By class, from the discovery node's own location.type. The display-name heuristic is the
             // fallback only; xUnit v3 hands over the real type on every node.
             PartitionKey = test => test.TestClass ?? WorkPlan.ClassOf(test),

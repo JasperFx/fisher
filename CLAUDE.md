@@ -28,6 +28,13 @@ dotnet test src/Fisher.Tests/Fisher.Tests.csproj -f net10.0 -- --filter-method "
 ./build.sh Test --skip Compile --test-workers 4   # override the worker count (and the per-machine clamp)
 ./build.sh Test --record-ledger            # fold this run into artifacts/test-ledger/ (CI always does)
 
+# The .NET 11 release train (fisher#459): local packs before the nuget.org replay
+./build.sh Pack --version 2.0.0-local.1 --feed /tmp/feed   # Fisher, Fisher.AspNetCore, Fisher.EntityFrameworkCore
+./build.sh AotSmoke                                          # publish smoke/aot-consumer natively and run it
+scripts/take-local-upstream.sh 3.0.0-local.1 10.0.0-local.1 /tmp/feed   # pin JasperFx/Weasel + register the feed
+                                                                         # (gitignored nuget.config); rerun with the
+                                                                         # released versions to put the pins back
+
 # The documentation site
 npm install
 npm run docs                               # mdsnippets + dev server on :5173
