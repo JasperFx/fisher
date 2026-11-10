@@ -663,3 +663,10 @@ public class soft_delete_compliance
 
 public class document_metadata_compliance
     : DocumentMetadataCompliance<FisherDocumentComplianceFixture>;
+
+/// <summary>
+///     The shared step-through (jasperfx#1049), which Fisher's three <c>IEventStore</c> step-through members
+///     now forward to.
+/// </summary>
+public class projection_step_through_compliance
+    : ProjectionStepThroughCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

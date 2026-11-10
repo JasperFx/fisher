@@ -260,21 +260,34 @@ public class writing_to_aggregates : IAsyncLifetime
     }
 
     [Fact]
-    public async Task an_expected_version_of_zero_still_creates_a_missing_stream()
+    public async Task an_expected_starting_version_of_zero_still_creates_a_missing_stream()
     {
-        // The other side of fisher#378: zero is what FetchForWriting records for a stream that did not
-        // exist when it was fetched, so refusing it would break the ordinary "start it if absent" shape.
+        // The other side of fisher#378: a starting version of zero is what FetchForWriting records for a
+        // stream that did not exist when it was fetched, so refusing it would break the ordinary "start it
+        // if absent" shape. Since jasperfx#1047 Append's argument is the version AFTER the append, so one
+        // event onto a missing stream is spelled 1.
         var streamId = Guid.NewGuid();
 
         await using (var session = _store.LightweightSession())
         {
-            session.Events.Append(streamId, 0, new QuestStarted("Find the ring"));
+            session.Events.Append(streamId, 1, new QuestStarted("Find the ring"));
             await session.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         await using var query = _store.LightweightSession();
         var state = await query.Events.FetchStreamStateAsync(streamId, TestContext.Current.CancellationToken);
         state!.Version.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task an_expected_version_below_the_events_appended_is_refused_before_anything_is_read()
+    {
+        // The old reading of Append(id, 0, e) — "the stream is at 0" — is refused outright under the shared
+        // meaning, rather than silently reinterpreted.
+        await using var session = _store.LightweightSession();
+
+        Should.Throw<ArgumentOutOfRangeException>(
+            () => session.Events.Append(Guid.NewGuid(), 0, new QuestStarted("Find the ring")));
     }
 
     [Fact]

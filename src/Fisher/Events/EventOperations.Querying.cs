@@ -64,6 +64,28 @@ public partial class EventOperations
         return FetchStreamAsync((object)streamKey, version, timestamp, 0, token, includeArchived: true);
     }
 
+    /// <summary>
+    ///     Set only while <see cref="Protected.FisherStreamCompacting" /> runs. The shared
+    ///     <see cref="JasperFx.Events.Protected.StreamCompactingExecution{TSession}" /> reads the stream through
+    ///     the public <c>FetchStreamAsync</c>, which leaves archived events out, and Fisher has always compacted
+    ///     an archived stream: archiving does not erase it, and the snapshot row stays archived.
+    /// </summary>
+    private bool _streamReadsIncludeArchived;
+
+    internal async Task<T> WithArchivedStreamReadsAsync<T>(Func<Task<T>> action)
+    {
+        var previous = _streamReadsIncludeArchived;
+        _streamReadsIncludeArchived = true;
+        try
+        {
+            return await action().ConfigureAwait(false);
+        }
+        finally
+        {
+            _streamReadsIncludeArchived = previous;
+        }
+    }
+
     private async Task<IReadOnlyList<IEvent>> FetchStreamAsync(object streamId, long version,
         DateTimeOffset? timestamp, long fromVersion, CancellationToken token, bool includeArchived = false)
     {
@@ -74,7 +96,7 @@ public partial class EventOperations
             .Append(Graph.EventsTableName)
             .Append(" where stream_id = @stream_id");
 
-        if (!includeArchived)
+        if (!includeArchived && !_streamReadsIncludeArchived)
         {
             sql.Append(" and is_archived = 0");
         }

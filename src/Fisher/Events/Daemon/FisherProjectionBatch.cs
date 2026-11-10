@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using JasperFx.Events.Documents;
 using Fisher.Internal;
 using JasperFx.Events;
 using JasperFx.Events.Daemon;
@@ -29,47 +30,37 @@ namespace Fisher.Events.Daemon;
 ///         for the single write lock, and taking it up front is what stops a deferred transaction from
 ///         discovering the conflict only at commit.
 ///     </para>
+///     <para>
+///         <b>The session list, the message batch, the raised-event bookkeeping and the post-commit ordering
+///         are the shared <see cref="ProjectionBatchBase{TSession}" />'s</b> (jasperfx#1045). What stays here is
+///         the SQLite transaction, the progression write and planning raised events under the write lock.
+///         One behaviour came with the base: outside <see cref="ShardExecutionMode.Continuous" /> a projection
+///         publishes nothing and raises nothing, because a rebuild or catch-up replays history and a message
+///         or raised event from one is a second delivery of something already done.
+///     </para>
 /// </remarks>
-internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession, IQuerySession>
+internal sealed class FisherProjectionBatch : ProjectionBatchBase<IDocumentSession>,
+    IProjectionBatch<IDocumentSession, IQuerySession>
 {
     private readonly DocumentStore _store;
     private readonly EventGraph _events;
-    private readonly ConcurrentBag<IDocumentSession> _sessions = [];
     private readonly ConcurrentQueue<Weasel.Storage.IStorageOperation> _progress = new();
-
-    // Null until a projection in this batch actually publishes, which keeps both commit hooks
-    // no-ops for the common case of no bus integration.
-    private Messaging.IMessageBatch? _messageBatch;
-    private readonly SemaphoreSlim _messageBatchGate = new(1, 1);
-
-    // Streams a projection raised events onto, planned at commit rather than when recorded.
-    private readonly List<StreamAction> _raisedStreams = [];
-
     private readonly Fisher.Storage.FisherDatabase _database;
 
-    internal FisherProjectionBatch(DocumentStore store, EventGraph events, Fisher.Storage.FisherDatabase database)
+    // Gathered before the resilience pipeline (fisher#12) and told about the commit after it.
+    private ITransactionParticipant[] _participants = [];
+
+    internal FisherProjectionBatch(DocumentStore store, EventGraph events, Fisher.Storage.FisherDatabase database,
+        ShardExecutionMode mode) : base(mode)
     {
         _store = store;
         _events = events;
         _database = database;
     }
 
-    /// <summary>
-    ///     A session for one tenant's slice of this batch.
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         Thread-safe because a composite projection may ask for sessions concurrently, which is why
-    ///         the backing collection is a <see cref="ConcurrentBag{T}" /> rather than a list.
-    ///     </para>
-    ///     <para>
-    ///         <b>Pinned to the batch's own database rather than resolved from the tenant id</b>
-    ///         (fisher#57). The two agree under every tenancy but database-per-tenant, where resolving
-    ///         would send a slice's documents to whichever file the tenant id names — which for a
-    ///         batch's default-tenant slices is not the file its events came from.
-    ///     </para>
-    /// </remarks>
-    public IDocumentSession SessionForTenant(string tenantId)
+    protected override IMessageOutbox Outbox => _store.Options.Events.MessageOutbox;
+
+    protected override IDocumentSession OpenSessionForTenant(string tenantId)
     {
         var session = _store.OpenSessionOn(_database, tenantId);
 
@@ -83,19 +74,10 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
             fisherSession.ParticipantsOwnedByBatch = true;
         }
 
-        _sessions.Add(session);
         return session;
     }
 
-    /// <summary>
-    ///     Record how far the shard reached, to commit alongside the projection's own writes.
-    /// </summary>
-    /// <remarks>
-    ///     Guarded on the range's floor (fisher#402): the write fails the batch if another agent has
-    ///     already moved this shard, rather than letting two daemons over one file both apply the range.
-    ///     See <see cref="Storage.ShardProgressionOperation" />.
-    /// </remarks>
-    public ValueTask RecordProgress(EventRange range)
+    public override ValueTask RecordProgress(EventRange range)
     {
         Diagnostics.DaemonTrace.Record("batch.progress", range.ShardName.Identity,
             range.SequenceFloor, range.SequenceCeiling);
@@ -107,9 +89,10 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
         return ValueTask.CompletedTask;
     }
 
-    public async Task ExecuteAsync(CancellationToken token)
+    protected override async Task ExecuteOperationsInTransactionAsync(Func<CancellationToken, Task> beforeCommit,
+        CancellationToken token)
     {
-        var sessions = _sessions.OfType<FisherSession>().ToArray();
+        var sessions = Sessions.OfType<FisherSession>().ToArray();
 
         // A snapshot type's table may never have been created — the daemon can easily be the first
         // thing to write one. Done before the transaction opens, because creating it is its own
@@ -132,7 +115,7 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
         // SQLITE_BUSY re-executes the whole delegate, so a drain in there would hand the retry an
         // empty queue: the transaction would commit the progression row for events whose documents
         // were never written, with no error anywhere. Every other piece of the delegate's input
-        // (_raisedStreams, _progress) is already copied rather than consumed, for the same reason.
+        // (RaisedEvents, _progress) is already copied rather than consumed, for the same reason.
         var pending = sessions
             .Select(session => (Session: session, Operations: session.TakePendingOperations()))
             .ToArray();
@@ -140,6 +123,9 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
         // Gathered here rather than read inside the delegate for the same reason as the operations
         // above — everything the delegate consumes has to survive being read twice.
         var participants = sessions.SelectMany(session => session.Participants).ToArray();
+        _participants = participants;
+
+        var raised = RaisedEvents;
 
         Diagnostics.DaemonTrace.Record("batch.taken", null,
             pending.Sum(x => x.Operations.Count), _progress.Count, sessions.Length);
@@ -166,7 +152,7 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
                     .ConfigureAwait(false);
             }
 
-            await AppendRaisedEventsAsync(connection, transaction, sessions, ct).ConfigureAwait(false);
+            await AppendRaisedEventsAsync(raised, connection, transaction, sessions, ct).ConfigureAwait(false);
 
             foreach (var operation in _progress)
             {
@@ -174,78 +160,42 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
                     .ConfigureAwait(false);
             }
 
-            // Last thing inside the transaction, so an outbox wanting its messages atomic with the
-            // projection write and the progression row gets exactly that.
-            if (_messageBatch is not null)
-            {
-                await _messageBatch.BeforeCommitAsync(ct).ConfigureAwait(false);
-            }
-
-            // And anything a projection asked to write with us, on the batch's connection and in the
-            // batch's transaction — the same position and the same visibility semantics
-            // FisherSession.SaveChangesAsync gives a participant, so a projection that enlists one
-            // does not have to know which of the two commit paths it is running under.
+            // Anything a projection asked to write with us, on the batch's connection and in the batch's
+            // transaction — the same position and visibility FisherSession.SaveChangesAsync gives a
+            // participant, so a projection that enlists one does not have to know which of the two
+            // commit paths it is running under.
             foreach (var participant in participants)
             {
                 await participant.BeforeCommitAsync(connection, transaction, ct).ConfigureAwait(false);
             }
 
+            // Last thing inside the transaction, as the shared base requires, so an outbox wanting its
+            // messages atomic with the projection write and the progression row gets exactly that.
+            await beforeCommit(ct).ConfigureAwait(false);
+
             await transaction.CommitAsync(ct).ConfigureAwait(false);
         }, token).ConfigureAwait(false);
+    }
 
-        // Outside the resilience pipeline: a retried SQLITE_BUSY re-runs the whole delegate, and a
-        // post-commit publish that ran inside it would fire again for a transaction that already
-        // committed. There is nothing to retry here anyway — the write is durable.
-        //
-        // And not on `token` (fisher#434). A stopping shard cancels it when its drain times out
-        // (jasperfx#953), and that can land after the commit above. The progression row is already
-        // durable, so whoever runs the shard next starts after this range: post-commit work skipped
-        // here is skipped for good. The drain does not wait on this — it is bounded by its own
-        // timeout — so letting committed work finish costs it nothing.
-        var afterCommit = CancellationToken.None;
-
-        if (_messageBatch is not null)
+    // Runs after the commit, outside the resilience pipeline and not on the shard's token (fisher#434):
+    // the base calls it once the write is durable, and a participant holding its work replayable across
+    // attempts is told so exactly once.
+    protected override async Task AfterCommitAsync()
+    {
+        foreach (var participant in _participants)
         {
-            await _messageBatch.AfterCommitAsync(afterCommit).ConfigureAwait(false);
-        }
-
-        // Same position and the same reason — a participant holding its work replayable across
-        // attempts is told once that the write is durable.
-        foreach (var participant in participants)
-        {
-            await participant.AfterCommitAsync(afterCommit).ConfigureAwait(false);
+            await participant.AfterCommitAsync(CancellationToken.None).ConfigureAwait(false);
         }
     }
 
-    /// <summary>
-    ///     Plan and write the events this batch's projections raised, inside the batch's transaction.
-    /// </summary>
-    /// <remarks>
-    ///     <para>
-    ///         The same <see cref="AppendPlanner" /> a session's <c>SaveChangesAsync</c> uses, on the
-    ///         batch's own connection and transaction — so a raised event is numbered from the stream's
-    ///         version as read under the write lock, and the optimistic concurrency check runs there
-    ///         too. A projection raising events onto a stream another writer has moved on fails the
-    ///         batch, which is what stops the shard rather than writing a wrong version.
-    ///     </para>
-    ///     <para>
-    ///         Tag rows come last and inside the same transaction, for the reason the session path has:
-    ///         a tag is keyed by the <c>seq_id</c> only the append's trailing read-back supplies, and an
-    ///         event that is visible but untagged is indistinguishable to a tag query from one that was
-    ///         never tagged.
-    ///     </para>
-    /// </remarks>
-    private async Task AppendRaisedEventsAsync(SqliteConnection connection, SqliteTransaction transaction,
-        IReadOnlyList<FisherSession> sessions, CancellationToken token)
+    // Raised events are planned INSIDE the transaction rather than through PlanRaisedEventsAsync, which
+    // runs before it: Fisher numbers them from a version read under the write lock, so the optimistic guard
+    // stays real, and routes them through FisherQuickAppendEventsOperation for the trailing sequence
+    // read-back a tag row needs.
+    private async Task AppendRaisedEventsAsync(IReadOnlyList<StreamAction> raised, SqliteConnection connection,
+        SqliteTransaction transaction, IReadOnlyList<FisherSession> sessions, CancellationToken token)
     {
-        StreamAction[] raised;
-
-        lock (_raisedStreams)
-        {
-            raised = _raisedStreams.ToArray();
-        }
-
-        if (raised.Length == 0)
+        if (raised.Count == 0)
         {
             return;
         }
@@ -258,7 +208,7 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
 
         try
         {
-            var operations = await new AppendPlanner(context)
+            var operations = await new AppendPlanner(context, JasperFx.Events.Appending.AppendOrigin.RaisedByProjection)
                 .PlanAsync(raised, connection, transaction, token).ConfigureAwait(false);
 
             await context.ExecuteOperationsAsync(connection, transaction, operations, token).ConfigureAwait(false);
@@ -318,120 +268,8 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
         }
     }
 
-    // ---- event-emitting projections ----
-    //
-    // JasperFx's EventSlice.BuildOperations drives these three. They are synchronous, but Fisher
-    // cannot build an append operation without reading the stream's current version, and that read has
-    // to happen under the write lock this batch's transaction has not yet taken. So all three do the
-    // same thing: record the StreamAction, and let ExecuteAsync plan it inside the transaction.
-    //
-    // All three funnel into one list because the StreamAction JasperFx hands over already carries every
-    // raised event. The single-stream-start path calls QuickAppendEventWithVersion once per event and
-    // then UpdateStreamVersion, all with the SAME action instance — so recording it once and planning
-    // it whole covers that path too. Reference identity is what dedupes them.
-    //
-    // Marten queues three different storage operations here instead, which is right for Postgres. It
-    // is not right for Fisher: the versions the slice pre-assigns are computed client-side from the
-    // slice's own event count, whereas the planner re-reads the stream under the write lock and keeps
-    // the optimistic guard real. Routing everything through the planner also means raised events go
-    // through FisherQuickAppendEventsOperation and therefore get the trailing sequence read-back —
-    // without which no tag row could be written for an event a projection raised.
-
-    public void QuickAppendEventWithVersion(StreamAction action, IEvent @event) => RecordRaisedStream(action);
-
-    public void UpdateStreamVersion(StreamAction action) => RecordRaisedStream(action);
-
-    public void QuickAppendEvents(StreamAction action) => RecordRaisedStream(action);
-
-    /// <summary>
-    ///     Note a stream a projection raised events onto, for planning at commit.
-    /// </summary>
-    /// <remarks>
-    ///     Locked rather than lock-free: a composite projection can raise events from several slices
-    ///     concurrently, and the dedupe is a scan for reference identity rather than a hash lookup —
-    ///     <see cref="StreamAction" /> overrides neither <c>Equals</c> nor <c>GetHashCode</c>, so a set
-    ///     would compare by identity anyway but read as though it compared by value.
-    /// </remarks>
-    private void RecordRaisedStream(StreamAction action)
+    public override async ValueTask DisposeAsync()
     {
-        lock (_raisedStreams)
-        {
-            foreach (var existing in _raisedStreams)
-            {
-                if (ReferenceEquals(existing, action))
-                {
-                    return;
-                }
-            }
-
-            _raisedStreams.Add(action);
-        }
-    }
-
-    // ---- projection side effects ----
-
-    /// <summary>
-    ///     Publish a message a projection emitted while processing this batch.
-    /// </summary>
-    /// <remarks>
-    ///     Buffered into the batch's <see cref="Messaging.IMessageBatch" /> rather than sent here.
-    ///     <see cref="ExecuteAsync" /> fires its hooks around the commit, so a transaction that rolls
-    ///     back publishes nothing. The default outbox drops the message; see
-    ///     <see cref="StoreOptions.MessageOutbox" />.
-    /// </remarks>
-    public async Task PublishMessageAsync(object message, string tenantId)
-    {
-        var batch = await CurrentMessageBatchAsync().ConfigureAwait(false);
-        await Messaging.MessagePublishing.PublishAsync(batch, message, tenantId).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc cref="PublishMessageAsync(object, string)" />
-    public async Task PublishMessageAsync(object message, MessageMetadata metadata)
-    {
-        var batch = await CurrentMessageBatchAsync().ConfigureAwait(false);
-        await Messaging.MessagePublishing.PublishAsync(batch, message, metadata).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    ///     The batch's message buffer, created on first publish.
-    /// </summary>
-    /// <remarks>
-    ///     Guarded, because a composite projection can publish from several tenants' work concurrently
-    ///     — the same reason <see cref="SessionForTenant" /> writes into a concurrent collection. The
-    ///     outbox is handed a session so it can enlist in this batch's transaction if it wants the
-    ///     before-commit guarantee; one is opened if the batch has produced none of its own, which
-    ///     happens when a projection publishes without writing a document.
-    /// </remarks>
-    private async ValueTask<Messaging.IMessageBatch> CurrentMessageBatchAsync()
-    {
-        if (_messageBatch is not null)
-        {
-            return _messageBatch;
-        }
-
-        await _messageBatchGate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            if (_messageBatch is not null)
-            {
-                return _messageBatch;
-            }
-
-            var session = _sessions.FirstOrDefault() ?? SessionForTenant(JasperFx.StorageConstants.DefaultTenantId);
-
-            return _messageBatch = await _store.Options.Events.MessageOutbox.CreateBatch(session)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            _messageBatchGate.Release();
-        }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        _messageBatchGate.Dispose();
-
         // Participants first, because one may still be holding something that writes on a session's
         // connection. A participant enlisted for a batch is scoped to that batch — an EF-backed
         // projection's DbContext is created per batch and cannot dispose itself, since it has to
@@ -442,14 +280,11 @@ internal sealed class FisherProjectionBatch : IProjectionBatch<IDocumentSession,
         // in one place — the session releases its own participants too, for the inline path that has
         // no batch to do it. The drain takes the list and nulls it, so the second owner to reach a
         // participant finds nothing and cannot dispose it twice.
-        foreach (var session in _sessions.OfType<FisherSession>())
+        foreach (var session in Sessions.OfType<FisherSession>())
         {
             await session.DisposeParticipantsAsync().ConfigureAwait(false);
         }
 
-        foreach (var session in _sessions)
-        {
-            await session.DisposeAsync().ConfigureAwait(false);
-        }
+        await base.DisposeAsync().ConfigureAwait(false);
     }
 }

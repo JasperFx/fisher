@@ -205,7 +205,7 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
             IEventDatabase database, ShardExecutionMode mode, AsyncOptions projectionOptions,
             CancellationToken token)
     {
-        var batch = new FisherProjectionBatch(this, EventGraph, DatabaseFrom(database));
+        var batch = new FisherProjectionBatch(this, EventGraph, DatabaseFrom(database), mode);
         await batch.RecordProgress(range).ConfigureAwait(false);
 
         var naturalKeys = Options.Projections.NaturalKeyProjection;
@@ -705,7 +705,7 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         Subscriptions.ISubscription subscription, IEventDatabase database, EventRange range,
         ShardExecutionMode mode, CancellationToken token)
     {
-        await using var batch = new FisherProjectionBatch(this, EventGraph, DatabaseFrom(database));
+        await using var batch = new FisherProjectionBatch(this, EventGraph, DatabaseFrom(database), mode);
 
         await batch.RecordProgress(range).ConfigureAwait(false);
 

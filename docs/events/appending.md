@@ -39,10 +39,19 @@ where Marten uses a bulk function and Polecat `OUTPUT … INTO`. That read-back 
 ## Optimistic concurrency
 
 ```cs
+// The stream is at version 4; after this one event it will be at 5.
 session.Events.Append(streamId, expectedVersion: 5, new OrderShipped(…));
 ```
 
-A losing write throws `EventStreamUnexpectedMaxEventIdException` at `SaveChangesAsync`.
+`expectedVersion` is the version of the stream **after** the append, as on Marten and Polecat. A losing
+write throws `EventStreamUnexpectedMaxEventIdException` at `SaveChangesAsync`.
+
+::: warning Changed in Fisher 2.0
+Fisher 1.x read this argument as the version **before** the append. To migrate, add the number of events
+being appended to the version you were passing. A value smaller than the number of events throws
+`ArgumentOutOfRangeException` at the call, so `Append(id, 0, e)` on a new stream is now `Append(id, 1, e)`.
+`FetchForWriting` and `AppendOptimistic` are unaffected.
+:::
 
 ```cs
 session.Events.AppendOptimistic(streamId, new OrderShipped(…));   // reads the version for you
