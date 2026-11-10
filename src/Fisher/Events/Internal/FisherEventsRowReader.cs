@@ -125,7 +125,7 @@ internal static class FisherEventsRowReader
         }
         catch (Exception e) when (IsBodyFailure(e))
         {
-            throw new Fisher.Exceptions.EventDeserializationFailureException(seqId, typeName, e);
+            throw new JasperFx.Events.EventDeserializationFailureException(seqId, typeName, e);
         }
 
         return new EventRecord(
@@ -274,7 +274,7 @@ internal static class FisherEventsRowReader
     ///     outside that method's deserialization guard</b> (fisher#308). "No IEventBinarySerializer is
     ///     registered for this type" is a misconfiguration of the whole store rather than one
     ///     unreadable row, so it must not become an
-    ///     <see cref="Fisher.Exceptions.EventDeserializationFailureException" /> that
+    ///     <see cref="JasperFx.Events.EventDeserializationFailureException" /> that
     ///     <c>SkipSerializationErrors</c> then quarantines — that would bury the one thing worth
     ///     saying under a dead letter per binary event in the store.
     /// </remarks>
@@ -287,7 +287,7 @@ internal static class FisherEventsRowReader
 
     /// <summary>
     ///     Whether a failure raised while reading a row's body should be reported as an
-    ///     <see cref="Fisher.Exceptions.EventDeserializationFailureException" />.
+    ///     <see cref="JasperFx.Events.EventDeserializationFailureException" />.
     /// </summary>
     /// <remarks>
     ///     <para>
@@ -393,7 +393,7 @@ internal static class FisherEventsRowReader
         }
         catch (Exception e) when (IsBodyFailure(e))
         {
-            throw new Fisher.Exceptions.EventDeserializationFailureException(seqId, typeName, e);
+            throw new JasperFx.Events.EventDeserializationFailureException(seqId, typeName, e);
         }
 
         var resolvedType = upcast?.GetType() ?? ctx.EventGraph.ResolveEventType(dotNetTypeName);
@@ -433,7 +433,7 @@ internal static class FisherEventsRowReader
         }
         catch (Exception e) when (IsBodyFailure(e))
         {
-            throw new Fisher.Exceptions.EventDeserializationFailureException(seqId, typeName, e);
+            throw new JasperFx.Events.EventDeserializationFailureException(seqId, typeName, e);
         }
 
         var @event = mapping.Wrap(data);

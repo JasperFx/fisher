@@ -593,7 +593,7 @@ public sealed class DynamicTenancy : ITenancy
 ///         <c>OnException&lt;UnknownTenantIdException&gt;()</c> policy — both matched with
 ///         <c>ex is T</c> — worked on three stores and silently missed on Fisher. Subclassing rather
 ///         than replacing is the compatible choice, exactly as
-///         <see cref="Fisher.Exceptions.ExistingStreamIdCollisionException" /> records: an existing
+///         <see cref="JasperFx.Events.ExistingStreamIdCollisionException" /> records: an existing
 ///         <c>catch (UnknownTenantException)</c> keeps working and a catch on the shared type starts
 ///         working.
 ///     </para>

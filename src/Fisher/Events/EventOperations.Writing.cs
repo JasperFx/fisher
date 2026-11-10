@@ -586,7 +586,7 @@ public partial class EventOperations
 
     private async Task<long> RequireStreamVersionAsync(object streamId, CancellationToken token)
         => (await ReadStreamRowAsync(streamId, token).ConfigureAwait(false)).Version
-           ?? throw new Fisher.Exceptions.NonExistentStreamException(streamId);
+           ?? throw new JasperFx.Events.NonExistentStreamException(streamId);
 
     /// <summary>
     ///     Whether <typeparamref name="TId" /> is exactly the type <typeparamref name="T" /> declares as

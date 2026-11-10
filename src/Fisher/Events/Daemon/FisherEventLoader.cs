@@ -101,7 +101,7 @@ internal sealed class FisherEventLoader : EventLoaderBase
     protected override Exception UnresolvedEventTypeException(DbDataReader reader, long sequence)
     {
         var (_, dotNetTypeName) = FisherEventsRowReader.ReadUnresolvedIdentity((SqliteDataReader)reader);
-        return new Fisher.Exceptions.UnknownEventTypeException(dotNetTypeName ?? "(null)", sequence);
+        return new JasperFx.Events.UnknownEventTypeException(dotNetTypeName ?? "(null)", sequence);
     }
 
     // fisher#308. A body that is there and will not parse is governed by SkipSerializationErrors, which the

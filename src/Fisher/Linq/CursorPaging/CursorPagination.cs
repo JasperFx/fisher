@@ -156,6 +156,6 @@ internal sealed class FisherCursorCodec : CursorCodec
         };
     }
 
-    /// <summary>Fisher's own <see cref="Linq.BadLinqExpressionException" />, which derives from JasperFx's.</summary>
-    protected override Exception OrderingRefused(string message) => new BadLinqExpressionException(message);
+    /// <summary>JasperFx's <see cref="JasperFx.BadLinqExpressionException" />, thrown directly since fisher#530.</summary>
+    protected override Exception OrderingRefused(string message) => new JasperFx.BadLinqExpressionException(message);
 }

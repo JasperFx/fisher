@@ -226,7 +226,7 @@ internal sealed class NaturalKeyClaimOperation : Weasel.Storage.IStorageOperatio
         // stream. Same reading the optimistic document upsert gives its own empty result.
         if (!await reader.ReadAsync(token).ConfigureAwait(false))
         {
-            exceptions.Add(new Exceptions.DuplicateNaturalKeyException(_aggregateType, _key));
+            exceptions.Add(new JasperFx.Events.DuplicateNaturalKeyException(_aggregateType, _key));
         }
     }
 }

@@ -287,7 +287,7 @@ public class daemon_event_loading : IAsyncLifetime
 
         // Unfiltered, the daemon meets the poison row and refuses it by name — the pre-existing
         // policy this test leans on as its control.
-        await Should.ThrowAsync<Fisher.Exceptions.UnknownEventTypeException>(async () =>
+        await Should.ThrowAsync<JasperFx.Events.UnknownEventTypeException>(async () =>
             await TheLoader.LoadAsync(Request(0, 2), TestContext.Current.CancellationToken));
 
         // Filtered to QuestStarted, the row is excluded by the SQL and never hydrated at all.
@@ -340,7 +340,7 @@ public class daemon_event_loading : IAsyncLifetime
 
         var letter = letters.ShouldHaveSingleItem();
         letter.EventSequence.ShouldBe(1);
-        letter.ExceptionType.ShouldContain(nameof(Fisher.Exceptions.EventDeserializationFailureException));
+        letter.ExceptionType.ShouldContain(nameof(JasperFx.Events.EventDeserializationFailureException));
     }
 
     /// <summary>
@@ -362,7 +362,7 @@ public class daemon_event_loading : IAsyncLifetime
         var ex = await Should.ThrowAsync<JasperFx.Events.EventDeserializationFailureException>(
             async () => await TheLoader.LoadAsync(Request(0, 2), TestContext.Current.CancellationToken));
 
-        ex.ShouldBeOfType<Fisher.Exceptions.EventDeserializationFailureException>();
+        ex.ShouldBeOfType<JasperFx.Events.EventDeserializationFailureException>();
         ex.Sequence.ShouldBe(2);
         ex.EventTypeName.ShouldBe(_store.Options.EventGraph.EventMappingFor(typeof(QuestStarted)).EventTypeName);
         ex.InnerException.ShouldBeOfType<System.Text.Json.JsonException>();
@@ -399,7 +399,7 @@ public class daemon_event_loading : IAsyncLifetime
             (await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken)).ShouldBe(1);
         }
 
-        await Should.ThrowAsync<Fisher.Exceptions.UnknownEventTypeException>(async () =>
+        await Should.ThrowAsync<JasperFx.Events.UnknownEventTypeException>(async () =>
             await TheLoader.LoadAsync(
                 Request(0, 1, errors: new ErrorHandlingOptions { SkipSerializationErrors = true }),
                 TestContext.Current.CancellationToken));

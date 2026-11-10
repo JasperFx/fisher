@@ -1152,7 +1152,7 @@ implementation nothing local had reason to question:
   back — the empty case is the whole subject of the flag.
 - **Appending to an archived stream landed** rather than being rejected. Every one of Fisher's own
   archiving tests checks the flag and the reads; none of them tried to write afterwards.
-  `Exceptions.ArchivedStreamException` is the refusal, raised from the planner — and deliberately
+  `JasperFx.Events.ArchivedStreamException` is the refusal, raised from the planner — and deliberately
   *not* for a `StartStream`, where an archived id is still an id in use and the collision is the more
   useful answer.
 - **`FisherProjectionStorage.ArchiveStream` was an empty method**, with a comment reasoning about the

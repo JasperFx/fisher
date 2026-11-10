@@ -417,7 +417,7 @@ public class included_documents : IAsyncLifetime
 
         var boats = new List<Boat>();
 
-        var exception = await Should.ThrowAsync<Fisher.Linq.BadLinqExpressionException>(() =>
+        var exception = await Should.ThrowAsync<JasperFx.BadLinqExpressionException>(() =>
             session.Query<Angler>()
                 .Include(x => x.BoatId, boats)
                 .Select(x => x.Name)
@@ -433,7 +433,7 @@ public class included_documents : IAsyncLifetime
 
         var boats = new List<Boat>();
 
-        var exception = await Should.ThrowAsync<Fisher.Linq.BadLinqExpressionException>(() =>
+        var exception = await Should.ThrowAsync<JasperFx.BadLinqExpressionException>(() =>
             session.Query<Angler>()
                 .Include(x => x.BoatId, boats)
                 .GroupBy(x => x.Region)
@@ -450,7 +450,7 @@ public class included_documents : IAsyncLifetime
 
         var boats = new List<Boat>();
 
-        var exception = await Should.ThrowAsync<Fisher.Linq.BadLinqExpressionException>(() =>
+        var exception = await Should.ThrowAsync<JasperFx.BadLinqExpressionException>(() =>
             session.Query<Angler>()
                 .Include(x => x.BoatId, boats)
                 .Join(session.Query<Catch>(), a => a.Id, c => c.AnglerId,
@@ -467,7 +467,7 @@ public class included_documents : IAsyncLifetime
 
         var boats = new List<Boat>();
 
-        var exception = await Should.ThrowAsync<Fisher.Linq.BadLinqExpressionException>(() =>
+        var exception = await Should.ThrowAsync<JasperFx.BadLinqExpressionException>(() =>
             session.Query<Angler>().Include(x => x.BoatId, boats).CountAsync(Token));
 
         exception.Message.ShouldContain("CountAsync");
@@ -481,11 +481,11 @@ public class included_documents : IAsyncLifetime
 
         var boats = new List<Boat>();
 
-        (await Should.ThrowAsync<Fisher.Linq.BadLinqExpressionException>(() =>
+        (await Should.ThrowAsync<JasperFx.BadLinqExpressionException>(() =>
             session.Query<Angler>().Include(x => x.BoatId, boats).AnyAsync(Token)))
             .Message.ShouldContain("AnyAsync");
 
-        (await Should.ThrowAsync<Fisher.Linq.BadLinqExpressionException>(() =>
+        (await Should.ThrowAsync<JasperFx.BadLinqExpressionException>(() =>
             session.Query<Angler>().Include(x => x.BoatId, boats).SumAsync(x => x.Licence, Token)))
             .Message.ShouldContain("SumAsync");
     }
@@ -501,7 +501,7 @@ public class included_documents : IAsyncLifetime
 
         var boats = new List<Boat>();
 
-        var exception = await Should.ThrowAsync<Fisher.Linq.BadLinqExpressionException>(() =>
+        var exception = await Should.ThrowAsync<JasperFx.BadLinqExpressionException>(() =>
             session.Query<Angler>()
                 .Include(x => x.Region, boats)
                 .ToListAsync(Token));

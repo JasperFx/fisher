@@ -40,7 +40,7 @@ Two different policies, each right for its caller.
 :::
 
 A body that *will not parse* is a different matter and is never skipped by a stream read: it surfaces
-as `Fisher.Exceptions.EventDeserializationFailureException`, carrying the sequence, the stored event
+as `JasperFx.Events.EventDeserializationFailureException`, carrying the sequence, the stored event
 type alias and the serializer's own exception. Only the daemon can be told to skip one, through
 [`SkipSerializationErrors`](/events/projections/async-daemon#unreadable-event-bodies).
 

@@ -218,7 +218,7 @@ internal sealed class FisherQuickAppendEventsOperation : PerEventQuickAppendOper
 
     /// <summary>
     ///     Map a SQLite primary-key violation on the stream INSERT to
-    ///     <see cref="ExistingStreamIdCollisionException" />. The base calls this for an insert only.
+    ///     <see cref="JasperFx.Events.ExistingStreamIdCollisionException" />. The base calls this for an insert only.
     /// </summary>
     /// <remarks>
     ///     Matching needs the EXTENDED result code. The primary code for every constraint failure is the same
@@ -229,7 +229,7 @@ internal sealed class FisherQuickAppendEventsOperation : PerEventQuickAppendOper
         var sqlite = original as SqliteException ?? original.InnerException as SqliteException;
 
         return sqlite is { SqliteExtendedErrorCode: SqliteConstraintPrimaryKey }
-            ? new Fisher.Exceptions.ExistingStreamIdCollisionException(Stream.Key is not null ? Stream.Key : Stream.Id)
+            ? new JasperFx.Events.ExistingStreamIdCollisionException(Stream.Key is not null ? Stream.Key : Stream.Id)
             : null;
     }
 

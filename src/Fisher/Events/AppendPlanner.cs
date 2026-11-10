@@ -145,9 +145,9 @@ internal sealed class AppendPlanner
         internal static readonly FisherAppendRefusals Instance = new();
 
         public override Exception Collision(object id, Type? aggregateType)
-            => new Exceptions.ExistingStreamIdCollisionException(id);
+            => new JasperFx.Events.ExistingStreamIdCollisionException(id);
 
-        public override Exception Archived(object id) => new Exceptions.ArchivedStreamException(id);
+        public override Exception Archived(object id) => new JasperFx.Events.ArchivedStreamException(id);
     }
 
     // ---- reading the stream rows ----

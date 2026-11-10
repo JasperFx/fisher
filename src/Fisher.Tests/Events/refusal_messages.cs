@@ -1,6 +1,6 @@
-using Fisher.Exceptions;
 using Fisher.Linq;
 using JasperFx;
+using JasperFx.Events;
 
 namespace Fisher.Tests.Events;
 

@@ -11,8 +11,14 @@ namespace Fisher.Exceptions;
 ///         Wolverine <c>OnException&lt;StreamLockedException&gt;().RetryWithCooldown(...)</c> policy
 ///         — matched with <c>ex is T</c> — behave the same on all three. Before this the caller got a
 ///         raw <c>SqliteException</c> saying "database is locked", which is true and says nothing
-///         about which write lost. Subclassing rather than replacing is the compatible choice, for
-///         the reasons <see cref="ExistingStreamIdCollisionException" /> records.
+///         about which write lost.
+///     </para>
+///     <para>
+///         <b>The one Fisher subclass of a shared event exception left, and only until
+///         <see cref="StreamIds" /> moves up.</b> fisher#530 deleted the other derived copies and
+///         throws the JasperFx types directly; this one stays because the shared type has no
+///         member for the list of streams, and the rule is to lift that member into
+///         JasperFx.Events first rather than drop it.
 ///     </para>
 ///     <para>
 ///         <b>The lock is the database file's, not a row's, and that is the one place Fisher's
