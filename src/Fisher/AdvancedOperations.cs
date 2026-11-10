@@ -151,7 +151,7 @@ public class AdvancedOperations
     {
         ArgumentNullException.ThrowIfNull(configure);
 
-        var batch = new Events.Protected.EventDataMasking(_store);
+        var batch = new Events.Protected.FisherEventDataMasking(_store);
         configure(batch);
 
         return batch.ApplyAsync(token);

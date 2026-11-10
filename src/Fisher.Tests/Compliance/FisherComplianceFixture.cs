@@ -300,6 +300,12 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override bool SupportsAsyncDaemon => true;
 
     /// <summary>
+    ///     Fisher's masking pass reads through <c>FetchStreamIncludingArchivedAsync</c> /
+    ///     <c>QueryEventsIncludingArchivedAsync</c>, so archived events are erased too (jasperfx#1048).
+    /// </summary>
+    public override bool SupportsMaskingArchivedEvents => true;
+
+    /// <summary>
     ///     Fisher builds a store over more than one database, so the two multi-database explorer arms
     ///     run rather than skip (jasperfx#810 / fisher#252).
     /// </summary>
