@@ -35,16 +35,13 @@ namespace Fisher.Events.Messaging;
 ///         dialect-specific, so the shape is deliberately identical and DCB/projection code ports
 ///         between the two stores unchanged.
 ///     </para>
+///     <para>
+///         <b>Derives from the shared <see cref="JasperFx.Events.Documents.IMessageBatch" /></b> (jasperfx#1045),
+///         which declares both hooks, so an implementation written against either compiles here and the shared
+///         <c>ProjectionBatchBase</c> drives it directly. Move to the shared interface; this one is kept for one
+///         release so existing implementers keep compiling.
+///     </para>
 /// </remarks>
-public interface IMessageBatch : IMessageSink
+public interface IMessageBatch : JasperFx.Events.Documents.IMessageBatch
 {
-    /// <summary>
-    ///     Called inside the write transaction, immediately before <c>COMMIT</c>.
-    /// </summary>
-    Task BeforeCommitAsync(CancellationToken token);
-
-    /// <summary>
-    ///     Called once the write is durably committed.
-    /// </summary>
-    Task AfterCommitAsync(CancellationToken token);
 }

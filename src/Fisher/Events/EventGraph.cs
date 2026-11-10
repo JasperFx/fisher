@@ -689,7 +689,7 @@ public class FisherEventType : IEventType
     ///     own <c>EventTypeData&lt;T&gt;</c> gets the fast shape by being generic; this type cannot
     ///     close over <c>T</c> without changing how <see cref="EventGraph.EventMappingFor" /> builds
     ///     mappings, so it caches the constructor as a delegate instead — the same pattern
-    ///     <c>MessagePublishing</c> uses for <c>IMessageSink.PublishAsync&lt;T&gt;</c>, with the same
+    ///     JasperFx's <c>MessagePublishing</c> uses for <c>IMessageSink.PublishAsync&lt;T&gt;</c>, with the same
     ///     BCL <c>Expression.Compile</c>. The lazy init races benignly: two threads may each compile,
     ///     both delegates are correct, and one wins the field.
     /// </remarks>
