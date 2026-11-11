@@ -354,7 +354,7 @@ which is why the old "stay on MTP 1.x" note is gone).
 
 ### JasperFx 3.0 and Weasel 10
 
-Fisher 2 requires JasperFx 3.0.0 and Weasel.Sqlite / Weasel.Storage 10.0. An application referencing
+Fisher 2 requires JasperFx 3.0.1 and Weasel.Sqlite / Weasel.Storage 10.0. An application referencing
 either directly has to move them together; mixing a 2.x JasperFx with Fisher 2 does not restore.
 
 ### The native SQLite build
