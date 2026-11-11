@@ -3,12 +3,26 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **twelve open issues: eleven are the Fisher 2.0 milestone, and the other one is blocked
-upstream.** The 2.0 issues are Fisher's share of the Critter Stack .NET 11 release train. 1.28.0 took JasperFx
+Status: **eleven open issues: nine are the Fisher 2.0 milestone, one is a follow-up the release train filed
+on 2026-11-10, and the other one is blocked upstream.** The 2.0 issues are Fisher's share of the Critter Stack
+.NET 11 release train. 1.28.0 took JasperFx
 2.100's compliance additions ([#519](https://github.com/JasperFx/fisher/issues/519)). 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
+
+**2.0.0-alpha.1 is the first package of the .NET 11 train**, on JasperFx 3.0.1 and Weasel 10.0.0-alpha.1,
+targeting `net10.0;net11.0`. It closed six of the train's issues on 2026-11-10:
+[#461](https://github.com/JasperFx/fisher/issues/461) the small runtime cleanups,
+[#462](https://github.com/JasperFx/fisher/issues/462) the SQLite bundle decision,
+[#463](https://github.com/JasperFx/fisher/issues/463) the single-writer queue audit (the benchmark itself is
+[#547](https://github.com/JasperFx/fisher/issues/547)),
+[#464](https://github.com/JasperFx/fisher/issues/464) adopting the lifted event bases (`EventLoaderBase`,
+`ProjectionBatchBase`, the append planner, masking and compaction), and
+[#467](https://github.com/JasperFx/fisher/issues/467) the dependency pins, and
+[#542](https://github.com/JasperFx/fisher/issues/542) the Native AOT consumer smoke, red from the move onto
+`ProjectionBatchBase` until JasperFx 3.0.1 carried the `MessagePublishing` fix (jasperfx#1173). It also packs and
+publishes `Fisher.Aspire.Hosting` ([#549](https://github.com/JasperFx/fisher/pull/549)).
 
 **1.29.0 moves to JasperFx 2.102.0 and Weasel 9.50.0.** It implements JasperFx 2.102.0's
 `IEventDatabase.FetchFirstEventTimestampsAfterAsync` ([#527](https://github.com/JasperFx/fisher/pull/527)), the
@@ -337,19 +351,23 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is twelve items, eleven of them the Fisher 2.0 milestone.
+What is left is eleven items: nine of them the Fisher 2.0 milestone, one follow-up the release train filed on
+2026-11-10, and one blocked upstream.
 
 **Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.0, Weasel 10.0, `net10.0;net11.0`):
 [#459](https://github.com/JasperFx/fisher/issues/459) build and pack targets,
 [#460](https://github.com/JasperFx/fisher/issues/460) the TFM move,
-[#461](https://github.com/JasperFx/fisher/issues/461) small runtime cleanups,
-[#462](https://github.com/JasperFx/fisher/issues/462) the SQLite bundle decision,
-[#463](https://github.com/JasperFx/fisher/issues/463) the single-writer queue benchmark,
-[#464](https://github.com/JasperFx/fisher/issues/464) and [#465](https://github.com/JasperFx/fisher/issues/465)
-adopting the lifted shared bases, [#466](https://github.com/JasperFx/fisher/issues/466) union-typed members,
-[#467](https://github.com/JasperFx/fisher/issues/467) the dependency pins,
-[#468](https://github.com/JasperFx/fisher/issues/468) an Aspire hosting helper, and
-[#469](https://github.com/JasperFx/fisher/issues/469) the migration guide. None of it lands in a 1.x release.
+[#465](https://github.com/JasperFx/fisher/issues/465) adopting the lifted closed-shape document family and the
+rest of the Weasel 10 storage lifts, [#466](https://github.com/JasperFx/fisher/issues/466) union-typed members,
+[#468](https://github.com/JasperFx/fisher/issues/468) an Aspire hosting helper,
+[#469](https://github.com/JasperFx/fisher/issues/469) the migration guide,
+[#530](https://github.com/JasperFx/fisher/issues/530) throwing the `JasperFx.Events` exception types directly,
+[#546](https://github.com/JasperFx/fisher/issues/546) `Guid.TryParse` over text ids in the event row readers, and
+[#547](https://github.com/JasperFx/fisher/issues/547) the `Channel<T>` single-writer queue benchmark.
+None of it lands in a 1.x release.
+
+**One follow-up the train filed.** [#543](https://github.com/JasperFx/fisher/issues/543): three
+`fetch_for_writing_compliance` facts are red on JasperFx 3.0.0 over what `Append`'s expected version means.
 
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.

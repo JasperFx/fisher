@@ -26,8 +26,8 @@ partial class Build
     [Parameter("Target framework AotSmoke publishes for - Default is 'net10.0'")]
     readonly string SingleFramework = "net10.0";
 
-    // Every shipped package; publish.yml packs the same three.
-    static readonly string[] PackableProjects = ["Fisher", "Fisher.AspNetCore", "Fisher.EntityFrameworkCore"];
+    // Every shipped package; publish.yml packs the same four.
+    static readonly string[] PackableProjects = ["Fisher", "Fisher.AspNetCore", "Fisher.EntityFrameworkCore", "Fisher.Aspire.Hosting"];
 
     AbsolutePath ArtifactsDirectory => RootDirectory / "artifacts";
 

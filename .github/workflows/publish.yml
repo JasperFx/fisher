@@ -90,6 +90,7 @@ jobs:
           dotnet pack src/Fisher/Fisher.csproj -c Release --no-build -o ./artifacts $VERSION_ARG
           dotnet pack src/Fisher.AspNetCore/Fisher.AspNetCore.csproj -c Release --no-build -o ./artifacts $VERSION_ARG
           dotnet pack src/Fisher.EntityFrameworkCore/Fisher.EntityFrameworkCore.csproj -c Release --no-build -o ./artifacts $VERSION_ARG
+          dotnet pack src/Fisher.Aspire.Hosting/Fisher.Aspire.Hosting.csproj -c Release --no-build -o ./artifacts $VERSION_ARG
 
       - name: Upload packages
         uses: actions/upload-artifact@v4

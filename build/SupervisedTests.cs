@@ -104,7 +104,16 @@ partial class Build
         foreach (var framework in frameworks)
         foreach (var suite in Suites)
         {
-            if (!runSupervised(suite, framework)) failed.Add($"{suite.Project} ({framework})");
+            try
+            {
+                if (!runSupervised(suite, framework)) failed.Add($"{suite.Project} ({framework})");
+            }
+            finally
+            {
+                // In a finally so a failed or aborted run cleans up too: the pipes sit outside the lane
+                // directories, where nothing else would reach them.
+                removePipeDirectory(suite.Project, framework);
+            }
         }
 
         if (failed.Count > 0)
@@ -340,15 +349,44 @@ partial class Build
         };
     }
 
+    /// <summary>The short home for every suite's pipes: /tmp/fisher-pipes (under the temp directory on Windows).</summary>
+    static string PipeRoot => OperatingSystem.IsWindows()
+        ? Path.Combine(Path.GetTempPath(), "fisher-pipes")
+        : "/tmp/fisher-pipes";
+
     /// <summary>A short directory for the platform's named pipes: /tmp/fisher-pipes/&lt;project-tfm&gt;/&lt;lane&gt;.</summary>
     static string pipeDirectoryFor(AbsolutePath laneDirectory)
     {
-        var root = OperatingSystem.IsWindows()
-            ? Path.Combine(Path.GetTempPath(), "fisher-pipes")
-            : "/tmp/fisher-pipes";
-        var directory = Path.Combine(root, laneDirectory.Parent!.Name, laneDirectory.Name);
+        var directory = Path.Combine(PipeRoot, laneDirectory.Parent!.Name, laneDirectory.Name);
         Directory.CreateDirectory(directory);
         return directory;
+    }
+
+    /// <summary>
+    /// Removes this suite's pipe directory, /tmp/fisher-pipes/&lt;project-tfm&gt;, once its run is over, and the
+    /// root with it when nothing else is left there. The pipes have to live outside the lane directories
+    /// (the 103-byte socket path cap, above), so emptying the lanes cannot reach them, and CI's leak check
+    /// (scripts/check_no_leaked_databases.py over the system temp directory) reports anything left in /tmp
+    /// as a leaked file. Per suite rather than the whole root at once, so another checkout's run sharing
+    /// the machine keeps its pipes. Nothing is running in it by now: Supervisor.Run has returned, and every
+    /// worker it launched has exited.
+    /// </summary>
+    static void removePipeDirectory(string project, string framework)
+    {
+        var root = PipeRoot;
+        var directory = Path.Combine(root, $"{project}-{framework}");
+
+        try
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            if (Directory.Exists(root) && !Directory.EnumerateFileSystemEntries(root).Any()) Directory.Delete(root);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Another run may be sharing the root (a second checkout, a developer's own `dotnet test`).
+            // Leaving it behind is what the leak check exists to notice, so say why rather than fail here.
+            Log.Warning(e, "Could not remove the pipe directory {Directory}", directory);
+        }
     }
 
     // ─── Test host resolution ──────────────────────────────────────────

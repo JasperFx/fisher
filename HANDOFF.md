@@ -16,12 +16,13 @@ scoreboard and the things that are true right now but not obvious from either.
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 811 of
 them are shared cross-store compliance tests — 580 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.0.0** / Weasel **10.0.0-alpha.1**.
+On JasperFx **3.0.1** / Weasel **10.0.0-alpha.1**.
 
 ## The JasperFx 3.0.0 bump — Fisher 2.0 on net10.0;net11.0 (fisher#460, fisher#530, fisher#465)
 
-The major: `net9.0` dropped, JasperFx **3.0.0**, Weasel **10.0.0-alpha.1**, SQLitePCLRaw bundle 3.0.5.
-`JasperFx.Events.ComplianceTests` 3.0.0 ships 65 suites and Fisher enrolls all 65: `ProjectionStepThroughCompliance`
+The major: `net9.0` dropped, JasperFx **3.0.0**, Weasel **10.0.0-alpha.1**, SQLitePCLRaw bundle 3.0.5. The pin moved to
+3.0.1 for jasperfx#1173, which lets `MessagePublishing` run in a Native AOT image (fisher#542).
+`JasperFx.Events.ComplianceTests` 3.0.1 ships 65 suites and Fisher enrolls all 65: `ProjectionStepThroughCompliance`
 (4 tests) is new and enrolled; `SingleTenantedEventSlicingCompliance`, the one suite 2.x shipped that Fisher could
 not enroll, no longer ships. Three enrolled suites grew on the bump: `StreamArchivingCompliance` 20 → 27,
 `FetchForWritingCompliance` 18 → 21, `EventDataMaskingCompliance` 11 → 13. Fisher's exception types are
@@ -1040,7 +1041,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 3.0.0 ships 65 suites; Fisher enrolls **65 of them, 811 tests**.
+`JasperFx.Events.ComplianceTests` 3.0.1 ships 65 suites; Fisher enrolls **65 of them, 811 tests**.
 Fisher passes **811 of them, across all
 65 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
