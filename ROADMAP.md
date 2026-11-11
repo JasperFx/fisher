@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **twelve open issues: nine are the Fisher 2.0 milestone, two are follow-ups the release train filed
+Status: **eleven open issues: nine are the Fisher 2.0 milestone, one is a follow-up the release train filed
 on 2026-11-10, and the other one is blocked upstream.** The 2.0 issues are Fisher's share of the Critter Stack
 .NET 11 release train. 1.28.0 took JasperFx
 2.100's compliance additions ([#519](https://github.com/JasperFx/fisher/issues/519)). 1.5.0 closed both of 1.4.0's
@@ -11,16 +11,18 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
-**2.0.0-alpha.1 is the first package of the .NET 11 train**, on JasperFx 3.0.0 and Weasel 10.0.0-alpha.1,
-targeting `net10.0;net11.0`. It closed five of the train's issues on 2026-11-10:
+**2.0.0-alpha.1 is the first package of the .NET 11 train**, on JasperFx 3.0.1 and Weasel 10.0.0-alpha.1,
+targeting `net10.0;net11.0`. It closed six of the train's issues on 2026-11-10:
 [#461](https://github.com/JasperFx/fisher/issues/461) the small runtime cleanups,
 [#462](https://github.com/JasperFx/fisher/issues/462) the SQLite bundle decision,
 [#463](https://github.com/JasperFx/fisher/issues/463) the single-writer queue audit (the benchmark itself is
 [#547](https://github.com/JasperFx/fisher/issues/547)),
 [#464](https://github.com/JasperFx/fisher/issues/464) adopting the lifted event bases (`EventLoaderBase`,
 `ProjectionBatchBase`, the append planner, masking and compaction), and
-[#467](https://github.com/JasperFx/fisher/issues/467) the dependency pins. It also packs and publishes
-`Fisher.Aspire.Hosting` ([#549](https://github.com/JasperFx/fisher/pull/549)).
+[#467](https://github.com/JasperFx/fisher/issues/467) the dependency pins, and
+[#542](https://github.com/JasperFx/fisher/issues/542) the Native AOT consumer smoke, red from the move onto
+`ProjectionBatchBase` until JasperFx 3.0.1 carried the `MessagePublishing` fix (jasperfx#1173). It also packs and
+publishes `Fisher.Aspire.Hosting` ([#549](https://github.com/JasperFx/fisher/pull/549)).
 
 **1.29.0 moves to JasperFx 2.102.0 and Weasel 9.50.0.** It implements JasperFx 2.102.0's
 `IEventDatabase.FetchFirstEventTimestampsAfterAsync` ([#527](https://github.com/JasperFx/fisher/pull/527)), the
@@ -349,7 +351,7 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is twelve items: nine of them the Fisher 2.0 milestone, two follow-ups the release train filed on
+What is left is eleven items: nine of them the Fisher 2.0 milestone, one follow-up the release train filed on
 2026-11-10, and one blocked upstream.
 
 **Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.0, Weasel 10.0, `net10.0;net11.0`):
@@ -364,12 +366,8 @@ rest of the Weasel 10 storage lifts, [#466](https://github.com/JasperFx/fisher/i
 [#547](https://github.com/JasperFx/fisher/issues/547) the `Channel<T>` single-writer queue benchmark.
 None of it lands in a 1.x release.
 
-**Two follow-ups the train filed.** [#542](https://github.com/JasperFx/fisher/issues/542): the Native AOT
-smoke fails since the projection batch moved onto JasperFx's `ProjectionBatchBase`, because the shared
-`MessagePublishing` compiles its per-type delegate with FastExpressionCompiler and does not fall back when
-dynamic code is unavailable — an upstream fix, jasperfx#1171, and the `package` job is red until a JasperFx
-release carries it. [#543](https://github.com/JasperFx/fisher/issues/543): three `fetch_for_writing_compliance`
-facts are red on JasperFx 3.0.0 over what `Append`'s expected version means.
+**One follow-up the train filed.** [#543](https://github.com/JasperFx/fisher/issues/543): three
+`fetch_for_writing_compliance` facts are red on JasperFx 3.0.0 over what `Append`'s expected version means.
 
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.
