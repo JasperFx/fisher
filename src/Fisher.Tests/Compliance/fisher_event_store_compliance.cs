@@ -80,6 +80,9 @@ public class assign_tag_where_compliance
 public class dcb_tag_query_and_consistency_compliance
     : DcbTagQueryAndConsistencyCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
+public class dcb_append_condition_compliance
+    : DcbAppendConditionCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
 public class async_daemon_compliance
     : AsyncDaemonCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 

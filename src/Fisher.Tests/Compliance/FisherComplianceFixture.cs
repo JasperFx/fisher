@@ -127,6 +127,14 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
                 options.Events.EnableHeaders = true;
             }
 
+            // marten#5887: the DCB append condition facts race saves against each other. Fisher
+            // serializes writers rather than deadlocking, but a retry that commits hides any failure
+            // just as well, so the facts that ask for no retries get none.
+            if (config.DisableWriteRetries)
+            {
+                options.ConfigurePolly(_ => { });
+            }
+
             // Conjoined event tenancy is a schema decision, not a runtime one — StreamsTable and
             // EventsTable read TenancyStyle when they build their columns and their primary key — so
             // it has to be set before ApplyAllConfiguredChangesToDatabaseAsync below.
