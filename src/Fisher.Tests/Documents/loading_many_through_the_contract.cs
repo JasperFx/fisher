@@ -83,6 +83,29 @@ public class loading_many_through_the_contract : IAsyncLifetime
         logger.Statements.ShouldBe(1);
     }
 
+    /// <summary>
+    ///     An empty id array is answered without a statement, through the contract and natively, in a
+    ///     session that keeps no identity map.
+    /// </summary>
+    /// <remarks>
+    ///     Fisher's own storages short-circuited this. Weasel's lightweight storage, which Fisher's are
+    ///     since fisher#465, does not, so the session guards it; this is what says it still does.
+    /// </remarks>
+    [Fact]
+    public async Task an_empty_load_many_runs_no_statement()
+    {
+        await using var query = _store.QuerySession();
+        var logger = new CountingLogger();
+        query.Logger = logger;
+
+        IDocumentReadOperations contract = query;
+        (await contract.LoadManyAsync<Receipt>(Array.Empty<Guid>(), TestContext.Current.CancellationToken))
+            .ShouldBeEmpty();
+        (await query.LoadManyAsync<Receipt>(Array.Empty<Guid>())).ShouldBeEmpty();
+
+        logger.Statements.ShouldBe(0);
+    }
+
     public class Trawler
     {
         public string Id { get; set; } = string.Empty;

@@ -18,7 +18,7 @@ namespace Fisher.Tests.Events;
 ///         Fisher session — the premise <c>concurrent_operation_queueing</c> already establishes and
 ///         fisher#13 was. <c>_operations</c> got a lock out of that bug. The session's other shared
 ///         fields did not, and two of them are on the write path a projection slice takes:
-///         <c>Versions</c> is resolved by <c>NumericLightweightFisherStorage.Upsert</c> and its
+///         <c>Versions</c> is resolved by <c>LightweightFisherStorage.Upsert</c> (Weasel's numeric write, fisher#465) and its
 ///         optimistic twin at operation-construction time, on the calling thread, and
 ///         <c>_queryProvider</c> is resolved by <c>Query&lt;T&gt;()</c>, which is how a
 ///         <c>ViewProjection</c> looks up what it is about to fold into.
@@ -177,7 +177,7 @@ public class concurrent_session_tracker_state : IAsyncLifetime
 
         await ReleaseTogetherAsync(workers, w =>
         {
-            // Exactly what NumericLightweightFisherStorage.Upsert does while building each operation.
+            // Exactly what Weasel's numeric Upsert (LightweightFisherStorage) does while building each operation.
             captured[w] = storage.Versions.RevisionsFor<Permit, Guid>();
 
             for (var i = 0; i < each; i++)

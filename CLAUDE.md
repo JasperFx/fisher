@@ -1436,22 +1436,45 @@ with `FOREIGN KEY constraint failed` (fisher#6). Tags go first, dead letters las
 
 ### Document storage layout
 
-Weasel.Storage supplies the selectors and the write operations but **not** an
-`IDocumentStorage<T,TId>` implementation to hold them together — Marten and Polecat each write their
-own, and `FisherDocumentStorage<TDoc,TId>` is Fisher's.
+**The storages are Weasel's closed-shape family** (fisher#465, on Weasel 10.0.0-alpha.2). Fisher used
+to carry its own `IDocumentStorage<T,TId>` family, ~1,000 lines, because Weasel.Storage once supplied
+only the selectors and the write operations; Weasel 10 relocated Marten's whole family into
+Weasel.Storage, and weasel#811 made the parts a store needs public. What is Fisher's now:
 
-⚠️ **That stopped being true in Weasel 10, and Fisher has not moved yet** (fisher#465 left it out).
-Weasel.Storage now ships the closed-shape family itself (`ClosedShapeDocumentProviderFactory`,
-`IClosedShapeStorageRules<TDoc,TId>`, `ProviderGraphBase`), relocated from Marten. Its leaves are
-`internal` and built only through the factory, so adopting it is not a base-class swap: what Fisher's
-storages carry beyond the shared contract — `UndeleteForId` / `RestoreForId`, the `IFisherDocumentStorage`
-surface, `MappedVersionFor` off Fisher's metadata mapping, `SubClassFisherStorage`'s wrapping — has to
-move onto a rules implementation or beside it, with `SqliteGuidIdentification`'s lowercasing and the
-positional `?` contract held throughout. Around it:
-
-- `DocumentProviderRegistry` (`IProviderGraph`) caches one `DocumentProvider<T>` per document type,
-  holding all four flavors. Which one a session resolves is `SessionOptions.Tracking`'s answer — see
-  "Session tracking".
+- **`FisherStorageRules<TDoc,TId>` is an `IClosedShapeStorageRules<TDoc,TId>`**, and every SQLite
+  decision a storage makes is on it: the read SQL per tracking mode (`ReadSqlFor` — the query-only
+  layout omits `id` and uses the narrower binders), the hard and soft delete SQL, the tenant and
+  soft-delete filters, `delete from` as the truncate, identity assignment, `MappedVersionFor` off
+  Fisher's metadata mapping (fisher#245), and undelete/restore by id (`BuildUndeletion` /
+  `BuildRestoration`, fisher#471/#507). **One instance serves all four tracking modes**, which is
+  Weasel's contract — nothing on it may remember a storage.
+- **The four storages derive Weasel's public tracking-mode bases** (`QueryOnlyClosedShapeDocumentStorage`,
+  `LightweightClosedShapeDocumentStorage`, `IdentityMapClosedShapeDocumentStorage`,
+  `DirtyTrackingClosedShapeDocumentStorage`) **only to carry `IFisherDocumentStorage`**, which the
+  criteria operations, tenant scopes, the LINQ select list and the diagnostics restore type-test a storage
+  for. `ClosedShapeDocumentProviderFactory.Build` is not called because its leaves are sealed and
+  internal, so they cannot carry a store's interface; weasel#811 says to derive the bases instead, and
+  they build exactly the operations the leaves do, over the same descriptor. The loads, `Store`, the
+  identity map, the selectors and the write operations for each concurrency mode are all Weasel's.
+- **`SubClassFisherStorage` derives `ClosedShapeSubClassDocumentStorage`**, for the same reason, over
+  `FisherSubClassRules`. Weasel's class forwards every defaulted storage member explicitly, which is the
+  fisher#394 trap closed upstream rather than here.
+- **`DocumentProviderRegistry` is a `ProviderGraphBase`**: a lock-free snapshot read and a build under a
+  re-entrant lock, so a sub-class resolving its base mid-build is safe and a cold type is built once.
+  Which flavor a session resolves is `SessionOptions.Tracking`'s answer — see "Session tracking".
+- **The write SQL did not move**: it is the descriptor's, from `SqliteDocumentStorageDescriptorBuilder`,
+  so the positional `?` contract below is unchanged, and so is `SqliteGuidIdentification`'s lowercasing,
+  which lives in the identity strategy rather than the storage.
+- ⚠️ **Three guards Weasel's bases do not have, and where they went.** An empty id array costs no
+  statement: the session's `LoadManyByIdAsync` guards it (Weasel's identity-map load-many does, its
+  lightweight one does not), as does projection storage; the session-free `LoadManyProjectedAsync`
+  is overridden for fisher#446. `loading_many_through_the_contract.an_empty_load_many_runs_no_statement`
+  and `inline_snapshot_reads_when_starting_streams` pin them.
+- **Behaviour that is Weasel's now, and differs slightly.** The identity map's refusal of a second
+  instance is Weasel's message (still naming the identity map), and Weasel notifies
+  `DocumentAddedForStorage` before refusing. A query-only storage's `Store` is a no-op rather than a
+  throw, which nothing reaches: Fisher has no query-only tracking mode. Truncating a type whose table
+  does not exist yet is a no-op rather than `no such table`.
 - **Storages record; the session queues.** `IStorageSession` has no operation queue, so
   `IDocumentStorage.Store` only assigns an identity and registers the document; `FisherSession.Store<T>`
   queues the `Upsert`. A storage that tried to enqueue would have to know a concrete session type.
@@ -3103,7 +3126,8 @@ mapping, the column, and the sub-class storage.
   three sub-classes get tables of their own.
 - **`SubClassFisherStorage` wraps the base's storage rather than being built from the mapping.** The
   descriptor's selectors materialise a row as whatever its discriminator says, which only type-checks
-  against the base; the wrapper downcasts through `CastingSelector`.
+  against the base; the wrapper (Weasel's `ClosedShapeSubClassDocumentStorage` since fisher#465)
+  downcasts each row.
 - **Writes delegate untouched.** `DocumentDocTypeBinder` resolves the alias from `document.GetType()`,
   so the base's write operations already stamp a derived instance with its own alias.
 - **The two narrowing paths are different on purpose.** A query is narrowed in SQL; a load by id is
@@ -3292,7 +3316,7 @@ first two are conventions applied when the mapping is created; the DSL runs afte
 - **Adding a mapping widens the SELECT**, because a binder is added to `readBinders` only when its
   column is mapped — an unmapped binder returns before touching the reader, so carrying it would cost
   a column per row to accomplish nothing. The read ordinals are `FirstMetadataColumn + index` into
-  that array and `FisherDocumentStorage`'s select list is built from the same array in the same order,
+  that array and `FisherStorageRules.ReadSqlFor`'s select list is built from the same array in the same order,
   so **the two stay aligned only while both are derived from it**. Nothing should ever append to one
   without the other; `AddIfMapped` exists so there is one place that does both.
 - **`IVersioned` turns optimistic concurrency on**, as it does on both siblings. Not a liberty: with
@@ -3337,7 +3361,7 @@ to be checked against.
   being arranged.** `DocumentMetadata` already maps `IVersioned.Version` onto the version column by
   convention, exactly as Marten's `VersionedPolicy` does — so the interface route and
   `Metadata(m => m.Version.MapTo(...))` arrive at storage identically, and
-  `FisherDocumentStorage.MappedVersionFor` (weasel#590's seam) reads one member for both. **The
+  `FisherStorageRules.MappedVersionFor` (weasel#590's seam) reads one member for both. **The
   asymmetry between them is what marten#5372 was**; here there was nothing to be asymmetric, because
   Fisher consulted neither. Both were broken identically, which is why
   `cross_session_optimistic_concurrency` asserts every fact for both routes — a fix seeding only one
@@ -3351,7 +3375,8 @@ to be checked against.
   are *default interface members*, so leaving them out compiles and answers null for every sub-class —
   a `Dog` loaded in one session failed its guard in every later one, fisher#245 again through the
   hierarchy. Both are forwarded now; they are the only two defaults on Weasel's `IDocumentStorage<T>`,
-  so a decorator over it should be re-checked whenever Weasel adds another.
+  so a decorator over it should be re-checked whenever Weasel adds another. Since fisher#465 the wrapper
+  is Weasel's `ClosedShapeSubClassDocumentStorage`, which forwards these and `TryApplyMapped*` itself.
   `cross_session_optimistic_concurrency` pins both routes through a sub-class, each with its stale twin.
 - **The `Guid.Empty` condition is carried for parity and is not observable.** Measured, not assumed:
   removing it changes no outcome in either direction, because an expectation of `Guid.Empty` matches no
@@ -4915,7 +4940,7 @@ all, including the zero-infrastructure embedded configuration that is Fisher's b
 JasperFx 2.93 added `IDocumentStoreDiagnosticsWriter.UndeleteDocumentAsync` (jasperfx#1059) and
 `DocumentQueryOptions.OrderByMetadata` (jasperfx#1058); the suite's 7 + 7 facts run.
 
-- **The undelete is a by-id `update`, not a deserialize-and-store.** `FisherDocumentStorage.RestoreForId`
+- **The undelete is a by-id `update`, not a deserialize-and-store.** `FisherStorageRules.BuildRestoration`
   is `UndeleteForId`'s statement plus `last_modified` and the version column, so the contract's "live, with
   a new version" holds while `data` stays byte-exact — a store would drop any member this deployment's type
   lacks. The new `guid_version` is generated in SQL (`hex(randomblob(16))`, hyphenated) so the statement
@@ -5791,7 +5816,7 @@ Ported from Polecat, which owns `Polecat.Linq.SqlGeneration` itself rather than 
 `Weasel.SqlServer` — so Fisher carrying its own fragment set is the mirror, not a divergence, and no
 upstream Weasel change was needed. The fragments bind to `Weasel.Core.SqlGeneration.ISqlFragment`
 (the neutral one the storage layer already uses) rather than a Fisher-local copy, so a parsed
-predicate can be handed to `FisherDocumentStorage.FilterDocuments`.
+predicate can be handed to a storage's `FilterDocuments` (`FisherStorageRules`).
 
 `session.Query<T>()` supports `Where`, the four ordering operators, `Take`/`Skip`, and async
 terminals. Anything else throws `BadLinqExpressionException` naming the operator rather than falling

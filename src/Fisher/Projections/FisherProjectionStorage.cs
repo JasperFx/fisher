@@ -111,12 +111,12 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
     /// </remarks>
     public void UnDelete(TDoc snapshot, string tenantId)
     {
-        if (_storage is not FisherDocumentStorage<TDoc, TId> fisher)
+        if (_storage is not IClosedShapeDocumentStorage<TDoc, TId> closed)
         {
             return;
         }
 
-        var operation = fisher.UndeleteForId((TId)_storage.IdentityFor(snapshot), tenantId);
+        var operation = closed.UndeleteForId((TId)_storage.IdentityFor(snapshot), tenantId);
 
         if (operation is not null)
         {

@@ -1001,7 +1001,7 @@ public partial class DocumentStore : IDocumentStoreDiagnostics, IDocumentStoreDi
     ///         a save and a delete are, so the expected version is checked against the row the restore will
     ///         touch. The restore clears <c>is_deleted</c> and <c>deleted_at</c> and moves
     ///         <c>last_modified</c> and the version column, without rewriting <c>data</c> — see
-    ///         <c>FisherDocumentStorage.RestoreForId</c>.
+    ///         <c>FisherStorageRules.BuildRestoration</c>.
     ///     </para>
     ///     <para>
     ///         <b>Only a soft-deleted row is a target.</b> A live row is <see cref="DocumentWriteStatus.NotFound" />

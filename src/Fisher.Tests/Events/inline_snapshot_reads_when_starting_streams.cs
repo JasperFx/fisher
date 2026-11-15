@@ -16,8 +16,9 @@ namespace Fisher.Tests.Events;
 ///         The single-stream base asks projection storage only for the ids of streams being appended
 ///         to, so a start-only commit hands <c>LoadManyAsync</c> an empty array. Marten passed it
 ///         through and paid a round trip on <c>id = ANY($1)</c> that could only return no rows. Fisher
-///         never did, because <c>FisherDocumentStorage.QueryManyAsync</c> short-circuits it, but that
-///         was three layers below the method that depends on it.
+///         never did, because its storage short-circuited it, but that was three layers below the
+///         method that depends on it -- and the storage is Weasel's now (fisher#465), whose lightweight
+///         load-many does not.
 ///     </para>
 ///     <para>
 ///         <b>The positive cases matter as much as the zero cases.</b> They are what makes the
@@ -180,7 +181,7 @@ public class inline_snapshot_reads_when_starting_streams : IAsyncLifetime
             $"Data Source={Path.Combine(Path.GetTempPath(), $"no-such-dir-{Guid.NewGuid():N}", "x.db")};Mode=ReadOnly",
             "unreachable");
 
-        var storage = (FisherDocumentStorage<QuestParty, Guid>)_store.Database.Providers
+        var storage = (Weasel.Storage.IDocumentStorage<QuestParty, Guid>)_store.Database.Providers
             .StorageFor<QuestParty>().Lightweight;
 
         var loaded = await storage.LoadManyProjectedAsync([], unreachable, StorageConstants.DefaultTenantId, Token);
