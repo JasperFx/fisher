@@ -450,7 +450,8 @@
              does not reference. -->
         <!-- Weasel 10.0.0-alpha.2 (from alpha.1). fisher#551: weasel#809 evicts a tenant the master table no
              longer offers, through EvictStaleTenantAsync, which MasterTableTenantSource overrides to revoke. -->
-        <PackageVersion Include="Aspire.Hosting" Version="13.6.4" />
+        <!-- Aspire.Hosting 13.6.5 (from 13.6.4): CVE-2026-120006 / GHSA-f7vh-h5g3-7jrh, high, fixed in 13.6.5 (fisher#468). -->
+        <PackageVersion Include="Aspire.Hosting" Version="13.6.5" />
         <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.2" />
         <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.2" />
 

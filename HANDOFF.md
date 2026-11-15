@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3080 tests green on net10.0 and 3107 on net11.0** — 3009 (net10.0) / 3036 (net11.0) in `Fisher.Tests`, 40 in
+**3083 tests green on net10.0 and 3110 on net11.0** — 3012 (net10.0) / 3039 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -46,6 +46,16 @@ publishes only the third, and with the gate off it publishes all three. No schem
 the previous version's `fi_event_progression` row. JasperFx's own gate tests use a substituted database, so this is
 the only place Fisher's shard names are shown to parse back into what the gate looks for. The guide entry is no
 longer pending, and neither is anything else in it.
+
+## The Community Toolkit's SQLite connection string, measured (fisher#468)
+
+`docs/configuration/aspire.md` said a CommunityToolkit.Aspire.Hosting.Sqlite connection string works with
+`AddFisher(connectionString)`, "not verified". Measured against 13.6.1 (Aspire.Hosting 13.6.4): it is
+`Data Source={path};Cache=Shared;Mode=ReadWriteCreate`. `community_toolkit_connection_string` pins Fisher against
+that string: the file is in WAL once the store has written, and 8 writers × 25 appends commit with the async daemon
+reading. `Cache=Shared` was the part worth checking, since SQLite discourages shared cache beside WAL. The README now
+lists `Fisher.Aspire.Hosting`. A smoke consumer reference was not added. `Aspire.Hosting` moves 13.6.4 → 13.6.5 for
+CVE-2026-120006 (GHSA-f7vh-h5g3-7jrh, high, elevation of privilege), which `Fisher.Aspire.Hosting` depended on.
 
 ## The JasperFx 3.3.0 bump (fisher#553, fisher#554)
 

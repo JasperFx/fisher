@@ -30,10 +30,16 @@ directory a mounted volume provides. It does not mount anything itself.
 
 ## Community Toolkit `AddSqliteConnection`
 
-If the AppHost already uses the Aspire Community Toolkit's SQLite integration
-, a connection string it produces is an ordinary SQLite one, so
-`AddFisher(connectionString)` can take it (not verified against every toolkit version). Fisher then owns the schema, journal mode and
-PRAGMAs through its own data source, so leave the toolkit's own settings at their defaults.
+If the AppHost already uses the Aspire Community Toolkit's SQLite integration (`AddSqlite`), the connection
+string it hands a project works with `AddFisher(connectionString)`. CommunityToolkit.Aspire.Hosting.Sqlite 13.6.1
+produces `Data Source={path};Cache=Shared;Mode=ReadWriteCreate`, which Microsoft.Data.Sqlite opens as an ordinary
+file. Fisher then applies its own schema, journal mode and PRAGMAs through its own data source, so the file still
+runs in WAL, and concurrent writers commit with the async daemon reading beside them under the shared cache.
+`community_toolkit_connection_string` in Fisher's suite pins that string; another toolkit version could produce a
+different one.
+
+On the service side you do not need the toolkit's client package (`AddSqliteConnection`): read the connection
+string from configuration and pass it to `AddFisher`, as above.
 
 ## OpenTelemetry
 
