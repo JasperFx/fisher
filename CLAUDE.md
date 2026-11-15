@@ -18,6 +18,7 @@ compliance scoreboard and the current state of play.
 dotnet build fisher.slnx
 dotnet test fisher.slnx                    # both TFMs; they run serially on purpose
 dotnet test fisher.slnx -f net10.0         # one TFM
+dotnet build fisher.slnx -p:FisherRuntimeAsync=false   # net11.0 without runtime-async (fisher#550); clean bin/ obj/ first
 
 # One test class or method (Microsoft Testing Platform — note the bare `--`)
 dotnet test src/Fisher.Tests/Fisher.Tests.csproj -f net10.0 -- --filter-method "*appending_events*"

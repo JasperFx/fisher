@@ -12,11 +12,20 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3076 tests green on net10.0 and 3103 on net11.0** — 3005 (net10.0) / 3032 (net11.0) in `Fisher.Tests`, 40 in
+**3077 tests green on net10.0 and 3104 on net11.0** — 3006 (net10.0) / 3033 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.1**.
+
+## Runtime-async on by default for net11.0 (fisher#550)
+
+Plan decision D4, as JasperFx's `JasperFxRuntimeAsync` and Wolverine 7.0. `Directory.Build.props` adds
+`<Features>runtime-async=on</Features>` for `net11.0` unless a build passes `-p:FisherRuntimeAsync=false`; `net10.0`
+cannot load it. Fisher builds no code at runtime through `GenerationRules`, so that switch is all of it.
+`runtime_async_defaults` pins it from the assembly's metadata, since async code behaves the same either way: on
+`net11.0` Fisher has runtime-async methods and no compiler-built state machines except async iterators', and on
+`net10.0` the reverse. Rebuilding with the switch off fails it. The full `net11.0` suite runs green with it on.
 
 ## The JasperFx 3.3.0 bump (fisher#553, fisher#554)
 
