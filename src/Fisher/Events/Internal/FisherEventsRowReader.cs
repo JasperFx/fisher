@@ -376,6 +376,9 @@ internal static class FisherEventsRowReader
         MetadataSlots slots, CancellationToken token)
     {
         var seqId = reader.GetInt64(0);
+
+        // Parse over GetString, measured (fisher#546): the provider has no allocation-free TEXT read, and
+        // GetChars/GetBytes open a blob handle per call. CLAUDE.md's "Row readers" has the numbers.
         var eventId = Guid.Parse(reader.GetString(1));
         // stream_id at ordinal 2 — the caller already knows it; not read here.
         var eventVersion = reader.GetInt64(3);

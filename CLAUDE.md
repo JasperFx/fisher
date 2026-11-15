@@ -223,6 +223,26 @@ write path converts explicitly on the way in, so reading through a provider conv
 would leave the round trip depending on Microsoft.Data.Sqlite's coercion rules instead of Fisher's
 own storage decisions — asymmetry that breaks quietly under a provider upgrade.
 
+⚠️ **`Guid.Parse(reader.GetString(n))` stays, and that was measured rather than assumed** (fisher#546, the
+remainder of fisher#461). The obvious change is `Guid.TryParse` over a span to skip the string, but
+Microsoft.Data.Sqlite has no read of a TEXT column that gives a span without allocating one first. Over 20,000
+rows with two text Guids each, against Microsoft.Data.Sqlite 10.0.9:
+
+| Read | bytes/row | µs/row |
+|---|---|---|
+| `Guid.Parse(GetString)` (as is) | 192 | 0.295 |
+| `Guid.TryParse(GetString(..).AsSpan())` | 192 | 0.294 |
+| `GetFieldValue<Guid>` | 192 | 0.387 |
+| `GetChars` into a reused `char[]` | 7,216 | 1.92 |
+| `GetBytes` into a reused `byte[]`, UTF-8 `TryParse` | 656 | 0.864 |
+
+`TryParse` over the string's span saves nothing, because the string is already allocated. `GetChars` and
+`GetBytes` are the only ways around it, and both are much worse: with `seq_id` in the row, the provider serves them
+through incremental blob I/O, opening a blob handle per call. That is the same reason the binary-body read keeps
+`GetValue` (fisher#555, under "Binary event bodies"). `Parse` also stays over `TryParse` on purpose: a column
+that does not hold a Guid is corruption, and an exception names it where `TryParse` would hand back `Guid.Empty`.
+Revisit only if the provider gains a span read over `sqlite3_column_text`.
+
 ### Table naming
 
 `main` → `fi_events`; any other `DatabaseSchemaName` → `compliance_fi_events`. Every `DbObjectName`
