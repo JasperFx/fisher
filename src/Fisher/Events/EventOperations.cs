@@ -113,8 +113,15 @@ public partial class EventOperations : EventOperationsBase, IEventStoreOperation
     }
 
     /// <summary>
-    ///     Reverse <see cref="ArchiveStream(Guid)" />.
+    ///     Reverse <see cref="ArchiveStream(Guid)" />: clear the archived flag on the stream and its
+    ///     events. Queued until <c>SaveChangesAsync</c>.
     /// </summary>
+    /// <remarks>
+    ///     Implements <see cref="IEventStoreOperations.UnArchiveStream(Guid)" /> (JasperFx/marten#5476).
+    ///     Save the unarchive in its own unit of work before appending to the stream: the append path
+    ///     checks for an archived stream before the batch is written, so an unarchive and an append in
+    ///     the same <c>SaveChangesAsync</c> is refused with <see cref="ArchivedStreamException" />.
+    /// </remarks>
     public void UnArchiveStream(Guid streamId)
     {
         AssertGuidIdentity();

@@ -16,7 +16,22 @@ scoreboard and the things that are true right now but not obvious from either.
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 811 of
 them are shared cross-store compliance tests — 580 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.0.1** / Weasel **10.0.0-alpha.1**.
+On JasperFx **3.3.0** / Weasel **10.0.0-alpha.1**. The counts above predate that pin. On 3.3.0, `Fisher.Tests`
+on net10.0 is 2979 passed and 24 skipped, and its compliance namespace is 843 tests on both frameworks.
+
+## The JasperFx 3.3.0 bump (fisher#553, fisher#554)
+
+JasperFx 3.0.1 → 3.3.0, spanning 3.1.0 and 3.2.0. There was no compile break. The bump added two compliance changes:
+- `DcbAppendConditionCompliance` (jasperfx#1183) is new and enrolled by fisher#553: 23 pass, and 1 skips because
+  `SupportsHoldingAnAppendOpen` is false.
+- `StreamArchivingCompliance` grew from 27 to 35 when `UnArchiveStream` moved onto the shared
+  `IEventStoreOperations` (jasperfx#1186). Fisher's existing methods implement it, and the fixture hook is gone
+  (fisher#554).
+
+`StreamLockedException` is still Fisher's own subclass. jasperfx#1172 added `StreamIds` to the base type, but
+Fisher's subclass has to use the base's message constructor, and that constructor records only the first id. A
+caller that catches the JasperFx type therefore sees one stream, which is what the CS0108 warning on
+`StreamIds` is pointing at.
 
 ## The JasperFx 3.0.0 bump — Fisher 2.0 on net10.0;net11.0 (fisher#460, fisher#530, fisher#465)
 

@@ -503,14 +503,12 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override bool SupportsNaturalKeys => true;
 
     /// <summary>
-    ///     Fisher has <c>UnArchiveStream</c> on its own event operations, so the archiving suite's
-    ///     unarchive facts run rather than skipping.
+    ///     Fisher's <c>EventOperations.UnArchiveStream(Guid|string)</c> implement the members
+    ///     JasperFx lifted onto the shared <see cref="IEventStoreOperations" /> (jasperfx#1186,
+    ///     JasperFx/marten#5476), so the archiving suite's unarchive facts run rather than skipping. The
+    ///     suite calls them through <c>EventsFor(session)</c>; the fixture hook it used to call is
+    ///     obsolete and Fisher no longer overrides it.
     /// </summary>
-    /// <remarks>
-    ///     The operation is not on the shared <see cref="IEventStoreOperations" /> and cannot be:
-    ///     Polecat declares it on its own surface and Marten has no equivalent at all, which is why
-    ///     the suite reaches it through this pair rather than through the contract.
-    /// </remarks>
     public override bool SupportsUnarchiveStream => true;
 
     /// <summary>
@@ -520,23 +518,6 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     ///     real foreign key to <c>fi_events</c>; see <c>TombstoneStreamOperation</c>.
     /// </summary>
     public override bool SupportsTombstoneStream => true;
-
-    /// <inheritdoc cref="SupportsUnarchiveStream" />
-    public override void UnArchiveStream(IDocumentSession session, object streamIdentity)
-    {
-        switch (streamIdentity)
-        {
-            case Guid streamId:
-                session.Events.UnArchiveStream(streamId);
-                break;
-            case string streamKey:
-                session.Events.UnArchiveStream(streamKey);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(streamIdentity),
-                    $"Fisher has no stream identity of type {streamIdentity.GetType().FullName}");
-        }
-    }
 
     /// <summary>
     ///     jasperfx#763 — Fisher routes a projection's published side effects through
