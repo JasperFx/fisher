@@ -335,9 +335,7 @@ See [Integration Testing](/testing/integration).
 
 Fisher 2.0 is the Fisher half of the Critter Stack's .NET 11 release train: JasperFx 3.0, Weasel 10.0,
 Marten 10.0, Polecat 6.0, Fisher 2.0 and Wolverine 7.0 move together. Each entry below says what changes,
-what it does to an existing database file, and how to opt out. Entries marked **pending** describe work
-that is tracked in its own issue and has not landed yet; they are listed so the guide is complete the day
-2.0 ships, and each will be rewritten when its change merges.
+what it does to an existing database file, and how to opt out.
 
 ### Target frameworks: `net10.0` and `net11.0`
 
@@ -381,13 +379,41 @@ An application that wants encryption at rest references `SQLite3MC.PCLRaw.provid
 on the same SQLitePCLRaw 3.0.x line. See [SQLite configuration](/configuration/sqlite#the-native-sqlite-build).
 There is no schema effect.
 
-### Event-store defaults: `GateSideEffectsBehindPriorVersion` (**pending**)
+### Event-store defaults: `GateSideEffectsBehindPriorVersion`
 
 jasperfx#1075 turns `GateSideEffectsBehindPriorVersion` **on by default for every event store** in
 JasperFx 3.0, Fisher included. Fisher does not set it itself, so the default arrives with the JasperFx
-bump. This entry will state, once the behaviour is measured against a Fisher file, the effect on an
-existing database and the opt-out; until then, treat the setting as new behaviour for projection
-side effects and check the daemon after upgrading.
+bump.
+
+**What it does.** It matters only when you raise a projection's `Version` (a blue/green or rolling deploy of
+a changed projection). The new version replays the event store to build its own documents. With the gate on, it
+does that with **side effects suppressed** up to where the previous version's progression stopped, and
+publishes messages and raises events only for events the previous version never processed. In Fisher 1 the
+new version re-published everything it replayed, so every message the old version had already sent went out a
+second time.
+
+**Effect on an existing database: none.** No table or column changes. The gate reads the previous
+version's row in `fi_event_progression`, which the version-qualified shard name (`Quest:V2:All` beside
+`Quest:V1:All`) already keeps apart. A projection whose `Version` never changes, or that starts from the
+present, behaves exactly as before.
+
+**Opting out** is per projection, on the projection's options:
+
+```cs
+public class QuestProjection : SingleStreamProjection<Quest, Guid>
+{
+    public QuestProjection()
+    {
+        Version = 2;
+
+        // Fisher 1's behaviour: re-publish side effects over the whole replay.
+        GateSideEffectsBehindPriorVersion = false;
+    }
+}
+```
+
+`side_effect_gate_behind_prior_version` in Fisher's own suite runs both cases against a real file and the
+real daemon.
 
 ### Types that move to shared packages
 
