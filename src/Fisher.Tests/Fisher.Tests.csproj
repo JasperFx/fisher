@@ -39,7 +39,14 @@
              That is why the global aliases in Compliance/ComplianceAliases.cs must all resolve even
              for suites Fisher cannot pass yet — a shared source file referencing
              ComplianceEventProjection is compiled whether or not it is enrolled. -->
-        <PackageReference Include="JasperFx.Events.ComplianceTests" />
+        <PackageReference Include="JasperFx.Events.ComplianceTests" Condition="'$(ComplianceSourceDir)' == ''" />
+        <!-- LOCAL DEV LOOP ONLY: -p:ComplianceSourceDir=/path/to/jasperfx/src/JasperFx.Events.ComplianceTests
+             swaps the published suites for a working copy, so a new suite can be validated against
+             Fisher before the JasperFx release. Same switch as Marten and Polecat. -->
+        <Compile Include="$(ComplianceSourceDir)\**\*.cs"
+                 Exclude="$(ComplianceSourceDir)\bin\**\*.cs;$(ComplianceSourceDir)\obj\**\*.cs;$(ComplianceSourceDir)\Local\**\*.cs"
+                 LinkBase="ComplianceSuites"
+                 Condition="'$(ComplianceSourceDir)' != ''" />
 
     </ItemGroup>
 

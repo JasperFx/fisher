@@ -672,4 +672,36 @@ public class archived_events_are_opt_in : IAsyncLifetime
         events.Count.ShouldBe(2);
         events.ShouldAllBe(x => !x.IsArchived);
     }
+
+    /// <summary>
+    ///     An unarchive and an append to the same stream in ONE <c>SaveChangesAsync</c> is refused,
+    ///     and the refusal rolls the unarchive back with it.
+    /// </summary>
+    /// <remarks>
+    ///     The shared <see cref="IEventStoreOperations.UnArchiveStream(Guid)" /> contract leaves this
+    ///     case out on purpose (JasperFx/marten#5476): Fisher's append planner reads the stream rows,
+    ///     and refuses an archived one, before any queued operation runs. This pins Fisher's answer so a
+    ///     change to it is a decision rather than an accident. It goes through the shared interface,
+    ///     which is how store-agnostic code reaches the member.
+    /// </remarks>
+    [Fact]
+    public async Task unarchiving_and_appending_in_the_same_save_is_refused()
+    {
+        await using (var session = _store.LightweightSession())
+        {
+            IEventStoreOperations events = session.Events;
+            events.UnArchiveStream(_archived);
+            events.Append(_archived, new MemberJoined("Sam"));
+
+            var refusal = await Should.ThrowAsync<ArchivedStreamException>(() => session.SaveChangesAsync(Token));
+            refusal.Id.ShouldBe(_archived);
+        }
+
+        await using var query = _store.LightweightSession();
+
+        var state = await query.Events.FetchStreamStateAsync(_archived, Token);
+        state.ShouldNotBeNull();
+        state.IsArchived.ShouldBeTrue();
+        state.Version.ShouldBe(2);
+    }
 }

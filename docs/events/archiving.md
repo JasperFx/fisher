@@ -31,6 +31,21 @@ longer live.
 needs a different id rather than an unarchive.
 :::
 
+## Unarchiving
+
+`UnArchiveStream(Guid)` and `UnArchiveStream(string)` are members of the shared
+`JasperFx.Events.IEventStoreOperations`, so store-agnostic code can call them as well as
+`session.Events`. Once the unarchive is saved, the stream takes appends again, at the version it had,
+and its events come back into the default reads. Unarchiving a stream that is not archived, or that does
+not exist, does nothing. Under conjoined tenancy only the session's tenant's copy is reopened.
+
+::: warning
+**Save the unarchive before you append.** Fisher checks every stream an append touches before it
+writes the batch, so an unarchive and an append to the same stream in one `SaveChangesAsync` is refused
+with `ArchivedStreamException`, and the unarchive is rolled back with it. The shared contract leaves
+this case open.
+:::
+
 ## Reading archived events
 
 Marten and Polecat filter archived events out of their reads, and Fisher follows the same rule: you have to
