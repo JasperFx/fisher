@@ -6665,7 +6665,7 @@ from one of them is a build error rather than a projection test failing somewher
 
 ## The companion packages
 
-Two, both modelled on Polecat's and Marten's, both multi-targeting net9.0/net10.0 as the core does.
+Two, both modelled on Polecat's and Marten's, both targeting net10.0;net11.0 as the core does.
 
 ### `Fisher.AspNetCore` (fisher#49)
 
@@ -6764,8 +6764,8 @@ and a rollback takes EF's write with it. All four are what the seam needs and no
 - **The package references `Microsoft.EntityFrameworkCore.Relational` only.** Which EF provider a
   `DbContext` uses is the application's decision; referencing the Sqlite provider would be Fisher
   making it for them, even though on SQLite it is nearly always the right one.
-- **Pinned to EF Core 9.x, not 10.x**, because the package multi-targets net9.0 and net10.0 and EF
-  Core 10 is net10-only. 9.x targets net8.0, so it loads on both.
+- **Floored at EF Core 10.0** since Fisher 2 dropped net9.0 (fisher#467). Fisher 1 pinned EF Core 9.x
+  because EF Core 10 is net10+ and the package still targeted net9.0.
 - **`CompletelyRemoveAllAsync` leaves EF's tables alone**, because it filters by the `fi_` prefix.
   Correct — Fisher owning the file does not make it Fisher's to clear — and pinned so nobody "fixes" it.
 

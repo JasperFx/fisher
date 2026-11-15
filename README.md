@@ -120,8 +120,8 @@ contracts](https://jasperfx.net/support-plans/) for the Critter Stack.
 
 ## Working with the Code
 
-You need the **.NET 10 SDK** ([available here](https://dotnet.microsoft.com/download)) and the .NET 9
-runtime to run that target framework's suites.
+You need the **.NET 11 SDK** ([available here](https://dotnet.microsoft.com/download)), which builds both
+target frameworks, and the .NET 10 runtime to run the `net10.0` suites. Fisher 2 targets `net10.0;net11.0`.
 
 **There is no database server to run.** No `docker-compose up`, no connection string to configure, no
 container to wait for — the tests create throwaway SQLite files under the temp directory. This is the
