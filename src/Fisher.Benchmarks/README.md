@@ -34,6 +34,7 @@ dotnet run -c Release --project src/Fisher.Benchmarks -- event-append       --st
 dotnet run -c Release --project src/Fisher.Benchmarks -- daemon-rebuild     --events 10000
 dotnet run -c Release --project src/Fisher.Benchmarks -- concurrent-writers --writers 8 --commits 50 --docs-per-commit 5
 dotnet run -c Release --project src/Fisher.Benchmarks -- cold-start         --types 20 --rounds 5
+dotnet run -c Release --project src/Fisher.Benchmarks -- writer-queue       --writers 8 --total-commits 400 --docs-per-commit 5 --rounds 7
 
 # The BenchmarkDotNet micro-benchmarks (MemoryDiagnoser)
 dotnet run -c Release --project src/Fisher.Benchmarks -- bdn
@@ -69,18 +70,24 @@ every change. For a publishable number, scale up:
    `BEGIN IMMEDIATE` can wait inside the connection's 30s busy timeout and succeed with *no*
    retry event — high wall clock with zero retries is still contention — and the retry event only
    fires for a SQLITE_BUSY/SQLITE_LOCKED that reaches the resilience pipeline.
-5. **`cold-start`** — a fresh database file, base schema applied, then the first unit of work
+5. **`writer-queue`** (fisher#547) — the `concurrent-writers` shape run three ways with the same total
+   work: racing for `BEGIN IMMEDIATE` as today, through a benchmark-only `Channel<T>` single-writer
+   queue (`SingleWriterQueue`), and through a `SemaphoreSlim(1)` control. Reports wall clock, commit
+   latency percentiles, allocations per commit, the `fisher.write_lock.wait` histogram and both retry
+   signals. `--writers N` runs one count; without it, it sweeps 1/2/4/8/16. The queue is a measurement
+   aid only; Fisher's write path does not use it.
+6. **`cold-start`** — a fresh database file, base schema applied, then the first unit of work
    touching T document types, which pays the first-use table-ensure migration once per type (the
    O(types × objects) migration finding). The second, identical commit is the warm contrast, so
    the report can isolate "table-ensure overhead" and "overhead per type".
-6. **`QueryConstructionBenchmarks`** (BDN only) — the same query shapes split into **construct**
+7. **`QueryConstructionBenchmarks`** (BDN only) — the same query shapes split into **construct**
    (`session.ToSql(...)`: walk the expression tree, resolve members, build the `Statement`, render the
    SQL) and **full** (construct, execute, materialize), on one warm session so the pair is comparable.
    This is the harness for the compiled-query question: a compiled query removes the construct half
    and nothing else, so the construct/full ratio *is* the answer. `ByIdConstruct`/`ByIdFull` is the
    ceiling — an index seek returning one row, the cheapest execution there is, so the largest share
    construction can hold. See `Results.md` for the numbers and fisher#195 for what they decided.
-7. **`QueryBenchmarks`** (BDN only) — one LINQ query end to end over a deliberately tiny table, so
+8. **`QueryBenchmarks`** (BDN only) — one LINQ query end to end over a deliberately tiny table, so
    parsing the chain and rendering the SQL rather than materializing rows is what the number is
    about. The harness for the query-construction work: allocations are the signal, since the SQLite
    round trip is in-process and the same before and after. The `FilteredCount` and `FirstByMember`

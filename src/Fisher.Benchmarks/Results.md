@@ -319,3 +319,187 @@ first by id (index seek)           22.5%          42.5%
 - **What would change the answer**: a plan cache that lands and leaves a residue still worth 10%+ of a
   query, or a workload dominated by trivially-executing queries at high rate. Re-run this class rather
   than re-arguing it.
+
+---
+
+## Channel<T> single-writer queue vs racing for `BEGIN IMMEDIATE` — fisher#547 (2026-11-15, `channel-writer-benchmark`)
+
+**Measurement only. Whether Fisher adopts a queue is the repo owner's decision, and nothing here
+makes it.** Fisher's write path is unchanged: the queue is a benchmark-only wrapper
+(`Scenarios/SingleWriterQueue.cs`) around an ordinary session's `SaveChangesAsync`.
+
+```
+Fisher.Benchmarks — 2026-11-15 (Apple M5 Max)
+  OS:        macOS 26.4.1 (Arm64)
+  .NET:      .NET 10.0.14
+  CPUs:      18
+  Config:    Release
+```
+
+### What was measured
+
+`writer-queue` (`Scenarios/WriterQueueScenario.cs`) is `ConcurrentWritersScenario`'s shape: K
+writers, each opening a lightweight session, storing N small `BenchDoc`s and committing, in a loop,
+against one database file. The total work is fixed and split across the K writers. Three modes, which
+differ only in who calls `SaveChangesAsync`:
+
+- **race**: today. Every writer commits for itself and races for `BEGIN IMMEDIATE`. Contention is
+  absorbed by SQLite's `busy_timeout` (5000 ms, from Weasel's default PRAGMAs) and, beyond that, by
+  the Polly pipeline.
+- **queue**: the fisher#547 candidate. Writers hand `() => session.SaveChangesAsync()` to one
+  unbounded `Channel<T>` with a single consumer, which runs the commits one at a time. Plain
+  serialization, one transaction per unit of work. **Not group commit**: batching several queued
+  sessions into one transaction is a different design with different failure semantics, and it was
+  not measured.
+- **gate**: a control, not a candidate. A `SemaphoreSlim(1)` around the writer's own
+  `SaveChangesAsync`. It serializes exactly as the queue does, but the commit stays on the caller's
+  async flow, so it separates "serializing in-process" from "a channel and a consumer task".
+
+Per mode the scenario reports:
+
+- wall clock (median and range over rounds) and commits/sec at the median;
+- commit latency p50/p95/p99/max, pooled over every commit of every round. It is measured from just
+  before the commit is requested to its completion, so it includes the `BEGIN IMMEDIATE` wait for
+  **race** and the time spent queued for **queue**;
+- bytes allocated per commit (`GC.GetTotalAllocatedBytes(precise: true)` over the timed section);
+- the `fisher.write_lock.wait` histogram and the `fisher.write_lock.retries` counter
+  (`TrackWriteLockContention()`, read by a `MeterListener` filtered on a per-round store name);
+- `fisher.retry` activity events (`RetryCounter`).
+
+Method: `-c Release`, a fresh database file per round, one discarded warmup round per mode, and the
+mode order rotated every round so no mode always runs first. Commands:
+
+```bash
+dotnet run -c Release --project src/Fisher.Benchmarks -- writer-queue --total-commits 400  --docs-per-commit 5  --rounds 11
+dotnet run -c Release --project src/Fisher.Benchmarks -- writer-queue --total-commits 2000 --docs-per-commit 5  --rounds 9
+dotnet run -c Release --project src/Fisher.Benchmarks -- writer-queue --total-commits 1000 --docs-per-commit 50 --rounds 7
+# the headline writer counts again, 21 rounds per run, run separately
+dotnet run -c Release --project src/Fisher.Benchmarks -- writer-queue --writers 1  --rounds 21
+dotnet run -c Release --project src/Fisher.Benchmarks -- writer-queue --writers 8  --rounds 21   # x2
+dotnet run -c Release --project src/Fisher.Benchmarks -- writer-queue --writers 16 --rounds 21   # x4
+```
+
+Without `--writers` it sweeps 1, 2, 4, 8 and 16 writers. 400 commits x 5 documents is the audit's
+shape: 8 writers x 50 commits against 1 writer x 400.
+
+### The audit's shape: 400 commits x 5 documents, 11 rounds
+
+```
+             wall clock, median (ms)      commit latency, race (ms)    commit latency, queue (ms)   lock wait summed
+writers     race    queue    gate        p50    p99     max            p50    p99    max           per round, race
+   1        29.0     33.6    30.4        0.1    0.3     1.6            0.1    0.3    2.2              1.0 ms
+   2        35.1     31.9    44.7        0.1    1.1    36.1            0.1    0.9    3.2             21.7 ms
+   4        42.4     29.4    47.2        0.1    3.7    59.5            0.2    1.9    6.7             66.2 ms
+   8        66.5     29.0    46.4        0.1   20.4   116.6            0.5    3.3   24.7            237.3 ms
+  16       113.0     30.5    45.4        0.1   54.9   236.2            1.1    3.7    6.8            554.2 ms
+```
+
+The same shape again at 21 rounds per run (wall clock medians, race / queue / gate):
+
+```
+   1 writer     36.6 / 37.8 / 36.1 ms
+   8 writers    86.1 / 24.5 / 38.8      85.7 / 30.5 / 35.6
+  16 writers   141.2 / 58.9 / 62.6     138.6 / 24.1 / 29.6     114.3 / 31.0 / 36.8     138.3 / 21.8 / 31.5
+```
+
+### Larger runs and heavier commits
+
+```
+2000 commits x 5 docs, 9 rounds     wall clock median (ms)        p99 / max latency (ms)
+writers                             race   queue   gate           race           queue
+   1                               230.2   226.6  210.8          0.5 / 25.5      0.5 / 50.8
+   8                               207.2   184.8  205.8          5.0 / 235.8     3.7 / 80.8
+  16                               288.6   144.4  222.7         27.2 / 340.4     5.8 / 69.5
+
+1000 commits x 50 docs, 7 rounds
+   1                               288.6   326.9  312.2          2.2 / 111.0     2.0 / 54.4
+   8                               371.2   263.1  339.3         36.5 / 437.7     6.8 / 13.2
+  16                               462.2   280.4  337.7        108.7 / 643.6    11.0 / 14.8
+```
+
+Allocations per commit were the same in every mode, within noise: 29.6-30.2 KB for 5 documents and
+209.2-209.6 KB for 50. The queue adds about 0.2-0.3 KB per commit (the work item, its
+`TaskCompletionSource` and the closure).
+
+**Retries: zero.** `fisher.retry` and `fisher.write_lock.retries` read 0 in every mode of every run.
+As the 2026-09-05 baseline found, all of today's contention is absorbed inside `BEGIN IMMEDIATE` by
+the busy timeout, and the Polly pipeline is never reached.
+
+**One commit failed and the cause is unknown.** It was in race mode at 16 writers, in the first
+400 x 5 sweep: 1 commit of 4,400, with no retry recorded. That run did not capture the exception.
+After capture was added, 84 more 16-writer race rounds (33,600 commits) did not reproduce it.
+
+### Notes
+
+- **At one writer the three modes are the same. From four writers up, the queue is faster.** On the
+  audit's shape it took about 2.3x less wall clock at 8 writers and 3.7x less at 16. On the larger
+  runs the gain was 1.1-2x, and on 50-document commits 1.4-1.6x. At two writers the difference is
+  within noise. Racing gets slower as writers are added: 8 writers took 2.3x the 1-writer wall clock
+  here, against 1.8x in the baseline. The queue's wall clock stays flat. 8 or 16 queued writers can
+  even finish slightly ahead of 1 writer, because building the next session overlaps the current
+  commit.
+- **The queue mostly improves the tail. Its median is slightly worse.** A racing commit usually gets
+  the lock at once (p50 0.1 ms), and the unlucky few wait 20-240 ms (p99 and max at 8-16 writers). A
+  queued commit always waits its turn (p50 0.5-4 ms), but never for long (p99 3-11 ms). At low
+  concurrency, typical latency is a little worse with the queue. Worst-case latency is much better.
+- **The racing writers spend most of their wait asleep, not behind a held lock.** This is inferred
+  from the numbers, not traced, but the numbers are hard to read any other way:
+  - one commit holds the lock for roughly 0.07 ms (400 commits in about 30 ms single-writer), so 15
+    writers queued ahead account for about 1 ms;
+  - yet the waits over 1 ms (4-9 % of commits at 8-16 writers) ran to 130 ms and beyond;
+  - and the summed wait per round (237 ms at 8 writers, 554 ms at 16) is several times the round's
+    whole wall clock.
+
+  The likely mechanism is SQLite's default busy handler, which `PRAGMA busy_timeout` installs. It
+  polls the lock with growing sleeps (1, 2, 5, 10, 15, 20, 25 ... 100 ms), so a waiter can be asleep
+  while the lock is free. The scenario prints the slept waits bucketed by that schedule
+  (`slept waits, busy-handler buckets`, up to 5, 10, 20, 35, 55, 80, 105, 130 and over 130 ms). A
+  typical 16-writer run gave `337 91 53 32 24 35 28 21 23`: a long tail rather than one cluster near
+  the lock-hold time. So what the queue removes is the busy handler's sleeping, not Polly retries,
+  since there are none.
+- **The gate matches the queue on the tail but not on throughput.** Its p99 is as good as the queue's.
+  Its wall clock beats racing at 8 and 16 writers, but is worse than racing at 2 and 4, and behind the
+  queue at 8 and 16 (about 30-46 ms against 22-31 ms, leaving out one noisy 16-writer run where both
+  were near 60 ms). A probable reason, not measured: the channel's
+  single consumer runs commits back to back, while every semaphore release hands off to another
+  thread-pool continuation. In-process serialization is what helps, and a channel is one way to get
+  it.
+- **A queue in front of one process's sessions does not cover everything that writes.** These all
+  still race with the consumer, as they race with each other today: the async daemon's projection
+  batches, rebuild teardown, the Hi-Lo advance (`fi_hilo`, on its own connection), first-use table
+  migrations, dead-letter writes, a second store over the same file, another process, and every
+  enlisted session (see below). None of them were in this scenario.
+
+### What the queue would change for callers
+
+These are the semantic differences the issue asked to be stated. They apply to any design that runs
+a session's commit somewhere other than the caller's own `await`.
+
+- **A failure arrives later.** A queued commit's task completes or faults when the consumer gets to
+  it, which is after everything queued ahead of it. A caller awaiting it still gets the exception
+  (a concurrency failure, a constraint violation, `StreamLockedException`), but only after the queue
+  time. A caller that does not await the task never sees the failure.
+- **The commit runs on the consumer's async flow, not the caller's.** `Activity.Current`,
+  `AsyncLocal` values and logging scopes are whatever the consumer task captured. In particular the
+  commit's span no longer has the caller's trace as its parent. The gate keeps the caller's flow. The
+  queue would need to capture and restore each caller's `ExecutionContext` to do the same.
+- **Cancellation stops reaching a queued commit.** A caller's `CancellationToken` matters only once
+  the commit is running. A commit still in the queue cannot be withdrawn unless the queue is built to
+  remove it.
+- **One slow commit holds up everyone behind it, in strict order.** There is one lock, so this is
+  also true today, but today the order is a lottery and with a queue it is first in, first out. A
+  large batch, an inline projection, or a transaction participant doing EF Core work delays every
+  commit queued after it.
+- **A commit hook that commits again would deadlock.** A listener's `AfterCommitAsync`, an outbox or
+  a participant that itself commits through the queue would wait for the consumer that is running it,
+  and never finish. The gate has the same problem.
+- **Enlisted sessions cannot go through the queue.** Under `SessionOptions.ForTransaction` the caller
+  already holds the transaction on their own connection, and for a `BEGIN IMMEDIATE` transaction that
+  means they already hold the file's write lock. Fisher does not commit that session at all. Queuing
+  it would make it wait for a consumer that is waiting for the lock the caller holds. So enlisted
+  sessions would have to bypass the queue and keep racing with its consumer, and a queue could not
+  promise that commits never race.
+
+Not measured: group commit (coalescing queued sessions into one transaction), event appends (the
+scenario writes documents only), the async daemon writing at the same time, a bounded channel with
+backpressure, and any machine other than this one.
