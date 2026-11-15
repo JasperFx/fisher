@@ -452,8 +452,12 @@
              nowhere (nuget.org, polecat-local, stoat-local) when this was written. Held at 9.50.0 so
              the repo restores and tests; move both lines when alpha.1 exists. -->
         <PackageVersion Include="Aspire.Hosting" Version="13.6.4" />
-        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.1" />
-        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.1" />
+        <!-- Weasel 10.0.0-alpha.2 (from alpha.1). weasel#811: the closed-shape document family's
+             tracking-mode bases, the sub-class storage and the undelete/restore rules hooks are public,
+             which is what lets Fisher's storages derive from Weasel's rather than reimplement them
+             (fisher#465's last item). -->
+        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.2" />
+        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.2" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
