@@ -508,7 +508,7 @@ internal partial class FisherSession
 
         // Guarded on the rows that are actually deleted, so an undelete never touches a live row's
         // last_modified or races a concurrent write to one.
-        QueueOperation(new DocumentWhereOperation(fisher.UndeleteFragment, typeof(T),
+        QueueOperation(new DocumentWhereOperation(fisher.UndeleteFragment!, typeof(T),
             ParsePredicate(predicate), TenantArgument(fisher), SoftDelete.DeletedSql,
             OperationRole.Update));
     }
@@ -708,6 +708,13 @@ internal partial class FisherSession
         where T : notnull where TId : notnull
     {
         await EnsureDocumentTableForReadAsync(typeof(T), token).ConfigureAwait(false);
+
+        // No ids, no statement. Fisher's own storages used to short-circuit this; Weasel's lightweight
+        // base (fisher#465) does not, so the guard lives here, where the empty array arrives.
+        if (ids.Length == 0)
+        {
+            return Array.Empty<T>();
+        }
 
         return await ((Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>())
             .LoadManyAsync(ids, this, token).ConfigureAwait(false);

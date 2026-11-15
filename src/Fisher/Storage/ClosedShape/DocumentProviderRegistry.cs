@@ -11,9 +11,15 @@ namespace Fisher.Storage.ClosedShape;
 ///     The store's <see cref="IProviderGraph" />: one cached <see cref="DocumentProvider{T}" /> per
 ///     document type, each holding the four storage flavors.
 /// </summary>
-internal class DocumentProviderRegistry : IProviderGraph
+/// <remarks>
+///     The cache and its locking are Weasel's <see cref="ProviderGraphBase" /> (fisher#465): a
+///     lock-free read of a published snapshot, and a build under a re-entrant lock on a miss, so a
+///     sub-class resolving its base inside <see cref="BuildProvider{T}" /> is safe and two threads
+///     racing on a cold type build it once. What is Fisher's is resolving the mapping and closing the
+///     identity type, below.
+/// </remarks>
+internal class DocumentProviderRegistry : ProviderGraphBase
 {
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Type, object> _providers = new();
     private readonly StoreOptions _options;
 
     public DocumentProviderRegistry(StoreOptions options)
@@ -21,27 +27,26 @@ internal class DocumentProviderRegistry : IProviderGraph
         _options = options;
     }
 
-    public DocumentProvider<T> StorageFor<T>() where T : notnull
-        => (DocumentProvider<T>)_providers.GetOrAdd(typeof(T), _ =>
-        {
-            var mapping = _options.Schema.MappingFor(typeof(T));
+    protected override DocumentProvider<T> BuildProvider<T>()
+    {
+        var mapping = _options.Schema.MappingFor(typeof(T));
 
-            // A registered sub-class resolves to its hierarchy's mapping, which is how the whole
-            // hierarchy shares one table. Its storage wraps the base's rather than being built from the
-            // mapping directly: the descriptor's selectors materialise each row as whatever its
-            // discriminator says, which only type-checks against the base.
-            return mapping.DocumentType != typeof(T)
-                ? BuildSubClassProviderFor<T>(mapping)
-                : BuildProviderFor<T>(mapping);
-        });
+        // A registered sub-class resolves to its hierarchy's mapping, which is how the whole
+        // hierarchy shares one table. Its storage wraps the base's rather than being built from the
+        // mapping directly: the descriptor's selectors materialise each row as whatever its
+        // discriminator says, which only type-checks against the base.
+        return (DocumentProvider<T>)(mapping.DocumentType != typeof(T)
+            ? BuildSubClassProviderFor<T>(mapping)
+            : BuildProviderFor<T>(mapping));
+    }
 
     /// <summary>
     ///     Wrap the hierarchy base's provider so every flavor narrows to one sub-class.
     /// </summary>
     /// <remarks>
     ///     Reflection because the base type and the identity type are both runtime values here — the
-    ///     caller named only the sub-class. Once per sub-class per store; the result is cached by the
-    ///     dictionary this is called from.
+    ///     caller named only the sub-class. Once per sub-class per store; the result is cached by
+    ///     <see cref="ProviderGraphBase" />.
     /// </remarks>
     [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
         Justification =
@@ -110,15 +115,16 @@ internal class DocumentProviderRegistry : IProviderGraph
     {
         var parent = StorageFor<TBase>();
 
+        // One rules object serves all four, as Weasel's own BuildSubClass does.
+        var rules = new FisherSubClassRules<TDoc, TBase, TId>(mapping);
+
         SubClassFisherStorage<TDoc, TBase, TId> Wrap(IDocumentStorage<TBase> storage)
-            => new((IDocumentStorage<TBase, TId>)storage, mapping);
+            => new((IDocumentStorage<TBase, TId>)storage, rules);
 
         return new DocumentProvider<TDoc>(
             Wrap(parent.QueryOnly), Wrap(parent.Lightweight), Wrap(parent.IdentityMap),
             Wrap(parent.DirtyTracking));
     }
-
-    public void Append<T>(DocumentProvider<T> provider) where T : notnull => _providers[typeof(T)] = provider;
 
     /// <summary>
     ///     Close the storage generics over the document type and its identity type.
@@ -345,32 +351,6 @@ internal class DocumentProviderRegistry : IProviderGraph
     {
         var descriptor = SqliteDocumentStorageDescriptorBuilder.Build(mapping, identification, _options);
 
-        var queryOnly = new QueryOnlyFisherStorage<TDoc, TId>(mapping, descriptor);
-
-        FisherDocumentStorage<TDoc, TId> lightweight = descriptor.ConcurrencyMode switch
-        {
-            ConcurrencyMode.Optimistic => new OptimisticLightweightFisherStorage<TDoc, TId>(mapping, descriptor),
-            ConcurrencyMode.Numeric => new NumericLightweightFisherStorage<TDoc, TId>(mapping, descriptor),
-            _ => new UnversionedLightweightFisherStorage<TDoc, TId>(mapping, descriptor)
-        };
-
-        FisherDocumentStorage<TDoc, TId> identityMap = descriptor.ConcurrencyMode switch
-        {
-            ConcurrencyMode.Optimistic => new OptimisticIdentityMapFisherStorage<TDoc, TId>(mapping, descriptor),
-            ConcurrencyMode.Numeric => new NumericIdentityMapFisherStorage<TDoc, TId>(mapping, descriptor),
-            _ => new UnversionedIdentityMapFisherStorage<TDoc, TId>(mapping, descriptor)
-        };
-
-        FisherDocumentStorage<TDoc, TId> dirtyTracking = descriptor.ConcurrencyMode switch
-        {
-            ConcurrencyMode.Optimistic => new OptimisticDirtyTrackingFisherStorage<TDoc, TId>(mapping, descriptor),
-            ConcurrencyMode.Numeric => new NumericDirtyTrackingFisherStorage<TDoc, TId>(mapping, descriptor),
-            _ => new UnversionedDirtyTrackingFisherStorage<TDoc, TId>(mapping, descriptor)
-        };
-
-        // All four flavors are built for every registered type, whether or not any session asks for
-        // them: they are cheap, they are cached with the provider, and which one a session resolves is
-        // decided per session by SessionOptions.Tracking.
-        return new DocumentProvider<TDoc>(queryOnly, lightweight, identityMap, dirtyTracking);
+        return FisherStorages.Build(mapping, descriptor);
     }
 }

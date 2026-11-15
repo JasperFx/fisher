@@ -1,576 +1,173 @@
+using JasperFx;
 using Weasel.Core;
 using Weasel.Storage;
 
 namespace Fisher.Storage.ClosedShape;
 
+// Fisher's four document storages are Weasel's closed-shape tracking-mode bases (weasel#811),
+// derived for one reason only: to carry IFisherDocumentStorage, which ~11 call sites type-test a
+// storage for. Every behaviour -- the loads, Store, the identity map, the write operations for each
+// concurrency mode, the selectors -- is Weasel's, and every SQLite decision is on the rules object
+// (FisherStorageRules). That is the shape weasel#811 made public for exactly this; the factory's own
+// leaves are sealed and internal, so a store with interfaces of its own derives the bases instead,
+// and the bases build exactly the operations the leaves would, over exactly the same descriptor.
+//
+// Fisher used to carry ~1,000 lines of its own storage family here (fisher#465).
+
+/// <summary>
+///     The query-only flavor: Weasel's read-only storage, whose SELECT omits the id column and narrows
+///     the metadata set — a contract with the query-only selectors rather than an optimization.
+/// </summary>
+internal sealed class QueryOnlyFisherStorage<TDoc, TId> : QueryOnlyClosedShapeDocumentStorage<TDoc, TId>,
+    IFisherDocumentStorage
+    where TDoc : notnull
+    where TId : notnull
+{
+    private readonly FisherStorageRules<TDoc, TId> _fisher;
+
+    public QueryOnlyFisherStorage(DocumentStorageDescriptor<TDoc, TId> descriptor, FisherStorageRules<TDoc, TId> rules)
+        : base(descriptor, rules)
+    {
+        _fisher = rules;
+        SelectColumnsSql = string.Join(", ", SelectFields());
+    }
+
+    public DeleteStyle DeleteStyle => _fisher.DeleteStyle;
+    public bool IsConjoined => _fisher.IsConjoined;
+    public string SelectColumnsSql { get; }
+
+    Weasel.Storage.IStorageOperation? IFisherDocumentStorage.RestoreForId(object id, string tenantId)
+        => RestoreForId((TId)id, tenantId);
+}
+
 /// <summary>
 ///     The lightweight flavor: loads go straight to the database, and nothing is remembered between
 ///     them.
 /// </summary>
-internal abstract class LightweightFisherStorage<TDoc, TId> : FisherDocumentStorage<TDoc, TId>
+internal sealed class LightweightFisherStorage<TDoc, TId> : LightweightClosedShapeDocumentStorage<TDoc, TId>,
+    IFisherDocumentStorage
     where TDoc : notnull
     where TId : notnull
 {
-    protected LightweightFisherStorage(DocumentMapping mapping, DocumentStorageDescriptor<TDoc, TId> descriptor)
-        : base(mapping, descriptor)
+    private readonly FisherStorageRules<TDoc, TId> _fisher;
+
+    public LightweightFisherStorage(DocumentStorageDescriptor<TDoc, TId> descriptor, FisherStorageRules<TDoc, TId> rules)
+        : base(descriptor, rules)
     {
+        _fisher = rules;
+        SelectColumnsSql = string.Join(", ", SelectFields());
     }
 
-    public override Task<TDoc?> LoadAsync(TId id, IStorageSession session, CancellationToken token)
-        => QueryOneAsync(id, session, token);
+    public DeleteStyle DeleteStyle => _fisher.DeleteStyle;
+    public bool IsConjoined => _fisher.IsConjoined;
+    public string SelectColumnsSql { get; }
 
-    public override Task<IReadOnlyList<TDoc>> LoadManyAsync(TId[] ids, IStorageSession session,
-        CancellationToken token)
-        => QueryManyAsync(ids, session, token);
+    Weasel.Storage.IStorageOperation? IFisherDocumentStorage.RestoreForId(object id, string tenantId)
+        => RestoreForId((TId)id, tenantId);
 
-    /// <summary>
-    ///     Assign an identity if the document has none and announce it to the session. Queueing the
-    ///     write is the session's job — <see cref="IStorageSession" /> has no queue of its own, so a
-    ///     storage that tried to enqueue here would have to know a concrete session type.
-    /// </summary>
-    public override void Store(IStorageSession session, TDoc document)
-        => session.MarkAsAddedForStorage(_descriptor.Identification.AssignIfMissing(document, session.Database),
-            document);
-
-    public override void Store(IStorageSession session, TDoc document, Guid? version)
-    {
-        if (version.HasValue)
-        {
-            session.Versions.StoreVersion<TDoc, TId>(Identity(document), version.Value);
-        }
-
-        Store(session, document);
-    }
-
-    /// <inheritdoc cref="FisherDocumentStorage{TDoc,TId}.UseNumericRevisions" />
-    public override void Store(IStorageSession session, TDoc document, long revision)
-        => throw new NotSupportedException(
-            "Fisher does not implement numeric document revisions. Use optimistic concurrency instead.");
+    /// <inheritdoc cref="FisherStorages.LoadManyProjectedAsync{TDoc,TId}" />
+    public override Task<IReadOnlyList<TDoc>> LoadManyProjectedAsync(TId[] ids, IStorageDatabase database,
+        string tenantId, CancellationToken token)
+        => FisherStorages.LoadManyProjectedAsync(ids, () => base.LoadManyProjectedAsync(ids, database, tenantId, token));
 }
 
 /// <summary>
 ///     The identity-map flavor: a document loaded or stored in this session is returned again from
-///     memory rather than re-read.
+///     memory rather than re-read, and a second instance under a mapped id is refused.
 /// </summary>
-internal abstract class IdentityMapFisherStorage<TDoc, TId> : FisherDocumentStorage<TDoc, TId>
+internal sealed class IdentityMapFisherStorage<TDoc, TId> : IdentityMapClosedShapeDocumentStorage<TDoc, TId>,
+    IFisherDocumentStorage
     where TDoc : notnull
     where TId : notnull
 {
-    protected IdentityMapFisherStorage(DocumentMapping mapping, DocumentStorageDescriptor<TDoc, TId> descriptor)
-        : base(mapping, descriptor)
+    private readonly FisherStorageRules<TDoc, TId> _fisher;
+
+    public IdentityMapFisherStorage(DocumentStorageDescriptor<TDoc, TId> descriptor, FisherStorageRules<TDoc, TId> rules)
+        : base(descriptor, rules)
     {
+        _fisher = rules;
+        SelectColumnsSql = string.Join(", ", SelectFields());
     }
 
-    private Dictionary<TId, TDoc> MapFor(IStorageSession session)
-    {
-        if (session.ItemMap.TryGetValue(typeof(TDoc), out var raw) && raw is Dictionary<TId, TDoc> existing)
-        {
-            return existing;
-        }
+    public DeleteStyle DeleteStyle => _fisher.DeleteStyle;
+    public bool IsConjoined => _fisher.IsConjoined;
+    public string SelectColumnsSql { get; }
 
-        var map = new Dictionary<TId, TDoc>();
-        session.ItemMap[typeof(TDoc)] = map;
+    Weasel.Storage.IStorageOperation? IFisherDocumentStorage.RestoreForId(object id, string tenantId)
+        => RestoreForId((TId)id, tenantId);
 
-        return map;
-    }
-
-    public override async Task<TDoc?> LoadAsync(TId id, IStorageSession session, CancellationToken token)
-    {
-        var map = MapFor(session);
-
-        if (map.TryGetValue(id, out var cached))
-        {
-            return cached;
-        }
-
-        var document = await QueryOneAsync(id, session, token).ConfigureAwait(false);
-
-        if (document is not null)
-        {
-            map[id] = document;
-        }
-
-        return document;
-    }
-
-    /// <remarks>
-    ///     The already-mapped ids are answered from memory and left out of the statement, rather than
-    ///     read back and discarded. Reference identity would hold either way — the identity-map
-    ///     selector returns the cached instance for a row it has already seen — so what this saves is
-    ///     the read, which is the other half of what the map is for.
-    /// </remarks>
-    public override async Task<IReadOnlyList<TDoc>> LoadManyAsync(TId[] ids, IStorageSession session,
-        CancellationToken token)
-    {
-        var map = MapFor(session);
-        var results = new List<TDoc>();
-        var missing = new List<TId>();
-
-        foreach (var id in ids)
-        {
-            if (map.TryGetValue(id, out var cached))
-            {
-                results.Add(cached);
-            }
-            else
-            {
-                missing.Add(id);
-            }
-        }
-
-        // The selector maps whatever it materialises, so nothing has to be mapped again here.
-        results.AddRange(await QueryManyAsync(missing.ToArray(), session, token).ConfigureAwait(false));
-
-        return results;
-    }
-
-    /// <remarks>
-    ///     <b>A second instance under an id the map already holds is refused</b>, as Marten refuses it.
-    ///     That is the whole safety property an identity map buys: two instances of one document in one
-    ///     session, both stored, is a last-write-wins outcome indistinguishable from a lost update. A
-    ///     type that declares <see cref="IEquatable{T}" /> is taken at its word, since it has said what
-    ///     "the same document" means.
-    /// </remarks>
-    public override void Store(IStorageSession session, TDoc document)
-    {
-        var id = _descriptor.Identification.AssignIfMissing(document, session.Database);
-        var map = MapFor(session);
-
-        if (map.TryGetValue(id, out var existing) && !ReferenceEquals(existing, document)
-            && document is not IEquatable<TDoc>)
-        {
-            throw new InvalidOperationException(
-                $"A different instance of '{typeof(TDoc).FullName}' with identity '{id}' is already in "
-                + "this session's identity map. Storing both would write one over the other, which is a "
-                + "lost update wearing a last-write-wins hat. Store the instance the session handed you, "
-                + $"call Eject to drop the mapped one first, or make {typeof(TDoc).Name} IEquatable<"
-                + $"{typeof(TDoc).Name}> to say what 'the same document' means. A LightweightSession "
-                + "keeps no map and does not check.");
-        }
-
-        // Mapped before the write runs, so a load later in the same session returns what the caller
-        // stored rather than what the database still holds.
-        map[id] = document;
-
-        session.MarkAsAddedForStorage(id, document);
-    }
-
-    public override void Store(IStorageSession session, TDoc document, Guid? version)
-    {
-        if (version.HasValue)
-        {
-            session.Versions.StoreVersion<TDoc, TId>(Identity(document), version.Value);
-        }
-
-        Store(session, document);
-    }
-
-    /// <inheritdoc cref="FisherDocumentStorage{TDoc,TId}.UseNumericRevisions" />
-    public override void Store(IStorageSession session, TDoc document, long revision)
-        => throw new NotSupportedException(
-            "Fisher does not implement numeric document revisions. Use optimistic concurrency instead.");
+    /// <inheritdoc cref="FisherStorages.LoadManyProjectedAsync{TDoc,TId}" />
+    public override Task<IReadOnlyList<TDoc>> LoadManyProjectedAsync(TId[] ids, IStorageDatabase database,
+        string tenantId, CancellationToken token)
+        => FisherStorages.LoadManyProjectedAsync(ids, () => base.LoadManyProjectedAsync(ids, database, tenantId, token));
 }
-
-// ---- ConcurrencyMode.Off ----
-
-internal sealed class UnversionedLightweightFisherStorage<TDoc, TId> : LightweightFisherStorage<TDoc, TId>
-    where TDoc : notnull
-    where TId : notnull
-{
-    public UnversionedLightweightFisherStorage(DocumentMapping mapping,
-        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
-    {
-    }
-
-    public override Weasel.Storage.IStorageOperation Insert(TDoc document, IStorageSession session, string tenantId)
-        => new UnversionedClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
-
-    public override Weasel.Storage.IStorageOperation Update(TDoc document, IStorageSession session, string tenantId)
-        => new UnversionedClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
-
-    public override Weasel.Storage.IStorageOperation Upsert(TDoc document, IStorageSession session, string tenantId)
-        => new UnversionedClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            OperationRole.Upsert);
-
-    public override Weasel.Storage.IStorageOperation Overwrite(TDoc document, IStorageSession session, string tenantId)
-        => new UnversionedClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
-
-    public override Weasel.Storage.IStorageOperation OverwriteProjected(TDoc document, string tenantId)
-        => new UnversionedClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
-
-    public override Weasel.Storage.IStorageOperation UpsertProjected(TDoc document, string tenantId)
-        => new UnversionedClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            OperationRole.Upsert);
-
-    public override Weasel.Storage.IStorageOperation InsertProjected(TDoc document, string tenantId)
-        => new UnversionedClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
-
-    public override Weasel.Storage.IStorageOperation UpdateProjected(TDoc document, string tenantId)
-        => new UnversionedClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
-
-    public override ISelector BuildSelector(IStorageSession session)
-        => _descriptor.ResolveDocumentType is not null
-            ? new HierarchicalUnversionedClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor)
-            : new FlatUnversionedClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor);
-}
-
-internal class UnversionedIdentityMapFisherStorage<TDoc, TId> : IdentityMapFisherStorage<TDoc, TId>
-    where TDoc : notnull
-    where TId : notnull
-{
-    public UnversionedIdentityMapFisherStorage(DocumentMapping mapping,
-        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
-    {
-    }
-
-    public override Weasel.Storage.IStorageOperation Insert(TDoc document, IStorageSession session, string tenantId)
-        => new UnversionedClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
-
-    public override Weasel.Storage.IStorageOperation Update(TDoc document, IStorageSession session, string tenantId)
-        => new UnversionedClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
-
-    public override Weasel.Storage.IStorageOperation Upsert(TDoc document, IStorageSession session, string tenantId)
-        => new UnversionedClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            OperationRole.Upsert);
-
-    public override Weasel.Storage.IStorageOperation Overwrite(TDoc document, IStorageSession session, string tenantId)
-        => new UnversionedClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
-
-    public override Weasel.Storage.IStorageOperation OverwriteProjected(TDoc document, string tenantId)
-        => new UnversionedClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
-
-    public override Weasel.Storage.IStorageOperation UpsertProjected(TDoc document, string tenantId)
-        => new UnversionedClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            OperationRole.Upsert);
-
-    public override Weasel.Storage.IStorageOperation InsertProjected(TDoc document, string tenantId)
-        => new UnversionedClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
-
-    public override Weasel.Storage.IStorageOperation UpdateProjected(TDoc document, string tenantId)
-        => new UnversionedClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor);
-
-    public override ISelector BuildSelector(IStorageSession session)
-        => _descriptor.ResolveDocumentType is not null
-            ? new HierarchicalUnversionedClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor)
-            : new FlatUnversionedClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor);
-}
-
-// ---- ConcurrencyMode.Numeric ----
-//
-// Mirrors the Optimistic pair below/above, with two differences that are the whole of the mode: the
-// tracker is RevisionsFor rather than ForType, and the operations carry a long revision instead of a
-// Guid version. The *Projected variants pass a null tracker for the same reason the Optimistic ones
-// do — a projection rebuild writes what the events say and has no prior read to guard against.
-
-internal sealed class NumericLightweightFisherStorage<TDoc, TId> : LightweightFisherStorage<TDoc, TId>
-    where TDoc : notnull
-    where TId : notnull
-{
-    public NumericLightweightFisherStorage(DocumentMapping mapping,
-        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
-    {
-    }
-
-    private static Dictionary<TId, long> Revisions(IStorageSession session)
-        => session.Versions.RevisionsFor<TDoc, TId>();
-
-    public override Weasel.Storage.IStorageOperation Insert(TDoc document, IStorageSession session, string tenantId)
-        => new NumericClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            Revisions(session));
-
-    public override Weasel.Storage.IStorageOperation Update(TDoc document, IStorageSession session, string tenantId)
-        => new NumericClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            Revisions(session));
-
-    public override Weasel.Storage.IStorageOperation Upsert(TDoc document, IStorageSession session, string tenantId)
-        => new NumericClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            OperationRole.Upsert, Revisions(session));
-
-    public override Weasel.Storage.IStorageOperation Overwrite(TDoc document, IStorageSession session, string tenantId)
-        => new NumericClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            Revisions(session));
-
-    public override Weasel.Storage.IStorageOperation OverwriteProjected(TDoc document, string tenantId)
-        => new NumericClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            null);
-
-    public override Weasel.Storage.IStorageOperation UpsertProjected(TDoc document, string tenantId)
-        => new NumericClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            OperationRole.Upsert, null);
-
-    public override Weasel.Storage.IStorageOperation InsertProjected(TDoc document, string tenantId)
-        => new NumericClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            null);
-
-    public override Weasel.Storage.IStorageOperation UpdateProjected(TDoc document, string tenantId)
-        => new NumericClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            null);
-
-    public override ISelector BuildSelector(IStorageSession session)
-        => _descriptor.ResolveDocumentType is not null
-            ? new HierarchicalNumericClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor)
-            : new FlatNumericClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor);
-}
-
-internal class NumericIdentityMapFisherStorage<TDoc, TId> : IdentityMapFisherStorage<TDoc, TId>
-    where TDoc : notnull
-    where TId : notnull
-{
-    public NumericIdentityMapFisherStorage(DocumentMapping mapping,
-        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
-    {
-    }
-
-    private static Dictionary<TId, long> Revisions(IStorageSession session)
-        => session.Versions.RevisionsFor<TDoc, TId>();
-
-    public override Weasel.Storage.IStorageOperation Insert(TDoc document, IStorageSession session, string tenantId)
-        => new NumericClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            Revisions(session));
-
-    public override Weasel.Storage.IStorageOperation Update(TDoc document, IStorageSession session, string tenantId)
-        => new NumericClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            Revisions(session));
-
-    public override Weasel.Storage.IStorageOperation Upsert(TDoc document, IStorageSession session, string tenantId)
-        => new NumericClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            OperationRole.Upsert, Revisions(session));
-
-    public override Weasel.Storage.IStorageOperation Overwrite(TDoc document, IStorageSession session, string tenantId)
-        => new NumericClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            Revisions(session));
-
-    public override Weasel.Storage.IStorageOperation OverwriteProjected(TDoc document, string tenantId)
-        => new NumericClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            null);
-
-    public override Weasel.Storage.IStorageOperation UpsertProjected(TDoc document, string tenantId)
-        => new NumericClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            OperationRole.Upsert, null);
-
-    public override Weasel.Storage.IStorageOperation InsertProjected(TDoc document, string tenantId)
-        => new NumericClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            null);
-
-    public override Weasel.Storage.IStorageOperation UpdateProjected(TDoc document, string tenantId)
-        => new NumericClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            null);
-
-    public override ISelector BuildSelector(IStorageSession session)
-        => _descriptor.ResolveDocumentType is not null
-            ? new HierarchicalNumericClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor)
-            : new FlatNumericClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor);
-}
-
-// ---- ConcurrencyMode.Optimistic ----
-//
-// The *Projected variants pass a null version tracker on purpose: a projection rebuild writes what
-// the events say, and has no prior read to guard against.
-
-internal sealed class OptimisticLightweightFisherStorage<TDoc, TId> : LightweightFisherStorage<TDoc, TId>
-    where TDoc : notnull
-    where TId : notnull
-{
-    public OptimisticLightweightFisherStorage(DocumentMapping mapping,
-        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
-    {
-    }
-
-    private static Dictionary<TId, Guid> Versions(IStorageSession session) => session.Versions.ForType<TDoc, TId>();
-
-    public override Weasel.Storage.IStorageOperation Insert(TDoc document, IStorageSession session, string tenantId)
-        => new OptimisticClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            Versions(session));
-
-    public override Weasel.Storage.IStorageOperation Update(TDoc document, IStorageSession session, string tenantId)
-        => new OptimisticClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            Versions(session));
-
-    public override Weasel.Storage.IStorageOperation Upsert(TDoc document, IStorageSession session, string tenantId)
-        => new OptimisticClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            OperationRole.Upsert, Versions(session));
-
-    public override Weasel.Storage.IStorageOperation Overwrite(TDoc document, IStorageSession session, string tenantId)
-        => new OptimisticClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            Versions(session));
-
-    public override Weasel.Storage.IStorageOperation OverwriteProjected(TDoc document, string tenantId)
-        => new OptimisticClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            null);
-
-    public override Weasel.Storage.IStorageOperation UpsertProjected(TDoc document, string tenantId)
-        => new OptimisticClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            OperationRole.Upsert, null);
-
-    public override Weasel.Storage.IStorageOperation InsertProjected(TDoc document, string tenantId)
-        => new OptimisticClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            null);
-
-    public override Weasel.Storage.IStorageOperation UpdateProjected(TDoc document, string tenantId)
-        => new OptimisticClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            null);
-
-    public override ISelector BuildSelector(IStorageSession session)
-        => _descriptor.ResolveDocumentType is not null
-            ? new HierarchicalOptimisticClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor)
-            : new FlatOptimisticClosedShapeLightweightSelector<TDoc, TId>(session, _descriptor);
-}
-
-internal class OptimisticIdentityMapFisherStorage<TDoc, TId> : IdentityMapFisherStorage<TDoc, TId>
-    where TDoc : notnull
-    where TId : notnull
-{
-    public OptimisticIdentityMapFisherStorage(DocumentMapping mapping,
-        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
-    {
-    }
-
-    private static Dictionary<TId, Guid> Versions(IStorageSession session) => session.Versions.ForType<TDoc, TId>();
-
-    public override Weasel.Storage.IStorageOperation Insert(TDoc document, IStorageSession session, string tenantId)
-        => new OptimisticClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            Versions(session));
-
-    public override Weasel.Storage.IStorageOperation Update(TDoc document, IStorageSession session, string tenantId)
-        => new OptimisticClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            Versions(session));
-
-    public override Weasel.Storage.IStorageOperation Upsert(TDoc document, IStorageSession session, string tenantId)
-        => new OptimisticClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            OperationRole.Upsert, Versions(session));
-
-    public override Weasel.Storage.IStorageOperation Overwrite(TDoc document, IStorageSession session, string tenantId)
-        => new OptimisticClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            Versions(session));
-
-    public override Weasel.Storage.IStorageOperation OverwriteProjected(TDoc document, string tenantId)
-        => new OptimisticClosedShapeOverwriteOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            null);
-
-    public override Weasel.Storage.IStorageOperation UpsertProjected(TDoc document, string tenantId)
-        => new OptimisticClosedShapeUpsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            OperationRole.Upsert, null);
-
-    public override Weasel.Storage.IStorageOperation InsertProjected(TDoc document, string tenantId)
-        => new OptimisticClosedShapeInsertOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            null);
-
-    public override Weasel.Storage.IStorageOperation UpdateProjected(TDoc document, string tenantId)
-        => new OptimisticClosedShapeUpdateOperation<TDoc, TId>(document, Identity(document), tenantId, _descriptor,
-            null);
-
-    public override ISelector BuildSelector(IStorageSession session)
-        => _descriptor.ResolveDocumentType is not null
-            ? new HierarchicalOptimisticClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor)
-            : new FlatOptimisticClosedShapeIdentityMapSelector<TDoc, TId>(session, _descriptor);
-}
-
-// ---- dirty tracking ----
-//
-// Each of these is its concurrency mode's identity-map storage with one member replaced: the
-// selector. That is the entire difference between the two flavors, and it is a difference in what
-// happens when a row is *read* — Weasel's dirty-tracking selectors do everything the identity-map
-// ones do and additionally register a ChangeTracker<T> per materialised document. Nothing about
-// storing, loading by id, or writing changes, so nothing else is overridden. Marten's own
-// DirtyCheckedDocumentStorage is the same one-line subclass of its identity-map storage.
-//
-// Detection and reset are the session's job, not the storage's: FisherSession.SaveChangesAsync asks
-// every tracker for its operation before taking the batch, and re-baselines them after the write.
-
-internal sealed class UnversionedDirtyTrackingFisherStorage<TDoc, TId>
-    : UnversionedIdentityMapFisherStorage<TDoc, TId>
-    where TDoc : notnull
-    where TId : notnull
-{
-    public UnversionedDirtyTrackingFisherStorage(DocumentMapping mapping,
-        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
-    {
-    }
-
-    public override ISelector BuildSelector(IStorageSession session)
-        => _descriptor.ResolveDocumentType is not null
-            ? new HierarchicalUnversionedClosedShapeDirtyTrackingSelector<TDoc, TId>(session, _descriptor)
-            : new FlatUnversionedClosedShapeDirtyTrackingSelector<TDoc, TId>(session, _descriptor);
-}
-
-internal sealed class NumericDirtyTrackingFisherStorage<TDoc, TId> : NumericIdentityMapFisherStorage<TDoc, TId>
-    where TDoc : notnull
-    where TId : notnull
-{
-    public NumericDirtyTrackingFisherStorage(DocumentMapping mapping,
-        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
-    {
-    }
-
-    public override ISelector BuildSelector(IStorageSession session)
-        => _descriptor.ResolveDocumentType is not null
-            ? new HierarchicalNumericClosedShapeDirtyTrackingSelector<TDoc, TId>(session, _descriptor)
-            : new FlatNumericClosedShapeDirtyTrackingSelector<TDoc, TId>(session, _descriptor);
-}
-
-internal sealed class OptimisticDirtyTrackingFisherStorage<TDoc, TId>
-    : OptimisticIdentityMapFisherStorage<TDoc, TId>
-    where TDoc : notnull
-    where TId : notnull
-{
-    public OptimisticDirtyTrackingFisherStorage(DocumentMapping mapping,
-        DocumentStorageDescriptor<TDoc, TId> descriptor) : base(mapping, descriptor)
-    {
-    }
-
-    public override ISelector BuildSelector(IStorageSession session)
-        => _descriptor.ResolveDocumentType is not null
-            ? new HierarchicalOptimisticClosedShapeDirtyTrackingSelector<TDoc, TId>(session, _descriptor)
-            : new FlatOptimisticClosedShapeDirtyTrackingSelector<TDoc, TId>(session, _descriptor);
-}
-
-// ---- query only ----
 
 /// <summary>
-///     The read-only flavor. Its SELECT omits the id column and narrows the metadata set, which is a
-///     contract with the query-only selectors rather than an optimization.
+///     The dirty-tracking flavor: the identity map plus a change tracker per loaded document, which
+///     Weasel's dirty-tracking selectors register. Detection and reset are the session's job:
+///     <c>FisherSession.SaveChangesAsync</c> asks every tracker for its operation before taking the
+///     batch, and re-baselines them after the write.
 /// </summary>
-internal sealed class QueryOnlyFisherStorage<TDoc, TId> : FisherDocumentStorage<TDoc, TId>
+internal sealed class DirtyTrackingFisherStorage<TDoc, TId> : DirtyTrackingClosedShapeDocumentStorage<TDoc, TId>,
+    IFisherDocumentStorage
     where TDoc : notnull
     where TId : notnull
 {
-    public QueryOnlyFisherStorage(DocumentMapping mapping, DocumentStorageDescriptor<TDoc, TId> descriptor)
-        : base(mapping, descriptor)
+    private readonly FisherStorageRules<TDoc, TId> _fisher;
+
+    public DirtyTrackingFisherStorage(DocumentStorageDescriptor<TDoc, TId> descriptor,
+        FisherStorageRules<TDoc, TId> rules)
+        : base(descriptor, rules)
     {
+        _fisher = rules;
+        SelectColumnsSql = string.Join(", ", SelectFields());
     }
 
-    protected override bool IncludeIdInSelect => false;
+    public DeleteStyle DeleteStyle => _fisher.DeleteStyle;
+    public bool IsConjoined => _fisher.IsConjoined;
+    public string SelectColumnsSql { get; }
 
-    protected override IDocumentMetadataBinder<TDoc>[] ReadBinders() => _descriptor.QueryOnlyReadBinders;
+    Weasel.Storage.IStorageOperation? IFisherDocumentStorage.RestoreForId(object id, string tenantId)
+        => RestoreForId((TId)id, tenantId);
 
-    public override ISelector BuildSelector(IStorageSession session)
-        => _descriptor.ResolveDocumentType is not null
-            ? new HierarchicalClosedShapeQueryOnlySelector<TDoc, TId>(session, _descriptor)
-            : new FlatClosedShapeQueryOnlySelector<TDoc, TId>(session, _descriptor);
+    /// <inheritdoc cref="FisherStorages.LoadManyProjectedAsync{TDoc,TId}" />
+    public override Task<IReadOnlyList<TDoc>> LoadManyProjectedAsync(TId[] ids, IStorageDatabase database,
+        string tenantId, CancellationToken token)
+        => FisherStorages.LoadManyProjectedAsync(ids, () => base.LoadManyProjectedAsync(ids, database, tenantId, token));
+}
 
-    public override Task<TDoc?> LoadAsync(TId id, IStorageSession session, CancellationToken token)
-        => QueryOneAsync(id, session, token);
+internal static class FisherStorages
+{
+    /// <summary>
+    ///     The four storages of one document type, all over one descriptor and one rules object.
+    /// </summary>
+    public static DocumentProvider<TDoc> Build<TDoc, TId>(DocumentMapping mapping,
+        DocumentStorageDescriptor<TDoc, TId> descriptor)
+        where TDoc : notnull
+        where TId : notnull
+    {
+        var rules = new FisherStorageRules<TDoc, TId>(mapping, descriptor);
 
-    public override Task<IReadOnlyList<TDoc>> LoadManyAsync(TId[] ids, IStorageSession session,
-        CancellationToken token)
-        => QueryManyAsync(ids, session, token);
+        // All four flavors are built for every registered type, whether or not any session asks for
+        // them: they are cheap, they are cached with the provider, and which one a session resolves is
+        // decided per session by SessionOptions.Tracking.
+        return new DocumentProvider<TDoc>(
+            new QueryOnlyFisherStorage<TDoc, TId>(descriptor, rules),
+            new LightweightFisherStorage<TDoc, TId>(descriptor, rules),
+            new IdentityMapFisherStorage<TDoc, TId>(descriptor, rules),
+            new DirtyTrackingFisherStorage<TDoc, TId>(descriptor, rules));
+    }
 
-    private static NotSupportedException CannotWrite()
-        => new("This is a read-only document session; it cannot store or delete documents.");
-
-    public override void Store(IStorageSession session, TDoc document) => throw CannotWrite();
-    public override void Store(IStorageSession session, TDoc document, Guid? version) => throw CannotWrite();
-    public override void Store(IStorageSession session, TDoc document, long revision) => throw CannotWrite();
-
-    public override Weasel.Storage.IStorageOperation Insert(TDoc d, IStorageSession s, string t) => throw CannotWrite();
-    public override Weasel.Storage.IStorageOperation Update(TDoc d, IStorageSession s, string t) => throw CannotWrite();
-    public override Weasel.Storage.IStorageOperation Upsert(TDoc d, IStorageSession s, string t) => throw CannotWrite();
-
-    public override Weasel.Storage.IStorageOperation Overwrite(TDoc d, IStorageSession s, string t)
-        => throw CannotWrite();
-
-    public override Weasel.Storage.IStorageOperation OverwriteProjected(TDoc d, string t) => throw CannotWrite();
-    public override Weasel.Storage.IStorageOperation UpsertProjected(TDoc d, string t) => throw CannotWrite();
-    public override Weasel.Storage.IStorageOperation InsertProjected(TDoc d, string t) => throw CannotWrite();
-    public override Weasel.Storage.IStorageOperation UpdateProjected(TDoc d, string t) => throw CannotWrite();
+    /// <summary>
+    ///     The session-free load-many, which answers an empty id array without opening a connection
+    ///     (fisher#446).
+    /// </summary>
+    /// <remarks>
+    ///     The projected loader opens a connection of its own, so an empty array would cost a connection
+    ///     as well as a statement that can only return no rows. Weasel's base does not guard it; the
+    ///     session loads do.
+    /// </remarks>
+    public static Task<IReadOnlyList<TDoc>> LoadManyProjectedAsync<TDoc, TId>(TId[] ids,
+        Func<Task<IReadOnlyList<TDoc>>> load)
+        => ids.Length == 0 ? Task.FromResult<IReadOnlyList<TDoc>>(Array.Empty<TDoc>()) : load();
 }

@@ -21,8 +21,11 @@ internal interface IFisherDocumentStorage
     /// <summary>Whether <c>Delete</c> flags the row or removes it.</summary>
     DeleteStyle DeleteStyle { get; }
 
-    /// <summary><c>update … set is_deleted = 0, deleted_at = null</c>.</summary>
-    IOperationFragment UndeleteFragment { get; }
+    /// <summary>
+    ///     <c>update … set is_deleted = 0, deleted_at = null</c>, or null for a type that is not
+    ///     soft-deleted. Satisfied by Weasel's <c>IClosedShapeDocumentStorage.UndeleteFragment</c>.
+    /// </summary>
+    IOperationFragment? UndeleteFragment { get; }
 
     /// <summary>Whether the table carries a <c>tenant_id</c> column to scope an operation by.</summary>
     bool IsConjoined { get; }

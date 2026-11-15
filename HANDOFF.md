@@ -12,11 +12,36 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3076 tests green on net10.0 and 3103 on net11.0** — 3005 (net10.0) / 3032 (net11.0) in `Fisher.Tests`, 40 in
+**3077 tests green on net10.0 and 3104 on net11.0** — 3006 (net10.0) / 3033 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.3.0** / Weasel **10.0.0-alpha.1**.
+On JasperFx **3.3.0** / Weasel **10.0.0-alpha.2**.
+
+## The closed-shape document family is Weasel's (fisher#465)
+
+The last item of fisher#465. Fisher's own `IDocumentStorage<T,TId>` family (`FisherDocumentStorage` and its nine
+leaves, ~1,000 lines) is gone, and the storages are Weasel.Storage's closed-shape family, on Weasel
+**10.0.0-alpha.2** for weasel#811's public tracking-mode bases. CLAUDE.md's "Document storage layout" has the
+arrangement; in short:
+
+- `FisherStorageRules<TDoc,TId>` (an `IClosedShapeStorageRules`) holds every SQLite decision: read SQL per tracking
+  mode, delete/undelete/restore SQL, the tenant and soft-delete filters, identity assignment and `MappedVersionFor`.
+- The four storages derive Weasel's public tracking-mode bases, and `SubClassFisherStorage` derives
+  `ClosedShapeSubClassDocumentStorage`, only to carry `IFisherDocumentStorage`, so no call site changed.
+  `ClosedShapeDocumentProviderFactory.Build` is not called: its leaves are sealed and internal, and cannot carry
+  a store's interface.
+- `DocumentProviderRegistry` is a `ProviderGraphBase`.
+- The write SQL, the positional `?` contract and `SqliteGuidIdentification`'s lowercasing did not move.
+
+Small behaviour changes, all now Weasel's: the identity map's second-instance refusal has Weasel's shorter
+message and fires `DocumentAddedForStorage` before refusing; truncating a type whose table does not exist yet is
+a no-op. An empty load-many still costs no statement, guarded in the session now
+(`loading_many_through_the_contract.an_empty_load_many_runs_no_statement` is new).
+
+The Weasel bump on its own failed one test: weasel#809 makes `MasterTableTenancyBase` evict stale tenants itself,
+which emptied the set `MasterTableTenantSource.AllAsync` revoked from, so a tenant forgotten in another process
+kept resolving. It now overrides `EvictStaleTenantAsync`. CLAUDE.md's tenant registry section has it.
 
 ## The JasperFx 3.3.0 bump (fisher#553, fisher#554)
 
