@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3074 tests green on net10.0 and 3101 on net11.0** — 3003 (net10.0) / 3030 (net11.0) in `Fisher.Tests`, 40 in
+**3076 tests green on net10.0 and 3103 on net11.0** — 3005 (net10.0) / 3032 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -26,6 +26,12 @@ JasperFx 3.0.1 → 3.3.0, spanning 3.1.0 and 3.2.0. There was no compile break. 
 - `StreamArchivingCompliance` grew from 27 to 35 when `UnArchiveStream` moved onto the shared
   `IEventStoreOperations` (jasperfx#1186). Fisher's existing methods implement it, and the fixture hook is gone
   (fisher#554).
+
+fisher#555 is the rest of 3.3.0. `non_public_aggregate_constructors` pins jasperfx#1188: an aggregate with only a
+private parameterless constructor now has that constructor and its field initializers run, on live aggregation and
+`FetchForWriting`. The pooled-buffer members of `IEventBinarySerializer` (jasperfx#1187/#1190) are measured and not
+used: Microsoft.Data.Sqlite has no allocation-free read of a BLOB, and the write parameter needs a `byte[]` anyway.
+CLAUDE.md's binary-event section has the numbers.
 
 `StreamLockedException` is still Fisher's own subclass. jasperfx#1172 added `StreamIds` to the base type, but
 Fisher's subclass has to use the base's message constructor, and that constructor records only the first id. A

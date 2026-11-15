@@ -427,6 +427,14 @@ internal static class FisherEventsRowReader
             // retries, and paused the shard as ShardFailureCategory.Other with no dead letter. Done
             // here rather than at each caller because this is the single hydration point every read
             // path converges on — the same argument the upcasting hook makes one line above.
+            //
+            // The BLOB is read as a byte[] and handed to the byte[] Deserialize, not into a rented buffer
+            // for the span overload (jasperfx#1187), and that was measured rather than assumed
+            // (fisher#555). Microsoft.Data.Sqlite 10.0.9 has no allocation-free read of a column's
+            // bytes: GetBytes and GetStream copy a cached array unless the row carries the rowid, and
+            // with the rowid (seq_id is selected) they open incremental blob I/O per row, which costs
+            // ~2 µs and ~350 bytes against ~0.3 µs and 224 bytes for a 200-byte body. The span default
+            // would also copy the bytes back into an array for any serializer that does not override it.
             data = upcast ?? (binarySerializer is null
                 ? ctx.Serializer.FromJson(resolvedType, reader.GetString(4))
                 : binarySerializer.Deserialize(resolvedType, (byte[])reader.GetValue(slots.BinaryDataIdx)));

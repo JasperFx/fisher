@@ -6081,6 +6081,16 @@ forever, property names included.
   holds. A binary encoding is a choice with real consequences for schema evolution (MessagePack,
   protobuf and compressed JSON fail differently when an event type gains a member), and picking one
   would be Fisher deciding how an application's data ages.
+- ⚠️ **The pooled-buffer members (jasperfx#1187/#1190) are deliberately not used, and that was measured**
+  (fisher#555). `Serialize(Type, object, IBufferWriter<byte>)` cannot save anything on the write side:
+  the BLOB parameter must be an exact-length `byte[]` that lives until the command executes, so a
+  pooled buffer still ends in a copy, and for a serializer implementing only the `byte[]` pair the
+  default adds a second. On the read side Microsoft.Data.Sqlite 10.0.9 has no allocation-free way to
+  reach a column's bytes: `GetBytes`/`GetStream` copy a cached array unless the row carries its rowid,
+  and with it — `seq_id` is always selected — they open incremental blob I/O per row. Measured over
+  2,000 rows: a 200-byte body is ~0.3 µs and 224 bytes through `GetValue`, ~2 µs and ~350–700 bytes
+  through a rented buffer; only a 100 KB body saves allocation, and it is slower even then. Revisit
+  only if the provider gains a span read over `sqlite3_column_blob`.
 
 Everything that reads the row's *columns* is unaffected — stream reads, the daemon's loader, DCB tag
 queries, `QueryEventsAsync`'s metadata filters — which is why a stream can mix the two encodings
