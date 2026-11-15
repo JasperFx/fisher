@@ -349,6 +349,10 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
 
         if (mapping.BinarySerializer is { } serializer)
         {
+            // The byte[] overload, not the IBufferWriter one (jasperfx#1187), deliberately (fisher#555).
+            // The BLOB parameter has to be an exact-length byte[] that lives until the command runs, so
+            // writing into a pooled buffer still ends in a copy to a new array. For a serializer that
+            // implements only the byte[] pair, the buffer-writer default adds a second copy on top.
             return serializer.Serialize(eventType, @event.Data);
         }
 
