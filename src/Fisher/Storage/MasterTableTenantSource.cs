@@ -80,10 +80,15 @@ public sealed class MasterTableTenantSource
 
     private volatile HashSet<string> _disabled = new(StringComparer.OrdinalIgnoreCase);
 
-    // Tenants still in the base's cache whose row another process deleted. The base offers no way to
-    // evict without deleting the row, which could delete a tenant re-added a moment ago, so these are
-    // answered as unknown here instead (fisher#487).
+    // Tenants whose row another process deleted (fisher#487). The base evicts them from its cache
+    // itself since weasel#809, through EvictStaleTenantAsync; this set is what keeps a removed SEEDED
+    // tenant from coming back through TryFind's seed fallback, which never reads the table.
     private volatile HashSet<string> _removed = new(StringComparer.OrdinalIgnoreCase);
+
+    // Filled by EvictStaleTenantAsync during BuildDatabasesAsync, drained by AllAsync. The hook cannot
+    // tell removed from disabled (the read that missed the tenant was of enabled rows only), so AllAsync
+    // sorts them once it has read the disabled ids.
+    private readonly ConcurrentQueue<string> _evictedThisRefresh = new();
 
     /// <inheritdoc />
     public Action<string>? OnTenantRevoked { get; set; }
@@ -221,27 +226,36 @@ public sealed class MasterTableTenantSource
     /// </remarks>
     public async ValueTask<IReadOnlyList<TenantRegistration>> AllAsync(CancellationToken token = default)
     {
-        var cached = await BuildDatabasesAsync(token).ConfigureAwait(false);
+        // Since weasel#809 this evicts every cached tenant the table no longer offers as enabled, and
+        // EvictStaleTenantAsync revokes each one as it goes, so what comes back is the enabled set.
+        var enabled = await BuildDatabasesAsync(token).ConfigureAwait(false);
         var disabled = await AllDisabledAsync(token).ConfigureAwait(false);
-        var inTheTable = await EnabledTenantIdsAsync(token).ConfigureAwait(false);
 
         var disabledIds = new HashSet<string>(disabled, StringComparer.OrdinalIgnoreCase);
+        var enabledIds = new HashSet<string>(enabled.Select(x => x.TenantId), StringComparer.OrdinalIgnoreCase);
 
         // Disabled rows are not enabled rows either, and that is not the same as gone: a suspended
-        // tenant stays distinguishable from an unknown one.
-        var removed = new HashSet<string>(
-            cached.Select(x => x.TenantId).Where(x => !inTheTable.Contains(x) && !disabledIds.Contains(x)),
-            StringComparer.OrdinalIgnoreCase);
+        // tenant stays distinguishable from an unknown one. Removed accumulates, because the base evicts
+        // a tenant once and never reports it again.
+        var removed = new HashSet<string>(_removed, StringComparer.OrdinalIgnoreCase);
+        while (_evictedThisRefresh.TryDequeue(out var evicted))
+        {
+            removed.Add(evicted);
+        }
+
+        removed.ExceptWith(disabledIds);
+        removed.ExceptWith(enabledIds);
 
         _disabled = disabledIds;
         _removed = removed;
 
-        foreach (var tenantId in disabled.Concat(removed))
+        // A tenant disabled elsewhere was usually revoked by the eviction hook already; revoking it again
+        // is a no-op in DynamicTenancy, and doing it here as well covers one disabled before this
+        // instance ever cached it.
+        foreach (var tenantId in disabled)
         {
             OnTenantRevoked?.Invoke(tenantId);
         }
-
-        var enabled = cached.Where(x => inTheTable.Contains(x.TenantId)).ToList();
 
         if (disabled.Count == 0)
         {
@@ -257,23 +271,26 @@ public sealed class MasterTableTenantSource
             .ToList();
     }
 
-    private Task<HashSet<string>> EnabledTenantIdsAsync(CancellationToken token)
-        => ExecuteAsync(async ct =>
-        {
-            await using var connection = await MasterDataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
-            await using var command = connection.CreateCommand();
-            command.CommandText = Dialect.SelectEnabledTenants(QualifiedTableName);
+    /// <summary>
+    ///     A cached tenant the control table no longer offers as enabled: deleted or disabled by another
+    ///     process (weasel#809, fisher#551).
+    /// </summary>
+    /// <remarks>
+    ///     ⚠️ The base evicts it from its cache, and that is what used to tell <see cref="AllAsync" /> a
+    ///     tenant had been removed elsewhere: it compared the cached list against the table. With the
+    ///     eviction upstream, the cached list no longer has the tenant to compare, so the revocation has
+    ///     to happen here or <see cref="DynamicTenancy" /> keeps serving the removed tenant's database,
+    ///     which is fisher#487 back again. The base is called first so the row's cache entry is gone
+    ///     before anything reacts to the revocation.
+    /// </remarks>
+    protected override async ValueTask EvictStaleTenantAsync(string tenantId, TenantRegistration database,
+        CancellationToken token)
+    {
+        await base.EvictStaleTenantAsync(tenantId, database, token).ConfigureAwait(false);
 
-            var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            while (await reader.ReadAsync(ct).ConfigureAwait(false))
-            {
-                ids.Add(reader.GetString(0));
-            }
-
-            return ids;
-        }, token);
+        _evictedThisRefresh.Enqueue(tenantId);
+        OnTenantRevoked?.Invoke(tenantId);
+    }
 
     /// <summary>
     ///     Re-read the control table now, rather than waiting for the daemon's poll.
