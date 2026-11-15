@@ -159,5 +159,5 @@ participant saves with `acceptAllChangesOnSuccess: false`. See
 
 - **`Microsoft.EntityFrameworkCore.Relational` only** — which EF provider your `DbContext` uses is your
   decision.
-- **Pinned to EF Core 9.x**, because the package multi-targets net9.0 and net10.0 and EF Core 10 is
-  net10-only.
+- **EF Core 10 or later**, because the package targets `net10.0;net11.0`. Fisher 1 pinned EF Core 9.x
+  while it still targeted `net9.0`.
