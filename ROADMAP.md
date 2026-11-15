@@ -3,13 +3,26 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **six open issues: four are the Fisher 2.0 milestone, one is documentation, and the other one is blocked
-upstream.** The 2.0 issues are Fisher's share of the Critter Stack
+Status: **three open issues: one is the Fisher 2.0 milestone (whether to adopt the single-writer queue), one is
+documentation, and the other one is blocked upstream.** The 2.0 issue is Fisher's share of the Critter Stack
 .NET 11 release train. 1.28.0 took JasperFx
 2.100's compliance additions ([#519](https://github.com/JasperFx/fisher/issues/519)). 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
+
+**2.0.0-alpha.2 moves to JasperFx 3.3.0 and Weasel 10.0.0-alpha.2** and closes the rest of the train's
+issues but one. [#465](https://github.com/JasperFx/fisher/issues/465)'s last item adopts Weasel's closed-shape
+document storage family (#566); [#530](https://github.com/JasperFx/fisher/issues/530) deletes Fisher's last
+derived exception, `StreamLockedException` (#556); [#550](https://github.com/JasperFx/fisher/issues/550) turns
+runtime-async on for `net11.0` (#561); [#551](https://github.com/JasperFx/fisher/issues/551) revokes tenants from
+Weasel's new eviction hook (#560); [#468](https://github.com/JasperFx/fisher/issues/468) measures the Community
+Toolkit's SQLite connection string and moves `Aspire.Hosting` to 13.6.5 for CVE-2026-120006 (#565);
+[#469](https://github.com/JasperFx/fisher/issues/469) measures `GateSideEffectsBehindPriorVersion` on a Fisher
+file and leaves the migration guide with nothing pending (#562). [#459](https://github.com/JasperFx/fisher/issues/459),
+[#460](https://github.com/JasperFx/fisher/issues/460), [#466](https://github.com/JasperFx/fisher/issues/466),
+[#543](https://github.com/JasperFx/fisher/issues/543), [#546](https://github.com/JasperFx/fisher/issues/546) and
+[#555](https://github.com/JasperFx/fisher/issues/555) closed too, the last two by measuring and declining.
 
 **2.0.0-alpha.1 is the first package of the .NET 11 train**, on JasperFx 3.0.1 and Weasel 10.0.0-alpha.1,
 targeting `net10.0;net11.0`. It closed six of the train's issues on 2026-11-10:
@@ -351,16 +364,12 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is six items: four of them the Fisher 2.0 milestone, one documentation, and one blocked upstream.
+What is left is three items: one of them the Fisher 2.0 milestone, one documentation, and one blocked upstream.
 
-**Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.0, Weasel 10.0, `net10.0;net11.0`):
-[#465](https://github.com/JasperFx/fisher/issues/465) adopting the lifted closed-shape document family and the
-rest of the Weasel 10 storage lifts,
-[#468](https://github.com/JasperFx/fisher/issues/468) an Aspire hosting helper,
-[#469](https://github.com/JasperFx/fisher/issues/469) the migration guide, and
-[#547](https://github.com/JasperFx/fisher/issues/547) the `Channel<T>` single-writer queue benchmark (measured in #564;
-adopting it is still to decide).
-None of it lands in a 1.x release.
+**Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.3, Weasel 10.0, `net10.0;net11.0`):
+[#547](https://github.com/JasperFx/fisher/issues/547) the `Channel<T>` single-writer queue. It is measured
+(#564: at 8+ writers an in-process queue roughly halved wall clock and cut worst-case commit latency by an order of
+magnitude), and adopting it is still to decide. It does not land in a 1.x release.
 
 **Documentation.** [#552](https://github.com/JasperFx/fisher/issues/552): a "Personal data and GDPR erasure" page
 pointing at [Tayra](https://tayra.dev) as the Critter Stack's crypto-shredding answer, and a note on the archiving
@@ -369,12 +378,6 @@ and compaction pages that neither is erasure. Fisher will not build a crypto-shr
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.
 <!-- /open-issues -->
-
-Closed since 2.0.0-alpha.1: [#459](https://github.com/JasperFx/fisher/issues/459) and
-[#466](https://github.com/JasperFx/fisher/issues/466) (done by #531 and #536),
-[#460](https://github.com/JasperFx/fisher/issues/460) (the TFM move, its docs finished in #563) and
-[#551](https://github.com/JasperFx/fisher/issues/551) (Weasel 10.0.0-alpha.2 and its eviction hook, #560) and
-[#550](https://github.com/JasperFx/fisher/issues/550) (runtime-async on by default for `net11.0`, #561).
 
 The release train's one follow-up, [#543](https://github.com/JasperFx/fisher/issues/543) (three
 `fetch_for_writing_compliance` facts red over what `Append`'s expected version means), was already fixed when it

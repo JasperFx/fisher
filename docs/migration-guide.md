@@ -352,7 +352,7 @@ which is why the old "stay on MTP 1.x" note is gone).
 
 ### Runtime-async on `net11.0`
 
-Fisher's `net11.0` assemblies are compiled with the C# compiler's **runtime-async** feature (fisher#550), as
+Landed in 2.0.0-alpha.2. Fisher's `net11.0` assemblies are compiled with the C# compiler's **runtime-async** feature (fisher#550), as
 JasperFx 3.0's and Wolverine 7.0's are. Async methods are run by the runtime rather than by a compiler-built
 state machine, which allocates much less. Wolverine measured 38% to 84% fewer allocations depending on how often a
 call suspends. The `net10.0` build is unchanged, because that runtime cannot load runtime-async code.
@@ -417,7 +417,8 @@ real daemon.
 
 ### Types that move to shared packages
 
-Landed in 2.0.0-alpha.1 (fisher#465 via #538, fisher#530 via #544). The Fisher 1 names are gone.
+Landed in 2.0.0-alpha.1 (fisher#465 via #538, fisher#530 via #544), and `StreamLockedException` in 2.0.0-alpha.2
+(fisher#530 via #556). The Fisher 1 names are gone.
 
 | Fisher 1 | Fisher 2 |
 | :--- | :--- |
