@@ -12,11 +12,21 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3076 tests green on net10.0 and 3103 on net11.0** — 3005 (net10.0) / 3032 (net11.0) in `Fisher.Tests`, 40 in
+**3078 tests green on net10.0 and 3105 on net11.0** — 3007 (net10.0) / 3034 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.1**.
+
+## The side-effect gate on a Fisher file (fisher#469)
+
+JasperFx 3.0 turned `GateSideEffectsBehindPriorVersion` on for every store (jasperfx#1075), and the migration guide
+said what that did to a Fisher file only once it was measured. `side_effect_gate_behind_prior_version` is the
+measurement: version 1 of a projection publishes for two quests, version 2 over the same file replays all three and
+publishes only the third, and with the gate off it publishes all three. No schema is involved, since the prior mark is
+the previous version's `fi_event_progression` row. JasperFx's own gate tests use a substituted database, so this is
+the only place Fisher's shard names are shown to parse back into what the gate looks for. The guide entry is no
+longer pending, and neither is anything else in it.
 
 ## The JasperFx 3.3.0 bump (fisher#553, fisher#554)
 
