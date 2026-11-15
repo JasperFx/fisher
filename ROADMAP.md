@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **eleven open issues: nine are the Fisher 2.0 milestone, one is documentation, and the other one is blocked
+Status: **nine open issues: seven are the Fisher 2.0 milestone, one is documentation, and the other one is blocked
 upstream.** The 2.0 issues are Fisher's share of the Critter Stack
 .NET 11 release train. 1.28.0 took JasperFx
 2.100's compliance additions ([#519](https://github.com/JasperFx/fisher/issues/519)). 1.5.0 closed both of 1.4.0's
@@ -351,13 +351,12 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is eleven items: nine of them the Fisher 2.0 milestone, one documentation, and one blocked upstream.
+What is left is nine items: seven of them the Fisher 2.0 milestone, one documentation, and one blocked upstream.
 
 **Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.0, Weasel 10.0, `net10.0;net11.0`):
-[#459](https://github.com/JasperFx/fisher/issues/459) build and pack targets,
 [#460](https://github.com/JasperFx/fisher/issues/460) the TFM move,
 [#465](https://github.com/JasperFx/fisher/issues/465) adopting the lifted closed-shape document family and the
-rest of the Weasel 10 storage lifts, [#466](https://github.com/JasperFx/fisher/issues/466) union-typed members,
+rest of the Weasel 10 storage lifts,
 [#468](https://github.com/JasperFx/fisher/issues/468) an Aspire hosting helper,
 [#469](https://github.com/JasperFx/fisher/issues/469) the migration guide,
 [#547](https://github.com/JasperFx/fisher/issues/547) the `Channel<T>` single-writer queue benchmark,
