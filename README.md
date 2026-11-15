@@ -27,7 +27,7 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > `Fisher.AspNetCore` and `Fisher.EntityFrameworkCore` companion packages all work and are tested.
 >
 > Fisher passes **all 66 suites and 843 tests** it enrolls from `JasperFx.Events.ComplianceTests`,
-> the shared cross-store suite Marten and Polecat also enroll in, alongside its own 3,006 (3,033 on net11.0).
+> the shared cross-store suite Marten and Polecat also enroll in, alongside its own 3,007 (3,034 on net11.0).
 >
 > That suite pins **API portability, not behavioural equivalence** — code written against one store
 > compiles and runs against another. It does not pin that the three behave identically, and they do
@@ -120,8 +120,8 @@ contracts](https://jasperfx.net/support-plans/) for the Critter Stack.
 
 ## Working with the Code
 
-You need the **.NET 10 SDK** ([available here](https://dotnet.microsoft.com/download)) and the .NET 9
-runtime to run that target framework's suites.
+You need the **.NET 11 SDK** ([available here](https://dotnet.microsoft.com/download)), which builds both
+target frameworks, and the .NET 10 runtime to run the `net10.0` suites. Fisher 2 targets `net10.0;net11.0`.
 
 **There is no database server to run.** No `docker-compose up`, no connection string to configure, no
 container to wait for — the tests create throwaway SQLite files under the temp directory. This is the

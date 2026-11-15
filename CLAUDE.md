@@ -4458,14 +4458,17 @@ a tenant suspended elsewhere kept resolving, and kept its daemon, until that pro
 while `RefreshAsync`'s own remarks promised that case worked. `MasterTableTenantSource.AllAsync` now revokes
 everything the table no longer offers, so the daemon's tenant poll converges every process on the table.
 
-- **The base evicts a stale tenant itself since Weasel 10.0.0-alpha.2** (weasel#809): `BuildDatabasesAsync`
-  drops a cached tenant the table no longer offers as enabled and leaves it out of the result. That made
-  `AllAsync`'s old "cached but not in the table" set empty, so a tenant forgotten in another process went on
-  resolving here — `tenant_registry_across_processes.a_tenant_forgotten_elsewhere_is_unknown_after_a_refresh`
-  failed on the bump alone. `MasterTableTenantSource` now overrides `EvictStaleTenantAsync`, the hook Weasel
-  offers for exactly this, to note each eviction before calling the base, and `AllAsync` revokes those.
-- **A removed id stays in `_removed` until the table offers it again**, because the base reports an eviction
-  once; holding it is what stops a *seeded* tenant coming back through the seed list.
+- ⚠️ **The base evicts a removed tenant itself since Weasel 10.0.0-alpha.2 (weasel#809), and Fisher revokes from
+  its hook** (fisher#551). `BuildDatabasesAsync` now drops every cached tenant the table no longer offers as
+  enabled, through `EvictStaleTenantAsync`. Fisher used to find a removed tenant by comparing that cached list
+  against the table; after the eviction there is nothing left to compare, so the bump alone brought #487 back.
+  `MasterTableTenantSource` overrides the hook, calls the base, then raises `OnTenantRevoked`.
+- **A removed tenant is still remembered in `_removed`, and now has to accumulate.** The base reports an
+  eviction once. Without the set, a *seeded* tenant removed elsewhere comes straight back through
+  `TryFind`'s seed fallback, which never reads the table.
+  `a_seeded_tenant_forgotten_elsewhere_stays_unknown_across_refreshes` pins it across two refreshes. The hook
+  cannot tell removed from disabled, so `AllAsync` sorts what it queued once it has read the disabled ids, and a
+  disabled tenant may be revoked twice, which `DynamicTenancy`'s `TryRemove` makes harmless.
 - **The poll retires a revoked tenant's daemon.** It was projecting through a disposed data source, in the
   process that made the call as well. The same pass that starts new tenants' daemons stops these, and a
   tenant that comes back gets a new one.
@@ -6696,7 +6699,7 @@ from one of them is a build error rather than a projection test failing somewher
 
 ## The companion packages
 
-Two, both modelled on Polecat's and Marten's, both multi-targeting net9.0/net10.0 as the core does.
+Two, both modelled on Polecat's and Marten's, both targeting net10.0;net11.0 as the core does.
 
 ### `Fisher.AspNetCore` (fisher#49)
 
@@ -6795,8 +6798,8 @@ and a rollback takes EF's write with it. All four are what the seam needs and no
 - **The package references `Microsoft.EntityFrameworkCore.Relational` only.** Which EF provider a
   `DbContext` uses is the application's decision; referencing the Sqlite provider would be Fisher
   making it for them, even though on SQLite it is nearly always the right one.
-- **Pinned to EF Core 9.x, not 10.x**, because the package multi-targets net9.0 and net10.0 and EF
-  Core 10 is net10-only. 9.x targets net8.0, so it loads on both.
+- **Floored at EF Core 10.0** since Fisher 2 dropped net9.0 (fisher#467). Fisher 1 pinned EF Core 9.x
+  because EF Core 10 is net10+ and the package still targeted net9.0.
 - **`CompletelyRemoveAllAsync` leaves EF's tables alone**, because it filters by the `fi_` prefix.
   Correct — Fisher owning the file does not make it Fisher's to clear — and pinned so nobody "fixes" it.
 
