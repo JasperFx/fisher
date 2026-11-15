@@ -12,12 +12,11 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3041 tests green on net10.0 and 3068 on net11.0** — 2970 (net10.0) / 2997 (net11.0) in `Fisher.Tests`, 40 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 811 of
-them are shared cross-store compliance tests — 580 event sourcing and 231 document.
+**3074 tests green on net10.0 and 3101 on net11.0** — 3003 (net10.0) / 3030 (net11.0) in `Fisher.Tests`, 40 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
+them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.3.0** / Weasel **10.0.0-alpha.1**. The counts above predate that pin. On 3.3.0, `Fisher.Tests`
-on net10.0 is 2979 passed and 24 skipped, and its compliance namespace is 843 tests on both frameworks.
+On JasperFx **3.3.0** / Weasel **10.0.0-alpha.1**.
 
 ## The JasperFx 3.3.0 bump (fisher#553, fisher#554)
 
@@ -1056,9 +1055,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 3.0.1 ships 65 suites; Fisher enrolls **65 of them, 811 tests**.
-Fisher passes **811 of them, across all
-65 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 3.3.0 ships 66 suites; Fisher enrolls **66 of them, 843 tests**.
+Fisher passes **843 of them, across all
+66 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -1213,19 +1212,20 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 65 suites, 811 tests
+### Green — 66 suites, 843 tests
 
-Event sourcing — 51 suites, 580 tests:
+Event sourcing — 52 suites, 612 tests:
 
 | Suite | Tests |
 |---|---|
 | `EventQueryCompliance` | 53 |
 | `DcbTagQueryAndConsistencyCompliance` | 28 |
+| `DcbAppendConditionCompliance` | 24 |
 | `ProjectionScenarioCompliance` | 20 |
 | `StringStreamIdentityCompliance` | 21 |
 | `EventStoreExplorerCompliance` | 18 |
 | `NaturalKeyCompliance` | 19 |
-| `StreamArchivingCompliance` | 27 |
+| `StreamArchivingCompliance` | 35 |
 | `StreamTombstoningCompliance` | 9 |
 | `ProjectionFloorCompliance` | 9 |
 | `ProjectionStepThroughCompliance` | 4 |
