@@ -120,9 +120,8 @@ public class stream_locked_exception : IAsyncLifetime
             return Task.CompletedTask;
         });
 
-        var locked = exception.ShouldBeOfType<Fisher.Exceptions.StreamLockedException>();
+        var locked = exception.ShouldBeOfType<JasperFx.Events.StreamLockedException>();
 
-        locked.ShouldBeAssignableTo<JasperFx.Events.StreamLockedException>();
         locked.StreamId.ShouldBe(streamId);
         locked.StreamIds.ShouldBe([streamId]);
     }
@@ -188,7 +187,7 @@ public class stream_locked_exception : IAsyncLifetime
             return Task.CompletedTask;
         });
 
-        var locked = exception.ShouldBeOfType<Fisher.Exceptions.StreamLockedException>();
+        var locked = exception.ShouldBeOfType<JasperFx.Events.StreamLockedException>();
 
         locked.StreamIds.ShouldBe([first, second], ignoreOrder: true);
         locked.StreamId.ShouldBeOneOf(first, second);

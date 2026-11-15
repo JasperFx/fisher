@@ -156,17 +156,18 @@ side — spelled `Append(id, 1, e)` since `Append`'s argument became the version
 **Losing the *file's* write lock is a different failure from losing a version guard, and it now has
 the Critter Stack's vocabulary** (fisher#306). Contention is still retried by
 `StoreOptions.ResiliencePipeline` and still recorded on the span and on `fisher.write_lock.retries`;
-what changed is what a caller sees once the retries were not enough — `Fisher.Exceptions.StreamLockedException`,
-deriving from the lifted `JasperFx.Events.StreamLockedException`, where a raw `SqliteException` saying
+what changed is what a caller sees once the retries were not enough — the lifted
+`JasperFx.Events.StreamLockedException`, thrown directly, where a raw `SqliteException` saying
 "database is locked" used to escape. Marten and Polecat both surface their lock contention as that
 type, so a store-agnostic `catch` and a Wolverine `OnException<StreamLockedException>()` policy —
-matched with `ex is T` — now behave the same on all three. **It is the one derived copy of a shared event exception left** (fisher#530). The others —
-`ExistingStreamIdCollisionException`, `NonExistentStreamException`, `UnknownEventTypeException`,
-`EventDeserializationFailureException`, `ArchivedStreamException`, `DuplicateNaturalKeyException` and
-`BadLinqExpressionException` — are deleted and Fisher throws the JasperFx types directly, with their
-canonical messages. `StreamIds` has no member on the shared type, and the rule is to lift it into
-JasperFx.Events first rather than drop it; until then the subclass stays. Do not reintroduce a Fisher
-subclass of any of the others.
+matched with `ex is T` — now behave the same on all three. **Fisher has no derived copy of a shared event
+exception left** (fisher#530). `StreamLockedException`, `ExistingStreamIdCollisionException`,
+`NonExistentStreamException`, `UnknownEventTypeException`, `EventDeserializationFailureException`,
+`ArchivedStreamException`, `DuplicateNaturalKeyException` and `BadLinqExpressionException` are all thrown as the
+JasperFx types, with their canonical messages. `StreamLockedException` was last, because its `StreamIds` had to be
+lifted into JasperFx.Events first (jasperfx#1172, JasperFx 3.3.0) rather than dropped. ⚠️ The subclass was worse
+than redundant once the lift shipped: it had to call the base's message constructor, which records only the first
+id, so a caller catching the JasperFx type saw one stream. Do not reintroduce a Fisher subclass of any of them.
 
 Three decisions in it:
 
@@ -174,10 +175,10 @@ Three decisions in it:
   no stream would say less than the driver already does.
   `a_documents_only_commit_keeps_the_raw_sqlite_exception` is the discriminating fact — translating
   unconditionally passes every other test in that class and fails only this one.
-- **`StreamIds` beside the base's single `StreamId`.** The siblings lock a *row*, so their version of
+- **`StreamIds` beside the single `StreamId`.** The siblings lock a *row*, so their version of
   this really is about one stream; SQLite locks the *file*, so every stream in the commit lost it
-  together. The base property carries the first, which is the whole of it for the aggregate-handler
-  shape and is what ports.
+  together. `StreamId` carries the first, which is the whole of it for the aggregate-handler
+  shape and is what ports. Both are the shared type's members now.
 - **An enlisted session gets it too.** `SessionOptions.ForTransaction` runs no pipeline — a retry
   would rewrite what the first attempt already put in the caller's still-open transaction — so its
   contention surfaces on the first statement with no retries at all. That is the documented rough

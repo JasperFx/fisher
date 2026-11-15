@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **ten open issues: nine are the Fisher 2.0 milestone, and the other one is blocked upstream.** The 2.0 issues are Fisher's share of the Critter Stack
+Status: **eight open issues: seven are the Fisher 2.0 milestone, and the other one is blocked upstream.** The 2.0 issues are Fisher's share of the Critter Stack
 .NET 11 release train. 1.28.0 took JasperFx
 2.100's compliance additions ([#519](https://github.com/JasperFx/fisher/issues/519)). 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
@@ -350,7 +350,7 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is ten items: nine of them the Fisher 2.0 milestone, and one blocked upstream.
+What is left is eight items: seven of them the Fisher 2.0 milestone, and one blocked upstream.
 
 **Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.0, Weasel 10.0, `net10.0;net11.0`):
 [#459](https://github.com/JasperFx/fisher/issues/459) build and pack targets,
@@ -358,9 +358,7 @@ What is left is ten items: nine of them the Fisher 2.0 milestone, and one blocke
 [#465](https://github.com/JasperFx/fisher/issues/465) adopting the lifted closed-shape document family and the
 rest of the Weasel 10 storage lifts, [#466](https://github.com/JasperFx/fisher/issues/466) union-typed members,
 [#468](https://github.com/JasperFx/fisher/issues/468) an Aspire hosting helper,
-[#469](https://github.com/JasperFx/fisher/issues/469) the migration guide,
-[#530](https://github.com/JasperFx/fisher/issues/530) throwing the `JasperFx.Events` exception types directly,
-[#546](https://github.com/JasperFx/fisher/issues/546) `Guid.TryParse` over text ids in the event row readers, and
+[#469](https://github.com/JasperFx/fisher/issues/469) the migration guide, and
 [#547](https://github.com/JasperFx/fisher/issues/547) the `Channel<T>` single-writer queue benchmark.
 None of it lands in a 1.x release.
 
@@ -372,6 +370,11 @@ The release train's one follow-up, [#543](https://github.com/JasperFx/fisher/iss
 `fetch_for_writing_compliance` facts red over what `Append`'s expected version means), was already fixed when it
 was filed: it was reproduced at d542e92, and #537's `EventOperationsBase` adoption made the argument the version
 *after* the append. All 21 facts pass on JasperFx 3.3.0, on both frameworks.
+
+[#530](https://github.com/JasperFx/fisher/issues/530) finished on JasperFx 3.3.0: with `StreamIds` lifted
+(jasperfx#1172), `StreamLockedException` was the last Fisher subclass of a shared event exception, and it is gone.
+[#546](https://github.com/JasperFx/fisher/issues/546) closed without a code change: the row readers keep
+`Guid.Parse(GetString)`, because Microsoft.Data.Sqlite has no allocation-free TEXT read (CLAUDE.md, "Row readers").
 
 [#243](https://github.com/JasperFx/fisher/issues/243) and
 [#245](https://github.com/JasperFx/fisher/issues/245) are both done — `GetProjectionStatusesAsync` at

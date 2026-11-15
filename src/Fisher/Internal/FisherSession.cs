@@ -881,7 +881,7 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             if (streams.Length > 0 && e is SqliteException sqlite
                                    && Storage.FisherResilienceDefaults.IsTransient(sqlite))
             {
-                throw new Exceptions.StreamLockedException(IdentitiesOf(streams), sqlite);
+                throw new JasperFx.Events.StreamLockedException(IdentitiesOf(streams), sqlite);
             }
 
             throw;
@@ -1033,7 +1033,7 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     ///     <para>
     ///         And outside <c>SaveChangesAsync</c>'s commit-failure handling: a failure here is a hook
     ///         failing after the commit, not a commit that did not happen, so it is neither logged as
-    ///         one nor translated into a <see cref="Exceptions.StreamLockedException" />.
+    ///         one nor translated into a <see cref="JasperFx.Events.StreamLockedException" />.
     ///     </para>
     /// </remarks>
     private async Task RunPostCommitHooksAsync(StreamAction[] streams, CancellationToken token)
