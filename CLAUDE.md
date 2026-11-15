@@ -18,6 +18,7 @@ compliance scoreboard and the current state of play.
 dotnet build fisher.slnx
 dotnet test fisher.slnx                    # both TFMs; they run serially on purpose
 dotnet test fisher.slnx -f net10.0         # one TFM
+dotnet build fisher.slnx -p:FisherRuntimeAsync=false   # net11.0 without runtime-async (fisher#550); clean bin/ obj/ first
 
 # One test class or method (Microsoft Testing Platform — note the bare `--`)
 dotnet test src/Fisher.Tests/Fisher.Tests.csproj -f net10.0 -- --filter-method "*appending_events*"
@@ -131,6 +132,9 @@ the only sync-over-async left in the write path and runs once per sequence. The 
 single-writer queue in front of `BEGIN IMMEDIATE`, is a benchmark-first design question (it would change
 per-session failure and enlisted-session semantics) and is NOT done; the baseline to beat is
 `ConcurrentWritersScenario` (8 writers ~1.8x the wall clock of 1 writer, see `Fisher.Benchmarks/Results.md`).
+**fisher#547 has the measurement, and no decision yet:** `writer-queue` in `Fisher.Benchmarks` compares racing
+against a benchmark-only `Channel<T>` queue (and a `SemaphoreSlim` control), and `Results.md`'s fisher#547
+section has the numbers and the semantic costs. Adopting or declining it is the owner's call.
 
 **`AppendExclusive` / `FetchForExclusiveWriting` / `WriteExclusivelyToAggregate` are the optimistic
 methods.** Marten and Polecat take a row lock so a competing session waits its turn. SQLite has no

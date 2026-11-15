@@ -6,7 +6,7 @@ using Fisher.Benchmarks.Scenarios;
 // Fisher.Benchmarks — the perf harness described in the repo README under src/Fisher.Benchmarks.
 //
 // Timed scenarios (the EventAppenderPerfTester shape) for long-running/contended work:
-//   doc-save | event-append | daemon-rebuild | concurrent-writers | cold-start | all
+//   doc-save | event-append | daemon-rebuild | concurrent-writers | writer-queue | cold-start | all
 // BenchmarkDotNet (MemoryDiagnoser) for the allocation-shaped micro-benchmarks:
 //   bdn [BenchmarkDotNet args...]
 //
@@ -71,6 +71,26 @@ switch (command)
         break;
     }
 
+    case "writer-queue":
+    {
+        // fisher#547: racing for BEGIN IMMEDIATE (today) vs a benchmark-only Channel<T> single-writer
+        // queue, same total work. --writers runs one writer count; omitted, it sweeps 1/2/4/8/16.
+        PrintEnvironment();
+        int[] writerCounts = options.TryGetValue("writers", out var only) ? [only] : [1, 2, 4, 8, 16];
+        var reports = await WriterQueueScenario.RunAsync(
+            writerCounts,
+            options.GetValueOrDefault("total-commits", 400),
+            options.GetValueOrDefault("docs-per-commit", 5),
+            options.GetValueOrDefault("rounds", 7));
+
+        foreach (var report in reports)
+        {
+            report.Print();
+        }
+
+        break;
+    }
+
     case "cold-start":
     {
         PrintEnvironment();
@@ -128,6 +148,9 @@ switch (command)
               daemon-rebuild      [--events 10000]
               concurrent-writers  [--writers 8] [--commits 50] [--docs-per-commit 5]
               cold-start          [--types 20] [--rounds 5]
+              writer-queue        [--writers N (default: sweep 1,2,4,8,16)] [--total-commits 400]
+                                  [--docs-per-commit 5] [--rounds 7]
+                                  racing BEGIN IMMEDIATE vs a Channel<T> single-writer queue (fisher#547)
               all                 every scenario at its checked-in defaults
 
             Micro-benchmarks (BenchmarkDotNet + MemoryDiagnoser):

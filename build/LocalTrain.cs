@@ -23,8 +23,9 @@ partial class Build
     [Parameter("TakeLocalUpstream: version of the local Weasel packages to pin (e.g. 10.0.0-local.1)")]
     readonly string WeaselVersion;
 
-    [Parameter("Target framework AotSmoke publishes for - Default is 'net10.0'")]
-    readonly string SingleFramework = "net10.0";
+    // net11.0 because smoke/aot-consumer targets only net11.0 since #532; a net10.0 default could not publish it.
+    [Parameter("Target framework AotSmoke publishes for - Default is 'net11.0'")]
+    readonly string SingleFramework = "net11.0";
 
     // Every shipped package; publish.yml packs the same four.
     static readonly string[] PackableProjects = ["Fisher", "Fisher.AspNetCore", "Fisher.EntityFrameworkCore", "Fisher.Aspire.Hosting"];

@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3078 tests green on net10.0 and 3105 on net11.0** — 3007 (net10.0) / 3034 (net11.0) in `Fisher.Tests`, 40 in
+**3084 tests green on net10.0 and 3111 on net11.0** — 3013 (net10.0) / 3040 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -48,6 +48,35 @@ and #487 came back: `tenant_registry_across_processes.a_tenant_forgotten_elsewhe
 on the bump alone. Fisher now overrides the hook to revoke, drops its own read of the enabled ids, and remembers
 removed tenants across refreshes. `a_seeded_tenant_forgotten_elsewhere_stays_unknown_across_refreshes` is new and
 pins that last part.
+
+## Runtime-async on by default for net11.0 (fisher#550)
+
+Plan decision D4, as JasperFx's `JasperFxRuntimeAsync` and Wolverine 7.0. `Directory.Build.props` adds
+`<Features>runtime-async=on</Features>` for `net11.0` unless a build passes `-p:FisherRuntimeAsync=false`; `net10.0`
+cannot load it. Fisher builds no code at runtime through `GenerationRules`, so that switch is all of it.
+`runtime_async_defaults` pins it from the assembly's metadata, since async code behaves the same either way: on
+`net11.0` Fisher has runtime-async methods and no compiler-built state machines except async iterators', and on
+`net10.0` the reverse. Rebuilding with the switch off fails it. The full `net11.0` suite runs green with it on.
+
+## The side-effect gate on a Fisher file (fisher#469)
+
+JasperFx 3.0 turned `GateSideEffectsBehindPriorVersion` on for every store (jasperfx#1075), and the migration guide
+said what that did to a Fisher file only once it was measured. `side_effect_gate_behind_prior_version` is the
+measurement: version 1 of a projection publishes for two quests, version 2 over the same file replays all three and
+publishes only the third, and with the gate off it publishes all three. No schema is involved, since the prior mark is
+the previous version's `fi_event_progression` row. JasperFx's own gate tests use a substituted database, so this is
+the only place Fisher's shard names are shown to parse back into what the gate looks for. The guide entry is no
+longer pending, and neither is anything else in it.
+
+## The Community Toolkit's SQLite connection string, measured (fisher#468)
+
+`docs/configuration/aspire.md` said a CommunityToolkit.Aspire.Hosting.Sqlite connection string works with
+`AddFisher(connectionString)`, "not verified". Measured against 13.6.1 (Aspire.Hosting 13.6.4): it is
+`Data Source={path};Cache=Shared;Mode=ReadWriteCreate`. `community_toolkit_connection_string` pins Fisher against
+that string: the file is in WAL once the store has written, and 8 writers × 25 appends commit with the async daemon
+reading. `Cache=Shared` was the part worth checking, since SQLite discourages shared cache beside WAL. The README now
+lists `Fisher.Aspire.Hosting`. A smoke consumer reference was not added. `Aspire.Hosting` moves 13.6.4 → 13.6.5 for
+CVE-2026-120006 (GHSA-f7vh-h5g3-7jrh, high, elevation of privilege), which `Fisher.Aspire.Hosting` depended on.
 
 ## The JasperFx 3.3.0 bump (fisher#553, fisher#554)
 
