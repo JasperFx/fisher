@@ -128,7 +128,7 @@ Two packaging notes:
 - **`Microsoft.EntityFrameworkCore.Relational` only.** Which EF provider your `DbContext` uses is your
   decision; referencing the SQLite provider would be Fisher making it for you, even though on SQLite
   it is nearly always the right one.
-- **Pinned to EF Core 9.x, not 10.x**, because the package multi-targets net9.0 and net10.0 and EF
-  Core 10 is net10-only. 9.x targets net8.0, so it loads on both.
+- **EF Core 10 or later.** The package targets `net10.0;net11.0`, so it floors at EF Core 10.0. Fisher 1
+  pinned EF Core 9.x because it still targeted `net9.0`.
 
 See also [EF Core Projections](/events/projections/efcore).
