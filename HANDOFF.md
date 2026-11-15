@@ -33,10 +33,10 @@ private parameterless constructor now has that constructor and its field initial
 used: Microsoft.Data.Sqlite has no allocation-free read of a BLOB, and the write parameter needs a `byte[]` anyway.
 CLAUDE.md's binary-event section has the numbers.
 
-`StreamLockedException` is still Fisher's own subclass. jasperfx#1172 added `StreamIds` to the base type, but
-Fisher's subclass has to use the base's message constructor, and that constructor records only the first id. A
-caller that catches the JasperFx type therefore sees one stream, which is what the CS0108 warning on
-`StreamIds` is pointing at.
+fisher#530 is finished: Fisher's `StreamLockedException` subclass is deleted and `FisherSession` throws
+`JasperFx.Events.StreamLockedException` through its `StreamIds` constructor (jasperfx#1172). The subclass had to use
+the base's message constructor, which records only the first id, so a caller catching the JasperFx type used to see
+one stream. It now sees all of them.
 
 ## The JasperFx 3.0.0 bump — Fisher 2.0 on net10.0;net11.0 (fisher#460, fisher#530, fisher#465)
 
@@ -46,7 +46,7 @@ The major: `net9.0` dropped, JasperFx **3.0.0**, Weasel **10.0.0-alpha.1**, SQLi
 (4 tests) is new and enrolled; `SingleTenantedEventSlicingCompliance`, the one suite 2.x shipped that Fisher could
 not enroll, no longer ships. Three enrolled suites grew on the bump: `StreamArchivingCompliance` 20 → 27,
 `FetchForWritingCompliance` 18 → 21, `EventDataMaskingCompliance` 11 → 13. Fisher's exception types are
-JasperFx.Events' own (fisher#530); `StreamLockedException` stays Fisher's until jasperfx#1172 adds `StreamIds`.
+JasperFx.Events' own (fisher#530); `StreamLockedException` followed on 3.3.0, once jasperfx#1172 added `StreamIds`.
 
 ## The JasperFx 2.102.0 bump — pending event ages (jasperfx#1150)
 

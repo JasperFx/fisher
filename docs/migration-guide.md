@@ -386,9 +386,10 @@ Landed in 2.0.0-alpha.1 (fisher#465 via #538, fisher#530 via #544). The Fisher 1
 | `Fisher.Patching.IPatchExpression<T>` | the shared JasperFx patch-expression contract |
 | `Fisher.Exceptions.*` types that derived from a `JasperFx.Events` exception | the `JasperFx.Events` type itself, thrown directly |
 
-One exception keeps a Fisher type for now: `StreamLockedException` stays Fisher's until JasperFx.Events carries the
-list of streams that lost the lock (jasperfx#1172). The mechanical change for the rest is a `using` and, for the
-exceptions, a `catch` of the `JasperFx.Events` type; members are unchanged. No table or column is involved.
+That includes `StreamLockedException`: `Fisher.Exceptions.StreamLockedException` is gone and Fisher throws
+`JasperFx.Events.StreamLockedException`, whose `StreamIds` lists every stream in the unit of work (jasperfx#1172).
+Its message is now the shared one. The mechanical change is a `using` and, for the exceptions, a `catch` of the
+`JasperFx.Events` type; members are unchanged. No table or column is involved.
 
 ### Union-typed properties and events (`net11.0` only)
 
