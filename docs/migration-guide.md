@@ -350,6 +350,19 @@ restore fails with `NU1605`.
 Test projects move with the stack: xunit.v3 4.x on Microsoft Testing Platform 2 (Fisher's own suite did,
 which is why the old "stay on MTP 1.x" note is gone).
 
+### Runtime-async on `net11.0`
+
+Fisher's `net11.0` assemblies are compiled with the C# compiler's **runtime-async** feature (fisher#550), as
+JasperFx 3.0's and Wolverine 7.0's are. Async methods are run by the runtime rather than by a compiler-built
+state machine, which allocates much less. Wolverine measured 38% to 84% fewer allocations depending on how often a
+call suspends. The `net10.0` build is unchanged, because that runtime cannot load runtime-async code.
+
+There is nothing to migrate and no table or column is involved. What can look different is async code at runtime:
+stack traces, debugger stepping, and APM agents or profilers that hook async state machines. To build Fisher from
+source without it, pass `-p:FisherRuntimeAsync=false` and clean `bin/` and `obj/` first, since changing the switch
+does not trigger a recompile. The setting governs only the assemblies it compiles; your own projects decide for
+themselves.
+
 ### JasperFx 3.0 and Weasel 10
 
 Fisher 2 requires JasperFx 3.3.0 and Weasel.Sqlite / Weasel.Storage 10.0. An application referencing

@@ -124,7 +124,7 @@
         },
         "SingleFramework": {
           "type": "string",
-          "description": "Target framework AotSmoke publishes for - Default is 'net10.0'"
+          "description": "Target framework AotSmoke publishes for - Default is 'net11.0'"
         },
         "TestWorkers": {
           "type": [
