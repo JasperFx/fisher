@@ -12,11 +12,21 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3076 tests green on net10.0 and 3103 on net11.0** — 3005 (net10.0) / 3032 (net11.0) in `Fisher.Tests`, 40 in
+**3077 tests green on net10.0 and 3104 on net11.0** — 3006 (net10.0) / 3033 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.3.0** / Weasel **10.0.0-alpha.1**.
+On JasperFx **3.3.0** / Weasel **10.0.0-alpha.2**.
+
+## Weasel 10.0.0-alpha.2 (fisher#551)
+
+Weasel 10.0.0-alpha.1 → 10.0.0-alpha.2, no compile break. weasel#809 makes the master-table base evict a cached
+tenant the control table no longer offers, through a new `EvictStaleTenantAsync` hook. That emptied the comparison
+`MasterTableTenantSource.AllAsync` used to find tenants removed by another process, so they stopped being revoked
+and #487 came back: `tenant_registry_across_processes.a_tenant_forgotten_elsewhere_is_unknown_after_a_refresh` failed
+on the bump alone. Fisher now overrides the hook to revoke, drops its own read of the enabled ids, and remembers
+removed tenants across refreshes. `a_seeded_tenant_forgotten_elsewhere_stays_unknown_across_refreshes` is new and
+pins that last part.
 
 ## The JasperFx 3.3.0 bump (fisher#553, fisher#554)
 

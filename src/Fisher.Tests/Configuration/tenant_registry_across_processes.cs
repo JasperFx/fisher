@@ -178,6 +178,28 @@ public class tenant_registry_across_processes : IAsyncLifetime
         await WriteAsync(second.Store, StorageConstants.DefaultTenantId);
     }
 
+    /// <summary>
+    ///     fisher#551. Since Weasel's base evicts a tenant removed elsewhere (weasel#809), its cache no longer
+    ///     says the tenant was ever there, and a SEEDED tenant would otherwise come straight back through
+    ///     <c>TryFind</c>'s seed fallback, which never reads the table. The second refresh is the
+    ///     discriminating half: the base reports an evicted tenant once, so the removal has to be remembered.
+    /// </summary>
+    [Fact]
+    public async Task a_seeded_tenant_forgotten_elsewhere_stays_unknown_across_refreshes()
+    {
+        var (first, second) = await BothServingAcmeAsync();
+        await WriteAsync(second.Store, StorageConstants.DefaultTenantId);
+
+        await first.Source.ForgetTenantAsync(StorageConstants.DefaultTenantId, Token);
+        await ((DynamicTenancy)second.Store.Tenancy).RefreshAsync(Token);
+
+        Should.Throw<UnknownTenantException>(() => second.Store.LightweightSession(StorageConstants.DefaultTenantId));
+
+        await ((DynamicTenancy)second.Store.Tenancy).RefreshAsync(Token);
+
+        Should.Throw<UnknownTenantException>(() => second.Store.LightweightSession(StorageConstants.DefaultTenantId));
+    }
+
     /// <summary>The file stays. Fisher deprovisions and never deletes.</summary>
     [Fact]
     public async Task the_tenants_file_is_left_alone()

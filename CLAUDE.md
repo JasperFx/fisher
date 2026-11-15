@@ -4433,8 +4433,17 @@ a tenant suspended elsewhere kept resolving, and kept its daemon, until that pro
 while `RefreshAsync`'s own remarks promised that case worked. `MasterTableTenantSource.AllAsync` now revokes
 everything the table no longer offers, so the daemon's tenant poll converges every process on the table.
 
-- **A removed row is held in `_removed`, and not evicted from the base's cache**, because the base can only
-  evict by deleting the row, which could delete a tenant another process has just re-added.
+- ⚠️ **The base evicts a removed tenant itself since Weasel 10.0.0-alpha.2 (weasel#809), and Fisher revokes from
+  its hook** (fisher#551). `BuildDatabasesAsync` now drops every cached tenant the table no longer offers as
+  enabled, through `EvictStaleTenantAsync`. Fisher used to find a removed tenant by comparing that cached list
+  against the table; after the eviction there is nothing left to compare, so the bump alone brought #487 back.
+  `MasterTableTenantSource` overrides the hook, calls the base, then raises `OnTenantRevoked`.
+- **A removed tenant is still remembered in `_removed`, and now has to accumulate.** The base reports an
+  eviction once. Without the set, a *seeded* tenant removed elsewhere comes straight back through
+  `TryFind`'s seed fallback, which never reads the table.
+  `a_seeded_tenant_forgotten_elsewhere_stays_unknown_across_refreshes` pins it across two refreshes. The hook
+  cannot tell removed from disabled, so `AllAsync` sorts what it queued once it has read the disabled ids, and a
+  disabled tenant may be revoked twice, which `DynamicTenancy`'s `TryRemove` makes harmless.
 - **The poll retires a revoked tenant's daemon.** It was projecting through a disposed data source, in the
   process that made the call as well. The same pass that starts new tenants' daemons stops these, and a
   tenant that comes back gets a new one.
