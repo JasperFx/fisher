@@ -19,6 +19,16 @@ them are shared cross-store compliance tests — 612 event sourcing and 231 docu
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
 
+## `decimal` aggregates are exact (fisher#606)
+
+SQLite's `sum`/`avg`/`min`/`max` ran in double over `json_extract`'s REAL, so `g.Sum(x => x.Amount) == 0.3m` missed
+the group holding `0.1m` and `0.2m`, a 16-digit total and a 28-digit mean came back rounded, and `Min`/`Max` were wrong
+for values no double holds. All four now read the JSON text (`IQueryableMember.JsonTextLocator`) through
+`fi_decimal_*` aggregates Fisher registers on every connection, borrowed ones included, and the grouped forms carry an
+`fi_decimal` collation so `HAVING`, grouped `OrderBy` and `Distinct` compare as numbers. `decimal_aggregates`
+(17 facts, LINQ to Objects as the oracle) fails 14 on the previous build. Plain `Select`/`Where` beyond 15
+significant digits is fisher#609; the collation's registry member is weasel#861.
+
 ## A second `OrderBy` re-sorts (fisher#588)
 
 `OrderBy(a).OrderBy(b)` rendered `order by a, b`; LINQ's `OrderBy` is a stable re-sort, so it means `b, a`.

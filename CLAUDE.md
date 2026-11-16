@@ -2456,6 +2456,26 @@ int, so the two disagree whenever the set straddles `0x80000000`. A test compari
 `Enumerable.Min` would be a genuine intermittent; `min_and_max_over_members_that_are_not_numbers`
 builds its expectation with `StringComparer.Ordinal` instead.
 
+⚠️ **A `decimal` aggregate is computed in `decimal`, never by SQLite's `sum`/`avg`/`min`/`max`**
+(fisher#606, `Linq/DecimalAggregates.cs`). Those run in double over `json_extract`'s REAL, so `0.1 + 0.2`
+missed a `HAVING == 0.3m` and matched `> 0.3m`, a 16-digit total came back rounded, `0.5m / 3` came back
+at 15 digits, and even `Min`/`Max` were wrong for a value no double holds. Verified against an oracle
+before anything changed: 14 of `decimal_aggregates`' 17 facts fail on the old path.
+- **They read `IQueryableMember.JsonTextLocator`** (`data -> '$.path'`, the number as written), never
+  `TypedLocator`. A duplicated decimal column is REAL, so it forwards its inner member's. A decimal with no
+  JSON text is refused by name rather than falling back to the REAL.
+- **`fi_decimal_sum`/`_avg`/`_min`/`_max` return TEXT**, so the grouped form is
+  `(fi_decimal_sum(…) collate fi_decimal)`. That collation is what makes `HAVING`, a grouped `OrderBy` and
+  `Distinct` compare as numbers, and `DecimalAggregateComparison` binds the `HAVING` value as TEXT. fisher#304's
+  REAL would sort below every TEXT and match nothing. The collation is registered by subclassing
+  `SqliteFunction` until weasel#861 adds a registry member.
+- **`AverageAsync` still returns `double`**, now the exact mean rounded once. `(double)decimal` is not
+  correctly rounded, which is why the test's oracle parses the decimal's text instead.
+- **A borrowed connection gets the store's functions too**: `ExternalConnectionLifetime` registers them on
+  first use, or `SessionOptions.ForConnection` met `no such function`. That also covers vector search.
+- A plain `Select`/`Where` over a decimal with more than 15 significant digits is still read as a double;
+  that is fisher#609.
+
 ### Sessions, `SessionOptions` and enlistment
 
 `DocumentStore.QuerySession()`, `OpenSession(SessionOptions)`, and `Internal/Sessions/` (fisher#30).

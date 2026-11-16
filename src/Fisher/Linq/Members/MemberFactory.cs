@@ -280,7 +280,7 @@ internal class MemberFactory : IMemberResolver
             .Replace("'", "''");
 
         return CreateScalarMember($"(case when {typeTest} then json_extract({_dataExpression}, '{path}') end)",
-            memberType);
+            memberType, $"(case when {typeTest} then {_dataExpression} -> '{path}' end)");
     }
 
     /// <inheritdoc />
@@ -440,7 +440,8 @@ internal class MemberFactory : IMemberResolver
                 _collectionDepth + 1);
         }
 
-        return CreateScalarMember($"json_extract({_dataExpression}, '{jsonPath}')", memberType);
+        return CreateScalarMember($"json_extract({_dataExpression}, '{jsonPath}')", memberType,
+            $"({_dataExpression} -> '{jsonPath}')");
     }
 
     /// <summary>
@@ -448,7 +449,11 @@ internal class MemberFactory : IMemberResolver
     ///     element member — whose locator is <c>each_N.value</c> rather than a <c>json_extract</c> —
     ///     goes through exactly the same typing rules as a document member of the same CLR type.
     /// </summary>
-    internal IQueryableMember CreateScalarMember(string locator, Type memberType)
+    /// <param name="jsonTextLocator">
+    ///     The same member as JSON text, for a decimal aggregate (fisher#606). Null for a member that is not
+    ///     read from a document's JSON, such as a collection element.
+    /// </param>
+    internal IQueryableMember CreateScalarMember(string locator, Type memberType, string? jsonTextLocator = null)
     {
         var underlying = Nullable.GetUnderlyingType(memberType) ?? memberType;
 
@@ -482,7 +487,7 @@ internal class MemberFactory : IMemberResolver
             return new DateMember(locator, memberType, _serializerOptions);
         }
 
-        return new QueryableMember(locator, memberType);
+        return new QueryableMember(locator, memberType, jsonTextLocator: jsonTextLocator);
     }
 
     /// <summary>

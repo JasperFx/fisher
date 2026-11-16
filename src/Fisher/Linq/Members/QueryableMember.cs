@@ -5,8 +5,9 @@ namespace Fisher.Linq.Members;
 /// </summary>
 internal class QueryableMember : IQueryableMember
 {
-    public QueryableMember(string locator, Type memberType, bool isBoolean = false)
+    public QueryableMember(string locator, Type memberType, bool isBoolean = false, string? jsonTextLocator = null)
     {
+        JsonTextLocator = jsonTextLocator;
         RawLocator = locator;
         TypedLocator = locator;
         MemberType = memberType;
@@ -17,6 +18,7 @@ internal class QueryableMember : IQueryableMember
     public string TypedLocator { get; }
     public string RawLocator { get; }
     public bool IsBoolean { get; }
+    public string? JsonTextLocator { get; }
 
     public object? ConvertValue(object? value)
     {

@@ -119,15 +119,25 @@ internal sealed class OwnedConnectionLifetime : IConnectionLifetime
 ///         commit on it. The <c>PRAGMA</c> settings the store's data source applies are the caller's
 ///         responsibility here too — Fisher never opened this connection, so it never configured it.
 ///     </para>
+///     <para>
+///         <b>The store's functions are not</b>, and are registered on it the first time the session uses
+///         it. A function lives on the connection and changes nothing in the file, and without them a query
+///         that needs one — a decimal aggregate (fisher#606), a vector search — fails with
+///         <c>no such function</c> on exactly the connections a caller handed over.
+///     </para>
 /// </remarks>
 internal sealed class ExternalConnectionLifetime : IConnectionLifetime
 {
     private readonly SqliteConnection _connection;
+    private readonly Weasel.Sqlite.Functions.SqliteFunctionRegistry _functions;
+    private bool _functionsRegistered;
 
-    public ExternalConnectionLifetime(SqliteConnection connection, SqliteTransaction? transaction)
+    public ExternalConnectionLifetime(SqliteConnection connection, SqliteTransaction? transaction,
+        Weasel.Sqlite.Functions.SqliteFunctionRegistry functions)
     {
         _connection = connection;
         EnlistedTransaction = transaction;
+        _functions = functions;
     }
 
     public SqliteTransaction? EnlistedTransaction { get; }
@@ -139,6 +149,12 @@ internal sealed class ExternalConnectionLifetime : IConnectionLifetime
         if (_connection.State != System.Data.ConnectionState.Open)
         {
             await _connection.OpenAsync(token).ConfigureAwait(false);
+        }
+
+        if (!_functionsRegistered)
+        {
+            _functions.RegisterAll(_connection);
+            _functionsRegistered = true;
         }
 
         return _connection;

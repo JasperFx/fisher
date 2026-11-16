@@ -268,8 +268,16 @@ internal sealed class GroupingTranslator
     ///     The SQL for <paramref name="node" /> when it is something a group can answer, else false.
     /// </summary>
     public bool TryTranslate(Expression node, ParameterExpression group, out string sql)
+        => TryTranslate(node, group, out sql, out _);
+
+    /// <param name="exactDecimal">
+    ///     True when <paramref name="sql" /> is a decimal aggregate computed by <see cref="DecimalAggregates" />,
+    ///     whose TEXT result a <c>HAVING</c> has to compare against TEXT (fisher#606).
+    /// </param>
+    private bool TryTranslate(Expression node, ParameterExpression group, out string sql, out bool exactDecimal)
     {
         sql = "";
+        exactDecimal = false;
 
         // g.Key
         if (node is MemberExpression { Member.Name: "Key" } member && member.Expression == group)
@@ -309,7 +317,18 @@ internal sealed class GroupingTranslator
             return false;
         }
 
-        sql = $"{function.Value.Sql()}({LocatorFor(call, function.Value)})";
+        var (aggregated, described) = MemberFor(call, function.Value);
+
+        // fisher#606: SQLite's sum() and avg() over a decimal accumulate in double, and json_extract reads
+        // even a single value as a double, so all four go through the exact decimal aggregates.
+        if (DecimalAggregates.Applies(aggregated))
+        {
+            sql = DecimalAggregates.Grouped(function.Value, DecimalAggregates.JsonTextOf(aggregated, described));
+            exactDecimal = true;
+            return true;
+        }
+
+        sql = $"{function.Value.Sql()}({aggregated.TypedLocator})";
         return true;
     }
 
@@ -341,7 +360,8 @@ internal sealed class GroupingTranslator
     private static bool IsOverTheGroup(MethodCallExpression call, ParameterExpression group)
         => call.Arguments.Count > 0 && call.Arguments[0] == group;
 
-    private string LocatorFor(MethodCallExpression call, AggregateFunction function)
+    private (IQueryableMember Member, string Described) MemberFor(MethodCallExpression call,
+        AggregateFunction function)
     {
         var lambda = (LambdaExpression)StripQuotes(call.Arguments[1]);
         var body = lambda.Body;
@@ -375,7 +395,7 @@ internal sealed class GroupingTranslator
                 + $"'{memberExpression.Member.Name}': its stored form is not order-preserving.");
         }
 
-        return member.TypedLocator;
+        return (member, memberExpression.Member.Name);
     }
 
     private static bool IsNumeric(Type type)
@@ -454,15 +474,25 @@ internal sealed class GroupingTranslator
             return new FilteredCountComparison(rightCount, Flip(op), HavingValue(binary.Left));
         }
 
-        if (TryTranslate(binary.Left, group, out var left))
+        if (TryTranslate(binary.Left, group, out var left, out var leftDecimal))
         {
+            if (leftDecimal)
+            {
+                return new DecimalAggregateComparison(left, op, HavingValue(binary.Right));
+            }
+
             return new ComparisonFilter(left, op,
                 WhereClauseParser.ExtractValue(binary.Right)
                 ?? throw new BadLinqExpressionException("A HAVING comparison cannot be against null."));
         }
 
-        if (TryTranslate(binary.Right, group, out var right))
+        if (TryTranslate(binary.Right, group, out var right, out var rightDecimal))
         {
+            if (rightDecimal)
+            {
+                return new DecimalAggregateComparison(right, Flip(op), HavingValue(binary.Left));
+            }
+
             // Reversed operands: `10 < g.Count()` is `count(*) > 10`.
             return new ComparisonFilter(right, Flip(op),
                 WhereClauseParser.ExtractValue(binary.Left)

@@ -200,7 +200,7 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         _operationsLock = new System.Threading.Lock();
 
         _lifetime = sessionOptions.ExternalConnection is { } external
-            ? new Sessions.ExternalConnectionLifetime(external, sessionOptions.Transaction)
+            ? new Sessions.ExternalConnectionLifetime(external, sessionOptions.Transaction, options.Functions)
             : new Sessions.OwnedConnectionLifetime(database);
 
         Events = new EventOperations(this);

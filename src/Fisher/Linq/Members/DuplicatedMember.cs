@@ -45,6 +45,9 @@ internal sealed class DuplicatedMember : IQueryableMember
 
     public bool IsBoolean => _inner.IsBoolean;
 
+    // The generated column is REAL, so a decimal aggregate reads the JSON the column was computed from.
+    public string? JsonTextLocator => _inner.JsonTextLocator;
+
     public bool AllowsRangeComparison => _inner.AllowsRangeComparison;
 
     public object? ConvertValue(object? value) => _inner.ConvertValue(value);
