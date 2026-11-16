@@ -959,6 +959,15 @@ Six things that are decisions rather than mechanics:
   passes every compliance suite, and makes `upcasting.a_subscription_filtered_on_the_new_type_receives_the_upcast_old_rows`
   time out — verified. The allow list also adds `Archived` and `Compacted<T>` for a single-stream
   aggregate projection, which the old loader did not.
+  ⚠️ **A long allow list is bound as ONE `json_each` parameter** (fisher#583, weasel#846's contract).
+  The loader filters only in SQL, so a list the provider refuses fails the shard: one parameter per alias
+  dies past SQLite's 32,766 variables with `too many SQL variables`. Past `WhereInFilter.JsonArrayThreshold`
+  (1,000, fisher#372's split) the dialect renders `type in (select value from json_each(@types))`; below
+  it, one parameter per alias as before, so a typical shard's SQL and plan are unchanged. `explain query
+  plan` reaches `fi_events` by the same SEARCH either way. `event_type_allow_list_binding` builds a
+  33,000-name list through a stub registry, because no real one is that long. Its placeholder type is
+  concrete: since weasel#845, an interface, an abstract type or `object` on the list means "admit
+  everything".
 - **The generic interface's `IEventDatabase` parameter carries the answer** (fisher#57), where for a
   long time every one of them was ignored on the true-enough grounds that a Fisher store was one file.
   Under database-per-tenant it is not, and ignoring it would read one tenant's events and write every

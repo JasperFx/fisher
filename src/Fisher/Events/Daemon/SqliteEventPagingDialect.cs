@@ -1,5 +1,7 @@
 using System.Text;
 using Fisher.Events.Internal;
+using Fisher.Linq.SqlGeneration;
+using Fisher.Storage;
 using Weasel.Storage;
 
 namespace Fisher.Events.Daemon;
@@ -24,16 +26,34 @@ namespace Fisher.Events.Daemon;
 ///         The filter is pushed into SQL so non-matching rows never leave SQLite; the ceiling accounting
 ///         stays right because a page that does not fill the batch really has scanned the whole range.
 ///     </para>
+///     <para>
+///         <b>A long allow list is bound as ONE parameter</b>, <c>type in (select value from json_each(@types))</c>
+///         (fisher#583). <see cref="IEventPagingDialect" /> requires a list of any length to render in one
+///         statement (weasel#846), because the loader filters only in SQL, so a refused list fails the
+///         shard rather than slowing it. One parameter per alias stops at SQLite's 32,766 variables with
+///         <c>too many SQL variables</c>. Short lists keep a parameter per alias, the same split and the same
+///         threshold as <see cref="WhereInFilter" /> (fisher#372), so the plans and the SQL a typical shard
+///         runs are unchanged. Aliases are plain text, so <c>json_each</c>'s values compare exactly as bound
+///         parameters do. Both forms are probed by the <c>(is_archived, seq_id)</c> / rowid range;
+///         <c>explain query plan</c> shows the same access path for either.
+///     </para>
 /// </remarks>
 internal sealed class SqliteEventPagingDialect : IEventPagingDialect
 {
     private readonly StoreOptions _options;
     private readonly EventGraph _events;
+    private readonly int _jsonArrayThreshold;
 
-    internal SqliteEventPagingDialect(StoreOptions options)
+    /// <param name="options">The store's options.</param>
+    /// <param name="jsonArrayThreshold">
+    ///     How many aliases the list holds before it is bound as one JSON array. Only tests pass anything
+    ///     but the default, to drive the <c>json_each</c> form with a list real event types can produce.
+    /// </param>
+    internal SqliteEventPagingDialect(StoreOptions options, int jsonArrayThreshold = WhereInFilter.JsonArrayThreshold)
     {
         _options = options;
         _events = options.EventGraph;
+        _jsonArrayThreshold = jsonArrayThreshold;
     }
 
     public EventPageCommand BuildPageCommand(EventPageQuery query)
@@ -84,7 +104,12 @@ internal sealed class SqliteEventPagingDialect : IEventPagingDialect
         }
 
         var aliases = AllowedAliases(query.EventTypes);
-        if (aliases.Count > 0)
+        if (aliases.Count > _jsonArrayThreshold)
+        {
+            sql.Append(" and type in (select value from json_each(@types))");
+            parameters.Add(new EventPageParameter("@types", SqliteJsonArrays.Write(aliases)));
+        }
+        else if (aliases.Count > 0)
         {
             sql.Append(" and type in (");
             for (var i = 0; i < aliases.Count; i++)
