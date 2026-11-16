@@ -12,11 +12,23 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3129 tests green on net10.0 and 3156 on net11.0** — 3058 (net10.0) / 3085 (net11.0) in `Fisher.Tests`, 40 in
+**3172 tests green on net10.0 and 3199 on net11.0** — 3101 (net10.0) / 3128 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
+
+## A closed ordering key after a join is dropped (fisher#596)
+
+The join half of fisher#591. `OrderBy(x => Statics.Quantity).ThenBy(x => x.Item)` after a `Join` or a
+`GroupJoin(...).SelectMany(...)` was refused ("Fisher cannot order a join by ..."), never answered wrongly,
+because `JoinedMember` accepts only a document member. `AddJoinOrdering` now drops a key that reads nothing from
+the row, as `AddOrdering` does, so later keys decide and `Last` over only such keys is refused as having no
+`OrderBy`. A dropped `OrderBy` still starts a new group (`DropConstantKey`), which the merge of #593 and #594
+needs on both paths: without it `OrderBy(a).OrderBy(constant).ThenBy(b)` renders `a, b`.
+`join_ordering_closed_values` (14 facts, LINQ to Objects as the oracle): 12 fail on the previous build, and the
+two re-sort facts fail with the group reset removed. The header counts are from a real run of this branch,
+which carries #594: they also take in #593's 13 tests and #594's 16, neither of which bumped them.
 
 ## A second `OrderBy` re-sorts (fisher#588)
 
