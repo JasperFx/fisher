@@ -1815,6 +1815,16 @@ Three restrictions, each refused by name:
 One `Select` per query; a second would have to project members of the first's result, which is not a
 document and has no locators.
 
+⚠️ **`Distinct()` and identity `OrderBy` need the columns to BE the result** (fisher#590). Both act on the select
+list, so after `Select(x => x.Number % 3)` they used to act on `Number`. `IsFaithful` on both projections says
+whether the body is a column copy (a column, a lossless conversion, a `new` of copies and constants), and
+`LinqQueryParser.RequireFaithfulProjection` otherwise rebuilds the projection with `ComputedColumns`' arithmetic in
+the select list, or refuses by name. The subset is integer `%` and `/` by a constant other than 0 and -1, and unary
+minus with a `case` guard at the type minimum. Those are the only places SQLite and unchecked .NET agree for every
+value, which is why `*` and `+` are refused. A non-nullable leaf is `coalesce(…, 0)`, matching the projected read's
+NULL-to-default. The translation runs only when one of those operators asks, so the boundary above still holds for
+every other `Select`.
+
 **A NULL column becomes the target type's default, not a null.** `json_extract` yields SQL NULL for an
 absent key and an aggregate over an empty group yields NULL too, and the compiled projection *unboxes*
 each value to its declared type — so a null reaching a non-nullable value type is a
@@ -2621,6 +2631,14 @@ next opener.
 - ⚠️ **Weasel's migrations open their own `new SqliteConnection` and are not gated**, nor is application code. That
   residual is rare next to session opens. The class belongs in Weasel.Sqlite's `SqliteDataSource`, and the race
   upstream. Remove it when Microsoft.Data.Sqlite activates under the pool lock.
+- ⚠️ **The gate is a `Lock` around a wholly synchronous open, and must never become async again** (fisher#587).
+  The first version was a `SemaphoreSlim`: async opens `WaitAsync`ed and sync opens blocked in `Wait`. A contended
+  async open then returned an incomplete task, so the open, and the release of the gate, waited for a pool thread,
+  while sync waiters held pool threads. A burst of synchronous Hi-Lo stores (each advance opens synchronously)
+  stalled for 29 s, against 0.56 s now. The async override runs `base.OpenDbConnection()` under the lock and
+  returns a completed task, which is safe because Microsoft.Data.Sqlite's open and Weasel's PRAGMAs are
+  synchronous underneath. `a_contended_async_open_completes_before_it_returns` pins it without depending on timing;
+  `synchronous_hilo_burst` reproduces the stall only when run alone. Found by checking marten#5969 against Fisher.
 - fisher#311's untracked transaction may have been this too (another session's `BEGIN` on a shared handle). Not
   verified, so its defence stays.
 - `serialized_connection_opens` plants the mid-`Activate` state by reflection to pin the premise, and holds one open
@@ -6045,6 +6063,12 @@ Six SQLite decisions that are easy to get wrong and fail silently:
     three decimal-binding paths were correct and documented while the one a caller reaches first was
     not; that is the shape rather than the exception.
 
+⚠️ **A second `OrderBy` goes in front, and a `ThenBy` goes after its own `OrderBy`** (fisher#588,
+marten#5959). LINQ's `OrderBy` is a stable re-sort: `OrderBy(a).OrderBy(b)` is `b, a`, and
+`OrderBy(a).OrderBy(b).ThenBy(c)` is `b, c, a`, so plain appending is wrong for both. `LinqQueryParser.OrderingInsertionIndex`
+is the one rule, shared by the document path, the join path and the event-table providers. `OrderByMembers` is
+inserted at the same index, or keyset paging checks the wrong terminal key.
+
 **A member below a scalar is translated or refused, never rendered as a path** (fisher#483, near
 marten#5556). `ScalarMemberAccess` is where. There is nothing below one JSON value for a path to reach, so
 `$.count.value` was valid SQL yielding NULL: a `Where` matched nothing, a `Select` returned the type's
@@ -6056,6 +6080,19 @@ default and an `OrderBy` did not order, all silently. `Nullable<T>.Value` resolv
   lands in the wrong year. The input is `RawLocator` because a duplicated column holds the UTC form.
 - `.Date`, `DayOfWeek`, every `TimeSpan` member and anything else is refused by name. `CriteriaShapeRules`
   lost its date and `Nullable.Value` rules with this, since an honest refusal reaches a console on its own.
+
+⚠️ **A member chain not rooted at the lambda's parameter is a value, never a path** (fisher#591, near
+marten#5950/#5943). `MemberFactory.ResolveMember` refuses one by name (`IsRootedAtParameter`, the where
+parser's `IsDocumentMember` rule, looking through conversions and union-case casts). It used to walk a static
+or a captured local as `$.<name>`, so where the name matched a document member the query silently read that
+member. Per caller:
+- **An ordering key that reads nothing from the row is dropped** in `LinqQueryParser.AddOrdering` (Marten's
+  ruling): every row ties on it, so later keys decide. `OrderBys` and `OrderByMembers` both skip it, so `Last`
+  reverses and a cursor seeks on what remains; `Last` over only a dropped key is refused as having no ordering.
+- **`GroupBy` and `DistinctBy` over one are refused** — a single group or row has no locator to stand for it.
+- **`Sum`/`Min`/`Max`/`Average` over one, top-level or over a group, are refused** through the factory.
+- `TryParseArithmetic` requires a *document* member on one operand, so `x.Number < Statics.Value - 4` folds the
+  right side instead of compiling `x.Number` as a value.
 
 The provider takes both the column list and the materializer from the **query-only** closed-shape
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,

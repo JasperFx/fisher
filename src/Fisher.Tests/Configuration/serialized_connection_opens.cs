@@ -206,6 +206,51 @@ public class serialized_connection_opens : IAsyncLifetime
     }
 
     /// <summary>
+    ///     fisher#587: an async open that has to wait for the gate waits on the caller's own thread and
+    ///     returns a completed task. It never hands the wait to the thread pool.
+    /// </summary>
+    /// <remarks>
+    ///     This is the starvation mechanism, pinned without depending on timing. The first gate was a
+    ///     <c>SemaphoreSlim</c>: a contended <c>WaitAsync</c> returned an incomplete task, so the
+    ///     open finished, and later released the gate, only when the pool ran its continuation. Meanwhile
+    ///     synchronous opens blocked pool threads in <c>Wait</c>. A burst of synchronous Hi-Lo stores
+    ///     stalled for about 30 s. The caller here is a dedicated thread, so the test does not use the pool
+    ///     itself.
+    /// </remarks>
+    [Fact]
+    public async Task a_contended_async_open_completes_before_it_returns()
+    {
+        _blocker.Arm();
+
+        var first = Task.Run(async () => await _store.Database.OpenConnectionAsync(Token), Token);
+        _blocker.FirstEntered.Wait(TimeSpan.FromSeconds(30), Token).ShouldBeTrue("the first open never started");
+
+        var completedOnReturn = false;
+        System.Data.Common.DbConnection? opened = null;
+        var caller = new Thread(() =>
+        {
+            var task = _store.Database.DataSource.OpenConnectionAsync(Token);
+            completedOnReturn = task.IsCompleted;
+            opened = task.AsTask().GetAwaiter().GetResult();
+        }) { IsBackground = true };
+        caller.Start();
+
+        // The caller is inside the gate's wait now. Let the first open finish so it can get in.
+        Thread.Sleep(Window);
+        _blocker.Release();
+
+        caller.Join(TimeSpan.FromSeconds(30)).ShouldBeTrue("the second open never finished");
+
+        await using (await first)
+        await using (opened)
+        {
+        }
+
+        completedOnReturn.ShouldBeTrue(
+            "a contended async open returned an incomplete task, so finishing it needs a thread-pool thread");
+    }
+
+    /// <summary>
     ///     Make <paramref name="connection" />'s pooled internal look the way it does between the two
     ///     writes in <c>SqliteConnectionInternal.Activate</c>: active, with no outer connection.
     /// </summary>

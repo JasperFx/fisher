@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3129 tests green on net10.0 and 3156 on net11.0** — 3058 (net10.0) / 3085 (net11.0) in `Fisher.Tests`, 40 in
+**3183 tests green on net10.0 and 3210 on net11.0** — 3112 (net10.0) / 3139 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -30,6 +30,36 @@ replacing it, so `Take(0).FirstOrDefault()` is null and `Take(1).Single()` no lo
 ⚠️ **`ToPagedListAsync` over an already-paged query changed**: its paging composes and the total counts the
 caller's page, where both used to discard it. `ToCursorPageAsync` refuses a paged query.
 `operators_after_paging` fails 18 of 19 against the previous build.
+
+## `Distinct()` and identity ordering after a computed `Select` (fisher#590)
+
+Both act on the select list, which held the members a projection read rather than the value it computed, so
+`Select(x => x.Number % 3).Distinct()` deduplicated `Number` and `Select(x => -x.Number).OrderBy(n => n)` ordered
+by it. `SelectProjection` and `GroupProjection` now report `IsFaithful`, and the parser's
+`RequireFaithfulProjection` either moves the arithmetic into SQL (`ComputedColumns`: integer `%` and `/` by a
+constant other than 0 and -1, and unary minus guarded at the type minimum, over integer members, a group's key or
+its aggregates) or refuses by name. `*`, `+`, floating point, enums and string calls are refused. A projection no
+operator acts on still computes in .NET. `computed_projection_ordering_and_distinct` uses LINQ to Objects as the
+oracle; 17 of its 22 facts fail on the previous build.
+
+## The open gate no longer starves the thread pool (fisher#587)
+
+#582's gate (fisher#576) was a `SemaphoreSlim`. A contended async open handed its wait to the thread pool while
+synchronous opens held pool threads, and a first burst of synchronous Hi-Lo stores stalled for 29 s. The gate
+is now a `Lock` held around a wholly synchronous open in both the sync and async paths (0.56 s for the same
+burst). `serialized_connection_opens.a_contended_async_open_completes_before_it_returns` fails against the old
+gate. `synchronous_hilo_burst` reproduces the stall when run alone. Found by checking marten#5969 against Fisher.
+
+## A second `OrderBy` re-sorts (fisher#588)
+
+`OrderBy(a).OrderBy(b)` rendered `order by a, b`; LINQ's `OrderBy` is a stable re-sort, so it means `b, a`.
+`LinqQueryParser` now puts an `OrderBy`/`OrderByDescending` (and `OrderByRelevance*`) in front of every key so
+far, and a `ThenBy` straight after the keys of the `OrderBy` it refines, since `OrderBy(a).OrderBy(b).ThenBy(c)`
+is `b, c, a` rather than `b, a, c`. `OrderByMembers` moves with `OrderBys`, so keyset paging still checks the
+right terminal key. The join path (`GroupJoinData.OrderBys`) and the event-table providers (`QueryRawEvents`,
+`QueryStreamStates`, which used to drop the earlier keys altogether) follow the same rule.
+`repeated_order_by` (12 facts, LINQ to Objects as the oracle) and one `raw_event_queries` fact all fail on the
+previous build.
 ## The shared contract's hook members (fisher#581)
 
 `FisherSession` implements the three JasperFx 3.3.0 `JasperFx.Events.Documents` members it left to throwing
