@@ -47,6 +47,11 @@ public interface IAdvancedSql
     ///         restriction.
     ///     </para>
     ///     <para>
+    ///         <b><see cref="object" /></b> consumes one column and is the provider's own value for it:
+    ///         a <see cref="long" /> for INTEGER, a <see cref="double" /> for REAL, a <see cref="string" />
+    ///         for TEXT, a <see cref="byte" /> array for a BLOB, and null for NULL.
+    ///     </para>
+    ///     <para>
     ///         <b>Anything else</b> is deserialized from a single JSON column.
     ///     </para>
     /// </remarks>

@@ -212,6 +212,82 @@ public class advanced_sql_queries : IAsyncLifetime
         summaries.Select(x => x.Name).ShouldBe(["Frodo", "Sam"]);
     }
 
+    // ---- object, and a JSON column beside another computed one (fisher#613) ----
+
+    /// <summary>
+    ///     <c>object</c> is the provider's own value, in any position. The first call is the issue's
+    ///     exact one, which used to take the process down with SIGSEGV: <c>object</c> fell through to
+    ///     the JSON reader, whose stream read crashes natively when another computed column shares the
+    ///     row.
+    /// </summary>
+    [Fact]
+    public async Task object_in_any_result_position_is_the_providers_value()
+    {
+        await using var session = _store.LightweightSession();
+        var token = TestContext.Current.CancellationToken;
+
+        (await session.AdvancedSql.QueryAsync<object, long>("select 1, 2", token))
+            .ShouldBe([((object)1L, 2L)]);
+
+        (await session.AdvancedSql.QueryAsync<long, object>("select 1, 'two'", token))
+            .ShouldBe([(1L, (object)"two")]);
+
+        var triple = (await session.AdvancedSql.QueryAsync<object, object, object>(
+            "select 2.5, x'0102', null", token)).ShouldHaveSingleItem();
+        triple.Item1.ShouldBe(2.5);
+        triple.Item2.ShouldBe(new byte[] { 1, 2 });
+        triple.Item3.ShouldBeNull();
+
+        // Plain text is a value, not JSON: deserializing 'Aberdeen' as JSON would throw.
+        (await session.AdvancedSql.QueryAsync<object>("select name from port", token))
+            .ShouldBe(["Aberdeen"]);
+    }
+
+    [Fact]
+    public async Task streaming_object_is_the_providers_value_too()
+    {
+        await using var session = _store.LightweightSession();
+        var token = TestContext.Current.CancellationToken;
+
+        var singles = new List<object>();
+        await foreach (var value in session.AdvancedSql.StreamAsync<object>("select 'Aberdeen'", token))
+        {
+            singles.Add(value);
+        }
+
+        singles.ShouldBe(["Aberdeen"]);
+
+        var pairs = new List<(object, long)>();
+        await foreach (var pair in session.AdvancedSql.StreamAsync<object, long>("select 1, 2", token))
+        {
+            pairs.Add(pair);
+        }
+
+        pairs.ShouldBe([((object)1L, 2L)]);
+    }
+
+    /// <summary>
+    ///     The root cause of fisher#613, reached without <c>object</c>: a JSON result that is a computed
+    ///     column, beside another computed column. Microsoft.Data.Sqlite's <c>GetStream</c> scans the
+    ///     row for a rowid, matches the other column on its null table name and passes that null to
+    ///     <c>sqlite3_table_column_metadata</c>, which segfaults. If this regresses, the runner dies
+    ///     with exit 139 rather than failing this test.
+    /// </summary>
+    [Fact]
+    public async Task a_json_column_beside_another_computed_column_is_read()
+    {
+        await using var session = _store.LightweightSession();
+        var token = TestContext.Current.CancellationToken;
+
+        var leading = await session.AdvancedSql.QueryAsync<Summary, long>(
+            "select json_object('name', 'Frodo'), 2", token);
+        leading.ShouldBe([(new Summary("Frodo"), 2L)]);
+
+        var trailing = await session.AdvancedSql.QueryAsync<long, Summary>(
+            "select 1, json_object('name', 'Sam')", token);
+        trailing.ShouldBe([(1L, new Summary("Sam"))]);
+    }
+
     // ---- streaming, parameters, transaction scope ----
 
     [Fact]
