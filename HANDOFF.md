@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3112 tests green on net10.0 and 3139 on net11.0** — 3041 (net10.0) / 3068 (net11.0) in `Fisher.Tests`, 40 in
+**3131 tests green on net10.0 and 3158 on net11.0** — 3060 (net10.0) / 3087 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -25,6 +25,22 @@ synchronous opens held pool threads, and a first burst of synchronous Hi-Lo stor
 is now a `Lock` held around a wholly synchronous open in both the sync and async paths (0.56 s for the same
 burst). `serialized_connection_opens.a_contended_async_open_completes_before_it_returns` fails against the old
 gate. `synchronous_hilo_burst` reproduces the stall when run alone. Found by checking marten#5969 against Fisher.
+
+## The shared contract's hook members (fisher#581)
+
+`FisherSession` implements the three JasperFx 3.3.0 `JasperFx.Events.Documents` members it left to throwing
+defaults: `StoreObjects`, `AddTransactionParticipant(IDbTransactionParticipant)` and `AddSaveListener`. The last is
+what Wolverine's `Enroll` needs to flush its outbox on a session the application opened. All three are explicit
+implementations over a per-session JasperFx `DocumentSessionHooks`, on both commit paths for participants.
+`shared_session_hooks` (19 tests, all holding the session as the contract) fails 19 of 19 on the previous build.
+
+Decisions: a shared participant is released when its commit lands and is refused on an enlisted session; a save
+listener is refused on a projection batch's session and fires only its before hook on an enlisted one; both land on
+the parent from a tenant scope. Behaviour change worth release notes: `SaveChangesAsync` now runs the message
+outbox's `BeforeCommitAsync` after every transaction participant, as the projection batch already did, where it
+used to run first. CLAUDE.md's "The store-agnostic document contract" has the detail. No shared compliance suite
+covers these members yet.
+
 ## The daemon's allow list binds as one parameter (fisher#583)
 
 `SqliteEventPagingDialect` binds an event-type allow list longer than 1,000 names as one JSON array,
