@@ -12,11 +12,22 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3202 tests green on net10.0 and 3229 on net11.0** — 3131 (net10.0) / 3158 (net11.0) in `Fisher.Tests`, 40 in
+**3238 tests green on net10.0 and 3265 on net11.0** — 3167 (net10.0) / 3194 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
+
+## Event-table queries apply operators after Take/Skip to the page (fisher#599)
+
+`QueryRawEvents()`, `QueryStreamStates()` and `QueryEventData<T>()` folded a `Where` or an `OrderBy` written after
+`Take`/`Skip` into the one statement, so it ran before the `LIMIT`. `EventTableQueryProvider` now composes
+consecutive paging into one `LIMIT`/`OFFSET` (`Take(n).Skip(k)` is `LIMIT max(n−k, 0) OFFSET k`, where it used to
+be refused, and a negative count is zero), and wraps the paged statement as a subquery for anything else, as many
+levels deep as the chain goes. Nothing is refused. The page's ordering breaks a re-sort's ties, and the scope
+(tenant, event type, archived filter) stays inside the page. `FirstOrDefault` no longer lifts a smaller limit.
+`event_queries_after_paging` (36 facts, LINQ to Objects as the oracle) fails 30 of them on the previous build; the
+6 that pass pin the consecutive `Take`/`Skip` composition that already worked.
 
 ## Operators after `Take`/`Skip` apply to the page (fisher#589)
 
@@ -60,6 +71,7 @@ right terminal key. The join path (`GroupJoinData.OrderBys`) and the event-table
 `QueryStreamStates`, which used to drop the earlier keys altogether) follow the same rule.
 `repeated_order_by` (12 facts, LINQ to Objects as the oracle) and one `raw_event_queries` fact all fail on the
 previous build.
+
 ## The shared contract's hook members (fisher#581)
 
 `FisherSession` implements the three JasperFx 3.3.0 `JasperFx.Events.Documents` members it left to throwing

@@ -5666,6 +5666,15 @@ had somewhere to put one. **A tenant on a store that is not multi-tenanted is re
 ignored**, the rule `QueryStreamStates` already followed one member over: `DefaultTenancy.DatabaseFor`
 resolves any id, so a quietly-unscoped reader would report every tenant's events as that tenant's.
 
+⚠️ **On the tier's three queryables (`QueryRawEvents`, `QueryStreamStates`, `QueryEventData<T>`), an
+operator after `Take`/`Skip` applies to the page** (fisher#599, fisher#589's twin in
+`EventTableQueryProvider`). Consecutive paging composes into one `LIMIT`/`OFFSET`; a `Where` or an ordering
+after it wraps the paged statement as a subquery (`select *` inside, the page's select list outside), as
+many levels deep as the chain goes, so nothing is refused. Two rules hold it together: the scope (tenant,
+event type, archived filter) and the final `seq_id` order go on the root statement, inside every page, and
+each page's ordering is repeated after the outer ordering, so a re-sort keeps LINQ's stable ties.
+`event_queries_after_paging` checks every shape against LINQ to Objects.
+
 **`HasEventStore` (jasperfx#914, fisher#354) is computed, never defaulted**: any registered event type
 other than `Archived`, or `Projections.IsActive()` — Marten's `EventGraph.IsActive` rule. The interface
 default is `true`, which makes a document-only store indistinguishable from an event store to a console
