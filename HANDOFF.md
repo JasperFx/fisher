@@ -131,17 +131,6 @@ right terminal key. The join path (`GroupJoinData.OrderBys`) and the event-table
 `repeated_order_by` (12 facts, LINQ to Objects as the oracle) and one `raw_event_queries` fact all fail on the
 previous build.
 
-## `Distinct()` and identity ordering after a computed `Select` (fisher#590)
-
-Both act on the select list, which held the members a projection read rather than the value it computed, so
-`Select(x => x.Number % 3).Distinct()` deduplicated `Number` and `Select(x => -x.Number).OrderBy(n => n)` ordered
-by it. `SelectProjection` and `GroupProjection` now report `IsFaithful`, and the parser's
-`RequireFaithfulProjection` either moves the arithmetic into SQL (`ComputedColumns`: integer `%` and `/` by a
-constant other than 0 and -1, and unary minus guarded at the type minimum, over integer members, a group's key or
-its aggregates) or refuses by name. `*`, `+`, floating point, enums and string calls are refused. A projection no
-operator acts on still computes in .NET. `computed_projection_ordering_and_distinct` uses LINQ to Objects as the
-oracle; 17 of its 22 facts fail on the previous build.
-
 ## The shared contract's hook members (fisher#581)
 
 `FisherSession` implements the three JasperFx 3.3.0 `JasperFx.Events.Documents` members it left to throwing
