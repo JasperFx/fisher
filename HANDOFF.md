@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3124 tests green on net10.0 and 3151 on net11.0** — 3053 (net10.0) / 3080 (net11.0) in `Fisher.Tests`, 40 in
+**3129 tests green on net10.0 and 3156 on net11.0** — 3058 (net10.0) / 3085 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -33,6 +33,15 @@ outbox's `BeforeCommitAsync` after every transaction participant, as the project
 used to run first. CLAUDE.md's "The store-agnostic document contract" has the detail. No shared compliance suite
 covers these members yet.
 
+## The daemon's allow list binds as one parameter (fisher#583)
+
+`SqliteEventPagingDialect` binds an event-type allow list longer than 1,000 names as one JSON array,
+`type in (select value from json_each(@types))`, which is what weasel#846 requires of a dialect. Shorter lists
+keep one parameter per alias, so nothing a real shard runs changes. Past SQLite's 32,766 variables the old form
+failed the shard with `too many SQL variables`. No real registry gets near that, so this is conformance rather
+than a reported failure. `event_type_allow_list_binding` covers the page and the skip-ahead probe over a
+33,000-name list, upcast source names on the `json_each` form (fisher#191), and the query plan.
+
 ## Weasel 10.0.0-alpha.4 (fisher#575)
 
 Weasel 10.0.0-alpha.3 → 10.0.0-alpha.4, no compile break and no Fisher code change. weasel#845 is the one that
@@ -45,9 +54,7 @@ that case, as Marten's loader always has, and the projection or subscription dis
 record, and through the async daemon an `Apply(IQuestMilestone)` snapshot and an `IncludeType<IQuestMilestone>()`
 subscription. All four fail on alpha.3; the daemon still reported the shards non-stale.
 
-Not done here: weasel#846 asks a paging dialect to bind the allow list as one parameter (on SQLite,
-`json_each(@types)`). `SqliteEventPagingDialect` still binds one parameter per alias, which only fails past SQLite's
-32,766 variables. weasel#840 (Hi-Lo blocks only move up) is inside `HiloSequenceBase` and needs nothing from Fisher;
+weasel#846 (bind the allow list as one parameter) is done in fisher#583, above. weasel#840 (Hi-Lo blocks only move up) is inside `HiloSequenceBase` and needs nothing from Fisher;
 weasel#838/#839 are tenancy and PostgreSQL additions Fisher does not use.
 
 ## `EventGraph` uses `EventRegistry`'s registries (fisher#574)
