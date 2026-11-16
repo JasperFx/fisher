@@ -45,7 +45,9 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
     {
         _options = options;
         _events = options.EventGraph;
-        _dataSource = new SqliteDataSource(connectionString, options.PragmaSettings, options.Functions, null);
+        // fisher#576: every open of this file's pool is serialized, to keep Microsoft.Data.Sqlite's pool
+        // from handing one native connection to two sessions. See SerializedOpenDataSource.
+        _dataSource = new SerializedOpenDataSource(connectionString, options.PragmaSettings, options.Functions);
         TenantId = tenantId;
     }
 
@@ -574,13 +576,17 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
     ///         <em>idle</em> connections too. Harmless — they are reopened on demand — and it is what
     ///         building two stores over one file already means.
     ///     </para>
+    ///     <para>
+    ///         Under the same lock as every open of this pool (fisher#576): clearing a pool runs the
+    ///         same leaked-connection scan an open does, and can reclaim a connection mid-open just the
+    ///         same. See <see cref="SerializedOpenDataSource" />.
+    ///     </para>
     /// </remarks>
     private void ReleasePooledConnections()
     {
         try
         {
-            using var pooled = new SqliteConnection(ConnectionString);
-            SqliteConnection.ClearPool(pooled);
+            SerializedOpenDataSource.ClearPool(ConnectionString);
         }
         catch (Exception)
         {

@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3101 tests green on net10.0 and 3128 on net11.0** — 3030 (net10.0) / 3057 (net11.0) in `Fisher.Tests`, 40 in
+**3105 tests green on net10.0 and 3132 on net11.0** — 3034 (net10.0) / 3061 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -49,6 +49,23 @@ check. `src/Fisher` builds with zero CS0108.
 Visible changes: a `Func` masking rule reaches a hierarchy; a failed tag inference throws JasperFx's
 `InvalidOperationException`; re-registering a tag type with a different inner type is refused. CLAUDE.md's
 "`EventGraph` is JasperFx's `EventRegistry`" has the detail.
+
+## One native connection, two sessions (fisher#576)
+
+The intermittent "This SqliteTransaction has completed" from the gapless-invoice DCB compliance fact was a race in
+Microsoft.Data.Sqlite's pool. `SqliteConnectionInternal.Activate` marks a connection active before it records its
+owner, outside the pool lock, so a concurrent `Open` that runs the pool's leaked-connection scan can reclaim a
+connection being opened and give its native handle to someone else. Two sessions on one handle then roll back each
+other's transactions, fail `Dispose` with "unable to delete/modify user-function due to active statements", or
+crash the process in SQLitePCLRaw's rollback hook. All three showed up under a 12-way loop: 3 failures in 400 runs.
+
+`SerializedOpenDataSource` (a `SqliteDataSource` subclass) serializes every Fisher open of one connection string,
+including a connection it hands out unopened, and `ReleasePooledConnections` clears the pool under the same lock.
+The loop went from 5 failures in 1900 runs to none in 3000. Opens cost more under saturation (about 130k/s instead
+of 210k/s at 16 threads, Debug), which no session commit comes near.
+`serialized_connection_opens` has the premise, planted by reflection, and three regression tests that fail in
+milliseconds without the lock. Weasel's migration connections still open outside it. The workaround belongs in
+Weasel.Sqlite's data source, and the race upstream in Microsoft.Data.Sqlite; neither is filed yet.
 
 ## The closed-shape document family is Weasel's (fisher#465)
 
