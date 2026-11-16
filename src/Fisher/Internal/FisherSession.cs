@@ -764,7 +764,8 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
 
         if (PendingOperationCount == 0 && Events.PendingStreams.Count == 0
             && TenantScopes.All(x => x.Events.PendingStreams.Count == 0)
-            && _participants is not { Count: > 0 })
+            && _participants is not { Count: > 0 }
+            && _hooks is not { HasPendingParticipants: true })
         {
             // Nothing to do, and therefore no listeners either — Marten's rule, and without it every
             // no-op save would run every registered listener.
@@ -776,7 +777,9 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             // no document and appends no event, and enlists a participant to write its envelope row
             // inside this transaction. Returning early there dropped the envelope silently - the send
             // looked successful and the message never existed. Polecat fixed the same defect in
-            // polecat#161. wolverine#3907.
+            // polecat#161. wolverine#3907. A shared IDbTransactionParticipant (fisher#581) is the same
+            // case reached through the store-agnostic contract, which says in as many words that this
+            // check has to read DocumentSessionHooks.HasPendingParticipants.
             return;
         }
 
@@ -785,6 +788,14 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         foreach (var listener in Listeners)
         {
             await listener.BeforeSaveChangesAsync(this, token).ConfigureAwait(false);
+        }
+
+        // fisher#581. The shared save listeners, once per save and not once per attempt: outside the
+        // transaction and the resilience pipeline, before anything is taken from the session, so a document
+        // or participant an outbox enlists here joins this commit.
+        if (_hooks is { } beforeHooks)
+        {
+            await beforeHooks.BeforeSaveAsync(this, token).ConfigureAwait(false);
         }
 
         // After the hook, not before, so that a listener can start or extend a stream and have those
@@ -887,9 +898,15 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             throw;
         }
 
+        // fisher#581. Built ahead of the post-commit hooks when the shared hooks will need it, because
+        // DocumentSessionHooks.AfterCommitAsync runs in the place the message batch's hook always ran.
+        Services.ChangeSet? sharedCommit = _hooks is not null && EnlistedTransaction is null
+            ? new Services.ChangeSet(queued, streams)
+            : null;
+
         if (EnlistedTransaction is null)
         {
-            await RunPostCommitHooksAsync(streams, token).ConfigureAwait(false);
+            await RunPostCommitHooksAsync(streams, sharedCommit, token).ConfigureAwait(false);
         }
 
         // Not reused across units of work: a batch's hooks have fired, and a second SaveChangesAsync
@@ -943,7 +960,7 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         // second-best, so the listener Fisher invokes cannot quietly change if either hierarchy
         // moves.
         Services.IChangeSet? commit = logging || notifyListeners
-            ? new Services.ChangeSet(queued, streams)
+            ? sharedCommit ?? new Services.ChangeSet(queued, streams)
             : null;
 
         // Before the listeners, so the duration reported is the unit of work's rather than the unit of
@@ -1036,9 +1053,18 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     ///         one nor translated into a <see cref="JasperFx.Events.StreamLockedException" />.
     ///     </para>
     /// </remarks>
-    private async Task RunPostCommitHooksAsync(StreamAction[] streams, CancellationToken token)
+    private async Task RunPostCommitHooksAsync(StreamAction[] streams, Services.ChangeSet? sharedCommit,
+        CancellationToken token)
     {
-        if (_messageBatch is not null)
+        // fisher#581. With shared hooks, JasperFx's DocumentSessionHooks releases the shared participants and
+        // then runs the message batch and every shared save listener, in the place the batch alone used to
+        // run: each one runs whatever an earlier one threw, and none sees the caller's token. Without them
+        // the batch's hook runs exactly as it did.
+        if (_hooks is { } hooks)
+        {
+            await hooks.AfterCommitAsync(this, sharedCommit!, _messageBatch).ConfigureAwait(false);
+        }
+        else if (_messageBatch is not null)
         {
             await _messageBatch.AfterCommitAsync(token).ConfigureAwait(false);
         }
@@ -1297,22 +1323,32 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
                 .WriteAsync(streams, connection, transaction, token).ConfigureAwait(false);
         }
 
-        // Last thing inside the transaction: an outbox that wants its messages to be atomic with
-        // the write persists them here. Null unless something actually published.
-        if (_messageBatch is not null)
-        {
-            await _messageBatch.BeforeCommitAsync(token).ConfigureAwait(false);
-        }
-
-        // And anything else that wants to write with us, on our connection and in our transaction.
-        // Same position, and the same visibility semantics fisher#4 pinned: nothing here is visible to
-        // anyone else until the commit, and throwing rolls Fisher's work back with the participant's.
+        // Anything else that wants to write with us, on our connection and in our transaction. Nothing
+        // here is visible to anyone else until the commit (fisher#4), and throwing rolls Fisher's work
+        // back with the participant's.
         if (_participants is { Count: > 0 })
         {
             foreach (var participant in _participants)
             {
                 await participant.BeforeCommitAsync(connection, transaction, token).ConfigureAwait(false);
             }
+        }
+
+        // Last thing inside the transaction: an outbox that wants its messages to be atomic with the
+        // write persists them here. Null unless something actually published.
+        //
+        // fisher#581. The message batch is LAST, after every participant, which is the promise
+        // IMessageBatch.BeforeCommitAsync makes and the order FisherProjectionBatch already had. It used to
+        // run ahead of the participants on this path. With shared hooks, DocumentSessionHooks runs the shared
+        // participants and then the batch; once per attempt, so a retried SQLITE_BUSY replays them on its
+        // fresh transaction.
+        if (_hooks is { } hooks)
+        {
+            await hooks.BeforeCommitAsync(connection, transaction, _messageBatch, token).ConfigureAwait(false);
+        }
+        else if (_messageBatch is not null)
+        {
+            await _messageBatch.BeforeCommitAsync(token).ConfigureAwait(false);
         }
     }
 
