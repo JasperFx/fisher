@@ -18,6 +18,9 @@
 
     <ItemGroup>
         <PackageReference Include="BenchmarkDotNet" />
+        <!-- fisher#570: the serializer behind BinaryEventBenchmarks. Its source generator ships in the
+             package, so [MemoryPackable] types need nothing else. -->
+        <PackageReference Include="MemoryPack" />
         <!-- Conventional Apply/Create dispatch on BenchTally is compile-time only; the generator
              must run in the assembly that defines the aggregate, exactly as Fisher.Tests does. -->
         <PackageReference Include="JasperFx.Events.SourceGenerator" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />

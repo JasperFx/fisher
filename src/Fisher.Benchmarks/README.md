@@ -39,6 +39,8 @@ dotnet run -c Release --project src/Fisher.Benchmarks -- writer-queue       --wr
 # The BenchmarkDotNet micro-benchmarks (MemoryDiagnoser)
 dotnet run -c Release --project src/Fisher.Benchmarks -- bdn
 dotnet run -c Release --project src/Fisher.Benchmarks -- bdn --filter '*QueryBenchmarks*'
+dotnet run -c Release --project src/Fisher.Benchmarks -- bdn --filter '*Binary*'
+dotnet run -c Release --project src/Fisher.Benchmarks -- binary-bind-probe
 ```
 
 The checked-in defaults are sized to finish in a few minutes so the harness stays cheap to run on
@@ -93,6 +95,14 @@ every change. For a publishable number, scale up:
    round trip is in-process and the same before and after. The `FilteredCount` and `FirstByMember`
    shapes read no documents (or one), which makes them the closest thing here to a per-query
    overhead reading.
+9. **`BinaryEncodeBenchmarks`, `BinaryColumnReadBenchmarks`, `BinaryEventStoreBenchmarks`** (BDN) and
+   **`binary-bind-probe`** (fisher#570) — binary event bodies through `IEventBinarySerializer`, with two
+   MemoryPack serializers: one implementing only the `byte[]` pair, and one overriding JasperFx 3.3.0's
+   `IBufferWriter` / `ReadOnlySpan` members. The serializer step alone, the BLOB column read three ways,
+   and end to end through a store (ten-event append + commit, ten-event `FetchStreamAsync`), at 200-byte
+   and 100 KB bodies. `binary-bind-probe` is not a timing: it reports which BLOB parameter shapes
+   Microsoft.Data.Sqlite will bind and what binding a truncated array costs. Rerun it after a provider
+   bump; it is the first thing that would make the span members worth revisiting.
 
 ## Results
 
