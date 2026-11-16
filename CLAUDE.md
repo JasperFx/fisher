@@ -1815,6 +1815,16 @@ Three restrictions, each refused by name:
 One `Select` per query; a second would have to project members of the first's result, which is not a
 document and has no locators.
 
+⚠️ **`Distinct()` and identity `OrderBy` need the columns to BE the result** (fisher#590). Both act on the select
+list, so after `Select(x => x.Number % 3)` they used to act on `Number`. `IsFaithful` on both projections says
+whether the body is a column copy (a column, a lossless conversion, a `new` of copies and constants), and
+`LinqQueryParser.RequireFaithfulProjection` otherwise rebuilds the projection with `ComputedColumns`' arithmetic in
+the select list, or refuses by name. The subset is integer `%` and `/` by a constant other than 0 and -1, and unary
+minus with a `case` guard at the type minimum. Those are the only places SQLite and unchecked .NET agree for every
+value, which is why `*` and `+` are refused. A non-nullable leaf is `coalesce(…, 0)`, matching the projected read's
+NULL-to-default. The translation runs only when one of those operators asks, so the boundary above still holds for
+every other `Select`.
+
 **A NULL column becomes the target type's default, not a null.** `json_extract` yields SQL NULL for an
 absent key and an aggregate over an empty group yields NULL too, and the compiled projection *unboxes*
 each value to its declared type — so a null reaching a non-nullable value type is a

@@ -358,6 +358,7 @@ internal class LinqQueryParser
                 break;
 
             case "Distinct":
+                RequireFaithfulProjection("Distinct()");
                 IsDistinct = true;
                 break;
 
@@ -829,9 +830,7 @@ internal class LinqQueryParser
                     + "an aggregate over it.");
         }
 
-        var columns = GroupProjection?.Columns ?? Projection?.Locators;
-
-        if (columns is null)
+        if (GroupProjection is null && Projection is null)
         {
             return LocatorFor(call);
         }
@@ -843,9 +842,17 @@ internal class LinqQueryParser
             body = unary.Operand;
         }
 
-        if (body == lambda.Parameters[0] && columns.Length == 1)
+        if (body == lambda.Parameters[0])
         {
-            return columns[0];
+            // fisher#590: the one column is only the value being ordered when the projection copies it.
+            RequireFaithfulProjection($"{call.Method.Name}({lambda})");
+
+            var columns = GroupProjection?.Columns ?? Projection!.Locators;
+
+            if (columns.Length == 1)
+            {
+                return columns[0];
+            }
         }
 
         throw new BadLinqExpressionException(
@@ -853,6 +860,44 @@ internal class LinqQueryParser
             + "single-value projection is supported; order before the Select to sort by a document "
             + "member, or by the group's key or an aggregate.");
     }
+
+    /// <summary>
+    ///     Makes sure an operator acting on the projection's columns acts on the values the caller sees —
+    ///     fisher#590.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <c>Distinct()</c> renders <c>select distinct &lt;columns&gt;</c> and identity ordering orders
+    ///         by the one column. Both are right only while the columns are the result. After
+    ///         <c>Select(x =&gt; x.Number % 3)</c> the column is <c>Number</c>, so both used to act on it and
+    ///         come back plausibly wrong: five "distinct" values where there are three, an order that is
+    ///         <c>Number</c>'s.
+    ///     </para>
+    ///     <para>
+    ///         So a projection that computes is either moved into SQL, for the integer arithmetic
+    ///         <see cref="ComputedColumns" /> can prove matches .NET, or refused by name. A
+    ///         <c>Select</c> that is never deduplicated or ordered keeps computing in .NET as before.
+    ///     </para>
+    /// </remarks>
+    private void RequireFaithfulProjection(string operation)
+    {
+        if (Projection is { IsFaithful: false } projection)
+        {
+            Projection = projection.ComputedInSql() ?? throw ComputedProjectionRefused(operation, projection.Selector);
+        }
+
+        if (GroupProjection is { IsFaithful: false } grouped)
+        {
+            GroupProjection = grouped.ComputedInSql() ?? throw ComputedProjectionRefused(operation, grouped.Selector);
+        }
+    }
+
+    private static BadLinqExpressionException ComputedProjectionRefused(string operation, LambdaExpression selector)
+        => new($"Fisher cannot apply {operation} after Select({selector}): the projection computes its value in "
+               + ".NET after the row is read, so SQL would act on the columns it read rather than on the values "
+               + "it returns. Only integer %, / by a constant other than 0 and -1, and unary minus, over integer "
+               + "members, the group's key or its aggregates, are computed in SQL. Project the members "
+               + "themselves, or apply the operator in memory after the query.");
 
     /// <summary>
     ///     Resolves an ordering key, refusing one whose stored form does not sort — the same guard the
