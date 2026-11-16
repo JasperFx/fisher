@@ -54,6 +54,14 @@ internal interface IQueryableMember
     bool AllowsRangeComparison => true;
 
     /// <summary>
+    ///     The member as the JSON text System.Text.Json wrote (<c>data -&gt; '$.path'</c>), where
+    ///     <see cref="TypedLocator" /> is the SQL value <c>json_extract</c> converts it to. Null when the member
+    ///     is not read from a document's JSON. What a decimal aggregate reads, because <c>json_extract</c>
+    ///     turns a JSON number into a REAL and loses every digit past a double's (fisher#606).
+    /// </summary>
+    string? JsonTextLocator => null;
+
+    /// <summary>
     ///     Render a CLR value into the form the stored JSON actually holds, so a predicate literal
     ///     compares against like for like.
     /// </summary>

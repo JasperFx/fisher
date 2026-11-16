@@ -135,14 +135,12 @@ public static class QueryableExtensions
         => Aggregate<T, long>(queryable, AggregateFunction.Sum, selector, token);
 
     /// <summary>
-    ///     Sum a decimal member. Accurate to <see cref="double" /> precision, not decimal precision.
+    ///     Sum a decimal member, exactly.
     /// </summary>
     /// <remarks>
-    ///     SQLite has no decimal type. A decimal member is stored as a JSON number and
-    ///     <c>json_extract</c> hands it back as REAL, which is the same reason <c>SqliteTypeFor</c>
-    ///     declares REAL for a duplicated decimal column. Stated rather than implied, because the CLR
-    ///     return type says <see cref="decimal" /> and would otherwise suggest more precision than the
-    ///     sum actually carries.
+    ///     SQLite has no decimal type and its <c>sum()</c> accumulates in double, so Fisher sums the stored
+    ///     JSON text in <see cref="decimal" /> instead, through a function it registers on every connection
+    ///     (fisher#606). The answer is the one <c>Enumerable.Sum</c> gives over the same documents.
     /// </remarks>
     public static Task<decimal> SumAsync<T>(this IQueryable<T> queryable,
         Expression<Func<T, decimal>> selector, CancellationToken token = default) where T : notnull

@@ -834,25 +834,24 @@ public partial class FisherQueryProvider : IQueryProvider
                 + $"Query<T>().{function}Async(x => x.Member).");
         }
 
-        var locator = AggregateLocatorFor(SourceTypeFor(expression), function, selector, join);
+        var (locator, sqlFunction) = AggregateLocatorFor(SourceTypeFor(expression), function, selector, join);
 
         if (statement.Limit.HasValue || statement.Offset.HasValue)
         {
-            statement = AggregateOverPage(statement, function, locator);
+            statement = AggregateOverPage(statement, sqlFunction, locator);
         }
         else
         {
             // An aggregate's value cannot depend on ordering, and keeping the ORDER BY would make
             // SQLite sort rows it is about to collapse.
             statement.OrderBys.Clear();
-            statement.SelectColumns = $"{function.Sql()}({locator})";
+            statement.SelectColumns = $"{sqlFunction}({locator})";
         }
 
         return Coerce<TResult>(await ExecuteScalarAsync(statement, token).ConfigureAwait(false));
     }
 
-    private static Statement AggregateOverPage(Statement statement, AggregateFunction function,
-        string locator)
+    private static Statement AggregateOverPage(Statement statement, string sqlFunction, string locator)
     {
         var inner = new Statement
         {
@@ -872,7 +871,7 @@ public partial class FisherQueryProvider : IQueryProvider
         inner.Wheres.AddRange(statement.Wheres);
         inner.OrderBys.AddRange(statement.OrderBys);
 
-        return new Statement { Subquery = inner, SelectColumns = $"{function.Sql()}(agg_value)" };
+        return new Statement { Subquery = inner, SelectColumns = $"{sqlFunction}(agg_value)" };
     }
 
     /// <summary>
@@ -893,7 +892,12 @@ public partial class FisherQueryProvider : IQueryProvider
     ///     <c>Where</c> and <c>OrderBy</c> use — and the two guards below then apply unchanged, because
     ///     what they ask about is the resolved member and not how it was reached.
     /// </param>
-    private string AggregateLocatorFor(Type sourceType, AggregateFunction function,
+    /// <returns>
+    ///     What to aggregate and the SQL function to aggregate it with. A decimal member is its JSON text under
+    ///     <see cref="DecimalAggregates" />' exact function, because <c>sum</c> and <c>avg</c> accumulate in
+    ///     double and <c>json_extract</c> reads even one value as a double (fisher#606).
+    /// </returns>
+    private (string Locator, string SqlFunction) AggregateLocatorFor(Type sourceType, AggregateFunction function,
         LambdaExpression selector, JoinPlan? join)
     {
         var body = selector.Body;
@@ -934,7 +938,13 @@ public partial class FisherQueryProvider : IQueryProvider
                 + "(StoreOptions.Serializer.EnumStorage) makes ordering meaningful.");
         }
 
-        return member.TypedLocator;
+        if (DecimalAggregates.Applies(member))
+        {
+            return (DecimalAggregates.JsonTextOf(member, memberExpression.Member.Name),
+                DecimalAggregates.FunctionFor(function));
+        }
+
+        return (member.TypedLocator, function.Sql());
     }
 
     private static bool IsNumeric(Type type)

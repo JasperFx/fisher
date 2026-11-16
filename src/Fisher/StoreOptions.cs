@@ -32,6 +32,7 @@ public class StoreOptions
     public StoreOptions()
     {
         Storage.Vectors.VectorFunctions.Register(Functions);
+        Linq.DecimalAggregates.Register(Functions);
         EventGraph = new EventGraph(this);
         Events.EventGraph = EventGraph;
         Projections = new Fisher.Projections.FisherProjectionOptions(EventGraph);

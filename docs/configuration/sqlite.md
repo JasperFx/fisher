@@ -167,9 +167,15 @@ through SQLite's date parser instead — see [Supported LINQ Operators](/documen
 ## `decimal` is a JSON number, and it compares as one
 
 SQLite has no decimal type. A `decimal` member is stored as an ordinary JSON number, and
-`json_extract` hands it back as REAL — so a predicate against one is a floating-point comparison, and
-`SumAsync`/`AverageAsync` over a `decimal` member are accurate to `double` precision rather than to
-decimal precision. A duplicated `decimal` field is declared REAL for the same reason.
+`json_extract` hands it back as REAL — so a predicate against one is a floating-point comparison. A
+duplicated `decimal` field is declared REAL for the same reason.
+
+The aggregates are the exception, and are exact. `Sum`, `Average`, `Min` and `Max` over a `decimal`
+member — `SumAsync` and its siblings, a grouped `Select`, a `HAVING` and a grouped `OrderBy` — read the
+number as the text System.Text.Json wrote and compute in `decimal`, through functions Fisher registers
+on every connection. So `GroupBy(x => x.Category).Where(g => g.Sum(x => x.Amount) == 0.3m)` finds the
+group holding `0.1m` and `0.2m`, which SQLite's own `sum()` would put at `0.30000000000000004`.
+`AverageAsync` still returns `double`; it is the exact decimal mean, rounded once.
 
 You do not have to do anything about this. Fisher normalises the comparison value wherever a query
 binds one, so `Where(x => x.Total > 100m)`, `IsOneOf`, `Contains`, `HAVING` and arithmetic on a
