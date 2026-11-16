@@ -12,11 +12,26 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3110 tests green on net10.0 and 3137 on net11.0** — 3039 (net10.0) / 3066 (net11.0) in `Fisher.Tests`, 40 in
+**3129 tests green on net10.0 and 3156 on net11.0** — 3058 (net10.0) / 3085 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
+
+## The shared contract's hook members (fisher#581)
+
+`FisherSession` implements the three JasperFx 3.3.0 `JasperFx.Events.Documents` members it left to throwing
+defaults: `StoreObjects`, `AddTransactionParticipant(IDbTransactionParticipant)` and `AddSaveListener`. The last is
+what Wolverine's `Enroll` needs to flush its outbox on a session the application opened. All three are explicit
+implementations over a per-session JasperFx `DocumentSessionHooks`, on both commit paths for participants.
+`shared_session_hooks` (19 tests, all holding the session as the contract) fails 19 of 19 on the previous build.
+
+Decisions: a shared participant is released when its commit lands and is refused on an enlisted session; a save
+listener is refused on a projection batch's session and fires only its before hook on an enlisted one; both land on
+the parent from a tenant scope. Behaviour change worth release notes: `SaveChangesAsync` now runs the message
+outbox's `BeforeCommitAsync` after every transaction participant, as the projection batch already did, where it
+used to run first. CLAUDE.md's "The store-agnostic document contract" has the detail. No shared compliance suite
+covers these members yet.
 
 ## The daemon's allow list binds as one parameter (fisher#583)
 
