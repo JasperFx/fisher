@@ -152,7 +152,10 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
         CancellationToken token) where T : default
     {
         var statement = Translate(queryable.Expression);
-        statement.Limit = 1;
+
+        // fisher#599: at most one row, without lifting a smaller limit the query already carries —
+        // Take(0).FirstOrDefault() is null.
+        statement.Limit = statement.Limit is { } limit ? Math.Min(limit, 1) : 1;
 
         TElement? result = null;
         await ExecuteAsync(statement, token, async (reader, session) =>
@@ -205,6 +208,14 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
     ///     outermost-first and replayed in source order, so LINQ's own semantics fall out: a later
     ///     <c>OrderBy</c> replaces the ordering, a <c>ThenBy</c> extends it.
     /// </summary>
+    /// <remarks>
+    ///     ⚠️ <b>An operator after <c>Take</c>/<c>Skip</c> applies to the page</b> (fisher#599, the
+    ///     event-table twin of fisher#589). Every <c>Where</c> used to land in the one statement's
+    ///     <c>WHERE</c> and every <c>OrderBy</c> in its <c>ORDER BY</c>, so both ran before the
+    ///     <c>LIMIT</c>. Consecutive paging composes into one <c>LIMIT</c>/<c>OFFSET</c>; a
+    ///     <c>Where</c> or an ordering after it wraps the paged statement as a subquery, as many
+    ///     levels deep as the chain goes.
+    /// </remarks>
     private Statement Translate(Expression expression)
     {
         var calls = new List<MethodCallExpression>();
@@ -235,8 +246,21 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
 
         var statement = CreateStatement();
 
+        // fisher#599: the statement the caller's operators started on. Everything the store scopes a
+        // query by goes on this one, inside any page taken from it.
+        var root = statement;
+
+        // The ordering of the page the current statement reads from, which breaks the ties of any
+        // re-sort written after the Take/Skip. Empty until an operator follows the paging.
+        var pageOrdering = new List<(string Locator, bool Descending)>();
+
         foreach (var call in calls)
         {
+            if (FollowsPaging(call))
+            {
+                statement = WrapPage(statement);
+            }
+
             switch (call.Method.Name)
             {
                 case nameof(Queryable.Where):
@@ -263,24 +287,18 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
                     statement.OrderBys.Add((OrderingLocator(call), true));
                     break;
 
+                // fisher#599: consecutive paging composes into one LIMIT/OFFSET. The skips add up, and
+                // a skip after a take drops rows from the front of the page it was taken from:
+                // Take(n).Skip(k) is LIMIT max(n - k, 0) OFFSET k.
                 case nameof(Queryable.Skip):
-                    // Consecutive skips compose additively; a skip after a take would re-window the
-                    // page and is refused rather than quietly re-interpreted.
-                    if (statement.Limit.HasValue)
-                    {
-                        throw new BadLinqExpressionException(
-                            $"Skip() after Take() is not supported on a {QueryKind}. Apply Skip before Take.");
-                    }
-
-                    statement.Offset = (statement.Offset ?? 0)
-                                       + (int)WhereClauseParser.ExtractValue(call.Arguments[1])!;
+                    var skip = CountOf(call);
+                    statement.Limit = statement.Limit is { } pageSize ? Math.Max(pageSize - skip, 0) : null;
+                    statement.Offset = (statement.Offset ?? 0) + skip;
                     break;
 
                 case nameof(Queryable.Take):
-                    var take = (int)WhereClauseParser.ExtractValue(call.Arguments[1])!;
-                    statement.Limit = statement.Limit.HasValue
-                        ? Math.Min(statement.Limit.Value, take)
-                        : take;
+                    var take = CountOf(call);
+                    statement.Limit = statement.Limit is { } limit ? Math.Min(limit, take) : take;
                     break;
 
                 default:
@@ -291,17 +309,58 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
             }
         }
 
-        // Worked out across every Where, since a Where(...).Where(...) chain is one query.
-        if (LeavesOutArchivedEvents && !calls.Any(x => x.Method.Name == nameof(Queryable.Where)
-                                                       && LambdaOf(x).SpecifiesEventArchivalStatus()))
-        {
-            statement.Wheres.Add(new WhereFragment("is_archived = 0"));
-        }
-
-        ApplyScope(statement);
-        ApplyFinalOrdering(statement);
+        FinishLevel(statement);
 
         return statement;
+
+        // Called once per statement in the chain: when an operator after the paging wraps it, and
+        // for the outermost at the end.
+        void FinishLevel(Statement level)
+        {
+            if (ReferenceEquals(level, root))
+            {
+                // Worked out across every Where, since a Where(...).Where(...) chain is one query —
+                // one written after the paging included, so an opt-in there decides which rows the
+                // page is taken from as well.
+                if (LeavesOutArchivedEvents && !calls.Any(x => x.Method.Name == nameof(Queryable.Where)
+                                                               && LambdaOf(x).SpecifiesEventArchivalStatus()))
+                {
+                    level.Wheres.Add(new WhereFragment("is_archived = 0"));
+                }
+
+                ApplyScope(level);
+                ApplyFinalOrdering(level);
+            }
+
+            // LINQ's OrderBy is stable, so a re-sort of a page keeps the page's order among its ties.
+            // SQL promises nothing about the order a subquery's rows reach the enclosing query in, so
+            // the page's ordering is repeated after the caller's, and an unsorted Where over an
+            // ordered page comes back in the page's order.
+            level.OrderBys.AddRange(pageOrdering);
+        }
+
+        // fisher#599: an operator after Take/Skip applies to the page, so the paged statement becomes
+        // a subquery selecting every column of its table and the operator goes on the outside. Every
+        // member locator these providers build is a plain column or an expression over one
+        // (json_extract(data, ...)), so it resolves against the page exactly as against the table, and
+        // the outer select list is the page's, so the row readers' ordinals are unchanged.
+        Statement WrapPage(Statement page)
+        {
+            FinishLevel(page);
+
+            var outer = new Statement { Subquery = page, SelectColumns = page.SelectColumns };
+            page.SelectColumns = "*";
+
+            pageOrdering = [..page.OrderBys];
+
+            return outer;
+        }
+
+        bool FollowsPaging(MethodCallExpression call)
+            => (statement.Limit.HasValue || statement.Offset.HasValue)
+               && call.Method.Name is nameof(Queryable.Where) or nameof(Queryable.OrderBy)
+                   or nameof(Queryable.OrderByDescending) or nameof(Queryable.ThenBy)
+                   or nameof(Queryable.ThenByDescending);
 
         void AssertOrdered(MethodCallExpression call)
         {
@@ -340,6 +399,10 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
 
         static LambdaExpression LambdaOf(MethodCallExpression call)
             => (LambdaExpression)((UnaryExpression)call.Arguments[1]).Operand;
+
+        // LINQ reads a negative count as zero, for Take and Skip alike.
+        static int CountOf(MethodCallExpression call)
+            => Math.Max(0, (int)WhereClauseParser.ExtractValue(call.Arguments[1])!);
     }
 
     // ---- execution ----

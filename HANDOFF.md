@@ -12,11 +12,22 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3129 tests green on net10.0 and 3156 on net11.0** — 3058 (net10.0) / 3085 (net11.0) in `Fisher.Tests`, 40 in
+**3164 tests green on net10.0 and 3191 on net11.0** — 3093 (net10.0) / 3120 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
+
+## Event-table queries apply operators after Take/Skip to the page (fisher#599)
+
+`QueryRawEvents()`, `QueryStreamStates()` and `QueryEventData<T>()` folded a `Where` or an `OrderBy` written after
+`Take`/`Skip` into the one statement, so it ran before the `LIMIT`. `EventTableQueryProvider` now composes
+consecutive paging into one `LIMIT`/`OFFSET` (`Take(n).Skip(k)` is `LIMIT max(n−k, 0) OFFSET k`, where it used to
+be refused, and a negative count is zero), and wraps the paged statement as a subquery for anything else, as many
+levels deep as the chain goes. Nothing is refused. The page's ordering breaks a re-sort's ties, and the scope
+(tenant, event type, archived filter) stays inside the page. `FirstOrDefault` no longer lifts a smaller limit.
+`event_queries_after_paging` (35 facts, LINQ to Objects as the oracle) fails 24 of them on the previous build; the
+11 that pass pin the composition that already worked.
 
 ## The shared contract's hook members (fisher#581)
 
