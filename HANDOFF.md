@@ -16,7 +16,7 @@ scoreboard and the things that are true right now but not obvious from either.
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.3.0** / Weasel **10.0.0-alpha.2**.
+On JasperFx **3.3.0** / Weasel **10.0.0-alpha.3**.
 
 ## The closed-shape document family is Weasel's (fisher#465)
 
