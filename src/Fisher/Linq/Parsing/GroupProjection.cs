@@ -257,11 +257,17 @@ internal sealed class GroupingTranslator
 {
     private readonly IMemberResolver _members;
     private readonly string _keyLocator;
+    private readonly bool _keyIsExactDecimal;
 
-    public GroupingTranslator(IMemberResolver members, string keyLocator)
+    /// <param name="keyIsExactDecimal">
+    ///     True when the key is a decimal grouped by its exact text (fisher#609), so a <c>HAVING</c> over
+    ///     <c>g.Key</c> binds its value as TEXT the way one over a decimal aggregate does.
+    /// </param>
+    public GroupingTranslator(IMemberResolver members, string keyLocator, bool keyIsExactDecimal = false)
     {
         _members = members;
         _keyLocator = keyLocator;
+        _keyIsExactDecimal = keyIsExactDecimal;
     }
 
     /// <summary>
@@ -283,6 +289,7 @@ internal sealed class GroupingTranslator
         if (node is MemberExpression { Member.Name: "Key" } member && member.Expression == group)
         {
             sql = _keyLocator;
+            exactDecimal = _keyIsExactDecimal;
             return true;
         }
 

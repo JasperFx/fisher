@@ -32,7 +32,7 @@ internal sealed class IsOneOf : IMethodCallParser
                 "IsOneOf needs a set of values that can be evaluated when the query is built.");
         }
 
-        return new WhereInFilter(member.TypedLocator,
+        return DecimalPrecision.In(member,
             FloatComparisons.MembershipValues(member, values.Cast<object?>()).Select(member.ConvertValue).ToList(),
             member.RawLocator);
     }
@@ -107,7 +107,7 @@ internal sealed class ObjectEquals : IMethodCallParser
 
         return value is null
             ? new LiteralSqlFragment($"{member.RawLocator} is null")
-            : new ComparisonFilter(member.TypedLocator, "=", value, nullSafe: true);
+            : DecimalPrecision.Compare(member, "=", value, nullSafe: true);
     }
 
     private static Expression StripConversions(Expression expression)

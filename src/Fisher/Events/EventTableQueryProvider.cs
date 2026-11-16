@@ -401,7 +401,8 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
                     + "its stored form is not order-preserving.");
             }
 
-            return member.TypedLocator;
+            // fisher#609: a decimal body member orders by its exact value.
+            return Linq.DecimalPrecision.OrderingFor(member);
         }
 
         static Expression StripConvert(Expression expression)

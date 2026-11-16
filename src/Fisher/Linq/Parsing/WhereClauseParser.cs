@@ -929,7 +929,8 @@ internal class WhereClauseParser
             return FloatComparisons.Compare(member, number, op, nullSafe);
         }
 
-        return new ComparisonFilter(member.TypedLocator, op, member.ConvertValue(value)!, nullSafe);
+        // fisher#609: a decimal compared in decimal is compared exactly, not as json_extract's REAL.
+        return DecimalPrecision.Compare(member, op, member.ConvertValue(value)!, nullSafe);
     }
 
     /// <summary>

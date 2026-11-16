@@ -167,13 +167,23 @@ through SQLite's date parser instead — see [Supported LINQ Operators](/documen
 ## `decimal` is a JSON number, and it compares as one
 
 SQLite has no decimal type. A `decimal` member is stored as an ordinary JSON number, and
-`json_extract` hands it back as REAL — so a predicate against one is a floating-point comparison. A
-duplicated `decimal` field is declared REAL for the same reason.
+`json_extract` hands it back as REAL, which holds about fifteen significant digits. A duplicated
+`decimal` field is declared REAL for the same reason.
 
-The aggregates are the exception, and are exact. `Sum`, `Average`, `Min` and `Max` over a `decimal`
+Fisher does not let that REAL decide anything a decimal would decide differently. A `Select`, a
+`Where` (`==`, the ranges, `IsOneOf`, `Contains`), an `OrderBy`, a keyset cursor, `Distinct`,
+`DistinctBy`, a `GroupBy` key, a join key and an event-body query over a `decimal` member all read the
+number as the text System.Text.Json wrote and compare it as a `decimal`, through functions and a
+collation Fisher registers on every connection. So `0.1000000000000000001m` and
+`0.1000000000000000002m` are two values, as they are in C#. A comparison still uses the REAL as a coarse
+range first, so an index on the member — a duplicated field or `Index(x => x.Amount)` — still serves
+`==`, the ranges and `IsOneOf`. An `OrderBy` over a `decimal` sorts by an exact key instead, so it is no
+longer served by such an index.
+
+The aggregates are exact too. `Sum`, `Average`, `Min` and `Max` over a `decimal`
 member — `SumAsync` and its siblings, a grouped `Select`, a `HAVING` and a grouped `OrderBy` — read the
-number as the text System.Text.Json wrote and compute in `decimal`, through functions Fisher registers
-on every connection. So `GroupBy(x => x.Category).Where(g => g.Sum(x => x.Amount) == 0.3m)` finds the
+number as the text System.Text.Json wrote and compute in `decimal`. So
+`GroupBy(x => x.Category).Where(g => g.Sum(x => x.Amount) == 0.3m)` finds the
 group holding `0.1m` and `0.2m`, which SQLite's own `sum()` would put at `0.30000000000000004`.
 `AverageAsync` still returns `double`; it is the exact decimal mean, rounded once.
 

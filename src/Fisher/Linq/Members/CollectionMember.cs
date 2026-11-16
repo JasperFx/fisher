@@ -38,12 +38,14 @@ namespace Fisher.Linq.Members;
 internal class CollectionMember : QueryableMember
 {
     private readonly MemberFactory _parent;
+    private readonly string _dataExpression;
 
     public CollectionMember(MemberFactory parent, string dataExpression, string jsonPath,
         Type memberType, Type elementType, int depth)
         : base($"json_extract({dataExpression}, '{jsonPath}')", memberType)
     {
         _parent = parent;
+        _dataExpression = dataExpression;
         ElementType = elementType;
         Depth = depth;
         Alias = $"each_{depth}";
@@ -73,7 +75,11 @@ internal class CollectionMember : QueryableMember
     ///     complex element type.
     /// </summary>
     public IQueryableMember? ElementMember
-        => HasScalarElements ? _parent.CreateScalarMember($"{Alias}.value", ElementType) : null;
+        => HasScalarElements
+            // fisher#609: the element as written, through json_each's own path to it, so a decimal
+            // element compares exactly. json_each's value column is the REAL.
+            ? _parent.CreateScalarMember($"{Alias}.value", ElementType, $"({_dataExpression} -> {Alias}.fullkey)")
+            : null;
 
     /// <summary>
     ///     A resolver for the members of one element, scoped to the given lambda parameter — what an
