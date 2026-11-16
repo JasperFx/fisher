@@ -167,11 +167,12 @@ multiplication, division — and a `%` that is not integral are refused with a
 `BadLinqExpressionException` rather than answered in `double`. Integral and `double` arithmetic
 translate as before, because SQLite computes them the way C# does.
 
-::: warning
-The comparison is floating point, so `SumAsync` and `AverageAsync` over a `decimal` member are
-accurate to `double` precision rather than to decimal precision. That is SQLite's arithmetic, not a
-Fisher choice; it is the same reason a duplicated `decimal` field is declared REAL.
-:::
+The comparison is exact, to every digit a `decimal` holds. The value is compared against the number
+as System.Text.Json wrote it, not against the REAL `json_extract` reads, so two decimals that differ
+only past a double's fifteenth digit are two values in a `Where`, an `OrderBy`, a `Select`, a
+`Distinct` or a `GroupBy`, as they are in C#. The aggregates (`SumAsync` and its siblings) compute in
+`decimal` too. A comparison done in `double` in C# — `(double)x.Total > 0.5` — stays a `double`
+comparison.
 
 ## Enums
 

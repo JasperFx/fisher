@@ -490,7 +490,7 @@ public partial class FisherQueryProvider : IQueryProvider
         if (cursor is not null)
         {
             statement.Wheres.Add(CursorPagination.BuildSeekPredicate(
-                parser.OrderBys, CursorPagination.Decode(cursor, parser.OrderByMembers)));
+                parser.OrderBys, parser.OrderByMembers, CursorPagination.Decode(cursor, parser.OrderByMembers)));
         }
 
         var fields = jsonOnly ? ["data"] : selectClause.SelectFields();
@@ -1089,6 +1089,19 @@ public partial class FisherQueryProvider : IQueryProvider
             return Guid.Parse((string)raw);
         }
 
+        // fisher#609: a decimal column is the number's JSON text (or an exact aggregate's), which a
+        // double would round. Convert.ToDecimal(string) would refuse an exponent, so it is read as JSON.
+        if (target == typeof(decimal) && raw is string number)
+        {
+            return DecimalAggregates.ParseJson(number);
+        }
+
+        // A decimal ordering key read back for a keyset cursor is its fi_decimal_key.
+        if (target == typeof(decimal) && raw is byte[] sortKey)
+        {
+            return DecimalAggregates.FromSortKey(sortKey);
+        }
+
         // fisher#351: a strong-typed identifier is stored as its inner value, so convert to that and
         // then wrap. Convert.ChangeType cannot build a wrapper, and threw InvalidCastException for every
         // Select of one — loading the whole document never met it, because the serializer builds it.
@@ -1620,7 +1633,18 @@ public partial class FisherQueryProvider : IQueryProvider
                     + "was meant — use DistinctBy(x => x.Key) to deduplicate documents by a member.");
             }
 
-            statement.IsDistinct = true;
+            // fisher#609: a decimal column is deduplicated by its sort key, as a GROUP BY that selects the
+            // number as written, where DISTINCT would compare the column through its collation, a call into
+            // .NET per comparison. The rows a group collapses hold the same number, up to its scale.
+            if (parser.Projection is { } projection && parser.GroupByLocator is null
+                && !projection.DistinctKeys.SequenceEqual(projection.Locators))
+            {
+                statement.GroupBy = string.Join(", ", projection.DistinctKeys);
+            }
+            else
+            {
+                statement.IsDistinct = true;
+            }
         }
 
         if (parser.DistinctByLocator is null)
