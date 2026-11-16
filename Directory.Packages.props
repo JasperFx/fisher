@@ -459,8 +459,18 @@
              RefuseAdvances check still runs inside the advance. INERT: weasel#832 (Fisher uses
              ExecuteEachAsync, which already asked one operation at a time) and weasel#831 (pooled bdata;
              Microsoft.Data.Sqlite binds only byte[], so there is nothing to gain). -->
-        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.3" />
-        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.3" />
+        <!-- Weasel 10.0.0-alpha.4 (from alpha.3). fisher#575: weasel#845 makes EventTypeAllowList admit every
+             type when a shard includes an interface or abstract event type, so IncludeType<IFoo>() and
+             Apply(IFoo) read their concrete events instead of matching nothing and reporting caught up
+             (interface_event_type_filtering is red on alpha.3). JasperFx floor still 3.0.0.
+             weasel#846 asks a paging dialect to bind the allow list as ONE parameter (SQLite: json_each);
+             SqliteEventPagingDialect still binds one per alias, which only fails past SQLite's 32,766
+             variables, so it is left for a follow-up. weasel#840: HiloSequenceBase drops a lower block that
+             arrives after an overlapping advance installed a higher one, so ids only increase.
+             weasel#838: MasterTableTenancyBase.TryResolveTenant, additive. INERT: weasel#839
+             (SingleServerDatabaseCollection). -->
+        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.4" />
+        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.4" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
