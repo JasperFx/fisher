@@ -22,14 +22,14 @@ public interface ISerializer : Weasel.Core.ISerializer
     /// </summary>
     [RequiresUnreferencedCode("Default ISerializer uses STJ reflection; AOT consumers should supply a source-generator-backed ISerializer impl.")]
     [RequiresDynamicCode("Default ISerializer uses STJ reflection which requires runtime code generation.")]
-    T FromJson<T>(string json);
+    new T FromJson<T>(string json);
 
     /// <summary>
     ///     Deserialize a JSON string to an object of the specified type.
     /// </summary>
     [RequiresUnreferencedCode("Default ISerializer uses STJ reflection; AOT consumers should supply a source-generator-backed ISerializer impl.")]
     [RequiresDynamicCode("Default ISerializer uses STJ reflection which requires runtime code generation.")]
-    object FromJson(Type type, string json);
+    new object FromJson(Type type, string json);
 
     /// <summary>
     ///     Deserialize UTF-8 JSON held in a span, without first materializing a string (fisher#461).

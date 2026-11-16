@@ -12,11 +12,26 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3084 tests green on net10.0 and 3111 on net11.0** — 3013 (net10.0) / 3040 (net11.0) in `Fisher.Tests`, 40 in
+**3097 tests green on net10.0 and 3124 on net11.0** — 3026 (net10.0) / 3053 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.3**.
+
+## `EventGraph` uses `EventRegistry`'s registries (fisher#574)
+
+JasperFx 3.3.0 lifted masking rules, DCB tag types, binary serializers and type/alias resolution onto
+`EventRegistry` as non-virtual members, and `EventGraph`'s same-named copies hid them (29 CS0108 warnings). Anything
+configuring the graph through `EventRegistry` was silently dropped: 11 of the 12 facts in
+`event_registry_base_typed_configuration` failed on the previous build. Fisher's copies are deleted and the base's
+are used through its hooks (`AliasFor`, `RegisterDotNetTypeNames`, `DefaultTagTableSuffixFor`,
+`OnBinarySerializersChanged`). `FisherDatabase` overrides `FindFeature` so Weasel's own `EnsureStorageExistsAsync`
+works, and its `IEventDatabase` member is `new`. The interface redeclarations are `new` after an interface-map
+check. `src/Fisher` builds with zero CS0108.
+
+Visible changes: a `Func` masking rule reaches a hierarchy; a failed tag inference throws JasperFx's
+`InvalidOperationException`; re-registering a tag type with a different inner type is refused. CLAUDE.md's
+"`EventGraph` is JasperFx's `EventRegistry`" has the detail.
 
 ## The closed-shape document family is Weasel's (fisher#465)
 

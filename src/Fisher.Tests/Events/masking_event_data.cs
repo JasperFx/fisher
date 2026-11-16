@@ -97,9 +97,7 @@ public class masking_event_data : IAsyncLifetime
 
     /// <summary>
     ///     <c>IEvent&lt;T&gt;</c> is covariant, so an <c>Action</c> rule registered against an
-    ///     interface reaches every event body implementing it. The <c>Func</c> overload cannot: it has
-    ///     to assign the replacement back, and only the closed <c>Event&lt;T&gt;</c> exposes a setter.
-    ///     That asymmetry is why a hierarchy-wide rule has to be the mutating one.
+    ///     interface reaches every event body implementing it.
     /// </summary>
     [Fact]
     public async Task an_action_rule_against_an_interface_reaches_every_implementor()
@@ -135,6 +133,44 @@ public class masking_event_data : IAsyncLifetime
 
         // The interface rule ran (seen became 1) before the concrete rule read it.
         ((ContactRecorded)events[0].Data).Phone.ShouldBe("REDACTED-1");
+    }
+
+    /// <summary>
+    ///     The <c>Func</c> overload reaches a hierarchy too, since fisher#574 adopted
+    ///     <c>EventRegistry</c>'s rule list: JasperFx's masker replaces the body through the envelope rather
+    ///     than through <c>Event&lt;T&gt;</c>'s typed setter. Fisher's own masker matched the exact type only.
+    ///     The replacement has to be something the event can hold, so a rule over an interface returns the
+    ///     concrete type.
+    /// </summary>
+    [Fact]
+    public async Task a_func_rule_against_an_interface_reaches_a_record_implementing_it()
+    {
+        await using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = _database.ConnectionString;
+            options.DatabaseSchemaName = "func_hierarchy";
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Events.AddMaskingRuleForProtectedInformation<IPersonalData>(
+                x => x is CustomerRegistered c ? c with { Email = "REDACTED" } : x);
+        });
+
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
+
+        var streamId = Guid.NewGuid();
+        await using (var session = store.LightweightSession())
+        {
+            session.Events.StartStream(streamId, new CustomerRegistered("Sam", "sam@shire.test"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await store.Advanced.ApplyEventDataMaskingAsync(
+            x => x.IncludeStream(streamId), TestContext.Current.CancellationToken);
+
+        await using var query = store.LightweightSession();
+        var events = await query.Events.FetchStreamAsync(streamId,
+            token: TestContext.Current.CancellationToken);
+
+        ((CustomerRegistered)events[0].Data).Email.ShouldBe("REDACTED");
     }
 
     // ---- selecting what to mask ----

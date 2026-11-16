@@ -1006,8 +1006,15 @@ public partial class FisherDatabase : IEventDatabase
     ///         the daemon asks before it starts. It used to fall through to the no-op below, so a daemon
     ///         built over a fresh file started against tables nobody had created.
     ///     </para>
+    ///     <para>
+    ///         <b>Hides Weasel's <c>DatabaseBase.EnsureStorageExistsAsync</c> deliberately</b> (fisher#574).
+    ///         That one is not virtual and returns a <c>ValueTask</c>, so this cannot override it, and this is
+    ///         the <see cref="IEventDatabase" /> member carrying Fisher's rules (<c>AutoCreate.None</c> refuses
+    ///         by name). A caller holding the Weasel base type still reaches Fisher's features, through
+    ///         <see cref="FindFeature" />.
+    ///     </para>
     /// </remarks>
-    public Task EnsureStorageExistsAsync(Type storageType, CancellationToken token)
+    public new Task EnsureStorageExistsAsync(Type storageType, CancellationToken token)
     {
         if (storageType == typeof(IEvent) || storageType == typeof(StreamAction))
         {

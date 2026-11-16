@@ -43,8 +43,8 @@ internal sealed class FisherEventDataMasking : EventDataMaskingBase<IDocumentSes
         Expression<Func<IEvent, bool>> filter, CancellationToken token)
         => session.Events.QueryEventsIncludingArchivedAsync(filter, token);
 
-    // Fisher's own rule list while EventGraph still hides EventRegistry's (jasperfx#1043, a separate node);
-    // this binds to whichever the graph has, so the two lifts can land in either order.
+    // EventRegistry's rule list (jasperfx#1043, adopted in fisher#574): EventGraph no longer keeps one of its
+    // own, so a rule registered through a base-typed reference is the one applied here.
     protected override bool TryMask(IEvent @event) => _store.EventGraph.TryMask(@event);
 
     protected override Task SaveChangesAsync(IDocumentSession session, CancellationToken token)
