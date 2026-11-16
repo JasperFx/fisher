@@ -102,6 +102,8 @@ public class event_queries_after_paging : IAsyncLifetime
         ["ordered-take-order-by"] = q => q.OrderByDescending(x => x.Sequence).Take(6).OrderBy(x => x.CorrelationId),
         ["take-order-by-then-by"] =
             q => q.Take(7).OrderByDescending(x => x.CorrelationId).ThenByDescending(x => x.Version),
+        // fisher#588 over a page: the second OrderBy is primary and the first breaks its ties.
+        ["take-two-order-bys"] = q => q.Take(5).OrderBy(x => x.CorrelationId).OrderByDescending(x => x.Version),
         ["take-where-take"] = q => q.Take(4).Where(x => x.CorrelationId == "c2").Take(3),
         ["take-where-skip"] = q => q.Take(6).Where(x => x.CorrelationId != "c3").Skip(1),
         ["two-pages-deep"] =

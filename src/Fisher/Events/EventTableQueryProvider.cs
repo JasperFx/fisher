@@ -206,7 +206,9 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
     /// <summary>
     ///     Turn the expression chain into a renderable <see cref="Statement" />. Calls are unwrapped
     ///     outermost-first and replayed in source order, so LINQ's own semantics fall out: a later
-    ///     <c>OrderBy</c> replaces the ordering, a <c>ThenBy</c> extends it.
+    ///     <c>OrderBy</c> becomes the primary key with the earlier keys breaking its ties (LINQ's
+    ///     <c>OrderBy</c> is a stable re-sort, fisher#588), and a <c>ThenBy</c> refines the newest
+    ///     <c>OrderBy</c>.
     /// </summary>
     /// <remarks>
     ///     ⚠️ <b>An operator after <c>Take</c>/<c>Skip</c> applies to the page</b> (fisher#599, the
@@ -245,6 +247,7 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
         var parser = new WhereClauseParser(members);
 
         var statement = CreateStatement();
+        var orderingGroupLength = 0;
 
         // fisher#599: the statement the caller's operators started on. Everything the store scopes a
         // query by goes on this one, inside any page taken from it.
@@ -268,23 +271,29 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
                     break;
 
                 case nameof(Queryable.OrderBy):
-                    statement.OrderBys.Clear();
-                    statement.OrderBys.Add((OrderingLocator(call), false));
+                    statement.OrderBys.Insert(
+                        LinqQueryParser.OrderingInsertionIndex(ref orderingGroupLength, primary: true),
+                        (OrderingLocator(call), false));
                     break;
 
                 case nameof(Queryable.OrderByDescending):
-                    statement.OrderBys.Clear();
-                    statement.OrderBys.Add((OrderingLocator(call), true));
+                    statement.OrderBys.Insert(
+                        LinqQueryParser.OrderingInsertionIndex(ref orderingGroupLength, primary: true),
+                        (OrderingLocator(call), true));
                     break;
 
                 case nameof(Queryable.ThenBy):
                     AssertOrdered(call);
-                    statement.OrderBys.Add((OrderingLocator(call), false));
+                    statement.OrderBys.Insert(
+                        LinqQueryParser.OrderingInsertionIndex(ref orderingGroupLength, primary: false),
+                        (OrderingLocator(call), false));
                     break;
 
                 case nameof(Queryable.ThenByDescending):
                     AssertOrdered(call);
-                    statement.OrderBys.Add((OrderingLocator(call), true));
+                    statement.OrderBys.Insert(
+                        LinqQueryParser.OrderingInsertionIndex(ref orderingGroupLength, primary: false),
+                        (OrderingLocator(call), true));
                     break;
 
                 // fisher#599: consecutive paging composes into one LIMIT/OFFSET. The skips add up, and
@@ -352,6 +361,9 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
             page.SelectColumns = "*";
 
             pageOrdering = [..page.OrderBys];
+
+            // The outer statement starts with no keys of its own; the page's are in pageOrdering.
+            orderingGroupLength = 0;
 
             return outer;
         }

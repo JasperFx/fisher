@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3164 tests green on net10.0 and 3191 on net11.0** — 3093 (net10.0) / 3120 (net11.0) in `Fisher.Tests`, 40 in
+**3178 tests green on net10.0 and 3205 on net11.0** — 3107 (net10.0) / 3134 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -26,8 +26,19 @@ consecutive paging into one `LIMIT`/`OFFSET` (`Take(n).Skip(k)` is `LIMIT max(n�
 be refused, and a negative count is zero), and wraps the paged statement as a subquery for anything else, as many
 levels deep as the chain goes. Nothing is refused. The page's ordering breaks a re-sort's ties, and the scope
 (tenant, event type, archived filter) stays inside the page. `FirstOrDefault` no longer lifts a smaller limit.
-`event_queries_after_paging` (35 facts, LINQ to Objects as the oracle) fails 24 of them on the previous build; the
-11 that pass pin the composition that already worked.
+`event_queries_after_paging` (36 facts, LINQ to Objects as the oracle) fails 30 of them on the previous build; the
+6 that pass pin the consecutive `Take`/`Skip` composition that already worked.
+
+## A second `OrderBy` re-sorts (fisher#588)
+
+`OrderBy(a).OrderBy(b)` rendered `order by a, b`; LINQ's `OrderBy` is a stable re-sort, so it means `b, a`.
+`LinqQueryParser` now puts an `OrderBy`/`OrderByDescending` (and `OrderByRelevance*`) in front of every key so
+far, and a `ThenBy` straight after the keys of the `OrderBy` it refines, since `OrderBy(a).OrderBy(b).ThenBy(c)`
+is `b, c, a` rather than `b, a, c`. `OrderByMembers` moves with `OrderBys`, so keyset paging still checks the
+right terminal key. The join path (`GroupJoinData.OrderBys`) and the event-table providers (`QueryRawEvents`,
+`QueryStreamStates`, which used to drop the earlier keys altogether) follow the same rule.
+`repeated_order_by` (12 facts, LINQ to Objects as the oracle) and one `raw_event_queries` fact all fail on the
+previous build.
 
 ## The shared contract's hook members (fisher#581)
 
