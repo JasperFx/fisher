@@ -503,3 +503,166 @@ a session's commit somewhere other than the caller's own `await`.
 Not measured: group commit (coalescing queued sessions into one transaction), event appends (the
 scenario writes documents only), the async daemon writing at the same time, a bounded channel with
 backpressure, and any machine other than this one.
+
+---
+
+## Binary event bodies: JasperFx 3.3.0's `IBufferWriter` / span serializer members — fisher#570 (2026-11-15, `binary-serializer-span-members-570`)
+
+**Decision: not adopted. Fisher keeps the `byte[]` pair on both sides, and no production code changed.**
+No measured shape saves allocation without costing time. One shape does save allocation: reading a body
+past the large-object-heap threshold through a serializer that overrides the span member. It is 33–42%
+slower per row in isolation. It would also need a length column added to the canonical SELECT, and a way
+to detect whether a serializer overrides a default interface member.
+
+```
+BenchmarkDotNet v0.15.8, macOS Tahoe 26.4.1 (25E253) [Darwin 25.4.0]
+Apple M5 Max, 1 CPU, 18 logical and 18 physical cores
+.NET SDK 11.0.100, host .NET 10.0.14, Arm64 RyuJIT
+Microsoft.Data.Sqlite 10.0.9, JasperFx.Events 3.3.0, MemoryPack 1.21.4
+Job=ShortRun (InProcessEmitToolchain, 3 warmup, 3 iterations; 10 iterations for the column reads)
+```
+
+Under ShortRun the **time** columns are noisy by roughly ±10–15%. For example, the same configuration's
+`AppendTenAndCommit` at 200 B ran 377 µs in one run and 454 µs in another, with identical allocation.
+The **allocation** columns are exact and repeat, and allocation is what the issue asked about.
+
+### What was measured
+
+`BinaryEventBenchmarks.cs` holds three BenchmarkDotNet classes and one probe. Every class runs two
+serializers over the same library (MemoryPack, with `[MemoryPackable]` on the event). The only difference
+between them is which `IEventBinarySerializer` members they implement:
+
+- **`ByteArrayOnly`** implements `Serialize(Type, object)` / `Deserialize(Type, byte[])` and lets the
+  interface defaults serve the two new members. Most hand-written serializers look like this.
+- **`BufferWriterAndSpan`** also overrides `Serialize(Type, object, IBufferWriter<byte>)` and
+  `Deserialize(Type, ReadOnlySpan<byte>)`. It writes into the caller's buffer and reads the caller's span
+  directly. This is the case the new members exist for.
+
+MemoryPack was chosen over a hand-written writer because it is the realistic case, and its source
+generator ran on net10.0 with no trouble. The event holds a `Guid`, a short string, an int, and a random
+`byte[]` payload of either 200 bytes or 100,000 bytes. The large body is past the 85,000-byte
+large-object-heap threshold, so every exact-length array of it is a Gen2 allocation.
+
+### 1. Which BLOB parameters Microsoft.Data.Sqlite binds (`-- binary-bind-probe`)
+
+A write-side adoption could skip the copy out of a pooled buffer only if the provider bound something
+other than an exact-length `byte[]`. It does not:
+
+```
+Microsoft.Data.Sqlite 10.0.9.0
+  byte[] (exact length)                  bound as blob, length 8
+  ArraySegment<byte>                     REFUSED: No mapping exists from object type System.ArraySegment`1[System.Byte] ...
+  ReadOnlyMemory<byte>                   REFUSED: No mapping exists ...
+  Memory<byte>                           REFUSED: No mapping exists ...
+  MemoryStream                           REFUSED: No mapping exists ...
+  byte[] with SqliteParameter.Size = 4   bound as blob, length 4
+
+Allocation per INSERT of a 100,000-byte BLOB (the array itself is pre-allocated):
+  exact-length byte[]                           296 bytes
+  128 KiB byte[] with Size = 100,000        100,320 bytes
+```
+
+⚠️ `SqliteParameter.Size` does truncate an oversized array, so it looks like a way to bind a rented
+buffer as-is. It is not: the provider copies the truncated prefix into a new array of `Size` bytes. Binding
+a rented buffer that way costs exactly the copy it was meant to avoid.
+
+### 2. The serializer step alone (`BinaryEncodeBenchmarks`), per event
+
+`Serialize_BufferWriterThenToArray` is the realistic write-side adoption. It serializes into a pooled
+writer (here one reused `ArrayBufferWriter`, which is the best case), then copies out the `byte[]` the
+bind needs. `Serialize_BufferWriterNoCopy` stops before that copy, so it is a floor that the provider
+makes unreachable.
+
+| Serializer | Body | `Serialize` (today) | pooled writer + `ToArray` | floor, no copy | `Deserialize(byte[])` (today) | `Deserialize(span)` |
+|---|---|---|---|---|---|---|
+| ByteArrayOnly | 200 B | 36.7 ns / 272 B | 54.7 ns / **544 B** | 42.6 ns / 272 B | 34.7 ns / 336 B | 46.8 ns / **608 B** |
+| ByteArrayOnly | 100 KB | 12.5 µs / 100,186 B | 26.0 µs / **200,372 B** | 14.7 µs / 100,186 B | 10.1 µs / 100,250 B | 20.2 µs / **200,436 B** |
+| BufferWriterAndSpan | 200 B | 36.5 ns / 272 B | 39.2 ns / 272 B | 26.9 ns / 0 B | 37.0 ns / 336 B | 36.9 ns / 336 B |
+| BufferWriterAndSpan | 100 KB | 12.5 µs / 100,186 B | 12.6 µs / 100,186 B | 1.0 µs / 0 B | 9.6 µs / 100,250 B | 10.1 µs / 100,250 B |
+
+- **The overriding serializer saves nothing in either direction.** MemoryPack's own `byte[]` `Serialize`
+  already writes into a pooled buffer and copies out once, which is exactly what the adoption does. The
+  span `Deserialize` over the array `GetValue` returned reads the same bytes the `byte[]` one does.
+- **A `byte[]`-only serializer pays double on both sides.** Each default member adds a copy. The
+  writer default copies `Serialize`'s array into the buffer, and the span default copies the span back
+  into an array.
+- **The floor shows where the cost is.** For a 100 KB body, the copy out is 11.5 of the 12.5 µs, because
+  the copy is a LOH allocation. Nothing on the write side can remove that copy, because the provider
+  binds only exact-length arrays.
+- For this event, deserializing allocates at least the body size, because the event owns a `byte[]`
+  payload. That allocation belongs to the event, not to the store.
+
+### 3. Reading the BLOB column (`BinaryColumnReadBenchmarks`), per row, 500 rows, 10 iterations
+
+Deserialization uses the overriding serializer throughout, so the rows differ only in how the bytes are
+reached. "Rowid" means the SELECT includes `seq_id`, which is the rowid's alias. Fisher's SELECT always
+includes it.
+
+| Read | 200 B | 100 KB |
+|---|---|---|
+| `GetValue` → `Deserialize(byte[])` (today) | 177 ns / 616 B | 24.4 µs / 200,444 B |
+| `GetBytes` into a rented buffer → span, rowid | 958 ns / 1,124 B | 34.8 µs / **101,038 B** |
+| `GetBytes` into a rented buffer → span, no rowid | 353 ns / 1,016 B | 34.5 µs / 200,844 B |
+| hybrid: length probe, rented only at ≥ 85,000 B, rowid | 589 ns / 1,011 B | 32.6 µs / **101,038 B** |
+
+- **Without the rowid, `GetBytes` saves nothing.** The provider materializes the column into a cached
+  array and copies from it.
+- **With the rowid, `GetBytes` reads through incremental blob I/O**, opening a `sqlite3_blob_open` per row.
+  For the large body that halves allocation, at +42% time per row. For a small body it is 5.4x slower and
+  allocates more, because the blob handle costs more than the 200 bytes it saves.
+- ⚠️ **The length probe is not free either.** With the rowid present, `GetBytes(ordinal, 0, null, 0, 0)`
+  also opens the blob, which is why the hybrid's small-body row costs 589 ns against 177 ns. To avoid
+  regressing small bodies, a hybrid would need the length as a SELECT column (`length(data_binary)`). That
+  changes the canonical projection `FisherEventsRowReader` owns.
+
+### 4. End to end through a Fisher store (`BinaryEventStoreBenchmarks`), per operation of ten events
+
+`AppendTenAndCommit` starts a new stream with ten binary events and commits it. `FetchTen` reads a
+ten-event binary stream with `FetchStreamAsync`.
+
+The "Prototype" column is the realistic adoption, built and measured on this branch and then reverted:
+
+- Write side: a `[ThreadStatic]` `ArrayBufferWriter` in `EventGraph.BinaryEncoderFor`, then
+  `Serialize(type, data, writer)`, then `WrittenSpan.ToArray()`.
+- Read side: `Deserialize(type, new ReadOnlySpan<byte>((byte[])reader.GetValue(...)))` in both
+  `FisherEventsRowReader` call sites.
+
+The "Rented read" column replaces that read with the rowid `GetBytes` read into an `ArrayPool` buffer. It
+was measured for `FetchTen` only.
+
+| Operation | Serializer | Body | Today | Prototype | Rented read |
+|---|---|---|---|---|---|
+| AppendTenAndCommit | ByteArrayOnly | 200 B | 379 µs / 309.97 KB | 441 µs / **312.63 KB** | — |
+| AppendTenAndCommit | ByteArrayOnly | 100 KB | 2,070 µs / 1,286.29 KB | 2,710 µs / **2,265.32 KB** | — |
+| AppendTenAndCommit | BufferWriterAndSpan | 200 B | 377 µs / 309.97 KB | 454 µs / 309.97 KB | — |
+| AppendTenAndCommit | BufferWriterAndSpan | 100 KB | 2,116 µs / 1,286.26 KB | 2,402 µs / 1,286.40 KB | — |
+| FetchTen | ByteArrayOnly | 200 B | 28.6 µs / 21.72 KB | 32.7 µs / **24.38 KB** | 45.2 µs / **30.67 KB** |
+| FetchTen | ByteArrayOnly | 100 KB | 186 µs / 1,972.20 KB | 314 µs / **2,949.29 KB** | 306 µs / 1,980.97 KB |
+| FetchTen | BufferWriterAndSpan | 200 B | 31.0 µs / 21.72 KB | 32.7 µs / 21.72 KB | 44.4 µs / **28.02 KB** |
+| FetchTen | BufferWriterAndSpan | 100 KB | 187 µs / 1,972.22 KB | 224 µs / 1,972.02 KB | 214 µs / **1,003.60 KB** |
+
+- **For small bodies, the binary step is a tiny share of a commit.** Ten 200-byte events encode to 2.7 KB
+  out of a 310 KB commit, so nothing an adoption changed there would show.
+- **The prototype changes nothing for the overriding serializer.** For the `byte[]`-only one it costs a
+  full body copy per event on each side. With a 100 KB body that is about 980 KB more per ten-event
+  commit, and about the same per ten-event read.
+- **The rented read improves exactly one cell**: the overriding serializer with a 100 KB body, which drops
+  from 1,972 KB to 1,004 KB per ten-event read. Its time is within this job's noise of today's (214 µs,
+  against 186–224 µs across runs), while the isolated column read above shows +33–42%. Every other cell
+  it touches gets worse. Taking it would mean a size threshold, a length column in the canonical SELECT,
+  and a check for whether the serializer overrides a default interface member. All of that buys one fewer
+  Gen2 array per large event read, and only for serializers that override the member.
+
+### Notes
+
+- The prototype was measured on this branch and reverted. It was never meant to ship, so the test suite
+  was not run against it.
+- Not measured:
+  - a serializer other than MemoryPack;
+  - bodies between 200 B and 100 KB (the LOH threshold is the one boundary that matters, and both sides
+    of it are covered);
+  - the async daemon's loader, which goes through the same `ReadEventCore`;
+  - net11.0.
+- Revisit if Microsoft.Data.Sqlite gains a span or `ReadOnlyMemory<byte>` BLOB bind, or a span read over
+  `sqlite3_column_blob`. After a provider bump, `-- binary-bind-probe` answers the first question in one
+  command.

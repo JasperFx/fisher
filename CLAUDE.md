@@ -6140,16 +6140,28 @@ forever, property names included.
   holds. A binary encoding is a choice with real consequences for schema evolution (MessagePack,
   protobuf and compressed JSON fail differently when an event type gains a member), and picking one
   would be Fisher deciding how an application's data ages.
-- ⚠️ **The pooled-buffer members (jasperfx#1187/#1190) are deliberately not used, and that was measured**
-  (fisher#555). `Serialize(Type, object, IBufferWriter<byte>)` cannot save anything on the write side:
-  the BLOB parameter must be an exact-length `byte[]` that lives until the command executes, so a
-  pooled buffer still ends in a copy, and for a serializer implementing only the `byte[]` pair the
-  default adds a second. On the read side Microsoft.Data.Sqlite 10.0.9 has no allocation-free way to
-  reach a column's bytes: `GetBytes`/`GetStream` copy a cached array unless the row carries its rowid,
-  and with it — `seq_id` is always selected — they open incremental blob I/O per row. Measured over
-  2,000 rows: a 200-byte body is ~0.3 µs and 224 bytes through `GetValue`, ~2 µs and ~350–700 bytes
-  through a rented buffer; only a 100 KB body saves allocation, and it is slower even then. Revisit
-  only if the provider gains a span read over `sqlite3_column_blob`.
+- ⚠️ **The pooled-buffer members (jasperfx#1187/#1190) are deliberately not used, and that is a committed
+  benchmark now, not an argument** (fisher#555, fisher#570). `BinaryEventBenchmarks.cs` runs two MemoryPack
+  serializers, one implementing only the `byte[]` pair and one overriding both new members. It measures
+  the serializer step, the column read, and a store end to end, at 200 B and 100 KB; `Results.md` has the
+  tables. A prototype adoption was built, measured and reverted.
+  - **Write side: nothing to gain.** Microsoft.Data.Sqlite 10.0.9 binds a BLOB only from a `byte[]`.
+    `ReadOnlyMemory<byte>`, `ArraySegment<byte>` and `Memory<byte>` are refused (`-- binary-bind-probe`).
+    ⚠️ `SqliteParameter.Size` truncates an oversized rented array, but it copies the prefix into a new
+    array to do it, so it is not a way around this. A pooled writer therefore still ends in `ToArray`.
+    That saves 0 B for the overriding serializer, because MemoryPack's own `byte[]` `Serialize` already
+    pools and copies once. For a `byte[]`-only serializer the default member adds a second copy: 544 B
+    against 272 B per 200 B event, and about 980 KB more per ten 100 KB events committed.
+  - **Read side: the span over `GetValue`'s array saves nothing**, and the default doubles a `byte[]`-only
+    serializer's read. The only path that reaches the bytes without an exact array is `GetBytes` into a
+    rented buffer with the rowid selected (`seq_id` always is), which goes through incremental blob I/O
+    per row. For a 100 KB body it halves the store's allocation (1,972 KB → 1,004 KB per ten-event read)
+    at +33–42% per row in isolation. For a 200 B body it is 5.4x slower and allocates more. ⚠️ Even the
+    length probe `GetBytes(i, 0, null, 0, 0)` opens the blob, so a size-gated hybrid would need
+    `length(data_binary)` added to the canonical SELECT. It would also need to detect whether a serializer
+    overrides a default interface member. That is not worth one Gen2 array per large read.
+  - Revisit if the provider gains a span or `ReadOnlyMemory<byte>` BLOB bind, or a span read over
+    `sqlite3_column_blob`. After a provider bump, rerun `-- binary-bind-probe` first.
 
 Everything that reads the row's *columns* is unaffected — stream reads, the daemon's loader, DCB tag
 queries, `QueryEventsAsync`'s metadata filters — which is why a stream can mix the two encodings

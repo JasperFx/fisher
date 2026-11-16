@@ -499,6 +499,10 @@
 
         <!-- Benchmarking (Fisher.Benchmarks only) -->
         <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+        <!-- fisher#570: a real serializer that overrides IEventBinarySerializer's IBufferWriter / span
+             members, so the binary-event benchmark measures the case those members exist for. Benchmark
+             only; Fisher ships no IEventBinarySerializer. -->
+        <PackageVersion Include="MemoryPack" Version="1.21.4" />
 
         <!-- Testing -->
         <PackageVersion Include="NSubstitute" Version="5.3.0" />

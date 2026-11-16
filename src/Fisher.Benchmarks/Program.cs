@@ -124,13 +124,19 @@ switch (command)
         break;
     }
 
+    case "binary-bind-probe":
+        // fisher#570: which BLOB parameter shapes Microsoft.Data.Sqlite binds. Not a timing.
+        BinaryParameterProbe.Run();
+        break;
+
     case "bdn":
         // Everything after `bdn` is handed to BenchmarkDotNet unaltered, so its own filters and
         // job overrides work: `-- bdn --filter *DocSave*`, `-- bdn --job medium`.
         BenchmarkSwitcher
             .FromTypes([
                 typeof(DocSaveBenchmarks), typeof(EventAppendBenchmarks), typeof(QueryBenchmarks),
-                typeof(QueryConstructionBenchmarks)
+                typeof(QueryConstructionBenchmarks), typeof(BinaryEncodeBenchmarks),
+                typeof(BinaryColumnReadBenchmarks), typeof(BinaryEventStoreBenchmarks)
             ])
             .Run(args.Skip(1).ToArray());
         break;
@@ -152,11 +158,13 @@ switch (command)
                                   [--docs-per-commit 5] [--rounds 7]
                                   racing BEGIN IMMEDIATE vs a Channel<T> single-writer queue (fisher#547)
               all                 every scenario at its checked-in defaults
+              binary-bind-probe   which BLOB parameter shapes the provider binds (fisher#570)
 
             Micro-benchmarks (BenchmarkDotNet + MemoryDiagnoser):
               bdn [BenchmarkDotNet args...]     e.g. bdn --filter *DocSave*
                                                 DocSave, EventAppend, Query,
-                                                QueryConstruction
+                                                QueryConstruction, BinaryEncode,
+                                                BinaryColumnRead, BinaryEventStore
 
             See src/Fisher.Benchmarks/README.md and Results.md.
             """);
