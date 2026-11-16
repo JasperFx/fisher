@@ -12,11 +12,21 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3308 tests green on net10.0 and 3335 on net11.0** — 3237 (net10.0) / 3264 (net11.0) in `Fisher.Tests`, 40 in
+**3349 tests green on net10.0 and 3376 on net11.0** — 3278 (net10.0) / 3305 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
+
+## Decimal arithmetic is folded, never computed in SQLite (fisher#603)
+
+`x.Price - 0.1m < 0.2m` was rendered as `(price - 0.1) < @p0`, which SQLite computes in double, so a price of 0.3
+matched. A decimal member ± constants, either side of the comparison, is now folded into one constant in .NET
+`decimal` arithmetic (`0.3m - x.Price < 0.2m` becomes `price > 0.1`). Two decimal members, `float` arithmetic, a
+`float` member widened to double, and any non-integral `%` (SQLite truncates both operands) are refused by name.
+Integral and `double` Add/Subtract still translate. `decimal_arithmetic_in_predicates` (41 tests, LINQ to Objects
+as the oracle) fails 29 of 41 on the previous build; `sql_injection_hardening`'s fractional-modulo test now pins
+the refusal instead of the wrong answer.
 
 ## Comparing two members translates (fisher#595)
 

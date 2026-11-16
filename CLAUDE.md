@@ -6079,6 +6079,17 @@ Six SQLite decisions that are easy to get wrong and fail silently:
     since fisher#34 (`SqliteParameterValue`, which documents this exact conversion). Two of Fisher's
     three decimal-binding paths were correct and documented while the one a caller reaches first was
     not; that is the shape rather than the exception.
+- ⚠️ **Decimal arithmetic is never computed in SQLite** (fisher#603). Binding as double is fine for a
+  *comparison*; an *operation* is not: `0.3 - 0.1` is `0.19999999999999998` in SQLite, so
+  `x.Price - 0.1m < 0.2m` matched a price of 0.3. `TryFoldDecimalArithmetic` folds a member ± constants
+  in .NET `decimal` (`c - x < v` reverses to `x > c - v`) and re-parses the result through
+  `ParseComparison`, so nesting and nullability follow the plain path. What cannot fold is refused in
+  `TryRenderArithmetic`: two decimal members, `float` arithmetic, and a `float` member widened to
+  double (its stored shortest text is not the double C# widens to). `AssertModuloIsIntegral` refuses
+  any non-integral `%`, because SQLite's `%` truncates both operands to INTEGER (`3.5 % 2` is 1).
+  Constant operands are evaluated with their conversions (`EvaluateValue`), so `(double)0.1f` renders
+  as the double C# uses. Integral and `double` Add/Subtract still translate. `decimal_arithmetic_in_predicates`
+  fails 29 of 41 against the old parser.
 
 ⚠️ **A second `OrderBy` goes in front, and a `ThenBy` goes after its own `OrderBy`** (fisher#588,
 marten#5959). LINQ's `OrderBy` is a stable re-sort: `OrderBy(a).OrderBy(b)` is `b, a`, and
