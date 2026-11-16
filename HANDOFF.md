@@ -13,7 +13,6 @@ equivalent for and never will.
 scoreboard and the things that are true right now but not obvious from either.
 
 **3132 tests green on net10.0 and 3159 on net11.0** — 3061 (net10.0) / 3088 (net11.0) in `Fisher.Tests`, 40 in
-**3129 tests green on net10.0 and 3156 on net11.0** — 3058 (net10.0) / 3085 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
