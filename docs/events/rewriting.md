@@ -51,7 +51,13 @@ A [binary event](/events/storage#binary-event-bodies) is refused by both rewrite
 
 ## Event data masking
 
-GDPR-style erasure: rewriting protected information out of events already stored.
+Rewriting protected information out of events already stored.
+
+::: warning Masking is not GDPR erasure
+Masking changes the live event bodies only. Projections already built from them, backups, and the
+file's free pages keep the old values. The Critter Stack's answer to an erasure request is
+crypto-shredding with [Tayra](https://tayra.dev). See [Personal Data and GDPR Erasure](/events/personal-data).
+:::
 
 ```cs
 await store.Advanced.ApplyEventDataMaskingAsync(masking =>
@@ -105,8 +111,8 @@ expression. That asymmetry is the shared interface's, not Fisher's — the param
 
 ### The rules
 
-- **The whole batch runs in one session**, so an erasure is either done or not done. A partial one is
-  a compliance answer that is neither.
+- **The whole batch runs in one session**, so a masking pass is either done or not done. A partial
+  one would leave you unable to say which events were masked.
 - **An event is rewritten only when a rule matched it**, and added headers follow the same gate — so
   `AddHeader` marks the events that were *masked*, not the events that were looked at.
 - **The same event reached by two sources is masked once**, deduplicated by sequence.
@@ -162,6 +168,14 @@ concurrent compactions of the same stream either write the same snapshot to the 
 target already gone and update nothing.
 
 There is no lost update to prevent, so a version guard would be theatre.
+:::
+
+### Compacting is not erasure
+
+::: warning
+Compacting deletes history, but the `Compacted<T>` snapshot carries the aggregate's state, including
+any personal data in it. An `Archiver` copies the old events somewhere else on purpose. For a GDPR
+erasure request, see [Personal Data and GDPR Erasure](/events/personal-data).
 :::
 
 ### Compacting is one-way
