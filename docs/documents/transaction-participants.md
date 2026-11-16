@@ -61,9 +61,15 @@ commit.
 
 ## Where the hook sits
 
-`BeforeCommitAsync` is the **last thing inside the transaction**, the position the outbox's before
-hook already occupies. So a participant's write is invisible to another connection until the commit,
-and visible immediately after.
+`BeforeCommitAsync` runs **at the end of the transaction, after every Fisher write and before the
+outbox's before hook**, which is the last thing of all. So a participant's write is invisible to another
+connection until the commit, and visible immediately after.
+
+::: info
+**The outbox runs after the participants on both commit paths.** That is the promise
+`IMessageBatch.BeforeCommitAsync` makes, and the order the projection batch already had. A session's
+`SaveChangesAsync` used to run the outbox first (changed in fisher#581).
+:::
 
 **Both commit paths invoke participants** — a session's `SaveChangesAsync` and the async daemon's
 projection batch alike — so a projection or subscription that enlists one does not have to know which
@@ -73,6 +79,29 @@ it is running under.
 A participant added through a [tenant scope](/documents/multi-tenancy#writing-across-tenants) lands on
 the parent, for the same reason its boundaries and metadata do: there is one transaction.
 :::
+
+## The store-agnostic participant
+
+JasperFx's `IDbTransactionParticipant` is the same member over the base `DbConnection` / `DbTransaction`
+pair, so a message bus can write its envelope rows once for Marten, Polecat and Fisher. A session takes
+one through the shared contract's `AddTransactionParticipant`; see the
+[save listener](/documents/listeners#joining-a-session-you-did-not-open-addsavelistener) that enlists one
+from its before hook.
+
+It runs in the same transaction, at the same position and once per attempt like Fisher's own, on both
+commit paths: a subscription's outbox enlists one on the daemon's batch session and it commits with the
+progression row. Three things differ, all of them the contract's rules:
+
+- **It is released when its commit lands.** Fisher's own participant stays enlisted until the session
+  is disposed; a shared one runs on the next commit that succeeds and not after it, so a session saved
+  twice does not write an envelope row twice.
+- **It has no after-commit member.** Use a save listener's `AfterCommitAsync` for that.
+- **An [enlisted session](/documents/sessions#enlisting-in-your-own-connection-or-transaction) refuses
+  it** with `NotSupportedException`. The caller commits that transaction, so Fisher never learns it
+  landed and could never release the participant.
+
+A participant enlisted on its own still makes the unit of work non-empty, as Fisher's does: it writes
+rows Fisher does not know about.
 
 ## The inverse: enlisting Fisher in your transaction
 

@@ -126,6 +126,11 @@ internal sealed class FisherProjectionBatch : ProjectionBatchBase<IDocumentSessi
         var participants = sessions.SelectMany(session => session.Participants).ToArray();
         _participants = participants;
 
+        // fisher#581. The shared IDbTransactionParticipants a projection or subscription enlisted through
+        // the store-agnostic contract (jasperfx#1052: a subscription's outbox joining this transaction).
+        // Gathered here for the same reason; each DocumentSessionHooks replays its participants per attempt.
+        var sharedHooks = sessions.Select(session => session.SharedHooks).OfType<DocumentSessionHooks>().ToArray();
+
         var raised = RaisedEvents;
 
         Diagnostics.DaemonTrace.Record("batch.taken", null,
@@ -168,6 +173,14 @@ internal sealed class FisherProjectionBatch : ProjectionBatchBase<IDocumentSessi
             foreach (var participant in participants)
             {
                 await participant.BeforeCommitAsync(connection, transaction, ct).ConfigureAwait(false);
+            }
+
+            // Then the shared ones, at the same position, and with no message batch: the base's
+            // beforeCommit below is the batch's outbox, and it stays last. Nothing releases them after the
+            // commit, because a batch's session is discarded with the batch and never commits again.
+            foreach (var hooks in sharedHooks)
+            {
+                await hooks.BeforeCommitAsync(connection, transaction, null, ct).ConfigureAwait(false);
             }
 
             // Last thing inside the transaction, as the shared base requires, so an outbox wanting its
