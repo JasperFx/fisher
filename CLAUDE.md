@@ -2336,10 +2336,30 @@ can do neither, but is stable under concurrent writes and does not degrade as th
   row at all* when the page is past the end — which is exactly when a pager most needs the real total.
   Same reasoning as `a_page_past_the_end_still_reports_the_total` in the event-store explorer's paging,
   and pinned the same way here.
-- **`CountIgnoringPagingAsync` is deliberately distinct from `CountAsync`.** The latter counts the
-  *page* when the query is paged (`Take(5).CountAsync()` is 5); the former discards `Take`/`Skip`
-  because a total that counted the page would say nothing. Both are right for their caller; conflating
-  them would make one silently wrong.
+- **`CountIgnoringPagingAsync` counts the query the pager pages, before the pager's own
+  `Skip`/`Take`.** ⚠️ Paging the caller wrote is part of that query since fisher#589: it used to be
+  discarded here while the items overwrote it, so `Take(2).ToPagedListAsync(1, 3)` listed three rows and
+  reported the whole table. Now both compose, so the items and the total agree.
+- ⚠️ **An operator after `Take`/`Skip` applies to the page** (fisher#589). `Take`/`Skip` used to
+  overwrite `Limit`/`Offset` and fold everything after them into one statement, so a later `Where`,
+  `OrderBy`, `Distinct`, second `Take`/`Skip` or terminal predicate ran *before* the LIMIT, silently.
+  - **Consecutive paging composes** in `LinqQueryParser.ComposeTake`/`ComposeSkip`: the smaller
+    `Take`, `Skip`s added, `Take(n).Skip(k)` as LIMIT `max(n−k, 0)` OFFSET k. One statement, no subquery.
+  - **Anything else after paging lands on `LinqQueryParser.AfterPage`**, and
+    `FisherQueryProvider.ApplyAfterPage` makes the paged statement a subquery selecting `*`, with the
+    outer statement taking its select list. Document-member locators, duplicated columns and `id` all
+    resolve against the page, and the implicit filters stay inside. The page's own ordering is repeated
+    after any re-sort, because a subquery's row order is not promised and LINQ's `OrderBy` is stable.
+  - **Accepted after paging**: `Where`, the `OrderBy` family, `Distinct` after a `Select`, a terminal's
+    predicate, and one further `Take`/`Skip`. `Select` and the no-SQL markers stay where they are.
+    **Refused by name**: everything else, including the soft-delete, tenant and metadata filters; any
+    operator after a *join's* paging (its aliased locators do not survive a subquery); a grouped,
+    distinct or full-text page; and a second operator boundary.
+  - **Wrapping sites carry `Subquery`** (`WrapAsSubquery`, `AggregateOverPage`), and terminals cap the
+    limit with `LimitAtMost` rather than overwriting it. `ToCursorPageAsync` refuses a paged query,
+    because it sets its own LIMIT and drops the OFFSET.
+  - `operators_after_paging` fails 18 of 19 against the old parser. The repro shapes came from the
+    `marten-1115-probes` branch.
 - **Keyset pagination requires a terminal identity key**, and this is the guard that makes the rest
   honest. Without a total order, rows tied on the sort key have no defined order between them and a
   seek boundary lands mid-tie — skipping some and repeating others, silently, and only when there are

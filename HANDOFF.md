@@ -12,11 +12,24 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3183 tests green on net10.0 and 3210 on net11.0** — 3112 (net10.0) / 3139 (net11.0) in `Fisher.Tests`, 40 in
+**3202 tests green on net10.0 and 3229 on net11.0** — 3131 (net10.0) / 3158 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
+
+## Operators after `Take`/`Skip` apply to the page (fisher#589)
+
+`Take`/`Skip` used to overwrite the statement's paging, and every later operator was folded into the same
+statement, so it ran before the LIMIT: `OrderBy(n).Take(3).Where(n > 1)` filtered the table and then took
+three. Consecutive paging now composes (`Take(a).Take(b)` is the smaller, `Skip`s add up, `Take(n).Skip(k)`
+is LIMIT `max(n−k, 0)` OFFSET k). A `Where`, the `OrderBy` family, `Distinct` after a `Select`, a terminal's
+predicate and further paging after it become a subquery over the page; anything else after paging, and
+anything after a join's or a grouped page's paging, is refused by name. Terminals cap the limit rather than
+replacing it, so `Take(0).FirstOrDefault()` is null and `Take(1).Single()` no longer refuses.
+⚠️ **`ToPagedListAsync` over an already-paged query changed**: its paging composes and the total counts the
+caller's page, where both used to discard it. `ToCursorPageAsync` refuses a paged query.
+`operators_after_paging` fails 18 of 19 against the previous build.
 
 ## `Distinct()` and identity ordering after a computed `Select` (fisher#590)
 
