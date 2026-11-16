@@ -34,8 +34,9 @@ internal enum SoftDeleteScope
 ///     </para>
 ///     <para>
 ///         The chain arrives outermost-call-first, so it is walked to the source and then applied in
-///         reverse. Order matters for <c>ThenBy</c>, which must land after the <c>OrderBy</c> it
-///         refines.
+///         reverse. Order matters for the ordering operators: a later <c>OrderBy</c> lands in front of
+///         every earlier key, and a <c>ThenBy</c> right after the keys of the <c>OrderBy</c> it refines
+///         (fisher#588).
 ///     </para>
 /// </remarks>
 internal class LinqQueryParser
@@ -262,14 +263,22 @@ internal class LinqQueryParser
             // Past the SelectMany the element is the projected shape, not a document — so an ordering
             // key names a member of it and has to be mapped back to whichever document it came from.
             // Kept as an expression for the provider, which is where the result selector is rewritten.
+            // A new OrderBy is the primary key and everything collected so far only breaks its ties;
+            // a ThenBy refines the newest OrderBy (fisher#588, see AddOrderingKey).
             case "OrderBy" when Joined:
-            case "ThenBy" when Joined:
-                CurrentJoin!.OrderBys.Add((UnwrapLambda(call), false));
+                AddJoinOrdering(call, descending: false, primary: true);
                 break;
 
             case "OrderByDescending" when Joined:
+                AddJoinOrdering(call, descending: true, primary: true);
+                break;
+
+            case "ThenBy" when Joined:
+                AddJoinOrdering(call, descending: false, primary: false);
+                break;
+
             case "ThenByDescending" when Joined:
-                CurrentJoin!.OrderBys.Add((UnwrapLambda(call), true));
+                AddJoinOrdering(call, descending: true, primary: false);
                 break;
 
             // A post-join predicate names the joined shape, so like the ordering keys it is kept as an
@@ -313,29 +322,35 @@ internal class LinqQueryParser
             // because that is exactly what it is: OrderByRelevance().ThenBy(...) and
             // OrderBy(...).ThenByRelevance() both mean what they look like.
             case "OrderByRelevance":
+                AddRelevanceOrdering(call, descending: false, primary: true);
+                break;
+
             case "ThenByRelevance":
-                AddRelevanceOrdering(call, descending: false);
+                AddRelevanceOrdering(call, descending: false, primary: false);
                 break;
 
             case "OrderByRelevanceDescending":
+                AddRelevanceOrdering(call, descending: true, primary: true);
+                break;
+
             case "ThenByRelevanceDescending":
-                AddRelevanceOrdering(call, descending: true);
+                AddRelevanceOrdering(call, descending: true, primary: false);
                 break;
 
             case "OrderBy":
-                AddOrdering(call, descending: false);
+                AddOrdering(call, descending: false, primary: true);
                 break;
 
             case "OrderByDescending":
-                AddOrdering(call, descending: true);
+                AddOrdering(call, descending: true, primary: true);
                 break;
 
             case "ThenBy":
-                AddOrdering(call, descending: false);
+                AddOrdering(call, descending: false, primary: false);
                 break;
 
             case "ThenByDescending":
-                AddOrdering(call, descending: true);
+                AddOrdering(call, descending: true, primary: false);
                 break;
 
             case "Select":
@@ -645,10 +660,86 @@ internal class LinqQueryParser
     ///         <c>Select</c> always works and reads no worse.
     ///     </para>
     /// </remarks>
-    private void AddOrdering(MethodCallExpression call, bool descending)
+    private void AddOrdering(MethodCallExpression call, bool descending, bool primary)
     {
-        OrderBys.Add((OrderingLocatorFor(call), descending));
-        OrderByMembers.Add(_lastOrderingMember);
+        // fisher#591, marten#5950: a key that reads nothing from the row is the same for every row, so
+        // every row ties on it and the keys after it decide, which is what LINQ does with it too.
+        // Dropped rather than resolved, because resolving it walked a static or a captured local as a
+        // JSON path and sorted by whichever document member shared its name.
+        if (IsConstantKey(UnwrapLambda(call)))
+        {
+            DropConstantKey(ref _orderingGroupLength, primary);
+            return;
+        }
+
+        AddOrderingKey(OrderingLocatorFor(call), descending, _lastOrderingMember, primary);
+    }
+
+    /// <summary>The join path's twin of <see cref="AddOrderingKey" />, over the post-join shape.</summary>
+    private void AddJoinOrdering(MethodCallExpression call, bool descending, bool primary)
+    {
+        var join = CurrentJoin!;
+        var length = join.OrderingGroupLength;
+        join.OrderBys.Insert(OrderingInsertionIndex(ref length, primary), (UnwrapLambda(call), descending));
+        join.OrderingGroupLength = length;
+    }
+
+    /// <summary>
+    ///     Records one ordering key, keeping <see cref="OrderByMembers" /> parallel to
+    ///     <see cref="OrderBys" />.
+    /// </summary>
+    /// <remarks>
+    ///     <b>An <c>OrderBy</c> goes in front of every key collected so far; a <c>ThenBy</c> goes
+    ///     straight after the keys of the <c>OrderBy</c> it refines</b> (fisher#588, marten#5959).
+    ///     LINQ's <c>OrderBy</c> is a stable re-sort, so <c>OrderBy(a).OrderBy(b)</c> means
+    ///     <c>b, a</c>: the newest key is the primary one and the earlier keys only break its ties. Appending both kinds, which this used to do, rendered
+    ///     <c>order by a, b</c> — a plausible order and the wrong one, with nothing to signal it.
+    /// </remarks>
+    private void AddOrderingKey(string locator, bool descending, IQueryableMember? member, bool primary)
+    {
+        var index = OrderingInsertionIndex(ref _orderingGroupLength, primary);
+        OrderBys.Insert(index, (locator, descending));
+        OrderByMembers.Insert(index, member);
+    }
+
+    /// <summary>How many keys the newest <c>OrderBy</c> and its <c>ThenBy</c>s have contributed.</summary>
+    private int _orderingGroupLength;
+
+    /// <summary>
+    ///     Where the next ordering key goes: an <c>OrderBy</c> at the front, a <c>ThenBy</c> straight
+    ///     after the keys of the <c>OrderBy</c> it refines.
+    /// </summary>
+    /// <remarks>
+    ///     A <c>ThenBy</c> does not simply append. <c>OrderBy(a).OrderBy(b).ThenBy(c)</c> means
+    ///     <c>b, c, a</c>: the <c>ThenBy</c> refines the newest <c>OrderBy</c>, and the older key still only
+    ///     breaks the ties of both. Appending would render <c>b, a, c</c>.
+    /// </remarks>
+    internal static int OrderingInsertionIndex(ref int groupLength, bool primary)
+    {
+        if (primary)
+        {
+            groupLength = 1;
+            return 0;
+        }
+
+        return groupLength++;
+    }
+
+    /// <summary>
+    ///     What a dropped constant ordering key (fisher#591) does to the re-sort rule (fisher#588).
+    /// </summary>
+    /// <remarks>
+    ///     A constant <c>OrderBy</c> still re-sorts: <c>OrderBy(a).OrderBy(constant).ThenBy(b)</c> means
+    ///     <c>b, a</c>, so it starts a new group with no keys in it, and the <c>ThenBy</c> that follows goes
+    ///     in front of <c>a</c>. Leaving the group length alone would render <c>a, b</c>. A constant
+    ///     <c>ThenBy</c> contributes nothing and changes nothing.
+    /// </remarks>
+    internal static void DropConstantKey(ref int groupLength, bool primary)
+    {
+        if (primary)
+        {
+            groupLength = 0;
+        }
     }
 
     /// <summary>
@@ -671,7 +762,7 @@ internal class LinqQueryParser
     ///     ordering key that is not a document member -- a rank is not a value a cursor can carry.
     ///     </para>
     /// </remarks>
-    private void AddRelevanceOrdering(MethodCallExpression call, bool descending)
+    private void AddRelevanceOrdering(MethodCallExpression call, bool descending, bool primary)
     {
         RequiresFullTextJoin = true;
 
@@ -703,8 +794,7 @@ internal class LinqQueryParser
         var table = Weasel.Sqlite.SchemaUtils.QuoteName(
             Storage.FullText.FullTextSchema.TableNameFor(mapping).Name);
 
-        OrderBys.Add((FullTextRank.Locator(table, weights), descending));
-        OrderByMembers.Add(null);
+        AddOrderingKey(FullTextRank.Locator(table, weights), descending, null, primary);
     }
 
     /// <summary>
@@ -815,6 +905,17 @@ internal class LinqQueryParser
     /// </summary>
     private string LocatorFor(MethodCallExpression call)
     {
+        // fisher#591: an ordering key like this is dropped before it gets here. A GroupBy or a
+        // DistinctBy over one would collapse every row into a single group or a single document, which
+        // has no locator to stand for it, so it is refused rather than approximated.
+        if (IsConstantKey(UnwrapLambda(call)))
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot translate {call.Method.Name}({UnwrapLambda(call)}): the key reads nothing from the "
+                + "document, so it has the same value for every row and there is no column to key on. "
+                + "Key on a document member, or compute the result in memory.");
+        }
+
         var body = UnwrapLambda(call).Body;
 
         while (body is UnaryExpression { NodeType: ExpressionType.Convert } unary)
@@ -841,6 +942,24 @@ internal class LinqQueryParser
         }
 
         return member.TypedLocator;
+    }
+
+    private static bool IsConstantKey(LambdaExpression lambda)
+    {
+        var finder = new ParameterUse(lambda.Parameters[0]);
+        finder.Visit(lambda.Body);
+        return !finder.Found;
+    }
+
+    private sealed class ParameterUse(ParameterExpression parameter) : ExpressionVisitor
+    {
+        internal bool Found { get; private set; }
+
+        protected override Expression VisitParameter(ParameterExpression node)
+        {
+            Found |= node == parameter;
+            return node;
+        }
     }
 
     private static LambdaExpression UnwrapLambda(MethodCallExpression call)
