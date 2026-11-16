@@ -661,6 +661,21 @@ internal class LinqQueryParser
     /// </remarks>
     private void AddOrdering(MethodCallExpression call, bool descending, bool primary)
     {
+        // fisher#591, marten#5950: a key that reads nothing from the row is the same for every row, so
+        // every row ties on it and the keys after it decide, which is what LINQ does with it too.
+        // Dropped rather than resolved, because resolving it walked a static or a captured local as a
+        // JSON path and sorted by whichever document member shared its name. A constant OrderBy still
+        // starts a new group (fisher#588), so a ThenBy after it refines it rather than the older keys.
+        if (IsConstantKey(UnwrapLambda(call)))
+        {
+            if (primary)
+            {
+                _orderingGroupLength = 0;
+            }
+
+            return;
+        }
+
         AddOrderingKey(OrderingLocatorFor(call), descending, _lastOrderingMember, primary);
     }
 
@@ -833,6 +848,17 @@ internal class LinqQueryParser
     /// </summary>
     private string LocatorFor(MethodCallExpression call)
     {
+        // fisher#591: an ordering key like this is dropped before it gets here. A GroupBy or a
+        // DistinctBy over one would collapse every row into a single group or a single document, which
+        // has no locator to stand for it, so it is refused rather than approximated.
+        if (IsConstantKey(UnwrapLambda(call)))
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot translate {call.Method.Name}({UnwrapLambda(call)}): the key reads nothing from the "
+                + "document, so it has the same value for every row and there is no column to key on. "
+                + "Key on a document member, or compute the result in memory.");
+        }
+
         var body = UnwrapLambda(call).Body;
 
         while (body is UnaryExpression { NodeType: ExpressionType.Convert } unary)
@@ -859,6 +885,24 @@ internal class LinqQueryParser
         }
 
         return member.TypedLocator;
+    }
+
+    private static bool IsConstantKey(LambdaExpression lambda)
+    {
+        var finder = new ParameterUse(lambda.Parameters[0]);
+        finder.Visit(lambda.Body);
+        return !finder.Found;
+    }
+
+    private sealed class ParameterUse(ParameterExpression parameter) : ExpressionVisitor
+    {
+        internal bool Found { get; private set; }
+
+        protected override Expression VisitParameter(ParameterExpression node)
+        {
+            Found |= node == parameter;
+            return node;
+        }
     }
 
     private static LambdaExpression UnwrapLambda(MethodCallExpression call)
