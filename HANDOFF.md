@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3399 tests green on net10.0 and 3426 on net11.0** — 3328 (net10.0) / 3355 (net11.0) in `Fisher.Tests`, 40 in
+**3462 tests green on net10.0 and 3489 on net11.0** — 3391 (net10.0) / 3418 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -27,6 +27,16 @@ for values no double holds. All four now read the JSON text (`IQueryableMember.J
 `fi_decimal` collation so `HAVING`, grouped `OrderBy` and `Distinct` compare as numbers. `decimal_aggregates`
 (17 facts, LINQ to Objects as the oracle) fails 14 on the previous build. Plain `Select`/`Where` beyond 15
 significant digits is fisher#609; the collation's registry member is weasel#861.
+
+## A null member compares as C# compares it (fisher#608)
+
+`x.N != 3`, `!(x.N == 3)` and `!(x.N > 3)` dropped every row whose member was null or absent, where C# says
+true. `!=` now renders `is not`, and a negation goes through `SqlNegation.Negate`: `is` / `is not` for equality,
+`not coalesce(…, 0)` for a range, De Morgan over a compound. `!IsOneOf`, `!Contains` and modulo follow, and a null
+in a `Contains` set matches a null member. `==` and ranges stay plain and still use an index. A string method on a
+null member keeps SQL's answer, since C# would throw. `nullable_negation_semantics` (62 tests, LINQ to Objects as
+the oracle) fails 50 of 62 on the previous build; `child_collections` gained one test, because its `All` test
+pinned the old SQL answer for `s.Port != "Oslo"`.
 
 ## A float comparison binds the value its stored text reads back as (fisher#605)
 
@@ -120,17 +130,6 @@ right terminal key. The join path (`GroupJoinData.OrderBys`) and the event-table
 `QueryStreamStates`, which used to drop the earlier keys altogether) follow the same rule.
 `repeated_order_by` (12 facts, LINQ to Objects as the oracle) and one `raw_event_queries` fact all fail on the
 previous build.
-
-## `Distinct()` and identity ordering after a computed `Select` (fisher#590)
-
-Both act on the select list, which held the members a projection read rather than the value it computed, so
-`Select(x => x.Number % 3).Distinct()` deduplicated `Number` and `Select(x => -x.Number).OrderBy(n => n)` ordered
-by it. `SelectProjection` and `GroupProjection` now report `IsFaithful`, and the parser's
-`RequireFaithfulProjection` either moves the arithmetic into SQL (`ComputedColumns`: integer `%` and `/` by a
-constant other than 0 and -1, and unary minus guarded at the type minimum, over integer members, a group's key or
-its aggregates) or refuses by name. `*`, `+`, floating point, enums and string calls are refused. A projection no
-operator acts on still computes in .NET. `computed_projection_ordering_and_distinct` uses LINQ to Objects as the
-oracle; 17 of its 22 facts fail on the previous build.
 
 ## The shared contract's hook members (fisher#581)
 

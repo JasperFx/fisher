@@ -26,7 +26,7 @@ internal static class FloatComparisons
     public static bool IsFloatMember(IQueryableMember member)
         => (Nullable.GetUnderlyingType(member.MemberType) ?? member.MemberType) == typeof(float);
 
-    public static ISqlFragment Compare(IQueryableMember member, double value, string op)
+    public static ISqlFragment Compare(IQueryableMember member, double value, string op, bool nullSafe = true)
     {
         if (double.IsNaN(value))
         {
@@ -37,7 +37,7 @@ internal static class FloatComparisons
         var nearest = (float)value;
         if (nearest == value)
         {
-            return new ComparisonFilter(member.TypedLocator, op, nearest);
+            return new ComparisonFilter(member.TypedLocator, op, nearest, nullSafe);
         }
 
         return op switch
@@ -46,9 +46,9 @@ internal static class FloatComparisons
             "!=" => new WhereFragment("1"),
             // No float equals the value, so > and >= both mean "at least the next float up".
             ">" or ">=" => new ComparisonFilter(member.TypedLocator, ">=",
-                nearest > value ? nearest : MathF.BitIncrement(nearest)),
+                nearest > value ? nearest : MathF.BitIncrement(nearest), nullSafe),
             "<" or "<=" => new ComparisonFilter(member.TypedLocator, "<=",
-                nearest < value ? nearest : MathF.BitDecrement(nearest)),
+                nearest < value ? nearest : MathF.BitDecrement(nearest), nullSafe),
             _ => throw new ArgumentOutOfRangeException(nameof(op), op, null)
         };
     }

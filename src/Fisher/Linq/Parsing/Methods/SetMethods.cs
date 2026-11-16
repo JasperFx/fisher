@@ -33,7 +33,8 @@ internal sealed class IsOneOf : IMethodCallParser
         }
 
         return new WhereInFilter(member.TypedLocator,
-            FloatComparisons.MembershipValues(member, values.Cast<object?>()).Select(member.ConvertValue).ToList());
+            FloatComparisons.MembershipValues(member, values.Cast<object?>()).Select(member.ConvertValue).ToList(),
+            member.RawLocator);
     }
 
     private static Expression StripConversions(Expression expression)
@@ -106,7 +107,7 @@ internal sealed class ObjectEquals : IMethodCallParser
 
         return value is null
             ? new LiteralSqlFragment($"{member.RawLocator} is null")
-            : new ComparisonFilter(member.TypedLocator, "=", value);
+            : new ComparisonFilter(member.TypedLocator, "=", value, nullSafe: true);
     }
 
     private static Expression StripConversions(Expression expression)

@@ -29,30 +29,41 @@ namespace Fisher.Linq.SqlGeneration;
 ///         call <see cref="Storage.SqliteParameterValue.NormalizeDecimal" />.
 ///     </para>
 /// </remarks>
-internal class ModuloFilter : ISqlFragment
+internal class ModuloFilter : ISqlFragment, INegatableFragment
 {
     private readonly string _locator;
     private readonly object _divisor;
     private readonly string _op;
     private readonly object _operand;
+    private readonly bool _negated;
 
     public ModuloFilter(string locator, object divisor, string op, object operand)
+        : this(locator, SqliteParameterValue.NormalizeDecimal(divisor)!, op,
+            SqliteParameterValue.NormalizeDecimal(operand)!, negated: false)
+    {
+    }
+
+    private ModuloFilter(string locator, object divisor, string op, object operand, bool negated)
     {
         _locator = locator;
-        _divisor = SqliteParameterValue.NormalizeDecimal(divisor)!;
+        _divisor = divisor;
         _op = op;
-        _operand = SqliteParameterValue.NormalizeDecimal(operand)!;
+        _operand = operand;
+        _negated = negated;
     }
+
+    /// <summary>A null member makes C#'s lifted <c>%</c> null, so this negates null-safe (fisher#608).</summary>
+    public ISqlFragment Negate() => new ModuloFilter(_locator, _divisor, _op, _operand, !_negated);
 
     public void Apply(ICommandBuilder builder)
     {
-        builder.Append('(');
-        builder.Append(_locator);
-        builder.Append(" % ");
-        builder.AppendParameter(_divisor);
-        builder.Append(") ");
-        builder.Append(_op);
-        builder.Append(' ');
-        builder.AppendParameter(_operand);
+        SqlNegation.ApplyNullSafe(builder, b =>
+        {
+            b.Append('(');
+            b.Append(_locator);
+            b.Append(" % ");
+            b.AppendParameter(_divisor);
+            b.Append(')');
+        }, _op, _negated, b => b.AppendParameter(_operand));
     }
 }

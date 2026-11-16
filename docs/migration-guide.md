@@ -74,8 +74,9 @@ Still missing against Marten, and refused by name rather than answered wrongly:
 - **`SelectMany` over a child collection**, and therefore anything that flattens elements into the
   result — including ordering or projecting by a child element's member.
 - **`Select` projecting a child collection.**
-- A predicate inside `Any` / `All` / `Count` follows **SQL null semantics**, not C#'s: a predicate that
-  evaluates to NULL is not satisfied.
+- A string method on a null member (`!x.Name.StartsWith("a")`) follows **SQL null semantics**, since
+  C# would throw: the row matches neither the method nor its negation. A comparison answers as C#
+  does — `x.N != 3` and `!(x.N > 3)` are true when `x.N` is null.
 
 ::: tip
 The one to check in ported code is the last bullet, because it compiles either way. The rest are

@@ -28,15 +28,74 @@ namespace Fisher.Linq.SqlGeneration;
 ///         has seen.
 ///     </para>
 /// </remarks>
-internal class WhereInFilter : ISqlFragment
+internal class WhereInFilter : ISqlFragment, INegatableFragment
 {
     private readonly string _locator;
+    private readonly string _nullLocator;
     private readonly IReadOnlyList<object?> _values;
+    private readonly bool _matchesNull;
+    private readonly bool _negated;
 
-    public WhereInFilter(string locator, IReadOnlyList<object?> values)
+    /// <param name="nullLocator">
+    ///     What a null in the set is tested against — the member's raw locator, since a null test asks
+    ///     whether the member is present. Defaults to <paramref name="locator" />.
+    /// </param>
+    public WhereInFilter(string locator, IReadOnlyList<object?> values, string? nullLocator = null)
     {
         _locator = locator;
-        _values = [.. values.Select(SqliteParameterValue.NormalizeComparisonValue)];
+        _nullLocator = nullLocator ?? locator;
+
+        // fisher#608: SQL's `in` never matches NULL, where C#'s Contains(null) does, so a null in the set
+        // becomes an `is null` arm rather than a parameter.
+        _matchesNull = values.Any(x => x is null);
+        _values = [.. values.Where(x => x is not null).Select(SqliteParameterValue.NormalizeComparisonValue)];
+    }
+
+    private WhereInFilter(WhereInFilter source, bool negated)
+    {
+        _locator = source._locator;
+        _nullLocator = source._nullLocator;
+        _values = source._values;
+        _matchesNull = source._matchesNull;
+        _negated = negated;
+    }
+
+    /// <summary>
+    ///     <c>!set.Contains(x.N)</c> is true in C# when <c>x.N</c> is null and the set holds no null, and
+    ///     <c>not (NULL in (…))</c> is NULL, so the negation is <c>not coalesce(…, 0)</c> (fisher#608).
+    /// </summary>
+    public ISqlFragment Negate() => new WhereInFilter(this, !_negated);
+
+    public void Apply(ICommandBuilder builder)
+    {
+        if (!_negated && !_matchesNull)
+        {
+            ApplyMembership(builder);
+            return;
+        }
+
+        if (_negated)
+        {
+            builder.Append("not coalesce(");
+        }
+
+        if (_matchesNull)
+        {
+            builder.Append('(');
+            ApplyMembership(builder);
+            builder.Append(" or ");
+            builder.Append(_nullLocator);
+            builder.Append(" is null)");
+        }
+        else
+        {
+            ApplyMembership(builder);
+        }
+
+        if (_negated)
+        {
+            builder.Append(", 0)");
+        }
     }
 
     /// <summary>
@@ -46,7 +105,7 @@ internal class WhereInFilter : ISqlFragment
     /// </summary>
     internal const int JsonArrayThreshold = 1_000;
 
-    public void Apply(ICommandBuilder builder)
+    private void ApplyMembership(ICommandBuilder builder)
     {
         if (_values.Count == 0)
         {
