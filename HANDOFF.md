@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3482 tests green on net10.0 and 3509 on net11.0** — 3411 (net10.0) / 3438 (net11.0) in `Fisher.Tests`, 40 in
+**3502 tests green on net10.0 and 3529 on net11.0** — 3431 (net10.0) / 3458 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -27,6 +27,14 @@ for values no double holds. All four now read the JSON text (`IQueryableMember.J
 `fi_decimal` collation so `HAVING`, grouped `OrderBy` and `Distinct` compare as numbers. `decimal_aggregates`
 (17 facts, LINQ to Objects as the oracle) fails 14 on the previous build. Plain `Select`/`Where` beyond 15
 significant digits is fisher#609; the collation's registry member is weasel#861.
+
+## Comparing two decimal members is exact (fisher#615)
+
+`x.A < x.B` and `x.A == x.B` over decimals compared their `json_extract` REALs, which are one value for decimals
+that differ past the fifteenth digit. A comparison C# makes in `decimal` now compares both sides' `fi_decimal_key`s,
+keyed from the JSON text (or from the INTEGER of an integral side), with fisher#595's and fisher#608's null answers.
+`(decimal)x.Ratio` is refused by name, since C# rounds a double to fifteen digits first. `decimal_member_comparisons`
+(20 tests, LINQ to Objects as the oracle) fails 14 on the previous build.
 
 ## `decimal` reads, comparisons and ordering are exact (fisher#609)
 

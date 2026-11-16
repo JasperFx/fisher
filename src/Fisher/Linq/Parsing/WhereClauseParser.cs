@@ -256,11 +256,22 @@ internal class WhereClauseParser
     ///         conversion that changes the value (<c>(int)x.Price</c> truncates in C# and not in SQL),
     ///         and <c>decimal</c> or <c>float</c> arithmetic, which SQLite would run in <c>double</c>.
     ///     </para>
+    ///     <para>
+    ///         ⚠️ <b>A comparison C# makes in <see cref="decimal" /> compares <c>fi_decimal_key</c>s</b>
+    ///         (fisher#615), never the two REALs, which are one value for decimals that differ past the
+    ///         fifteenth significant digit. See <see cref="ExactDecimalOperand" />.
+    ///     </para>
     /// </remarks>
     private ISqlFragment ParseMemberToMember(BinaryExpression binary, string op)
     {
         var left = ComparisonOperand(binary.Left, binary);
         var right = ComparisonOperand(binary.Right, binary);
+
+        if ((Nullable.GetUnderlyingType(binary.Left.Type) ?? binary.Left.Type) == typeof(decimal))
+        {
+            left = left with { Sql = ExactDecimalOperand(binary.Left, binary, left.Sql) };
+            right = right with { Sql = ExactDecimalOperand(binary.Right, binary, right.Sql) };
+        }
 
         if (!(left.Numeric && right.Numeric) && left.Type != right.Type)
         {
@@ -285,6 +296,62 @@ internal class WhereClauseParser
         }
 
         return new WhereFragment($"{left.Sql} {(op == "=" ? "is" : "is not")} {right.Sql}");
+    }
+
+    /// <summary>
+    ///     One side of a comparison C# makes in <see cref="decimal" />, as its <c>fi_decimal_key</c>: a BLOB
+    ///     whose bytes sort as the number, so <c>=</c>, <c>&lt;</c> and the rest compare exactly (fisher#615).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         A decimal member is keyed from its JSON text (<see cref="DecimalPrecision" />'s reading),
+    ///         so <c>1.0m</c> and <c>1.00m</c> are one key, as they are one value in C#. An integral member
+    ///         or integral arithmetic, which C# widens to decimal exactly, is keyed from its INTEGER. A
+    ///         null or absent member keys to NULL, so the caller's <c>is</c> / <c>coalesce</c> rendering
+    ///         keeps fisher#595's and fisher#608's answers for a null.
+    ///     </para>
+    ///     <para>
+    ///         ⚠️ <b>A <c>double</c> or <c>float</c> converted to decimal is refused</b>: C#'s conversion
+    ///         rounds to fifteen significant digits before comparing, which no SQL here reproduces, and
+    ///         comparing the REALs is the inexact answer this replaced.
+    ///     </para>
+    /// </remarks>
+    private string ExactDecimalOperand(Expression side, BinaryExpression binary, string sql)
+    {
+        for (var node = side;
+             node is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } convert;
+             node = convert.Operand)
+        {
+            var source = Nullable.GetUnderlyingType(convert.Operand.Type) ?? convert.Operand.Type;
+            if (source == typeof(double) || source == typeof(float))
+            {
+                throw RefuseMemberComparison(binary,
+                    $"'{convert}' converts a {source.Name} to decimal, which C# rounds to fifteen significant "
+                    + "digits before comparing. Compare in double instead, as in '(double)x.Amount'");
+            }
+        }
+
+        var stripped = StripConvert(side);
+        if (stripped is BinaryExpression)
+        {
+            // Integral arithmetic: decimal arithmetic is refused by ComparisonOperand (fisher#603).
+            return $"{DecimalAggregates.SortKeyFunctionName}({sql})";
+        }
+
+        TryResolveDocumentMember(stripped, out var member);
+        if (DecimalPrecision.IsExact(member))
+        {
+            return $"{DecimalAggregates.SortKeyFunctionName}({member!.JsonTextLocator})";
+        }
+
+        var type = Nullable.GetUnderlyingType(stripped.Type) ?? stripped.Type;
+        if (IntegralRank(type) > 0)
+        {
+            return $"{DecimalAggregates.SortKeyFunctionName}({sql})";
+        }
+
+        throw RefuseMemberComparison(binary,
+            $"'{stripped}' has no exact decimal value Fisher can read, so it cannot be compared in decimal");
     }
 
     /// <summary>One side of a member-to-member comparison.</summary>
@@ -408,8 +475,9 @@ internal class WhereClauseParser
             return IntegralRank(target) >= sourceRank || target == typeof(double) || target == typeof(decimal);
         }
 
-        // decimal and double are both compared as REAL already, so moving between them changes nothing
-        // SQLite sees. A float is not: C# compares it in single precision.
+        // decimal to double compares in double, as REALs. double to decimal is let through here and refused
+        // by ExactDecimalOperand, where the comparison is made in decimal (fisher#615). A float is not: C#
+        // compares it in single precision.
         return (source == typeof(decimal) && target == typeof(double))
                || (source == typeof(double) && target == typeof(decimal));
     }
