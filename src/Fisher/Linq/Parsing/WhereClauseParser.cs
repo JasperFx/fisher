@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
 using Fisher.Linq.Members;
@@ -178,6 +179,13 @@ internal class WhereClauseParser
         if (TryParseModulo(binary, op, out var moduloFragment))
         {
             return moduloFragment!;
+        }
+
+        // x.Price - 0.1m < 0.2m: decimal arithmetic is folded in .NET, never run in SQLite (fisher#603)
+        if (TryFoldDecimalArithmetic(binary.Left, binary.Right, op, out var foldedFragment)
+            || TryFoldDecimalArithmetic(binary.Right, binary.Left, ReverseOperator(op), out foldedFragment))
+        {
+            return foldedFragment!;
         }
 
         // x.Version - x.CompactedVersion > 3, either way round
@@ -518,6 +526,18 @@ internal class WhereClauseParser
             return false;
         }
 
+        // fisher#603: SQLite has no decimal or single-precision arithmetic, only double, so either would
+        // round differently than C#. decimal against constants was folded before this point
+        // (TryFoldDecimalArithmetic); what reaches here is a shape folding cannot express.
+        var resultType = Nullable.GetUnderlyingType(arithmetic.Type) ?? arithmetic.Type;
+        if (resultType == typeof(decimal) || resultType == typeof(float))
+        {
+            throw RefuseArithmetic(arithmetic,
+                $"it is {resultType.Name} arithmetic, which SQLite would compute in double precision and so "
+                + "round differently than C# does. Only a decimal member plus or minus constants is folded "
+                + "into a single constant");
+        }
+
         // At least one operand must be a document member, or this is a constant expression the value
         // side's ExtractValue would have folded already. fisher#591: a document member, not merely a
         // member. `Statics.Value - 4` is a member expression too, and accepting it here sent the other
@@ -553,6 +573,16 @@ internal class WhereClauseParser
                     return false;
                 }
 
+                // A float is stored as its shortest round-trip text, which reads back as a double that
+                // is not the double C# widens the float to: 0.3f is 0.3 in SQLite and
+                // 0.30000001192092896 in C# (fisher#603).
+                if ((Nullable.GetUnderlyingType(member.Type) ?? member.Type) == typeof(float))
+                {
+                    throw RefuseArithmetic(arithmetic,
+                        $"'{member}' is a float, which SQLite reads back as a different double than the one "
+                        + "C# widens it to");
+                }
+
                 operandSql = _memberFactory.ResolveMember(member).TypedLocator;
                 renderedMember = true;
                 anyNullable |= Nullable.GetUnderlyingType(member.Type) != null;
@@ -562,10 +592,12 @@ internal class WhereClauseParser
             // Only a parameter-free operand can be evaluated to a constant — ExtractValue compiles
             // the expression, and a lambda parameter inside it (a computed member of a join result,
             // say) is not a value to fold but a shape this parse must decline.
+            // EvaluateValue keeps the operand's conversions, so a float constant widened to double is
+            // rendered as the double C# computes with rather than as the float's shorter text.
             if (!ReferencesFreeParameter(operand)
-                && ExtractValue(operand) is { } value && IsNumeric(value.GetType()))
+                && EvaluateValue(operand) is { } value && IsNumeric(value.GetType()))
             {
-                operandSql = Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)!;
+                operandSql = Convert.ToString(value, CultureInfo.InvariantCulture)!;
                 return true;
             }
 
@@ -694,6 +726,8 @@ internal class WhereClauseParser
         if (binary.Left is BinaryExpression { NodeType: ExpressionType.Modulo } modulo
             && StripConvert(modulo.Left) is MemberExpression left && IsDocumentMember(left))
         {
+            AssertModuloIsIntegral(modulo);
+
             if (ExtractValue(modulo.Right) is not { } divisor || ExtractValue(binary.Right) is not { } operand)
             {
                 return false;
@@ -707,6 +741,8 @@ internal class WhereClauseParser
         if (binary.Right is BinaryExpression { NodeType: ExpressionType.Modulo } moduloRight
             && StripConvert(moduloRight.Left) is MemberExpression right && IsDocumentMember(right))
         {
+            AssertModuloIsIntegral(moduloRight);
+
             if (ExtractValue(moduloRight.Right) is not { } divisor || ExtractValue(binary.Left) is not { } operand)
             {
                 return false;
@@ -719,6 +755,159 @@ internal class WhereClauseParser
 
         return false;
     }
+
+    /// <summary>
+    ///     Refuses a <c>%</c> that is not integral (fisher#603). SQLite's <c>%</c> casts both operands to
+    ///     INTEGER first, so <c>3.5 % 2</c> is 1 there and 1.5 in C#, and <c>0.5m % 0.25m</c> is a
+    ///     division by zero (NULL) there and 0 in C#.
+    /// </summary>
+    private static void AssertModuloIsIntegral(BinaryExpression modulo)
+    {
+        var type = Nullable.GetUnderlyingType(modulo.Type) ?? modulo.Type;
+        if (IntegralRank(type) > 0 || type == typeof(ulong))
+        {
+            return;
+        }
+
+        throw RefuseArithmetic(modulo,
+            $"it is {type.Name} modulo, and SQLite's % truncates both operands to integers first, so it "
+            + "would return different rows than C#");
+    }
+
+    private static BadLinqExpressionException RefuseArithmetic(Expression arithmetic, string reason)
+        => new($"Cannot translate '{arithmetic}' to SQL: {reason}. " + Alternatives);
+
+    /// <summary>
+    ///     <c>x.Price - 0.1m &lt; 0.2m</c> → <c>x.Price &lt; 0.3m</c>: <c>decimal</c> Add/Subtract between a
+    ///     document member and constants, folded into one constant in <c>decimal</c> arithmetic on the .NET
+    ///     side (fisher#603).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         SQLite has no decimal type: the stored value reads back as REAL, so <c>(price - 0.1)</c>
+    ///         would be computed in double, and <c>0.3 - 0.1</c> is <c>0.19999999999999998</c> there and
+    ///         exactly <c>0.2</c> in C#. Folding leaves SQLite comparing the stored value with one exactly
+    ///         computed constant, which is what a plain decimal comparison already does (fisher#304).
+    ///     </para>
+    ///     <para>
+    ///         The rewritten comparison goes back through <see cref="ParseComparison" />, so a nested
+    ///         <c>(x.P - 1m) - 2m</c> folds one level per pass and the plain path's rules (nullability,
+    ///         conversions, a null constant) apply unchanged. <c>c - x.P &lt; v</c> negates the member and
+    ///         therefore reverses the operator: <c>x.P &gt; c - v</c>.
+    ///     </para>
+    ///     <para>
+    ///         Declines (returns false) for anything that is not exactly one member side and one constant
+    ///         side, which then reaches <see cref="TryRenderArithmetic" /> and is refused there by name.
+    ///     </para>
+    /// </remarks>
+    private bool TryFoldDecimalArithmetic(Expression arithmeticSide, Expression valueSide, string op,
+        out ISqlFragment? fragment)
+    {
+        fragment = null;
+
+        if (StripLifting(arithmeticSide) is not BinaryExpression
+            {
+                NodeType: ExpressionType.Add or ExpressionType.Subtract
+            } arithmetic
+            || (Nullable.GetUnderlyingType(arithmetic.Type) ?? arithmetic.Type) != typeof(decimal)
+            || ReferencesFreeParameter(valueSide))
+        {
+            return false;
+        }
+
+        var leftReadsTheRow = ReferencesFreeParameter(arithmetic.Left);
+        if (leftReadsTheRow == ReferencesFreeParameter(arithmetic.Right))
+        {
+            return false;
+        }
+
+        var memberOperand = leftReadsTheRow ? arithmetic.Left : arithmetic.Right;
+        var constantOperand = leftReadsTheRow ? arithmetic.Right : arithmetic.Left;
+
+        if (EvaluateValue(constantOperand) is not { } constantValue)
+        {
+            throw RefuseArithmetic(arithmetic, "a null operand makes the result null on every row");
+        }
+
+        var operand = Convert.ToDecimal(constantValue, CultureInfo.InvariantCulture);
+        var compared = EvaluateValue(valueSide);
+
+        if (compared == null && RangeOperators.Contains(op))
+        {
+            throw RefuseArithmetic(arithmetic, $"it is range-compared ({op}) with null");
+        }
+
+        decimal? folded;
+        var foldedOperator = op;
+
+        try
+        {
+            var value = compared == null ? (decimal?)null : Convert.ToDecimal(compared, CultureInfo.InvariantCulture);
+
+            if (arithmetic.NodeType == ExpressionType.Add)
+            {
+                // x + c OP v and c + x OP v are both x OP v - c
+                folded = value - operand;
+            }
+            else if (leftReadsTheRow)
+            {
+                // x - c OP v is x OP v + c
+                folded = value + operand;
+            }
+            else
+            {
+                // c - x OP v is -x OP v - c, which is x OP' c - v with the operator reversed
+                folded = operand - value;
+                foldedOperator = ReverseOperator(op);
+            }
+        }
+        catch (OverflowException)
+        {
+            throw RefuseArithmetic(arithmetic,
+                "folding its constants overflows decimal, so there is no single value to compare the member with");
+        }
+
+        var member = memberOperand.Type == typeof(decimal?)
+            ? memberOperand
+            : Expression.Convert(memberOperand, typeof(decimal?));
+
+        var rewritten = Expression.MakeBinary(ExpressionTypeOf(foldedOperator), member,
+            Expression.Constant(folded, typeof(decimal?)));
+
+        fragment = ParseComparison(rewritten, foldedOperator);
+        return true;
+    }
+
+    /// <summary>Strips conversions that only add or remove <see cref="Nullable{T}" />.</summary>
+    private static Expression StripLifting(Expression expression)
+    {
+        while (expression is UnaryExpression { NodeType: ExpressionType.Convert } convert
+               && (Nullable.GetUnderlyingType(convert.Type) ?? convert.Type)
+               == (Nullable.GetUnderlyingType(convert.Operand.Type) ?? convert.Operand.Type))
+        {
+            expression = convert.Operand;
+        }
+
+        return expression;
+    }
+
+    /// <summary>
+    ///     Evaluates a parameter-free expression to its value, keeping its conversions: a float widened to
+    ///     double is the double C# would compute with, not the float.
+    /// </summary>
+    private static object? EvaluateValue(Expression expression)
+        => expression is ConstantExpression constant ? constant.Value : CompileAndInvoke(expression);
+
+    private static ExpressionType ExpressionTypeOf(string op) => op switch
+    {
+        "=" => ExpressionType.Equal,
+        "!=" => ExpressionType.NotEqual,
+        ">" => ExpressionType.GreaterThan,
+        ">=" => ExpressionType.GreaterThanOrEqual,
+        "<" => ExpressionType.LessThan,
+        "<=" => ExpressionType.LessThanOrEqual,
+        _ => throw new ArgumentOutOfRangeException(nameof(op), op, null)
+    };
 
     private ISqlFragment BuildComparisonFilter(IQueryableMember member, object? value, string op)
     {

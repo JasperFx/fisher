@@ -151,6 +151,15 @@ below every TEXT one — see
 [SQLite differences](/configuration/sqlite#decimal-is-a-json-number-and-it-compares-as-one) for what
 that means if you ever write the statement yourself.
 
+**Arithmetic on a `decimal` member is never computed in SQLite**, which has only `double` arithmetic:
+there, `0.3 - 0.1` is `0.19999999999999998`, so `x.Price - 0.1m < 0.2m` would match a price of `0.3`.
+A member plus or minus constants, on either side of the comparison, is folded on the .NET side in
+`decimal` arithmetic: `x.Price - 0.1m < 0.2m` is sent as `price < 0.3`, and `0.3m - x.Price < 0.2m` as
+`price > 0.1`. Every other `decimal` or `float` arithmetic shape — two members (`x.Price + x.Fee`),
+multiplication, division — and a `%` that is not integral are refused with a
+`BadLinqExpressionException` rather than answered in `double`. Integral and `double` arithmetic
+translate as before, because SQLite computes them the way C# does.
+
 ::: warning
 The comparison is floating point, so `SumAsync` and `AverageAsync` over a `decimal` member are
 accurate to `double` precision rather than to decimal precision. That is SQLite's arithmetic, not a

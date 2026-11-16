@@ -18,6 +18,16 @@ them are shared cross-store compliance tests — 612 event sourcing and 231 docu
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
 
+## Decimal arithmetic is folded, never computed in SQLite (fisher#603)
+
+`x.Price - 0.1m < 0.2m` was rendered as `(price - 0.1) < @p0`, which SQLite computes in double, so a price of 0.3
+matched. A decimal member ± constants, either side of the comparison, is now folded into one constant in .NET
+`decimal` arithmetic (`0.3m - x.Price < 0.2m` becomes `price > 0.1`). Two decimal members, `float` arithmetic, a
+`float` member widened to double, and any non-integral `%` (SQLite truncates both operands) are refused by name.
+Integral and `double` Add/Subtract still translate. `decimal_arithmetic_in_predicates` (41 tests, LINQ to Objects
+as the oracle) fails 29 of 41 on the previous build; `sql_injection_hardening`'s fractional-modulo test now pins
+the refusal instead of the wrong answer.
+
 ## Comparing two members translates (fisher#595)
 
 `x.A < x.B`, `x.A == x.B` and `x.A - 1 < x.B` failed with an internal `InvalidOperationException`, because the
