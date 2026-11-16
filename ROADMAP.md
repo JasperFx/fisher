@@ -4,12 +4,48 @@ Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.
 architecture and the SQLite-specific decisions.
 
 Status: **three open issues: one is the Fisher 2.0 milestone (whether to adopt the single-writer queue), one is
-documentation, and the other one is blocked upstream.** The 2.0 issue is Fisher's share of the Critter Stack
-.NET 11 release train. 1.28.0 took JasperFx
+a small Marten parity helper, and the other one is blocked upstream.** The 2.0 issue is Fisher's share of the
+Critter Stack .NET 11 release train. 1.28.0 took JasperFx
 2.100's compliance additions ([#519](https://github.com/JasperFx/fisher/issues/519)). 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
+
+**Since 2.0.0-alpha.2, main moves to Weasel 10.0.0-alpha.4 and is mostly a LINQ correctness wave**, out of a sweep
+of Marten's fixes for anything that also bites Fisher. Every one of these answered differently from LINQ to
+Objects, silently, and now matches it or is refused by name:
+- A second `OrderBy` re-sorts ([#588](https://github.com/JasperFx/fisher/issues/588)).
+- An operator after `Take`/`Skip` applies to the page, for documents ([#589](https://github.com/JasperFx/fisher/issues/589))
+  and for the event tables ([#599](https://github.com/JasperFx/fisher/issues/599)).
+- `Distinct()` after a computed `Select` acts on the computed value ([#590](https://github.com/JasperFx/fisher/issues/590)).
+- A static or captured local is a value, not a JSON path, including after a join
+  ([#591](https://github.com/JasperFx/fisher/issues/591), [#596](https://github.com/JasperFx/fisher/issues/596)).
+- Two document members can be compared ([#595](https://github.com/JasperFx/fisher/issues/595)), and two decimal
+  members are compared exactly ([#615](https://github.com/JasperFx/fisher/issues/615)).
+- `!=` and a negation keep a null member's row, as C# does ([#608](https://github.com/JasperFx/fisher/issues/608)).
+- Decimals are exact end to end: arithmetic is folded in .NET ([#603](https://github.com/JasperFx/fisher/issues/603)),
+  the aggregates are computed in `decimal` ([#606](https://github.com/JasperFx/fisher/issues/606)), and reads,
+  comparisons, ordering and grouping read the number as written ([#609](https://github.com/JasperFx/fisher/issues/609)).
+  ⚠️ An index no longer serves `OrderBy` over a decimal; comparisons still use it.
+- A `float` comparison binds the value its stored text reads back as ([#605](https://github.com/JasperFx/fisher/issues/605)).
+
+Outside LINQ:
+- Fisher serializes connection opens per connection string, because Microsoft.Data.Sqlite's pool could hand one
+  native connection to two sessions ([#576](https://github.com/JasperFx/fisher/issues/576)). The gate is a `Lock`
+  around a synchronous open, so a burst of synchronous Hi-Lo stores no longer starves the thread pool
+  ([#587](https://github.com/JasperFx/fisher/issues/587)).
+- `EventGraph` uses `EventRegistry`'s registries instead of hiding them ([#574](https://github.com/JasperFx/fisher/issues/574)).
+- The shared contract's `StoreObjects`, `AddTransactionParticipant(IDbTransactionParticipant)` and `AddSaveListener`
+  are implemented ([#581](https://github.com/JasperFx/fisher/issues/581)).
+- The daemon's allow list binds as one parameter past 1,000 event types ([#583](https://github.com/JasperFx/fisher/issues/583)).
+- Raw SQL's `object` result reads the provider's value instead of crashing the process
+  ([#613](https://github.com/JasperFx/fisher/issues/613); the document-selector half is weasel#863).
+- The diagnostics criteria refuse only a negated string method on a nullable member ([#612](https://github.com/JasperFx/fisher/issues/612)).
+- Docs: a Personal Data and GDPR Erasure page pointing at Tayra ([#552](https://github.com/JasperFx/fisher/issues/552)).
+
+[#569](https://github.com/JasperFx/fisher/issues/569) was pinned to a regression test, and
+[#570](https://github.com/JasperFx/fisher/issues/570) measured and declined JasperFx 3.3.0's pooled binary-serializer
+members.
 
 **2.0.0-alpha.2 moves to JasperFx 3.3.0 and Weasel 10.0.0-alpha.2** and closes the rest of the train's
 issues but one. [#465](https://github.com/JasperFx/fisher/issues/465)'s last item adopts Weasel's closed-shape
@@ -364,16 +400,18 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is three items: one of them the Fisher 2.0 milestone, one documentation, and one blocked upstream.
+What is left is three items: one of them the Fisher 2.0 milestone, one a Marten parity helper, and one blocked
+upstream.
 
 **Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.3, Weasel 10.0, `net10.0;net11.0`):
-[#547](https://github.com/JasperFx/fisher/issues/547) the `Channel<T>` single-writer queue. It is measured
-(#564: at 8+ writers an in-process queue roughly halved wall clock and cut worst-case commit latency by an order of
-magnitude), and adopting it is still to decide. It does not land in a 1.x release.
+[#547](https://github.com/JasperFx/fisher/issues/547) the `Channel<T>` single-writer queue. It is measured twice.
+At 8+ writers an in-process queue roughly halved wall clock and cut worst-case commit latency by an order of
+magnitude (#564). Round 2 (#586) found SQLite's busy-handler sleeps to be the whole cost of racing: a 1 ms busy
+handler alone gives 2–3× the throughput with no semantic change, while a queue raises hot-stream version conflicts.
+Which of them to adopt, if any, is still to decide. It does not land in a 1.x release.
 
-**Documentation.** [#552](https://github.com/JasperFx/fisher/issues/552): a "Personal data and GDPR erasure" page
-pointing at [Tayra](https://tayra.dev) as the Critter Stack's crypto-shredding answer, and a note on the archiving
-and compaction pages that neither is erasure. Fisher will not build a crypto-shredding mechanism of its own.
+**Marten parity.** [#619](https://github.com/JasperFx/fisher/issues/619): a one-call helper that enables every optional
+event metadata field, user name included, as Marten 10's `MetadataConfig.EnableAll()` does after marten#6012.
 
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.
