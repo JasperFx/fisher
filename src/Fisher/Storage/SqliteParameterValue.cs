@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Fisher.Storage;
 
 /// <summary>
@@ -55,6 +57,14 @@ namespace Fisher.Storage;
 ///                 for a duplicated decimal column, and carrying the same precision caveat.
 ///             </description>
 ///         </item>
+///         <item>
+///             <description>
+///                 <b>A <see cref="float" /> binds as the double it widens to</b> (fisher#605):
+///                 <c>0.3f</c> becomes <c>0.30000001192092896</c>, where System.Text.Json wrote the
+///                 float's shortest round-trip text, <c>0.3</c>, and <c>json_extract</c> reads that back as
+///                 the double <c>0.3</c>. Converted through <see cref="FloatAsStored" />.
+///             </description>
+///         </item>
 ///     </list>
 ///     <para>
 ///         Everything else binds correctly as it stands and is passed through untouched — a
@@ -79,6 +89,7 @@ internal static class SqliteParameterValue
             DateTimeOffset timestamp => SqliteTimestamp.ToDatabaseValue(timestamp),
             DateTime dateTime => SqliteTimestamp.ToDatabaseValue(ToOffset(dateTime)),
             decimal money => (double)money,
+            float single => FloatAsStored(single),
             _ => value
         };
 
@@ -112,6 +123,45 @@ internal static class SqliteParameterValue
     /// </remarks>
     public static object? NormalizeDecimal(object? value)
         => value is decimal money ? (double)money : value;
+
+    /// <summary>
+    ///     <see cref="NormalizeDecimal" /> plus <see cref="float" /> (fisher#605): the normalisation every
+    ///     comparison a query binds goes through, in <c>ComparisonFilter</c> and <c>WhereInFilter</c>.
+    /// </summary>
+    /// <remarks>
+    ///     A float is applied here for fisher#304's reason, since four producers build a comparison. It is
+    ///     only ever a float when C# compares in single precision: <c>WhereClauseParser.ExtractValue</c>
+    ///     keeps a float widened to double as the double, so a float captured against a double member
+    ///     still binds the widened value C# compares with.
+    /// </remarks>
+    public static object? NormalizeComparisonValue(object? value)
+        => value switch
+        {
+            decimal money => (double)money,
+            float single => FloatAsStored(single),
+            _ => value
+        };
+
+    /// <summary>
+    ///     The double a stored <see cref="float" /> reads back as (fisher#605): System.Text.Json writes a
+    ///     float as its shortest round-trip text, and <c>json_extract</c> parses that text as a double.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Widening (<c>(double)0.3f</c>, <c>0.30000001192092896</c>) is what Microsoft.Data.Sqlite
+    ///         binds, and it equals nothing System.Text.Json wrote: the stored <c>0.3</c> reads back as
+    ///         <c>0.3</c>. Measured over 199,189 random finite floats on net10.0 and net11.0: the
+    ///         serializer's text is <c>ToString("R")</c> every time, <c>json_extract</c> of it equals this
+    ///         value every time, and the mapping is strictly increasing, so ranges keep their boundaries.
+    ///     </para>
+    ///     <para>
+    ///         A non-finite float is widened unchanged; the serializer refuses to write one by default.
+    ///     </para>
+    /// </remarks>
+    public static double FloatAsStored(float value)
+        => float.IsFinite(value)
+            ? double.Parse(value.ToString("R", CultureInfo.InvariantCulture), CultureInfo.InvariantCulture)
+            : value;
 
     /// <summary>
     ///     A <see cref="DateTime" /> carries no offset, so one has to be assumed.

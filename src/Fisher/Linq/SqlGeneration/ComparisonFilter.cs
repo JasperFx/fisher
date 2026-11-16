@@ -23,6 +23,11 @@ namespace Fisher.Linq.SqlGeneration;
 ///         decimal as TEXT, <c>json_extract</c> yields REAL, and SQLite orders every number below every
 ///         string — so <c>&gt;</c> and <c>=</c> matched nothing while <c>&lt;</c> matched everything.
 ///     </para>
+///     <para>
+///         <b>So is a <see cref="float" /></b> (fisher#605), to the double its stored shortest text reads
+///         back as — see <see cref="Storage.SqliteParameterValue.FloatAsStored" />. Widened, <c>0.3f</c>
+///         equals no stored <c>0.3</c>.
+///     </para>
 /// </remarks>
 internal class ComparisonFilter : ISqlFragment
 {
@@ -34,7 +39,7 @@ internal class ComparisonFilter : ISqlFragment
     {
         _locator = locator;
         _op = op;
-        _value = SqliteParameterValue.NormalizeDecimal(value)!;
+        _value = SqliteParameterValue.NormalizeComparisonValue(value)!;
     }
 
     public void Apply(ICommandBuilder builder)

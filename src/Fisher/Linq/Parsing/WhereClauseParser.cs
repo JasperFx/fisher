@@ -918,6 +918,12 @@ internal class WhereClauseParser
 
         AssertRangeIsMeaningful(member, op);
 
+        // x.Weight == 0.3: C# widens the float member, so the double is compared in float terms (fisher#605)
+        if (value is double number && FloatComparisons.IsFloatMember(member))
+        {
+            return FloatComparisons.Compare(member, number, op);
+        }
+
         return new ComparisonFilter(member.TypedLocator, op, member.ConvertValue(value)!);
     }
 
@@ -1020,7 +1026,58 @@ internal class WhereClauseParser
     /// </summary>
     internal static object? ExtractValue(Expression expression)
     {
-        expression = StripConvert(expression);
+        var floatingTarget = FloatingPointConversionTarget(expression);
+        var value = ExtractStrippedValue(StripConvert(expression));
+
+        return floatingTarget is null ? value : ConvertFloatingPoint(value, floatingTarget);
+    }
+
+    /// <summary>
+    ///     The target of the outermost conversion to <see cref="float" /> or <see cref="double" />, which
+    ///     <see cref="ExtractValue" /> keeps although it strips every other conversion (fisher#605).
+    /// </summary>
+    /// <remarks>
+    ///     A float is normalised to its stored text's double where it is bound, which is right only when C#
+    ///     compares it as a float. <c>x.Ratio == f</c> over a double member widens <c>f</c>, and binding
+    ///     the stripped float would compare a different number. <c>x.Weight == (float)d</c> narrows, and
+    ///     binding the stripped double would compare a number no float holds.
+    /// </remarks>
+    private static Type? FloatingPointConversionTarget(Expression expression)
+    {
+        while (expression is UnaryExpression { NodeType: ExpressionType.Convert } convert)
+        {
+            var target = Nullable.GetUnderlyingType(convert.Type) ?? convert.Type;
+            if (target == typeof(float) || target == typeof(double))
+            {
+                return target;
+            }
+
+            expression = convert.Operand;
+        }
+
+        return null;
+    }
+
+    private static object? ConvertFloatingPoint(object? value, Type target)
+        => value switch
+        {
+            float or double or decimal or int or long or short or byte or sbyte or uint or ulong or ushort
+                when target == typeof(float) => Convert.ToSingle(value, CultureInfo.InvariantCulture),
+            float single when target == typeof(double) => (double)single,
+            _ => value
+        };
+
+    private static object? ExtractStrippedValue(Expression expression)
+    {
+        // fisher#595: an expression that reads the row has no single value, and compiling it fails with
+        // an internal "variable 'x' ... is not defined". Every caller that reaches here with one is a
+        // shape no parser translated, so it is refused by name.
+        if (ReferencesFreeParameter(expression))
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot translate '{expression}' as a value: it reads the document, so it has a different "
+                + "value on every row and there is nothing to bind. " + Alternatives);
+        }
 
         // fisher#595: an expression that reads the row has no single value, and compiling it fails with
         // an internal "variable 'x' ... is not defined". Every caller that reaches here with one is a
