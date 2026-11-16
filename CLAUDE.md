@@ -2566,6 +2566,37 @@ fisher#306's translation is gated on transience and deliberately does not reach 
   fail against the previous build; the premise test and `an_ordinary_unit_of_work_is_untouched` pass
   either way, which is what they are for.
 
+### Opens are serialized per connection string — fisher#576
+
+`Storage/SerializedOpenDataSource.cs`. ⚠️ **Microsoft.Data.Sqlite's pool can give one native connection to two
+open `SqliteConnection`s.** `SqliteConnectionInternal.Activate` sets `_active` before the weak reference to its
+owner, outside the pool lock. `Leaked` is "active with no live owner". So an `Open` that finds the pool empty with
+an even count runs `ReclaimLeakedConnections`, and can reclaim a connection mid-`Activate` and hand it to the
+next opener.
+
+- **It presented as three unrelated failures, all from two sessions on one handle**: "This SqliteTransaction has
+  completed" (the other session's `ROLLBACK` fired this one's rollback hook), "unable to delete/modify
+  user-function due to active statements" from `Dispose`, and a process crash with a `NullReferenceException` in
+  SQLitePCLRaw's `rollback_hook_bridge_impl` (two threads replacing one handle's hook). fisher#576's "the tag writer
+  ran on a dead transaction" was the first. No earlier statement had failed; the issue's hypothesis was wrong.
+- **Confirmed, not inferred.** A probe of each open connection's native handle found sharing in the one failing run
+  out of 1200 and in no passing run, on the handle whose transaction had "completed". A Fisher-free loop over fresh
+  pools (12 threads, 200 pools) shares an in-use handle 66–132 times, and 0 times with `Open` under a lock.
+- **The fix serializes Fisher's opens of one connection string, and `ClearPool` with them**, since a pool clear runs
+  the same scan. A connection handed out unopened (`CreateConnection`, which Weasel.Storage's session-free
+  projection loads open themselves) is a `SqliteConnection` subclass whose `Open` takes the lock. The gate is static and keyed by the exact connection string, as the pool is, so two stores or a
+  tenant registry over one file share it. It covers Weasel's whole open (PRAGMAs, function registration), because
+  `OpenDbConnectionAsync` is the only override point. Cost at saturation (16 threads, Debug): about 130k
+  opens/s instead of 210k.
+- ⚠️ **Weasel's migrations open their own `new SqliteConnection` and are not gated**, nor is application code. That
+  residual is rare next to session opens. The class belongs in Weasel.Sqlite's `SqliteDataSource`, and the race
+  upstream. Remove it when Microsoft.Data.Sqlite activates under the pool lock.
+- fisher#311's untracked transaction may have been this too (another session's `BEGIN` on a shared handle). Not
+  verified, so its defence stays.
+- `serialized_connection_opens` plants the mid-`Activate` state by reflection to pin the premise, and holds one open
+  inside the gate with a SQL function whose registration blocks. All three regression tests fail in milliseconds
+  without the lock, so the failing direction does not wait on a window.
+
 ### Session tracking
 
 `DocumentTracking`, `SessionOptions.Tracking`, `IdentitySession()` / `DirtyTrackedSession()`, and the
