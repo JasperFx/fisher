@@ -5137,13 +5137,18 @@ defined the semantics the three stores used to disagree on, and added `IDocument
   read" would apply the metadata filters after paging. `SupportsDocumentDiagnosticCriteria` is true.
 - **`CriteriaShapeRules` refuses the shapes Fisher's provider gets SILENTLY WRONG** — measured against a
   LINQ-to-objects oracle by `document_diagnostics_criteria.no_criteria_shape_is_silently_wrong`, which is
-  also the pin that the rule set is complete. Date/time parts (`PlacedAt.Year`, `.Date`, `TimeSpan.TotalHours`
-  — the typed `Query<T>()` renders `$.placedAt.year` too, so it is a provider gap) and `.Value` off a
-  `Nullable<T>`; and `<>` / `not` over a comparison on a member that can be null (SQL's three-valued logic
-  drops the null rows), unless the text guards the null case — that one is JasperFx's shared
-  `DynamicQueryShapeRules.SqlNullSemantics()`, found here and lifted after Marten and Polecat measured the same. Nullability is read from the member's
-  nullable-reference annotations, so a non-nullable `string` is not refused. Remove a rule when the
-  provider learns the shape; the matrix test says whether it did.
+  also the pin that the rule set is complete. **One rule is left** (fisher#612):
+  `NegatedStringMethodOnNullableMember`, `not` over a string method (`Contains`, `StartsWith`, `EndsWith`,
+  `Equals`) on a member that can be null, unless the text guards the null case. The provider keeps SQL's
+  answer for a string method on a null member (C# would throw), so the negation drops the null rows.
+  - **It decorates JasperFx's `DynamicQueryShapeRules.SqlNullSemantics()`**, which was found here and lifted
+    after Marten and Polecat measured the same. The shared rule is shown every node, so its guard tracking
+    (`... or X = null`, `X != null and ...`) and nullability reading (nullable-reference annotations, so a
+    non-nullable `string` is not refused) are reused, and only its refusals of a string method call are passed
+    on. Since fisher#608 every `<>` / negated comparison it also refused comes back correct, so those run.
+  - The date-part and `Nullable<T>.Value` rules went with fisher#483. Remove a rule when the provider learns
+    the shape; the matrix test says whether it did. Removing this one makes the matrix report four silently
+    wrong shapes (`not Note.Contains/EndsWith/Equals`, `not ShipTo.Region.StartsWith`).
 - **Tenant → `DocumentQueryOptions.NormalizeTenantId`, then `Tenancy.DatabaseFor`.** The read used
   `Database` unconditionally, so database-per-tenant answered every tenant from the default file.
 - **`AllTenants` fans out, and fisher#368 said it would not need to** (jasperfx#928, JasperFx 2.78.0).
@@ -6192,8 +6197,8 @@ true when `x.N` is null and `!(x.N > 3)` is true too; SQL's `!=` and `not (NULL)
   and C#'s `Contains(null)` does.
 - **An absent non-nullable member is still NULL to SQL and its default to C#.** `x.Crew == 0` misses a document
   with no `crew` key; fixing that needs `coalesce(locator, default)`, which no index serves.
-- `CriteriaShapeRules` still carries `SqlNullSemantics()`. Measured without it, only `not Note.Contains(...)`
-  (the string-method case) comes back wrong, so the rule could narrow to that.
+- `CriteriaShapeRules` no longer refuses `<>` / `not` over a nullable member (fisher#612). Measured without
+  `SqlNullSemantics()`, only a negated string method came back wrong, so that is all it refuses now.
 
 The provider takes both the column list and the materializer from the **query-only** closed-shape
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,
