@@ -184,9 +184,12 @@ public class decimal_arithmetic_in_predicates : IAsyncLifetime
         var command = (Microsoft.Data.Sqlite.SqliteCommand)builder.Compile();
 
         // No arithmetic reaches SQLite: the member is compared with 0.3 - 0.2, computed in decimal, and
-        // the operator is reversed because the member was subtracted.
-        command.CommandText.ShouldBe("json_extract(data, '$.price') > @p0");
-        command.Parameters["p0"].Value.ShouldBe(0.1);
+        // the operator is reversed because the member was subtracted. The comparison is fisher#609's exact
+        // one: a REAL band around 0.1 and the exact text "0.1" against the number as written.
+        command.CommandText.ShouldNotContain(" - ");
+        command.CommandText.ShouldNotContain("0.3");
+        command.CommandText.ShouldContain("collate fi_decimal) > @p2");
+        command.Parameters["p2"].Value.ShouldBe("0.1");
     }
 
     [Fact]

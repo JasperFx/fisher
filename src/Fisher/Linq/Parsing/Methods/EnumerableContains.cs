@@ -80,7 +80,7 @@ internal class EnumerableContains : IMethodCallParser
             values.Add(member.ConvertValue(item));
         }
 
-        return new WhereInFilter(member.TypedLocator, values, member.RawLocator);
+        return DecimalPrecision.In(member, values, member.RawLocator);
     }
 
     private static bool IsDocumentMember(Expression expression)

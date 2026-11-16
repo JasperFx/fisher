@@ -397,7 +397,8 @@ public partial class FisherQueryProvider
                 + "composite key would be an equality per member, which Fisher does not translate.");
         }
 
-        return members.ResolveMember(member).TypedLocator;
+        // fisher#609: a decimal key matches on its exact value, not on the double json_extract reads.
+        return DecimalPrecision.OrderingFor(members.ResolveMember(member));
     }
 
     /// <summary>
@@ -438,7 +439,7 @@ public partial class FisherQueryProvider
                     + "not order-preserving, so the rows would come back in a plausible but wrong order.");
             }
 
-            statement.OrderBys.Add((member.TypedLocator, descending));
+            statement.OrderBys.Add((DecimalPrecision.OrderingFor(member), descending));
         }
     }
 

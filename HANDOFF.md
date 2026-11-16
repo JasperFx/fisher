@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3462 tests green on net10.0 and 3489 on net11.0** — 3391 (net10.0) / 3418 (net11.0) in `Fisher.Tests`, 40 in
+**3482 tests green on net10.0 and 3509 on net11.0** — 3411 (net10.0) / 3438 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -27,6 +27,15 @@ for values no double holds. All four now read the JSON text (`IQueryableMember.J
 `fi_decimal` collation so `HAVING`, grouped `OrderBy` and `Distinct` compare as numbers. `decimal_aggregates`
 (17 facts, LINQ to Objects as the oracle) fails 14 on the previous build. Plain `Select`/`Where` beyond 15
 significant digits is fisher#609; the collation's registry member is weasel#861.
+
+## `decimal` reads, comparisons and ordering are exact (fisher#609)
+
+`Select`, `Where` (`==`, ranges, `IsOneOf`, `Contains`), `OrderBy`, a keyset cursor, `Distinct`, `DistinctBy`,
+`GroupBy` keys, join keys and event-body queries over a `decimal` read the JSON text instead of `json_extract`'s REAL,
+so values that differ past the fifteenth digit stay distinct. Comparisons keep the REAL as a band, so the duplicated
+field's index still serves them. Ordering and grouping use an `fi_decimal_key` BLOB, which means an index no longer
+serves `OrderBy` over a decimal. `decimal_precision` (20 facts) fails 16 of its first 19 on the previous build; two are pins, one tests the new
+sort key, and one checks that decimal comparisons keep fisher#608's null-safe `!=` and negation.
 
 ## A null member compares as C# compares it (fisher#608)
 

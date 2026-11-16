@@ -53,9 +53,15 @@ internal static class CursorPagination
     ///     values only express a seek when every key runs the same direction, and mixed direction is the
     ///     common case — <c>OrderByDescending(x => x.Landed).ThenBy(x => x.Id)</c>. Special-casing the
     ///     uniform ordering is a possible optimisation, not a correctness matter.
+    ///     <para>
+    ///         <b>A decimal key seeks on its sort key</b> (fisher#609): the ordering is
+    ///         <c>fi_decimal_key(…)</c>, so the cursor's decimal is bound as that BLOB and compared byte for
+    ///         byte. A seek against the REAL would skip or repeat the rows a double cannot tell apart.
+    ///     </para>
     /// </remarks>
     public static ISqlFragment BuildSeekPredicate(
-        IReadOnlyList<(string Locator, bool Descending)> orderBy, object?[] values)
+        IReadOnlyList<(string Locator, bool Descending)> orderBy, IReadOnlyList<IQueryableMember?> members,
+        object?[] values)
     {
         var clauses = new List<ISqlFragment>();
 
@@ -67,9 +73,13 @@ internal static class CursorPagination
             {
                 var op = j < i ? "=" : orderBy[j].Descending ? "<" : ">";
 
-                terms.Add(values[j] is null
-                    ? new LiteralSqlFragment($"{orderBy[j].Locator} is null")
-                    : new ComparisonFilter(orderBy[j].Locator, op, values[j]!));
+                terms.Add(values[j] switch
+                {
+                    null => new LiteralSqlFragment($"{orderBy[j].Locator} is null"),
+                    decimal money when DecimalPrecision.IsExact(members[j])
+                        => new ComparisonFilter(orderBy[j].Locator, op, DecimalAggregates.SortKey(money)),
+                    var value => new ComparisonFilter(orderBy[j].Locator, op, value)
+                });
             }
 
             clauses.Add(CompoundWhereFragment.And(terms));
@@ -151,7 +161,10 @@ internal sealed class FisherCursorCodec : CursorCodec
             TypeCode.Boolean => slot.GetBoolean() ? 1L : 0L,
             TypeCode.Int32 or TypeCode.Int16 or TypeCode.Byte or TypeCode.SByte => slot.GetInt64(),
             TypeCode.Int64 => slot.GetInt64(),
-            TypeCode.Double or TypeCode.Single or TypeCode.Decimal => slot.GetDouble(),
+            TypeCode.Double or TypeCode.Single => slot.GetDouble(),
+
+            // fisher#609: the decimal the cursor carries, exactly; a double would seek to the wrong row.
+            TypeCode.Decimal => slot.GetDecimal(),
             _ => slot.GetString()
         };
     }
