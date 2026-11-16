@@ -315,13 +315,15 @@ the container for the main store and for each ancillary store. What the contract
   filters — still applies. Text that does not parse, a member the type does not have, and a shape the
   store cannot translate are refused with `DocumentCriteriaNotSupportedException`, never ignored. Under
   Native AOT criteria are refused, since they need runtime code generation.
-- **Some shapes are refused because Fisher would answer them wrongly**, not because they fail to parse.
-  Reading a *part* of a date or time (`PlacedAt.Year`, `DueDate.Date`, `Window.TotalHours`) and `.Value`
-  off a nullable member: Fisher renders those as a path into the stored value and matches nothing —
-  compare the whole value against a range instead. And `<>`, or `not` over a comparison, on a member that
-  can be null: SQL leaves the null rows out where the text, read as C#, keeps them. Say what null should
-  do — `Note <> "x" or Note = null`, or `Note != null and Note <> "x"` — and it runs. A member the
-  document declares non-nullable is not affected.
+- **`<>`, and `not` over a comparison, answer as C# does on a member that can be null**: `Note <> "x"`
+  keeps the documents with no note. Reading a part of a date or time that Fisher cannot translate
+  (`DueDate.Date`, `Window.TotalHours`) is refused; compare the whole value against a range instead.
+- **One shape is refused because Fisher would answer it wrongly**, not because it fails to parse: `not`
+  over a string method (`Contains`, `StartsWith`, `EndsWith`, `Equals`) on a member that can be null. A
+  string method on a null member is unknown to SQL, so the negation leaves those rows out where the text,
+  read with null propagation, keeps them. Say what null should do — `not Note.Contains("x") or Note = null`,
+  or `Note != null and not Note.Contains("x")` — and it runs. A member the document declares non-nullable
+  is not affected.
 
 - **`OrderByMetadata` orders by a metadata column** (jasperfx#1058, JasperFx 2.93) —
   `DocumentMetadataOrder.NewestFirst` is "newest first". The metadata key comes first, then a given
