@@ -2529,8 +2529,8 @@ tests the new sort key directly.
   longer serves `OrderBy` over a duplicated decimal (top-10 went 0.09 → 6 ms). `g.Key` still selects the text.
 - The cursor decodes the key back (`FromSortKey`) and binds the seek value as a key; `ConvertSlot` reads a decimal
   slot with `GetDecimal`. A `decimal[]` element is exact through `(data -> each_N.fullkey)`.
-- **Not covered**: a registered wrapper around a decimal (its member type is the wrapper), and decimal arithmetic or
-  member-to-member comparisons, which are #603's and #595's.
+- **Not covered**: a registered wrapper around a decimal (its member type is the wrapper), and decimal arithmetic,
+  which is #603's. Member-to-member comparisons are fisher#615's, under fisher#595's entry.
 
 ### Sessions, `SessionOptions` and enlistment
 
@@ -6202,6 +6202,12 @@ Add/Subtract.
   against `DateTime`), a range over a string-stored enum, a conversion that changes the value (`(int)x.Ratio`,
   a cast to `object`), `decimal`/`float` arithmetic (SQLite would run it in `double`), anything that is not a
   member or that arithmetic, and member types with no single stored value (objects, strong-typed ids).
+- ⚠️ **A comparison C# makes in `decimal` compares `fi_decimal_key`s, never the REALs** (fisher#615,
+  `ExactDecimalOperand`). The two REALs are one value for decimals that differ past the fifteenth digit. A decimal
+  side is keyed from its JSON text, an integral member or integral arithmetic from its INTEGER (C# widens both
+  exactly), and a NULL keys to NULL, so the `is` / `coalesce` rendering above is unchanged. `(decimal)x.Ratio` is
+  refused: C# rounds a double to fifteen digits before comparing. `(double)x.Amount == x.Ratio` stays a REAL
+  comparison. `decimal_member_comparisons` fails 14 of 20 on the previous build.
 - **`ExtractValue` refuses a row-reading expression by name**, so the other parsers (`x.A % x.B`,
   `x.Tags.Contains(x.Name)`) fail as a refusal rather than an internal exception. "Reads the row" is a FREE
   parameter: `Thresholds.Count(t => t > 1)` binds its own and is still a value.
