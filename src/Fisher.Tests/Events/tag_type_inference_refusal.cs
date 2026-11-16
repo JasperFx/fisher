@@ -14,8 +14,11 @@ public class tag_type_inference_refusal
     [Fact]
     public void a_failed_inference_names_the_explicit_overload()
     {
-        var ex = Should.Throw<InvalidValueTypeException>(() => new StoreOptions().Events.RegisterTagType<TwoPartTag>());
+        // JasperFx's refusal since fisher#574, which adopted EventRegistry's tag registration. It names the
+        // whole registration line, suffix included, so the suffix is Fisher's own.
+        var ex = Should.Throw<InvalidOperationException>(() => new StoreOptions().Events.RegisterTagType<TwoPartTag>());
 
-        ex.Message.ShouldContain("RegisterTagType<TwoPartTag, TInner>(x => x.Value)");
+        ex.InnerException.ShouldBeOfType<InvalidValueTypeException>();
+        ex.Message.ShouldContain("RegisterTagType<TwoPartTag, TInner>(x => x.Value, \"two_part_tag\")");
     }
 }

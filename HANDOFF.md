@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3088 tests green on net10.0 and 3115 on net11.0** — 3017 (net10.0) / 3044 (net11.0) in `Fisher.Tests`, 40 in
+**3101 tests green on net10.0 and 3128 on net11.0** — 3030 (net10.0) / 3057 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -34,6 +34,21 @@ Not done here: weasel#846 asks a paging dialect to bind the allow list as one pa
 `json_each(@types)`). `SqliteEventPagingDialect` still binds one parameter per alias, which only fails past SQLite's
 32,766 variables. weasel#840 (Hi-Lo blocks only move up) is inside `HiloSequenceBase` and needs nothing from Fisher;
 weasel#838/#839 are tenancy and PostgreSQL additions Fisher does not use.
+
+## `EventGraph` uses `EventRegistry`'s registries (fisher#574)
+
+JasperFx 3.3.0 lifted masking rules, DCB tag types, binary serializers and type/alias resolution onto
+`EventRegistry` as non-virtual members, and `EventGraph`'s same-named copies hid them (29 CS0108 warnings). Anything
+configuring the graph through `EventRegistry` was silently dropped: 11 of the 12 facts in
+`event_registry_base_typed_configuration` failed on the previous build. Fisher's copies are deleted and the base's
+are used through its hooks (`AliasFor`, `RegisterDotNetTypeNames`, `DefaultTagTableSuffixFor`,
+`OnBinarySerializersChanged`). `FisherDatabase` overrides `FindFeature` so Weasel's own `EnsureStorageExistsAsync`
+works, and its `IEventDatabase` member is `new`. The interface redeclarations are `new` after an interface-map
+check. `src/Fisher` builds with zero CS0108.
+
+Visible changes: a `Func` masking rule reaches a hierarchy; a failed tag inference throws JasperFx's
+`InvalidOperationException`; re-registering a tag type with a different inner type is refused. CLAUDE.md's
+"`EventGraph` is JasperFx's `EventRegistry`" has the detail.
 
 ## The closed-shape document family is Weasel's (fisher#465)
 

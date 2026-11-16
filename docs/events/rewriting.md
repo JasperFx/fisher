@@ -77,19 +77,28 @@ opts.Events.AddMaskingRuleForProtectedInformation<IHasCustomerName>(e => e.Custo
 opts.Events.AddMaskingRuleForProtectedInformation<OrderPlaced>(e => e with { Customer = "***" });
 ```
 
-### The two overloads do not have the same reach
+### Both overloads reach a hierarchy
+
+`IEvent<out T>` is covariant, so a rule registered against an **interface or base class reaches every
+event body implementing it**, through either overload. The `Action` overload mutates the body in
+place; the `Func` overload replaces it.
 
 ::: warning
-That falls out of the type system, so it is worth stating plainly:
+A `Func` rule over an interface or base class has to return something the event can still hold,
+normally an instance of the same runtime type. Anything else fails the masking pass rather than leaving
+the event unmasked:
 
-- The **`Action`** overload tests `@event is IEvent<T>`, and `IEvent<out T>` is covariant — so a rule
-  registered against an **interface or base class reaches every event body implementing it**.
-- The **`Func`** overload has to *assign* the replacement back, and only the closed generic event type
-  exposes a setter — so it matches its **exact type only**.
+```cs
+options.Events.AddMaskingRuleForProtectedInformation<IPersonalData>(
+    x => x is CustomerRegistered c ? c with { Email = "REDACTED" } : x);
+```
 
-A `record` needs the `Func` overload, because a `with` expression makes a new instance. A
-hierarchy-wide rule therefore has to be the mutating one.
+A `record` needs the `Func` overload, because a `with` expression makes a new instance.
 :::
+
+The rule list is JasperFx's `EventRegistry`'s, which Fisher's event graph derives from, so a rule
+registered through store-agnostic code holding the graph as an `EventRegistry` is applied the same
+way.
 
 ### Selecting the events
 
