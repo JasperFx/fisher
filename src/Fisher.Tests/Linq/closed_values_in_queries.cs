@@ -119,6 +119,23 @@ public class closed_values_in_queries : IAsyncLifetime
             .ThenByDescending(x => x.Name).Select(x => x.Name));
     }
 
+    /// <summary>
+    ///     A closed <c>OrderBy</c> still re-sorts (fisher#588): the <c>ThenBy</c> after it refines a new, empty
+    ///     group, which goes in front of the earlier key. Dropping the key without resetting the group would
+    ///     order by <c>Category, Name</c>, plausibly and wrongly.
+    /// </summary>
+    [Fact]
+    public async Task a_closed_order_by_still_re_sorts()
+    {
+        await using var session = _store.LightweightSession();
+
+        var names = await Query(session).OrderBy(x => x.Category).OrderBy(x => ClosedValueStatics.Number)
+            .ThenBy(x => x.Name).Select(x => x.Name).ToListAsync(Token);
+
+        names.ShouldBe(Targets.OrderBy(x => x.Category).OrderBy(x => ClosedValueStatics.Number)
+            .ThenBy(x => x.Name).Select(x => x.Name));
+    }
+
     [Fact]
     public async Task last_after_a_closed_key_reverses_the_keys_that_remain()
     {
