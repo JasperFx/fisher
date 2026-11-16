@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3131 tests green on net10.0 and 3158 on net11.0** — 3060 (net10.0) / 3087 (net11.0) in `Fisher.Tests`, 40 in
+**3144 tests green on net10.0 and 3171 on net11.0** — 3073 (net10.0) / 3100 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -26,6 +26,16 @@ is now a `Lock` held around a wholly synchronous open in both the sync and async
 burst). `serialized_connection_opens.a_contended_async_open_completes_before_it_returns` fails against the old
 gate. `synchronous_hilo_burst` reproduces the stall when run alone. Found by checking marten#5969 against Fisher.
 
+## A second `OrderBy` re-sorts (fisher#588)
+
+`OrderBy(a).OrderBy(b)` rendered `order by a, b`; LINQ's `OrderBy` is a stable re-sort, so it means `b, a`.
+`LinqQueryParser` now puts an `OrderBy`/`OrderByDescending` (and `OrderByRelevance*`) in front of every key so
+far, and a `ThenBy` straight after the keys of the `OrderBy` it refines, since `OrderBy(a).OrderBy(b).ThenBy(c)`
+is `b, c, a` rather than `b, a, c`. `OrderByMembers` moves with `OrderBys`, so keyset paging still checks the
+right terminal key. The join path (`GroupJoinData.OrderBys`) and the event-table providers (`QueryRawEvents`,
+`QueryStreamStates`, which used to drop the earlier keys altogether) follow the same rule.
+`repeated_order_by` (12 facts, LINQ to Objects as the oracle) and one `raw_event_queries` fact all fail on the
+previous build.
 ## The shared contract's hook members (fisher#581)
 
 `FisherSession` implements the three JasperFx 3.3.0 `JasperFx.Events.Documents` members it left to throwing
