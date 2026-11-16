@@ -33,15 +33,52 @@ namespace Fisher.Linq.Parsing;
 /// </remarks>
 internal sealed class SelectProjection
 {
-    private SelectProjection(string[] locators, Type[] columnTypes, Func<object?[], object?> build,
-        Type resultType, bool requiresFullTextJoin)
+    private readonly LambdaExpression _selector;
+    private readonly IMemberResolver _members;
+
+    private SelectProjection(LambdaExpression selector, IMemberResolver members, string[] locators,
+        Type[] columnTypes, Func<object?[], object?> build, Type resultType, bool requiresFullTextJoin,
+        bool isFaithful)
     {
+        _selector = selector;
+        _members = members;
         Locators = locators;
         ColumnTypes = columnTypes;
         Build = build;
         ResultType = resultType;
         RequiresFullTextJoin = requiresFullTextJoin;
+        IsFaithful = isFaithful;
     }
+
+    /// <summary>
+    ///     True when the columns ARE the values the caller sees — a member-for-member copy — so
+    ///     <c>Distinct()</c> and identity ordering over the columns answer the caller's question
+    ///     (fisher#590).
+    /// </summary>
+    public bool IsFaithful { get; }
+
+    /// <summary>
+    ///     The same projection with its integer arithmetic moved into the select list, when that makes
+    ///     it faithful; null when something it computes cannot be translated (fisher#590).
+    /// </summary>
+    /// <remarks>
+    ///     Only asked for by an operator that needs it. An ordinary projection keeps computing in .NET,
+    ///     which is the boundary this class documents; the translation exists so that
+    ///     <c>Select(x =&gt; x.Number % 3).Distinct()</c> can be answered rather than refused.
+    /// </remarks>
+    public SelectProjection? ComputedInSql()
+    {
+        if (IsFaithful)
+        {
+            return this;
+        }
+
+        var translated = Create(_selector, _members, translateArithmetic: true);
+        return translated.IsFaithful ? translated : null;
+    }
+
+    /// <summary>The selector as the caller wrote it, for a refusal to name.</summary>
+    public LambdaExpression Selector => _selector;
 
     /// <summary>The SQL locators to select, in order.</summary>
     public string[] Locators { get; }
@@ -62,8 +99,12 @@ internal sealed class SelectProjection
     public bool RequiresFullTextJoin { get; }
 
     public static SelectProjection For(LambdaExpression selector, IMemberResolver members)
+        => Create(selector, members, translateArithmetic: false);
+
+    private static SelectProjection Create(LambdaExpression selector, IMemberResolver members,
+        bool translateArithmetic)
     {
-        var collector = new MemberCollector(members, selector.Parameters[0]);
+        var collector = new MemberCollector(members, selector.Parameters[0], translateArithmetic);
         var body = collector.Visit(selector.Body)!;
 
         if (collector.Locators.Count == 0)
@@ -81,11 +122,14 @@ internal sealed class SelectProjection
             Expression.Convert(body, typeof(object)), values);
 
         return new SelectProjection(
+            selector,
+            members,
             collector.Locators.ToArray(),
             collector.ColumnTypes.ToArray(),
             lambda.Compile(),
             selector.ReturnType,
-            collector.RequiresFullTextJoin);
+            collector.RequiresFullTextJoin,
+            ComputedColumns.IsFaithful(body, values));
     }
 
     /// <summary>
@@ -100,12 +144,47 @@ internal sealed class SelectProjection
     {
         private readonly IMemberResolver _members;
         private readonly ParameterExpression _document;
+        private readonly bool _translateArithmetic;
         private readonly Dictionary<string, int> _indexes = new();
 
-        public MemberCollector(IMemberResolver members, ParameterExpression document)
+        public MemberCollector(IMemberResolver members, ParameterExpression document, bool translateArithmetic)
         {
             _members = members;
             _document = document;
+            _translateArithmetic = translateArithmetic;
+        }
+
+        /// <summary>
+        ///     Integer arithmetic the select list can compute exactly as .NET would — fisher#590, and only
+        ///     when <see cref="ComputedInSql" /> asked for it.
+        /// </summary>
+        public override Expression? Visit(Expression? node)
+        {
+            if (_translateArithmetic && node is not null
+                && ComputedColumns.TryTranslate(node, Leaf, out var sql))
+            {
+                return Capture(sql, node.Type);
+            }
+
+            return base.Visit(node);
+        }
+
+        private string? Leaf(Expression node)
+            => node is MemberExpression member && IsDocumentMember(member)
+                ? _members.ResolveMember(member).TypedLocator
+                : null;
+
+        private Expression Capture(string locator, Type type)
+        {
+            if (!_indexes.TryGetValue(locator, out var index))
+            {
+                index = Locators.Count;
+                _indexes[locator] = index;
+                Locators.Add(locator);
+                ColumnTypes.Add(type);
+            }
+
+            return Expression.Convert(Expression.ArrayIndex(Values, Expression.Constant(index)), type);
         }
 
         public ParameterExpression Values { get; } = Expression.Parameter(typeof(object?[]), "values");
