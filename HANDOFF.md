@@ -30,6 +30,20 @@ replacing it, so `Take(0).FirstOrDefault()` is null and `Take(1).Single()` no lo
 ⚠️ **`ToPagedListAsync` over an already-paged query changed**: its paging composes and the total counts the
 caller's page, where both used to discard it. `ToCursorPageAsync` refuses a paged query.
 `operators_after_paging` fails 18 of 19 against the previous build.
+## The shared contract's hook members (fisher#581)
+
+`FisherSession` implements the three JasperFx 3.3.0 `JasperFx.Events.Documents` members it left to throwing
+defaults: `StoreObjects`, `AddTransactionParticipant(IDbTransactionParticipant)` and `AddSaveListener`. The last is
+what Wolverine's `Enroll` needs to flush its outbox on a session the application opened. All three are explicit
+implementations over a per-session JasperFx `DocumentSessionHooks`, on both commit paths for participants.
+`shared_session_hooks` (19 tests, all holding the session as the contract) fails 19 of 19 on the previous build.
+
+Decisions: a shared participant is released when its commit lands and is refused on an enlisted session; a save
+listener is refused on a projection batch's session and fires only its before hook on an enlisted one; both land on
+the parent from a tenant scope. Behaviour change worth release notes: `SaveChangesAsync` now runs the message
+outbox's `BeforeCommitAsync` after every transaction participant, as the projection batch already did, where it
+used to run first. CLAUDE.md's "The store-agnostic document contract" has the detail. No shared compliance suite
+covers these members yet.
 
 ## The daemon's allow list binds as one parameter (fisher#583)
 

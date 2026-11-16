@@ -2723,6 +2723,11 @@ rather than resettling the question.
   projection batch is the daemon's unit of work, not the application's; firing user listeners for it
   would run an application's `AfterCommitAsync` on the daemon's threads for every batch of every
   shard. JasperFx's `IDaemonChangeListener` is the hook for that side and Fisher already supports it.
+  The shared contract's `AddSaveListener` on a batch's session therefore **throws** rather than
+  accepting a hook it would never fire (fisher#581, below).
+- **A listener can be added to an open session through the shared contract** (`AddSaveListener`,
+  fisher#581) — see "The store-agnostic document contract". Fisher's own two lists are still read once,
+  at first use.
 - **Pending streams are collected *after* the before hook, where Marten collects them before.** Costs
   nothing, and makes "work queued in the hook joins this transaction" true of appended events as well
   as of documents. Marten's listener that starts a stream is appending to the *next* unit of work.
@@ -4126,6 +4131,45 @@ The shared suites pin the results, which the default also gets right, so they pa
 through SQLite's own `sqlite3_trace` hook, because event reads do not go through the session logger.
 Swapping in a per-id loop fails that test alone.
 
+#### `StoreObjects`, `AddTransactionParticipant(IDbTransactionParticipant)`, `AddSaveListener` — fisher#581
+
+Three members of JasperFx 3.3.0's contract that a message bus needs (jasperfx#1052) and that fell
+through to throwing defaults. All three are **explicit**, in `FisherSession.SharedHooks.cs`: Fisher's own
+`AddTransactionParticipant(ITransactionParticipant)` would make a public overload ambiguous for any
+participant implementing both. Deleting any of them still compiles; `shared_session_hooks` (19 tests,
+all holding the session as the contract) fails 19 of 19 without them.
+
+- **JasperFx's `DocumentSessionHooks` is composed, not re-implemented.** One per session, created
+  through `LazilyCreate` (projection slices enlist concurrently). Its `BeforeSaveAsync` runs after Fisher's
+  own listeners' before hooks; `BeforeCommitAsync(conn, tx, _messageBatch)` runs the shared participants
+  and then the outbox, after Fisher's native participants; `AfterCommitAsync` replaces the outbox's
+  after hook in `RunPostCommitHooksAsync`, outside the pipeline, ahead of Fisher's own after-commit work.
+  With no shared hooks the outbox's hooks run as before, but **after** the native participants now.
+- **The emptiness check reads `HasPendingParticipants`**, the contract's explicit requirement and
+  wolverine#3907's shape: a lone shared participant is a unit of work.
+- **A shared participant is released when its commit lands**, where Fisher's own stays until the session
+  is disposed — the contract's rule, so a session saved twice does not write an envelope twice.
+- ⚠️ **`AddTransactionParticipant(IDbTransactionParticipant)` throws on an enlisted session.** The caller
+  commits, Fisher never learns it landed, and `DocumentSessionHooks` has no way to release a participant
+  without also firing the listeners' after hooks — so a second save would rerun it. The contract names
+  this shape as one a store must refuse. Consequence: an outbox listener that enlists from its before
+  hook fails an enlisted session's save loudly, which beats an envelope written twice.
+- ⚠️ **`AddSaveListener` throws on a projection batch's session** (`ParticipantsOwnedByBatch`): the
+  daemon commits the batch and never runs save hooks, and the contract names that session explicitly.
+  An enlisted session accepts it and fires only the before hook, Fisher's existing listener rule.
+- **The batch runs a session's shared participants** in `FisherProjectionBatch`, gathered before the
+  pipeline (fisher#12), after the native participants and before the base's outbox hook, replayed per
+  attempt. Not released: a batch's session never commits again. Removing that loop leaves a subscription's
+  participant accepted and never run, silently — `a_shared_participant_enlisted_in_a_projection_batch_*`.
+- **Both forward from a tenant scope to the parent**, which owns the one transaction.
+- **`StoreObjects` closes `Store<T>` over each runtime type**, so a hierarchy sub-class lands in its base's
+  table with its discriminator. Null elements are skipped (Marten, Polecat); a null collection is
+  `ArgumentNullException`. The closed delegate is cached per type; the `MakeGenericMethod` carries a
+  method-level IL2060/IL3050 justification — reference-type documents use the shared canonical
+  instantiation under Native AOT, a value-type document is not covered, and `Store<T>` is the AOT-safe
+  spelling.
+- **No shared compliance suite covers any of the three** as of JasperFx.Events.ComplianceTests 3.3.0.
+
 #### `LoadAsync<T>(object)` — the eighth operation
 
 jasperfx#665 added `Task<T?> LoadAsync<T>(object id, …)` to `IDocumentReadOperations`, and fisher#89
@@ -4287,9 +4331,12 @@ the shared contract's own remarks promise.
   transaction* — a genuine self-deadlock that presents as a hang rather than an error. That is the
   single most likely way to build one wrong, and it is why the connection is a parameter rather than
   something the participant is expected to find.
-- **The hook is the last thing inside the transaction**, the position `IMessageBatch.BeforeCommitAsync`
-  already occupies — so its visibility semantics are the ones fisher#4 pinned, and
+- **The hook is at the end of the transaction, just before the outbox's `IMessageBatch.BeforeCommitAsync`**,
+  which is last on both commit paths — so its visibility semantics are the ones fisher#4 pinned, and
   `a_participants_write_is_invisible_until_the_commit` re-probes them over a separate connection.
+  ⚠️ **The session path ran the outbox FIRST until fisher#581**; the projection batch already ran it last,
+  which is what `IMessageBatch.BeforeCommitAsync` promises. Order is native participants, shared
+  `IDbTransactionParticipant`s, then the batch (`the_message_batch_runs_after_every_participant`).
 - **Both commit paths invoke participants**, `FisherSession.SaveChangesAsync` and
   `FisherProjectionBatch.ExecuteAsync` alike, so a projection or subscription that enlists one does not
   have to know which it is running under. The batch gathers them *before* the resilience pipeline for

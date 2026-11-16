@@ -54,7 +54,7 @@ The same seam the [outbox](/events/projections/side-effects) uses, with the same
 
 | Hook | Position | Visible to another connection? |
 | :--- | :--- | :--- |
-| `BeforeSaveChangesAsync` | The last thing inside the transaction | **no** |
+| `BeforeSaveChangesAsync` | Before the transaction opens, once per save | **no** |
 | `AfterCommitAsync` | After the commit, outside the resilience pipeline | **yes** |
 
 Hook *order* is not the invariant — both would fire in order even if both ran before the commit. What
@@ -117,6 +117,91 @@ wrong by the time a listener reads it again. Fisher's is a snapshot either way.
 enlisted session both fire nothing here; Marten fires unconditionally for the latter. The shared
 contract permits both answers and deliberately asserts neither, so a listener that must hear about a
 commit made under your own transaction has to check its store.
+:::
+
+## Joining a session you did not open: `AddSaveListener`
+
+`Listeners` on `StoreOptions` and `SessionOptions` are read when the session is opened. A message bus
+often joins a session the *application* opened — Wolverine's `Enroll` does — so it needs to register a
+hook on a session that already exists. That is the contract's `AddSaveListener`, which takes JasperFx's
+`IDocumentSaveListener` and runs it on every save of that session for as long as it lives:
+
+<!-- snippet: sample_shared_session_hooks -->
+<a id='snippet-sample_shared_session_hooks'></a>
+```cs
+await using var session = store.LightweightSession();
+
+// Held as the contract, the way a message bus joins a session the application opened
+IDocumentSessionOperations contract = session;
+
+contract.AddSaveListener(new EnvelopeOutboxListener());
+
+// Documents of mixed types, each stored as its own runtime type
+contract.StoreObjects(documents);
+
+await contract.SaveChangesAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/shared_session_hooks_samples.cs#L51-L63' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_shared_session_hooks' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+A listener written against the contract, enlisting a
+[shared participant](/documents/transaction-participants#the-store-agnostic-participant) from its before
+hook, which is the shape an outbox has:
+
+<!-- snippet: sample_shared_save_listener -->
+<a id='snippet-sample_shared_save_listener'></a>
+```cs
+// Written once against JasperFx's contract, so the same class serves Marten, Polecat and Fisher
+public class EnvelopeOutboxListener : IDocumentSaveListener
+{
+    public Task BeforeSaveChangesAsync(IDocumentSessionOperations session, CancellationToken token)
+    {
+        // Outside the transaction, once per save. A participant enlisted here joins this commit.
+        session.AddTransactionParticipant(new EnvelopeParticipant());
+        return Task.CompletedTask;
+    }
+
+    public Task AfterCommitAsync(IDocumentSessionOperations session, IDocumentChangeSet commit,
+        CancellationToken token)
+    {
+        // After the commit, once, outside the resilience pipeline: the envelopes are durable now
+        return Task.CompletedTask;
+    }
+}
+
+public class EnvelopeParticipant : IDbTransactionParticipant
+{
+    public async Task BeforeCommitAsync(DbConnection connection, DbTransaction transaction,
+        CancellationToken token)
+    {
+        // Write on the connection and transaction you are handed, never on a second connection
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "insert into envelopes (body) values ('…')";
+        await command.ExecuteNonQueryAsync(token);
+    }
+}
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/shared_session_hooks_samples.cs#L14-L45' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_shared_save_listener' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+It follows every rule above: the before hook runs once per save and outside the transaction, the after
+hook after the commit and outside the resilience pipeline, an empty unit of work fires neither, and an
+enlisted session fires only the before hook. Two more:
+
+- **It runs alongside the store-wide and `SessionOptions` listeners**, not instead of them: Fisher's own
+  listeners' before hooks first, then the shared ones. After the commit the shared hooks run first, in
+  the place the outbox's after hook always ran, so one of your own listeners throwing cannot stop an
+  outbox from flushing. Each shared hook runs whatever an earlier one threw, and none sees your
+  cancellation token, because the commit has already happened.
+- **A listener added through a [tenant scope](/documents/multi-tenancy#writing-across-tenants) lands
+  on the parent**, whose saves are the scope's.
+
+::: warning
+**A session taken from the async daemon's projection batch refuses `AddSaveListener`** with
+`NotSupportedException`. The daemon commits that batch itself and never runs a session's save hooks, so
+a listener accepted there would never fire, and an outbox that never flushes is message loss with a clean
+build. The contract asks a store to refuse here for exactly that reason.
 :::
 
 ## Reading what is about to be appended
