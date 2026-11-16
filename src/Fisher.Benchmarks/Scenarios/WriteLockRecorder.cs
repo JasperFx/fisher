@@ -17,6 +17,7 @@ public sealed class WriteLockRecorder : IDisposable
     private readonly MeterListener _listener = new();
     private readonly string _storeName;
     private readonly List<double> _waits = new();
+    private readonly List<(double Wait, string? Holder)> _byHolder = new();
     private long _retries;
 
     public WriteLockRecorder(string storeName)
@@ -36,9 +37,16 @@ public sealed class WriteLockRecorder : IDisposable
         {
             if (instrument.Name == "fisher.write_lock.wait" && IsOurs(tags))
             {
+                string? holder = null;
+                foreach (var tag in tags)
+                {
+                    if (tag.Key == "fisher.write_lock.holder") holder = tag.Value as string;
+                }
+
                 lock (_waits)
                 {
                     _waits.Add(value);
+                    _byHolder.Add((value, holder));
                 }
             }
         });
@@ -62,6 +70,21 @@ public sealed class WriteLockRecorder : IDisposable
             lock (_waits)
             {
                 return _waits.ToArray();
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Every recorded wait with its <c>fisher.write_lock.holder</c> tag (<c>session</c>, <c>daemon</c>,
+    ///     ...), in recording order.
+    /// </summary>
+    public IReadOnlyList<(double Wait, string? Holder)> WaitsByHolder
+    {
+        get
+        {
+            lock (_waits)
+            {
+                return _byHolder.ToArray();
             }
         }
     }

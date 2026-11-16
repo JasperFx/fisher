@@ -35,6 +35,8 @@ dotnet run -c Release --project src/Fisher.Benchmarks -- daemon-rebuild     --ev
 dotnet run -c Release --project src/Fisher.Benchmarks -- concurrent-writers --writers 8 --commits 50 --docs-per-commit 5
 dotnet run -c Release --project src/Fisher.Benchmarks -- cold-start         --types 20 --rounds 5
 dotnet run -c Release --project src/Fisher.Benchmarks -- writer-queue       --writers 8 --total-commits 400 --docs-per-commit 5 --rounds 7
+dotnet run -c Release --project src/Fisher.Benchmarks -- writer-queue       --writers 8,16 --modes race,queue,bh-mimic,bh-sleep1ms,group --workload events-hot --rounds 11
+dotnet run -c Release --project src/Fisher.Benchmarks -- writer-queue       --writers 8 --total-commits 4000 --docs-per-commit 1 --workload events-many --daemon 1 --modes race,queue,bh-sleep1ms
 
 # The BenchmarkDotNet micro-benchmarks (MemoryDiagnoser)
 dotnet run -c Release --project src/Fisher.Benchmarks -- bdn
@@ -76,8 +78,23 @@ every change. For a publishable number, scale up:
    work: racing for `BEGIN IMMEDIATE` as today, through a benchmark-only `Channel<T>` single-writer
    queue (`SingleWriterQueue`), and through a `SemaphoreSlim(1)` control. Reports wall clock, commit
    latency percentiles, allocations per commit, the `fisher.write_lock.wait` histogram and both retry
-   signals. `--writers N` runs one count; without it, it sweeps 1/2/4/8/16. The queue is a measurement
-   aid only; Fisher's write path does not use it.
+   signals. `--writers N` (or a list, `--writers 1,8,16`) runs those counts; without it, it sweeps
+   1/2/4/8/16. The queue is a measurement aid only; Fisher's write path does not use it.
+   Round 2 (fisher#547) adds, all benchmark-only:
+   - `--modes` picks from `race`, `queue`, `gate`, `bh-mimic`, `bh-yield`, `bh-spin50us`, `bh-sleep1ms`,
+     `bh-none`, `bounded1`, `bounded4` and `group` (default `race,queue,gate`). The `bh-*` modes race as
+     today but replace SQLite's busy handler on every connection the store opens (`BusyHandlers`, a
+     native `sqlite3_busy_handler` installed through `StoreOptions.Functions`); `bh-mimic` is a counting
+     copy of SQLite's default handler. `bounded*` are the queue on a bounded channel with
+     `FullMode.Wait`. `group` is a group-commit prototype (`GroupCommitQueue`): queued units of work
+     replayed as enlisted sessions, one `SAVEPOINT` each, one `BEGIN IMMEDIATE` and one `COMMIT` per
+     group, capped by `--group-size` (default 64).
+   - `--workload docs` (default), `events-many` (`--docs-per-commit` new streams per commit, one event
+     each) or `events-hot` (one stream; each writer reads its version and appends expecting it, and a
+     lost race is counted as a version conflict).
+   - `--daemon 1` runs an async `Snapshot<BenchTally>` under the daemon during the writes and reports
+     the daemon's catch-up time and its own `fisher.write_lock.wait` (the `daemon` holder tag).
+   - Process CPU time per round, and the busy handler's invocation count and time inside it.
 6. **`cold-start`** — a fresh database file, base schema applied, then the first unit of work
    touching T document types, which pays the first-use table-ensure migration once per type (the
    O(types × objects) migration finding). The second, identical commit is the warm contrast, so

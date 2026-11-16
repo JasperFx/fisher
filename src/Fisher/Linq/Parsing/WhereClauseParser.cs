@@ -1079,6 +1079,16 @@ internal class WhereClauseParser
                 + "value on every row and there is nothing to bind. " + Alternatives);
         }
 
+        // fisher#595: an expression that reads the row has no single value, and compiling it fails with
+        // an internal "variable 'x' ... is not defined". Every caller that reaches here with one is a
+        // shape no parser translated, so it is refused by name.
+        if (ReferencesFreeParameter(expression))
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot translate '{expression}' as a value: it reads the document, so it has a different "
+                + "value on every row and there is nothing to bind. " + Alternatives);
+        }
+
         if (expression is ConstantExpression constant)
         {
             return constant.Value;
