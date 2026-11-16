@@ -1964,6 +1964,14 @@ stitch.
   **by parameter reference, not by type** — a self-join has the same type on both sides.
 - **A member the projection computed is refused rather than sorted or filtered on**, since its value
   exists only after the row is read.
+- **An ordering key that reads nothing from the row is dropped, as on the document path** (fisher#596, the
+  join half of fisher#591). `AddJoinOrdering` checks `IsConstantKey` before the key reaches `CurrentJoin.OrderBys`,
+  so a static or captured local ties every row and the later keys decide; `Last` over only such keys meets
+  the ordinary "requires an OrderBy" refusal. It was never silently wrong here — `JoinedMember` accepts only
+  `side.Member`, so main refused every such key — but it refused a query LINQ answers.
+  ⚠️ **A dropped `OrderBy` still re-sorts** (fisher#588): `DropConstantKey` resets the group length to 0, so
+  `OrderBy(a).OrderBy(constant).ThenBy(b)` is `b, a`. Leaving the group alone renders `a, b`, silently, on
+  both paths; `join_ordering_closed_values` has a fact for each.
 - **The scalar aggregates and `Last` work over a join** (fisher#54), and cost one seam: `JoinPlan.Member`
   holds the post-join member mapping as a closure, so a terminal reaches the same attribution the
   `Where` and the `OrderBy` already used rather than re-deriving it. The two aggregate guards are the

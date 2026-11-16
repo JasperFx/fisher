@@ -870,6 +870,19 @@ internal class LinqQueryParser
     {
         var join = CurrentJoin!;
         var length = join.OrderingGroupLength;
+
+        // fisher#596: the document path's rule (fisher#591) on the join path. A key over the joined
+        // shape that reads nothing from the row ties every row, so it is dropped and the keys after it
+        // decide. It used to reach ApplyJoinOrdering and be refused as "not a member of a joined
+        // document", which refused a query LINQ answers. A Last over nothing but such keys then meets
+        // the ordinary "requires an OrderBy" refusal, since no key reaches the statement.
+        if (IsConstantKey(UnwrapLambda(call)))
+        {
+            DropConstantKey(ref length, primary);
+            join.OrderingGroupLength = length;
+            return;
+        }
+
         join.OrderBys.Insert(OrderingInsertionIndex(ref length, primary), (UnwrapLambda(call), descending));
         join.OrderingGroupLength = length;
     }
