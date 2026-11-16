@@ -38,8 +38,9 @@ internal sealed class SelectProjection
 
     private SelectProjection(LambdaExpression selector, IMemberResolver members, string[] locators,
         Type[] columnTypes, Func<object?[], object?> build, Type resultType, bool requiresFullTextJoin,
-        bool isFaithful)
+        bool isFaithful, string[] distinctKeys)
     {
+        DistinctKeys = distinctKeys;
         _selector = selector;
         _members = members;
         Locators = locators;
@@ -82,6 +83,13 @@ internal sealed class SelectProjection
 
     /// <summary>The SQL locators to select, in order.</summary>
     public string[] Locators { get; }
+
+    /// <summary>
+    ///     What <c>Distinct()</c> deduplicates each column by, parallel to <see cref="Locators" />: the column
+    ///     itself, except a decimal's <c>fi_decimal_key</c> (fisher#609), which compares by bytes where the
+    ///     column's collation would call into .NET for every comparison.
+    /// </summary>
+    public string[] DistinctKeys { get; }
 
     /// <summary>The CLR type each column should be read as, parallel to <see cref="Locators" />.</summary>
     public Type[] ColumnTypes { get; }
@@ -129,7 +137,8 @@ internal sealed class SelectProjection
             lambda.Compile(),
             selector.ReturnType,
             collector.RequiresFullTextJoin,
-            ComputedColumns.IsFaithful(body, values));
+            ComputedColumns.IsFaithful(body, values),
+            collector.DistinctKeys.ToArray());
     }
 
     /// <summary>
@@ -181,6 +190,7 @@ internal sealed class SelectProjection
                 index = Locators.Count;
                 _indexes[locator] = index;
                 Locators.Add(locator);
+                DistinctKeys.Add(locator);
                 ColumnTypes.Add(type);
             }
 
@@ -192,6 +202,8 @@ internal sealed class SelectProjection
         public List<string> Locators { get; } = [];
 
         public List<Type> ColumnTypes { get; } = [];
+
+        public List<string> DistinctKeys { get; } = [];
 
         /// <summary>Set when a snippet or highlight was projected -- fisher#220.</summary>
         public bool RequiresFullTextJoin { get; private set; }
@@ -252,6 +264,7 @@ internal sealed class SelectProjection
                 slot = Locators.Count;
                 _indexes[locator] = slot;
                 Locators.Add(locator);
+                DistinctKeys.Add(locator);
                 ColumnTypes.Add(typeof(string));
             }
 
@@ -309,13 +322,17 @@ internal sealed class SelectProjection
                 return base.VisitMember(node);
             }
 
+            // fisher#609: a decimal is read as the number written, not as json_extract's REAL, and its
+            // column is collated so a Distinct or an OrderBy over it compares it as a decimal.
             var member = _members.ResolveMember(node);
+            var locator = DecimalPrecision.ColumnFor(member);
 
-            if (!_indexes.TryGetValue(member.TypedLocator, out var index))
+            if (!_indexes.TryGetValue(locator, out var index))
             {
                 index = Locators.Count;
-                _indexes[member.TypedLocator] = index;
-                Locators.Add(member.TypedLocator);
+                _indexes[locator] = index;
+                Locators.Add(locator);
+                DistinctKeys.Add(DecimalPrecision.OrderingFor(member));
                 ColumnTypes.Add(node.Type);
             }
 

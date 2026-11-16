@@ -237,7 +237,7 @@ internal sealed class CollectionContains : IMethodCallParser
 
         ISqlFragment where = value is null
             ? new WhereFragment($"{element.RawLocator} is null")
-            : new ComparisonFilter(element.TypedLocator, "=", value);
+            : DecimalPrecision.Compare(element, "=", value);
 
         return new ExistsSubQueryFilter(collection.JsonEachSource, collection.Alias, where);
     }

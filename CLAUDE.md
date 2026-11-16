@@ -2503,8 +2503,34 @@ before anything changed: 14 of `decimal_aggregates`' 17 facts fail on the old pa
   correctly rounded, which is why the test's oracle parses the decimal's text instead.
 - **A borrowed connection gets the store's functions too**: `ExternalConnectionLifetime` registers them on
   first use, or `SessionOptions.ForConnection` met `no such function`. That also covers vector search.
-- A plain `Select`/`Where` over a decimal with more than 15 significant digits is still read as a double;
-  that is fisher#609.
+
+⚠️ **Every other read of a `decimal` member is exact too** (fisher#609, `Linq/DecimalPrecision.cs`). `json_extract`'s
+REAL made `0.1000000000000000001m` and `…002m` one value to `Select`, `==` (matched both), `>` (matched neither),
+`OrderBy`, `Distinct`, `GroupBy` and a keyset cursor (which looped forever at page size 1). Of `decimal_precision`'s
+19 original facts, 16 fail on the old path, two are pins that pass on it (a whole-document load, the index plan), and one
+tests the new sort key directly.
+- **A projection selects `(nullif(data -> '$.p', 'null') collate fi_decimal)`** and `CoerceTo` parses the text, so the
+  value keeps its scale. The `nullif` matters: `->` renders JSON null as the TEXT `'null'`.
+- ⚠️ **A comparison is a REAL band plus the exact text, never a bare REAL prefilter.** SQLite's text-to-double is
+  **not correctly rounded** (measured on 3.53: 350 of 400,000 decimals one ulp off .NET's `double.Parse`), so
+  `R = ?` with a .NET double drops a true match. `DecimalComparison` renders `R between lo and hi and E = v`,
+  `R >= lo and (R > hi or E > v)` and so on, with `lo`/`hi` at 2^-40 of the value either side. Correct while each
+  conversion is within ~2,000 ulps of the truth; needs no monotonicity. The REAL keeps a duplicated field's index
+  (and an `Index(...)`) serving `==`, the ranges and `IsOneOf` (`MULTI-INDEX OR`), and keeps the collation off every
+  row outside the band. Only when C# compares in decimal: a `double` value keeps the REAL comparison.
+- ⚠️ **Both fragments keep fisher#608's null answers.** Over a null member the band's body is NULL, which a bare
+  `where` reads as C#'s false for `=` and the ranges, so those stay bare and indexable. A null-safe `!=` is
+  `coalesce(body, 1)`, a negation is `not coalesce(body, C#'s null answer)`, and `DecimalInFilter` takes
+  `WhereInFilter`'s `is null` arm and `not coalesce(…, 0)`. A collection element's `Contains` stays non-null-safe.
+- **`OrderBy`, `GroupBy`, `DistinctBy`, `Distinct`, join keys and the cursor seek use `fi_decimal_key`**, a BLOB whose
+  bytes sort as the number (`DecimalAggregates.SortKey`), keyed straight from the JSON digits. Measured on 10k rows:
+  ordering through the collation took 31 ms, the key 7–8, the REAL 6. `ORDER BY R, E collate` was 7 but exact only if
+  SQLite's conversion is monotone, which 600,000 dense samples never broke and nothing promises. Cost: an index no
+  longer serves `OrderBy` over a duplicated decimal (top-10 went 0.09 → 6 ms). `g.Key` still selects the text.
+- The cursor decodes the key back (`FromSortKey`) and binds the seek value as a key; `ConvertSlot` reads a decimal
+  slot with `GetDecimal`. A `decimal[]` element is exact through `(data -> each_N.fullkey)`.
+- **Not covered**: a registered wrapper around a decimal (its member type is the wrapper), and decimal arithmetic or
+  member-to-member comparisons, which are #603's and #595's.
 
 ### Sessions, `SessionOptions` and enlistment
 

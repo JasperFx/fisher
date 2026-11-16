@@ -682,7 +682,11 @@ internal class LinqQueryParser
         }
 
         GroupByLocator = LocatorFor(call);
-        _grouping = new GroupingTranslator(_memberFactory, GroupByLocator);
+        // fisher#609: a decimal groups by its sort key, and g.Key reads back the number as written,
+        // which every row of the group holds up to its scale.
+        var exact = DecimalPrecision.IsExact(_lastOrderingMember);
+        _grouping = new GroupingTranslator(_memberFactory,
+            exact ? DecimalPrecision.ExactKey(_lastOrderingMember!) : GroupByLocator, keyIsExactDecimal: exact);
     }
 
     /// <summary>
@@ -1144,7 +1148,8 @@ internal class LinqQueryParser
                 + "meaningful.");
         }
 
-        return member.TypedLocator;
+        // fisher#609: a decimal orders, groups and deduplicates by its exact value.
+        return DecimalPrecision.OrderingFor(member);
     }
 
     private static bool IsConstantKey(LambdaExpression lambda)
