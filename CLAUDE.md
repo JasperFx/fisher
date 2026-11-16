@@ -1815,6 +1815,16 @@ Three restrictions, each refused by name:
 One `Select` per query; a second would have to project members of the first's result, which is not a
 document and has no locators.
 
+⚠️ **`Distinct()` and identity `OrderBy` need the columns to BE the result** (fisher#590). Both act on the select
+list, so after `Select(x => x.Number % 3)` they used to act on `Number`. `IsFaithful` on both projections says
+whether the body is a column copy (a column, a lossless conversion, a `new` of copies and constants), and
+`LinqQueryParser.RequireFaithfulProjection` otherwise rebuilds the projection with `ComputedColumns`' arithmetic in
+the select list, or refuses by name. The subset is integer `%` and `/` by a constant other than 0 and -1, and unary
+minus with a `case` guard at the type minimum. Those are the only places SQLite and unchecked .NET agree for every
+value, which is why `*` and `+` are refused. A non-nullable leaf is `coalesce(…, 0)`, matching the projected read's
+NULL-to-default. The translation runs only when one of those operators asks, so the boundary above still holds for
+every other `Select`.
+
 **A NULL column becomes the target type's default, not a null.** `json_extract` yields SQL NULL for an
 absent key and an aggregate over an empty group yields NULL too, and the compiled projection *unboxes*
 each value to its declared type — so a null reaching a non-nullable value type is a
@@ -2326,10 +2336,30 @@ can do neither, but is stable under concurrent writes and does not degrade as th
   row at all* when the page is past the end — which is exactly when a pager most needs the real total.
   Same reasoning as `a_page_past_the_end_still_reports_the_total` in the event-store explorer's paging,
   and pinned the same way here.
-- **`CountIgnoringPagingAsync` is deliberately distinct from `CountAsync`.** The latter counts the
-  *page* when the query is paged (`Take(5).CountAsync()` is 5); the former discards `Take`/`Skip`
-  because a total that counted the page would say nothing. Both are right for their caller; conflating
-  them would make one silently wrong.
+- **`CountIgnoringPagingAsync` counts the query the pager pages, before the pager's own
+  `Skip`/`Take`.** ⚠️ Paging the caller wrote is part of that query since fisher#589: it used to be
+  discarded here while the items overwrote it, so `Take(2).ToPagedListAsync(1, 3)` listed three rows and
+  reported the whole table. Now both compose, so the items and the total agree.
+- ⚠️ **An operator after `Take`/`Skip` applies to the page** (fisher#589). `Take`/`Skip` used to
+  overwrite `Limit`/`Offset` and fold everything after them into one statement, so a later `Where`,
+  `OrderBy`, `Distinct`, second `Take`/`Skip` or terminal predicate ran *before* the LIMIT, silently.
+  - **Consecutive paging composes** in `LinqQueryParser.ComposeTake`/`ComposeSkip`: the smaller
+    `Take`, `Skip`s added, `Take(n).Skip(k)` as LIMIT `max(n−k, 0)` OFFSET k. One statement, no subquery.
+  - **Anything else after paging lands on `LinqQueryParser.AfterPage`**, and
+    `FisherQueryProvider.ApplyAfterPage` makes the paged statement a subquery selecting `*`, with the
+    outer statement taking its select list. Document-member locators, duplicated columns and `id` all
+    resolve against the page, and the implicit filters stay inside. The page's own ordering is repeated
+    after any re-sort, because a subquery's row order is not promised and LINQ's `OrderBy` is stable.
+  - **Accepted after paging**: `Where`, the `OrderBy` family, `Distinct` after a `Select`, a terminal's
+    predicate, and one further `Take`/`Skip`. `Select` and the no-SQL markers stay where they are.
+    **Refused by name**: everything else, including the soft-delete, tenant and metadata filters; any
+    operator after a *join's* paging (its aliased locators do not survive a subquery); a grouped,
+    distinct or full-text page; and a second operator boundary.
+  - **Wrapping sites carry `Subquery`** (`WrapAsSubquery`, `AggregateOverPage`), and terminals cap the
+    limit with `LimitAtMost` rather than overwriting it. `ToCursorPageAsync` refuses a paged query,
+    because it sets its own LIMIT and drops the OFFSET.
+  - `operators_after_paging` fails 18 of 19 against the old parser. The repro shapes came from the
+    `marten-1115-probes` branch.
 - **Keyset pagination requires a terminal identity key**, and this is the guard that makes the rest
   honest. Without a total order, rows tied on the sort key have no defined order between them and a
   seek boundary lands mid-tie — skipping some and repeating others, silently, and only when there are
@@ -2601,6 +2631,14 @@ next opener.
 - ⚠️ **Weasel's migrations open their own `new SqliteConnection` and are not gated**, nor is application code. That
   residual is rare next to session opens. The class belongs in Weasel.Sqlite's `SqliteDataSource`, and the race
   upstream. Remove it when Microsoft.Data.Sqlite activates under the pool lock.
+- ⚠️ **The gate is a `Lock` around a wholly synchronous open, and must never become async again** (fisher#587).
+  The first version was a `SemaphoreSlim`: async opens `WaitAsync`ed and sync opens blocked in `Wait`. A contended
+  async open then returned an incomplete task, so the open, and the release of the gate, waited for a pool thread,
+  while sync waiters held pool threads. A burst of synchronous Hi-Lo stores (each advance opens synchronously)
+  stalled for 29 s, against 0.56 s now. The async override runs `base.OpenDbConnection()` under the lock and
+  returns a completed task, which is safe because Microsoft.Data.Sqlite's open and Weasel's PRAGMAs are
+  synchronous underneath. `a_contended_async_open_completes_before_it_returns` pins it without depending on timing;
+  `synchronous_hilo_burst` reproduces the stall only when run alone. Found by checking marten#5969 against Fisher.
 - fisher#311's untracked transaction may have been this too (another session's `BEGIN` on a shared handle). Not
   verified, so its defence stays.
 - `serialized_connection_opens` plants the mid-`Activate` state by reflection to pin the premise, and holds one open
@@ -6051,6 +6089,19 @@ default and an `OrderBy` did not order, all silently. `Nullable<T>.Value` resolv
   lands in the wrong year. The input is `RawLocator` because a duplicated column holds the UTC form.
 - `.Date`, `DayOfWeek`, every `TimeSpan` member and anything else is refused by name. `CriteriaShapeRules`
   lost its date and `Nullable.Value` rules with this, since an honest refusal reaches a console on its own.
+
+⚠️ **A member chain not rooted at the lambda's parameter is a value, never a path** (fisher#591, near
+marten#5950/#5943). `MemberFactory.ResolveMember` refuses one by name (`IsRootedAtParameter`, the where
+parser's `IsDocumentMember` rule, looking through conversions and union-case casts). It used to walk a static
+or a captured local as `$.<name>`, so where the name matched a document member the query silently read that
+member. Per caller:
+- **An ordering key that reads nothing from the row is dropped** in `LinqQueryParser.AddOrdering` (Marten's
+  ruling): every row ties on it, so later keys decide. `OrderBys` and `OrderByMembers` both skip it, so `Last`
+  reverses and a cursor seeks on what remains; `Last` over only a dropped key is refused as having no ordering.
+- **`GroupBy` and `DistinctBy` over one are refused** — a single group or row has no locator to stand for it.
+- **`Sum`/`Min`/`Max`/`Average` over one, top-level or over a group, are refused** through the factory.
+- `TryParseArithmetic` requires a *document* member on one operand, so `x.Number < Statics.Value - 4` folds the
+  right side instead of compiling `x.Number` as a value.
 
 The provider takes both the column list and the materializer from the **query-only** closed-shape
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,
