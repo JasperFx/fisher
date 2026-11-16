@@ -134,7 +134,9 @@ per-session failure and enlisted-session semantics) and is NOT done; the baselin
 `ConcurrentWritersScenario` (8 writers ~1.8x the wall clock of 1 writer, see `Fisher.Benchmarks/Results.md`).
 **fisher#547 has the measurement, and no decision yet:** `writer-queue` in `Fisher.Benchmarks` compares racing
 against a benchmark-only `Channel<T>` queue (and a `SemaphoreSlim` control), and `Results.md`'s fisher#547
-section has the numbers and the semantic costs. Adopting or declining it is the owner's call.
+section has the numbers and the semantic costs. Its "fisher#547 round 2" section adds replacement busy
+handlers, event appends, the daemon, group commit and a bounded queue, and confirms SQLite's default busy
+handler's sleeps as the whole cost of racing. Adopting or declining any of it is the owner's call.
 
 **`AppendExclusive` / `FetchForExclusiveWriting` / `WriteExclusivelyToAggregate` are the optimistic
 methods.** Marten and Polecat take a row lock so a competing session waits its turn. SQLite has no
@@ -1964,6 +1966,14 @@ stitch.
   **by parameter reference, not by type** — a self-join has the same type on both sides.
 - **A member the projection computed is refused rather than sorted or filtered on**, since its value
   exists only after the row is read.
+- **An ordering key that reads nothing from the row is dropped, as on the document path** (fisher#596, the
+  join half of fisher#591). `AddJoinOrdering` checks `IsConstantKey` before the key reaches `CurrentJoin.OrderBys`,
+  so a static or captured local ties every row and the later keys decide; `Last` over only such keys meets
+  the ordinary "requires an OrderBy" refusal. It was never silently wrong here — `JoinedMember` accepts only
+  `side.Member`, so main refused every such key — but it refused a query LINQ answers.
+  ⚠️ **A dropped `OrderBy` still re-sorts** (fisher#588): `DropConstantKey` resets the group length to 0, so
+  `OrderBy(a).OrderBy(constant).ThenBy(b)` is `b, a`. Leaving the group alone renders `a, b`, silently, on
+  both paths; `join_ordering_closed_values` has a fact for each.
 - **The scalar aggregates and `Last` work over a join** (fisher#54), and cost one seam: `JoinPlan.Member`
   holds the post-join member mapping as a closure, so a terminal reaches the same attribution the
   `Where` and the `OrderBy` already used rather than re-deriving it. The two aggregate guards are the
@@ -2336,10 +2346,30 @@ can do neither, but is stable under concurrent writes and does not degrade as th
   row at all* when the page is past the end — which is exactly when a pager most needs the real total.
   Same reasoning as `a_page_past_the_end_still_reports_the_total` in the event-store explorer's paging,
   and pinned the same way here.
-- **`CountIgnoringPagingAsync` is deliberately distinct from `CountAsync`.** The latter counts the
-  *page* when the query is paged (`Take(5).CountAsync()` is 5); the former discards `Take`/`Skip`
-  because a total that counted the page would say nothing. Both are right for their caller; conflating
-  them would make one silently wrong.
+- **`CountIgnoringPagingAsync` counts the query the pager pages, before the pager's own
+  `Skip`/`Take`.** ⚠️ Paging the caller wrote is part of that query since fisher#589: it used to be
+  discarded here while the items overwrote it, so `Take(2).ToPagedListAsync(1, 3)` listed three rows and
+  reported the whole table. Now both compose, so the items and the total agree.
+- ⚠️ **An operator after `Take`/`Skip` applies to the page** (fisher#589). `Take`/`Skip` used to
+  overwrite `Limit`/`Offset` and fold everything after them into one statement, so a later `Where`,
+  `OrderBy`, `Distinct`, second `Take`/`Skip` or terminal predicate ran *before* the LIMIT, silently.
+  - **Consecutive paging composes** in `LinqQueryParser.ComposeTake`/`ComposeSkip`: the smaller
+    `Take`, `Skip`s added, `Take(n).Skip(k)` as LIMIT `max(n−k, 0)` OFFSET k. One statement, no subquery.
+  - **Anything else after paging lands on `LinqQueryParser.AfterPage`**, and
+    `FisherQueryProvider.ApplyAfterPage` makes the paged statement a subquery selecting `*`, with the
+    outer statement taking its select list. Document-member locators, duplicated columns and `id` all
+    resolve against the page, and the implicit filters stay inside. The page's own ordering is repeated
+    after any re-sort, because a subquery's row order is not promised and LINQ's `OrderBy` is stable.
+  - **Accepted after paging**: `Where`, the `OrderBy` family, `Distinct` after a `Select`, a terminal's
+    predicate, and one further `Take`/`Skip`. `Select` and the no-SQL markers stay where they are.
+    **Refused by name**: everything else, including the soft-delete, tenant and metadata filters; any
+    operator after a *join's* paging (its aliased locators do not survive a subquery); a grouped,
+    distinct or full-text page; and a second operator boundary.
+  - **Wrapping sites carry `Subquery`** (`WrapAsSubquery`, `AggregateOverPage`), and terminals cap the
+    limit with `LimitAtMost` rather than overwriting it. `ToCursorPageAsync` refuses a paged query,
+    because it sets its own LIMIT and drops the OFFSET.
+  - `operators_after_paging` fails 18 of 19 against the old parser. The repro shapes came from the
+    `marten-1115-probes` branch.
 - **Keyset pagination requires a terminal identity key**, and this is the guard that makes the rest
   honest. Without a total order, rows tied on the sort key have no defined order between them and a
   seek boundary lands mid-tie — skipping some and repeating others, silently, and only when there are
@@ -2631,6 +2661,14 @@ next opener.
 - ⚠️ **Weasel's migrations open their own `new SqliteConnection` and are not gated**, nor is application code. That
   residual is rare next to session opens. The class belongs in Weasel.Sqlite's `SqliteDataSource`, and the race
   upstream. Remove it when Microsoft.Data.Sqlite activates under the pool lock.
+- ⚠️ **The gate is a `Lock` around a wholly synchronous open, and must never become async again** (fisher#587).
+  The first version was a `SemaphoreSlim`: async opens `WaitAsync`ed and sync opens blocked in `Wait`. A contended
+  async open then returned an incomplete task, so the open, and the release of the gate, waited for a pool thread,
+  while sync waiters held pool threads. A burst of synchronous Hi-Lo stores (each advance opens synchronously)
+  stalled for 29 s, against 0.56 s now. The async override runs `base.OpenDbConnection()` under the lock and
+  returns a completed task, which is safe because Microsoft.Data.Sqlite's open and Weasel's PRAGMAs are
+  synchronous underneath. `a_contended_async_open_completes_before_it_returns` pins it without depending on timing;
+  `synchronous_hilo_burst` reproduces the stall only when run alone. Found by checking marten#5969 against Fisher.
 - fisher#311's untracked transaction may have been this too (another session's `BEGIN` on a shared handle). Not
   verified, so its defence stays.
 - `serialized_connection_opens` plants the mid-`Activate` state by reflection to pin the premise, and holds one open
@@ -5658,6 +5696,15 @@ had somewhere to put one. **A tenant on a store that is not multi-tenanted is re
 ignored**, the rule `QueryStreamStates` already followed one member over: `DefaultTenancy.DatabaseFor`
 resolves any id, so a quietly-unscoped reader would report every tenant's events as that tenant's.
 
+⚠️ **On the tier's three queryables (`QueryRawEvents`, `QueryStreamStates`, `QueryEventData<T>`), an
+operator after `Take`/`Skip` applies to the page** (fisher#599, fisher#589's twin in
+`EventTableQueryProvider`). Consecutive paging composes into one `LIMIT`/`OFFSET`; a `Where` or an ordering
+after it wraps the paged statement as a subquery (`select *` inside, the page's select list outside), as
+many levels deep as the chain goes, so nothing is refused. Two rules hold it together: the scope (tenant,
+event type, archived filter) and the final `seq_id` order go on the root statement, inside every page, and
+each page's ordering is repeated after the outer ordering, so a re-sort keeps LINQ's stable ties.
+`event_queries_after_paging` checks every shape against LINQ to Objects.
+
 **`HasEventStore` (jasperfx#914, fisher#354) is computed, never defaulted**: any registered event type
 other than `Archived`, or `Projections.IsActive()` — Marten's `EventGraph.IsActive` rule. The interface
 default is `true`, which makes a document-only store indistinguishable from an event store to a console
@@ -6054,6 +6101,33 @@ Six SQLite decisions that are easy to get wrong and fail silently:
     since fisher#34 (`SqliteParameterValue`, which documents this exact conversion). Two of Fisher's
     three decimal-binding paths were correct and documented while the one a caller reaches first was
     not; that is the shape rather than the exception.
+- ⚠️ **A `float` comparison value is normalised to the double its stored text parses to** (fisher#605).
+  System.Text.Json writes a float as its shortest round-trip text (`0.3`), which `json_extract` reads as
+  the double `0.3`; the provider binds `0.3f` widened, `0.30000001192092896`, so `x.Weight == 0.3f`
+  matched nothing and ranges were off at the boundary. `SqliteParameterValue.FloatAsStored` is
+  `double.Parse(f.ToString("R"))`, applied by `NormalizeComparisonValue` in `ComparisonFilter` and
+  `WhereInFilter` for fisher#304's reason, and by `ToDatabaseValue` for raw SQL. Measured over 199,189
+  random floats on net10.0 and net11.0: the serializer's text is always `ToString("R")`, `json_extract`
+  of it always equals the mapped double, and the mapping is strictly increasing.
+  - **It is right only when C# compares in single precision, so `ExtractValue` keeps a float/double
+    conversion it would otherwise strip.** `x.Ratio == f` over a double member widens `f`, and
+    `x.Weight == (float)d` narrows `d`; stripping either binds the wrong number.
+  - **A double against a float member** (`x.Weight == 0.3`, which C# widens the member for) goes through
+    `FloatComparisons`: an exact float compares as that float, anything else is never equal and a range
+    moves to the neighbouring float. `IsOneOf`/`Contains` drop a double no float equals.
+  - `float_comparisons` fails 30 of its 33 tests on the previous build; the float-against-double-member
+    guard is one of the three that pass there, and fails if `ExtractValue` strips the widening.
+- ⚠️ **Decimal arithmetic is never computed in SQLite** (fisher#603). Binding as double is fine for a
+  *comparison*; an *operation* is not: `0.3 - 0.1` is `0.19999999999999998` in SQLite, so
+  `x.Price - 0.1m < 0.2m` matched a price of 0.3. `TryFoldDecimalArithmetic` folds a member ± constants
+  in .NET `decimal` (`c - x < v` reverses to `x > c - v`) and re-parses the result through
+  `ParseComparison`, so nesting and nullability follow the plain path. What cannot fold is refused in
+  `TryRenderArithmetic`: two decimal members, `float` arithmetic, and a `float` member widened to
+  double (its stored shortest text is not the double C# widens to). `AssertModuloIsIntegral` refuses
+  any non-integral `%`, because SQLite's `%` truncates both operands to INTEGER (`3.5 % 2` is 1).
+  Constant operands are evaluated with their conversions (`EvaluateValue`), so `(double)0.1f` renders
+  as the double C# uses. Integral and `double` Add/Subtract still translate. `decimal_arithmetic_in_predicates`
+  fails 29 of 41 against the old parser.
 
 ⚠️ **A second `OrderBy` goes in front, and a `ThenBy` goes after its own `OrderBy`** (fisher#588,
 marten#5959). LINQ's `OrderBy` is a stable re-sort: `OrderBy(a).OrderBy(b)` is `b, a`, and
@@ -6072,6 +6146,34 @@ default and an `OrderBy` did not order, all silently. `Nullable<T>.Value` resolv
   lands in the wrong year. The input is `RawLocator` because a duplicated column holds the UTC form.
 - `.Date`, `DayOfWeek`, every `TimeSpan` member and anything else is refused by name. `CriteriaShapeRules`
   lost its date and `Nullable.Value` rules with this, since an honest refusal reaches a console on its own.
+
+⚠️ **A member chain not rooted at the lambda's parameter is a value, never a path** (fisher#591, near
+marten#5950/#5943). `MemberFactory.ResolveMember` refuses one by name (`IsRootedAtParameter`, the where
+parser's `IsDocumentMember` rule, looking through conversions and union-case casts). It used to walk a static
+or a captured local as `$.<name>`, so where the name matched a document member the query silently read that
+member. Per caller:
+- **An ordering key that reads nothing from the row is dropped** in `LinqQueryParser.AddOrdering` (Marten's
+  ruling): every row ties on it, so later keys decide. `OrderBys` and `OrderByMembers` both skip it, so `Last`
+  reverses and a cursor seeks on what remains; `Last` over only a dropped key is refused as having no ordering.
+- **`GroupBy` and `DistinctBy` over one are refused** — a single group or row has no locator to stand for it.
+- **`Sum`/`Min`/`Max`/`Average` over one, top-level or over a group, are refused** through the factory.
+- `TryParseArithmetic` requires a *document* member on one operand, so `x.Number < Statics.Value - 4` folds the
+  right side instead of compiling `x.Number` as a value.
+
+⚠️ **A comparison that reads the row on both sides is two locators, never a bound value** (fisher#595).
+`ParseComparison` sends it to `ParseMemberToMember` before anything calls `ExtractValue`, which compiled one
+side and failed with an internal "variable 'x' ... is not defined". Each side is a member's `TypedLocator` (so
+`strftime` timestamps and integer enums compare as they do against a constant) or `TryRenderArithmetic`'s
+Add/Subtract.
+- ⚠️ **Equality is `is` / `is not`, and a range is `coalesce(a < b, 0)`.** C#'s `x.A == x.B` is true when both
+  are null, and `!(x.A < x.B)` is true when either is; plain `=` and `not (NULL)` drop those rows.
+- **Refused by name**: sides of different kinds (a string-stored enum against a number, `DateTimeOffset`
+  against `DateTime`), a range over a string-stored enum, a conversion that changes the value (`(int)x.Ratio`,
+  a cast to `object`), `decimal`/`float` arithmetic (SQLite would run it in `double`), anything that is not a
+  member or that arithmetic, and member types with no single stored value (objects, strong-typed ids).
+- **`ExtractValue` refuses a row-reading expression by name**, so the other parsers (`x.A % x.B`,
+  `x.Tags.Contains(x.Name)`) fail as a refusal rather than an internal exception. "Reads the row" is a FREE
+  parameter: `Thresholds.Count(t => t > 1)` binds its own and is still a value.
 
 The provider takes both the column list and the materializer from the **query-only** closed-shape
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,

@@ -36,7 +36,7 @@ internal class WhereInFilter : ISqlFragment
     public WhereInFilter(string locator, IReadOnlyList<object?> values)
     {
         _locator = locator;
-        _values = [.. values.Select(SqliteParameterValue.NormalizeDecimal)];
+        _values = [.. values.Select(SqliteParameterValue.NormalizeComparisonValue)];
     }
 
     /// <summary>

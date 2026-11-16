@@ -12,8 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3132 tests green on net10.0 and 3159 on net11.0** — 3061 (net10.0) / 3088 (net11.0) in `Fisher.Tests`, 40 in
-**3129 tests green on net10.0 and 3156 on net11.0** — 3058 (net10.0) / 3085 (net11.0) in `Fisher.Tests`, 40 in
+**3382 tests green on net10.0 and 3409 on net11.0** — 3311 (net10.0) / 3338 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -28,6 +27,88 @@ for values no double holds. All four now read the JSON text (`IQueryableMember.J
 `fi_decimal` collation so `HAVING`, grouped `OrderBy` and `Distinct` compare as numbers. `decimal_aggregates`
 (17 facts, LINQ to Objects as the oracle) fails 14 on the previous build. Plain `Select`/`Where` beyond 15
 significant digits is fisher#609; the collation's registry member is weasel#861.
+
+## A float comparison binds the value its stored text reads back as (fisher#605)
+
+`x.Weight == 0.3f` bound the widened double `0.30000001192092896` against the stored `0.3`, so it matched nothing
+and ranges were off at the boundary. A float comparison value is now bound as `double.Parse(f.ToString("R"))` in
+`ComparisonFilter`, `WhereInFilter` and raw SQL; `ExtractValue` keeps float/double conversions so a float compared
+with a double member is still widened; and a double against a float member is moved onto the neighbouring float.
+`float_comparisons` (33 tests, LINQ to Objects as the oracle) fails 30 of 33 on the previous build.
+
+## Decimal arithmetic is folded, never computed in SQLite (fisher#603)
+
+`x.Price - 0.1m < 0.2m` was rendered as `(price - 0.1) < @p0`, which SQLite computes in double, so a price of 0.3
+matched. A decimal member ± constants, either side of the comparison, is now folded into one constant in .NET
+`decimal` arithmetic (`0.3m - x.Price < 0.2m` becomes `price > 0.1`). Two decimal members, `float` arithmetic, a
+`float` member widened to double, and any non-integral `%` (SQLite truncates both operands) are refused by name.
+Integral and `double` Add/Subtract still translate. `decimal_arithmetic_in_predicates` (41 tests, LINQ to Objects
+as the oracle) fails 29 of 41 on the previous build; `sql_injection_hardening`'s fractional-modulo test now pins
+the refusal instead of the wrong answer.
+
+## Comparing two members translates (fisher#595)
+
+`x.A < x.B`, `x.A == x.B` and `x.A - 1 < x.B` failed with an internal `InvalidOperationException`, because the
+where parser compiled one member side as a constant. They now render as two typed locators: `is` / `is not` for
+equality, so two nulls are equal as in C#, and `coalesce(… < …, 0)` for a range, so a negation keeps the null rows.
+Sides of different kinds, string-stored enum ranges, value-changing conversions and `decimal`/`float` arithmetic
+are refused by name, and `ExtractValue` now refuses any row-reading expression by name. CLAUDE.md's "LINQ" has the
+rules. `member_to_member_comparisons` (56 tests, LINQ to Objects as the oracle) fails 53 of 56 on the previous build.
+
+## A closed ordering key after a join is dropped (fisher#596)
+
+The join half of fisher#591. `OrderBy(x => Statics.Quantity).ThenBy(x => x.Item)` after a `Join` or a
+`GroupJoin(...).SelectMany(...)` was refused ("Fisher cannot order a join by ..."), never answered wrongly,
+because `JoinedMember` accepts only a document member. `AddJoinOrdering` now drops a key that reads nothing from
+the row, as `AddOrdering` does, so later keys decide and `Last` over only such keys is refused as having no
+`OrderBy`. A dropped `OrderBy` still starts a new group (`DropConstantKey`), which the merge of #593 and #594
+needs on both paths: without it `OrderBy(a).OrderBy(constant).ThenBy(b)` renders `a, b`.
+`join_ordering_closed_values` (14 facts, LINQ to Objects as the oracle): 12 fail on the previous build, and the
+two re-sort facts fail with the group reset removed. The header counts are from a real run of this branch,
+which carries #594: they also take in #593's 13 tests and #594's 16, neither of which bumped them.
+
+## Event-table queries apply operators after Take/Skip to the page (fisher#599)
+
+`QueryRawEvents()`, `QueryStreamStates()` and `QueryEventData<T>()` folded a `Where` or an `OrderBy` written after
+`Take`/`Skip` into the one statement, so it ran before the `LIMIT`. `EventTableQueryProvider` now composes
+consecutive paging into one `LIMIT`/`OFFSET` (`Take(n).Skip(k)` is `LIMIT max(n−k, 0) OFFSET k`, where it used to
+be refused, and a negative count is zero), and wraps the paged statement as a subquery for anything else, as many
+levels deep as the chain goes. Nothing is refused. The page's ordering breaks a re-sort's ties, and the scope
+(tenant, event type, archived filter) stays inside the page. `FirstOrDefault` no longer lifts a smaller limit.
+`event_queries_after_paging` (36 facts, LINQ to Objects as the oracle) fails 30 of them on the previous build; the
+6 that pass pin the consecutive `Take`/`Skip` composition that already worked.
+
+## Operators after `Take`/`Skip` apply to the page (fisher#589)
+
+`Take`/`Skip` used to overwrite the statement's paging, and every later operator was folded into the same
+statement, so it ran before the LIMIT: `OrderBy(n).Take(3).Where(n > 1)` filtered the table and then took
+three. Consecutive paging now composes (`Take(a).Take(b)` is the smaller, `Skip`s add up, `Take(n).Skip(k)`
+is LIMIT `max(n−k, 0)` OFFSET k). A `Where`, the `OrderBy` family, `Distinct` after a `Select`, a terminal's
+predicate and further paging after it become a subquery over the page; anything else after paging, and
+anything after a join's or a grouped page's paging, is refused by name. Terminals cap the limit rather than
+replacing it, so `Take(0).FirstOrDefault()` is null and `Take(1).Single()` no longer refuses.
+⚠️ **`ToPagedListAsync` over an already-paged query changed**: its paging composes and the total counts the
+caller's page, where both used to discard it. `ToCursorPageAsync` refuses a paged query.
+`operators_after_paging` fails 18 of 19 against the previous build.
+
+## `Distinct()` and identity ordering after a computed `Select` (fisher#590)
+
+Both act on the select list, which held the members a projection read rather than the value it computed, so
+`Select(x => x.Number % 3).Distinct()` deduplicated `Number` and `Select(x => -x.Number).OrderBy(n => n)` ordered
+by it. `SelectProjection` and `GroupProjection` now report `IsFaithful`, and the parser's
+`RequireFaithfulProjection` either moves the arithmetic into SQL (`ComputedColumns`: integer `%` and `/` by a
+constant other than 0 and -1, and unary minus guarded at the type minimum, over integer members, a group's key or
+its aggregates) or refuses by name. `*`, `+`, floating point, enums and string calls are refused. A projection no
+operator acts on still computes in .NET. `computed_projection_ordering_and_distinct` uses LINQ to Objects as the
+oracle; 17 of its 22 facts fail on the previous build.
+
+## The open gate no longer starves the thread pool (fisher#587)
+
+#582's gate (fisher#576) was a `SemaphoreSlim`. A contended async open handed its wait to the thread pool while
+synchronous opens held pool threads, and a first burst of synchronous Hi-Lo stores stalled for 29 s. The gate
+is now a `Lock` held around a wholly synchronous open in both the sync and async paths (0.56 s for the same
+burst). `serialized_connection_opens.a_contended_async_open_completes_before_it_returns` fails against the old
+gate. `synchronous_hilo_burst` reproduces the stall when run alone. Found by checking marten#5969 against Fisher.
 
 ## A second `OrderBy` re-sorts (fisher#588)
 

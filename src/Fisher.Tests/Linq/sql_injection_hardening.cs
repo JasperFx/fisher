@@ -119,31 +119,30 @@ public class sql_injection_hardening : IAsyncLifetime
     /// <summary>
     ///     The old interpolation rendered a fractional operand with the current culture, so under a
     ///     comma-decimal culture <c>x.Weight % 1.5</c> became <c>(… % 1,5) = …</c> — SQL whose shape
-    ///     depends on the server's locale. A bound parameter cannot.
+    ///     depends on the server's locale. Since fisher#603 a fractional modulo is refused outright,
+    ///     whatever the culture: SQLite's <c>%</c> truncates both operands to integers, so it answered
+    ///     "every weight" where C# answers none. An integral modulo still binds both operands.
     /// </summary>
     [Fact]
-    public async Task a_fractional_modulo_operand_survives_a_comma_decimal_culture()
+    public async Task a_fractional_modulo_is_refused_under_a_comma_decimal_culture()
     {
         var original = CultureInfo.CurrentCulture;
         CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
 
         try
         {
-            var command = CommandFor(x => x.Weight % 1.5 == 0);
+            var refusal = Should.Throw<BadLinqExpressionException>(() => CommandFor(x => x.Weight % 1.5 == 0));
+            refusal.Message.ShouldContain("Double modulo");
 
-            command.CommandText.ShouldBe("(json_extract(data, '$.weight') % @p0) = @p1");
-            command.Parameters["p0"].Value.ShouldBe(1.5);
+            var command = CommandFor(x => x.Number % 2 == 0);
+            command.CommandText.ShouldBe("(json_extract(data, '$.number') % @p0) = @p1");
 
-            // SQLite's % casts both operands to INTEGER, so every weight satisfies "% 1.5 == 0"
-            // (n % 1 is always 0). The assertion here is that the statement is *valid* whatever
-            // the culture — the old interpolation rendered "(… % 1,5) = 0", which SQLite refuses —
-            // not a claim about float-modulo semantics.
             await using var session = _store.LightweightSession();
-            var matches = await session.Query<Specimen>()
-                .Where(x => x.Weight % 1.5 == 0)
+            var even = await session.Query<Specimen>()
+                .Where(x => x.Number % 2 == 0)
                 .ToListAsync(TestContext.Current.CancellationToken);
 
-            matches.Count.ShouldBe(3);
+            even.ShouldHaveSingleItem().Number.ShouldBe(4);
         }
         finally
         {

@@ -108,19 +108,27 @@ public class paged_queries : IAsyncLifetime
     }
 
     /// <summary>
-    ///     The total ignores paging already on the query — a total that counted the page would say
-    ///     nothing. So an existing <c>Take</c>/<c>Skip</c> is replaced rather than composed with.
+    ///     Paging already on the query is part of the query the pager pages (fisher#589). It used to be
+    ///     replaced: the items overwrote it and the total discarded it, so this listed three rows of a
+    ///     two-row query and reported seven. The pager's paging now composes with it, as LINQ's does,
+    ///     and the total counts it, so the two agree.
     /// </summary>
     [Fact]
-    public async Task the_total_ignores_paging_already_on_the_query()
+    public async Task paging_already_on_the_query_is_part_of_what_is_paged()
     {
         await using var session = Session();
 
         var page = await session.Query<Catch>().OrderBy(x => x.Weight).Take(2)
             .ToPagedListAsync(1, 3, Token);
 
-        page.Count.ShouldBe(3);
-        page.TotalItemCount.ShouldBe(7);
+        page.Select(x => x.Weight).ShouldBe([1, 2]);
+        page.TotalItemCount.ShouldBe(2);
+
+        var second = await session.Query<Catch>().OrderBy(x => x.Weight).Skip(1).Take(5)
+            .ToPagedListAsync(2, 3, Token);
+
+        second.Select(x => x.Weight).ShouldBe([5, 6]);
+        second.TotalItemCount.ShouldBe(5);
     }
 
     [Fact]

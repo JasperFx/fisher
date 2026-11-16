@@ -35,13 +35,25 @@ namespace Fisher.Benchmarks.Scenarios;
 /// </remarks>
 public sealed class SingleWriterQueue : IAsyncDisposable
 {
-    private readonly Channel<WorkItem> _channel = Channel.CreateUnbounded<WorkItem>(
-        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    private readonly Channel<WorkItem> _channel;
 
     private readonly Task _consumer;
 
-    public SingleWriterQueue()
+    /// <param name="capacity">
+    ///     Null for the unbounded channel round 1 measured. A number for fisher#547 round 2's bounded
+    ///     variant: <see cref="BoundedChannelFullMode.Wait" />, so a writer finding the queue full waits
+    ///     (backpressure) before its commit is even queued.
+    /// </param>
+    public SingleWriterQueue(int? capacity = null)
     {
+        _channel = capacity is { } bound
+            ? Channel.CreateBounded<WorkItem>(new BoundedChannelOptions(bound)
+            {
+                SingleReader = true, SingleWriter = false, FullMode = BoundedChannelFullMode.Wait
+            })
+            : Channel.CreateUnbounded<WorkItem>(
+                new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+
         _consumer = Task.Run(ConsumeAsync);
     }
 
@@ -59,12 +71,19 @@ public sealed class SingleWriterQueue : IAsyncDisposable
     public Task CommitAsync(Func<Task> commit)
     {
         var item = new WorkItem(commit, Stopwatch.GetTimestamp());
-        if (!_channel.Writer.TryWrite(item))
+        if (_channel.Writer.TryWrite(item))
         {
-            throw new InvalidOperationException("The single-writer queue has been completed.");
+            return item.Completion.Task;
         }
 
-        return item.Completion.Task;
+        // Only a bounded channel that is full gets here: wait for room, then for the commit.
+        return WriteThenAwaitAsync(item);
+    }
+
+    private async Task WriteThenAwaitAsync(WorkItem item)
+    {
+        await _channel.Writer.WriteAsync(item).ConfigureAwait(false);
+        await item.Completion.Task.ConfigureAwait(false);
     }
 
     private async Task ConsumeAsync()

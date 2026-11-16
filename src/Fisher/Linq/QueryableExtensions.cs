@@ -202,9 +202,9 @@ public static class QueryableExtensions
     /// <remarks>
     ///     <para>
     ///         Two statements against the session's one connection: the page, and a <c>count(*)</c> over
-    ///         the same predicates with the paging stripped. The count deliberately ignores
-    ///         <c>Take</c>/<c>Skip</c> already on the query — a total that counted the page would say
-    ///         nothing — so any paging the caller applied is replaced rather than composed with.
+    ///         the query the pager pages. A <c>Take</c>/<c>Skip</c> already on the query is part of that
+    ///         query (fisher#589): the pager's own paging composes with it, and the total counts it, so
+    ///         <c>Take(5).ToPagedListAsync(2, 3)</c> is the last two of five rows with a total of five.
     ///     </para>
     ///     <para>
     ///         A page past the end still reports the real total, which is exactly when a pager needs it

@@ -74,6 +74,20 @@ internal class LinqQueryParser
     public int? Offset { get; private set; }
 
     /// <summary>
+    ///     The operators written after the query's <c>Take</c>/<c>Skip</c>, which apply to the page
+    ///     rather than to the rows it was taken from — fisher#589. Null when nothing follows the paging.
+    /// </summary>
+    /// <remarks>
+    ///     The provider renders the statement built from everything else as a subquery and applies
+    ///     these on the outside. One boundary only: a further <c>Take</c>/<c>Skip</c> composes into the
+    ///     boundary's own paging, and an operator after <em>that</em> is refused.
+    /// </remarks>
+    public PageBoundary? AfterPage { get; private set; }
+
+    /// <summary>Whether the chain pages anywhere, before or after an <see cref="AfterPage" /> boundary.</summary>
+    public bool IsPaged => Limit.HasValue || Offset.HasValue || AfterPage is not null;
+
+    /// <summary>
     ///     Which soft-deleted rows the query asked for. The last such operator in the chain wins, so
     ///     <c>MaybeDeleted().IsDeleted()</c> is the deleted ones — reading left to right, as the chain
     ///     does.
@@ -236,6 +250,15 @@ internal class LinqQueryParser
 
     private void Apply(MethodCallExpression call)
     {
+        // fisher#589: an operator after Take/Skip applies to the page. Checked before everything
+        // else because the join, grouping and soft-delete cases below would otherwise fold it into
+        // the paged statement, where it runs before the LIMIT.
+        if (FollowsPaging(call))
+        {
+            ApplyAfterPage(call);
+            return;
+        }
+
         switch (call.Method.Name)
         {
             case "GroupJoin":
@@ -410,12 +433,15 @@ internal class LinqQueryParser
                 Statistics = (QueryStatistics)WhereClauseParser.ExtractValue(call.Arguments[1])!;
                 break;
 
+            // fisher#589: consecutive paging composes rather than overwriting — Take(2).Take(4) is
+            // two rows and Take(3).Skip(2) is the third — so it stays one LIMIT/OFFSET and needs no
+            // subquery.
             case "Take":
-                Limit = (int)WhereClauseParser.ExtractValue(call.Arguments[1])!;
+                (Limit, Offset) = ComposeTake(Limit, Offset, CountOf(call));
                 break;
 
             case "Skip":
-                Offset = (int)WhereClauseParser.ExtractValue(call.Arguments[1])!;
+                (Limit, Offset) = ComposeSkip(Limit, Offset, CountOf(call));
                 break;
 
             // Matched on the declaring type as well as the name: these are Fisher's own marker
@@ -464,6 +490,170 @@ internal class LinqQueryParser
                     + "QueryForNonStaleData, Stats and Include). " + WhereClauseParser.Alternatives);
         }
     }
+
+    /// <summary>
+    ///     Whether <paramref name="call" /> changes which rows the chain yields, or their order, and so
+    ///     has to apply to the page when it follows a <c>Take</c>/<c>Skip</c> — fisher#589.
+    /// </summary>
+    /// <remarks>
+    ///     <c>Take</c>/<c>Skip</c> compose into the statement's own paging instead, until a boundary has
+    ///     been opened. <c>Select</c> maps each row of the page to one result, so it means the same on
+    ///     either side of the LIMIT and is left where it is, as are the markers that carry no SQL and a
+    ///     terminal with no predicate. Everything else — the soft-delete, tenant and metadata filters
+    ///     included — narrows or reorders rows, so it is either applied to the page or refused.
+    /// </remarks>
+    private bool FollowsPaging(MethodCallExpression call)
+    {
+        if (!IsPaged)
+        {
+            return false;
+        }
+
+        return call.Method.Name switch
+        {
+            "Take" or "Skip" => AfterPage is not null,
+            "Select" => false,
+            "Count" or "LongCount" or "Any" or "First" or "FirstOrDefault" or "Single" or "SingleOrDefault"
+                => call.Arguments.Count > 1,
+            nameof(IncludeExtensions.IncludeMarker) => call.Method.DeclaringType != typeof(IncludeExtensions),
+            nameof(StatisticsExtensions.Stats) => call.Method.DeclaringType != typeof(StatisticsExtensions),
+            nameof(Metadata.NonStaleDataExtensions.QueryForNonStaleData)
+                => call.Method.DeclaringType != typeof(Metadata.NonStaleDataExtensions),
+            _ => true
+        };
+    }
+
+    /// <summary>
+    ///     An operator written after <c>Take</c>/<c>Skip</c> — fisher#589.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Folding these into the paged statement is what made them silently wrong: a <c>Where</c>
+    ///         after <c>Take(3)</c> filtered the table and then took three, where LINQ filters the three.
+    ///         So they are collected on <see cref="AfterPage" />, and the provider wraps the paged
+    ///         statement as a subquery to apply them.
+    ///     </para>
+    ///     <para>
+    ///         <b>Only what a subquery answers correctly is accepted</b>, and the rest is refused by name.
+    ///         The page is read through its document columns, so a predicate or an ordering over a
+    ///         document member resolves outside it exactly as it would against the table. A join's
+    ///         locators are qualified with an alias that does not survive into the enclosing scope, a
+    ///         grouped or deduplicated page has no document columns left, and a full-text rank needs the
+    ///         FTS5 table joined to the document's rowid, which the page does not carry.
+    ///     </para>
+    /// </remarks>
+    private void ApplyAfterPage(MethodCallExpression call)
+    {
+        var name = call.Method.Name;
+        var page = OpenPage(name);
+
+        switch (name)
+        {
+            case "Take":
+                (page.Limit, page.Offset) = ComposeTake(page.Limit, page.Offset, CountOf(call));
+                return;
+
+            case "Skip":
+                (page.Limit, page.Offset) = ComposeSkip(page.Limit, page.Offset, CountOf(call));
+                return;
+
+            case "Where":
+            case "Count":
+            case "LongCount":
+            case "Any":
+            case "First":
+            case "FirstOrDefault":
+            case "Single":
+            case "SingleOrDefault":
+                page.Wheres.Add(_whereParser.Parse(UnwrapLambda(call).Body));
+                return;
+
+            // A ThenBy can only follow an OrderBy, and an OrderBy after the paging is the page's.
+            case "OrderBy":
+            case "ThenBy":
+                page.OrderBys.Add((OrderingLocatorFor(call), false));
+                return;
+
+            case "OrderByDescending":
+            case "ThenByDescending":
+                page.OrderBys.Add((OrderingLocatorFor(call), true));
+                return;
+
+            case "Distinct" when Projection is not null:
+                page.IsDistinct = true;
+                return;
+
+            case "Distinct":
+                throw new BadLinqExpressionException(
+                    "Distinct() after Take/Skip needs a Select before it. Over whole documents it would "
+                    + "compare serialized JSON strings rather than documents; use DistinctBy before the "
+                    + "paging to deduplicate documents by a member.");
+
+            default:
+                throw AfterPagingRefusal(name,
+                    "Fisher applies only Where, the OrderBy family, Distinct after a Select, a terminal's "
+                    + "predicate and further Take/Skip to a page. Apply it before the Take/Skip.");
+        }
+    }
+
+    /// <summary>The boundary an operator after the paging lands on, opened by the first one.</summary>
+    private PageBoundary OpenPage(string name)
+    {
+        if (AfterPage is not null)
+        {
+            if (name is not ("Take" or "Skip") && (AfterPage.Limit.HasValue || AfterPage.Offset.HasValue))
+            {
+                throw AfterPagingRefusal(name,
+                    "This query already applies operators to one page and then pages again; Fisher "
+                    + "supports one level of operators over a page.");
+            }
+
+            return AfterPage;
+        }
+
+        if (Joins.Count > 0)
+        {
+            throw AfterPagingRefusal(name,
+                "The page is a join, whose columns are qualified with table aliases that do not survive "
+                + "into a subquery over it. Apply it before the Take/Skip.");
+        }
+
+        if (_grouping is not null || IsDistinct || DistinctByLocator is not null)
+        {
+            throw AfterPagingRefusal(name,
+                "The page is grouped or deduplicated, so it has no document columns left for the "
+                + "operator to read. Apply it before the Take/Skip.");
+        }
+
+        if (RequiresFullTextJoin)
+        {
+            throw AfterPagingRefusal(name,
+                "The page ranks or projects a full-text match, which needs the FTS5 table joined to the "
+                + "document table and cannot be carried through a subquery. Apply it before the "
+                + "Take/Skip.");
+        }
+
+        AfterPage = new PageBoundary();
+        return AfterPage;
+    }
+
+    private static BadLinqExpressionException AfterPagingRefusal(string name, string reason)
+        => new($"Fisher cannot apply '{name}' after Take/Skip. LINQ applies it to the page rather than to "
+               + $"the rows the page was taken from, which needs the paged query as a subquery. {reason}");
+
+    private static int CountOf(MethodCallExpression call)
+        => Math.Max(0, (int)WhereClauseParser.ExtractValue(call.Arguments[1])!);
+
+    /// <summary><c>Take(n)</c> over the paging already in place: the smaller of the two limits.</summary>
+    private static (int? Limit, int? Offset) ComposeTake(int? limit, int? offset, int count)
+        => (limit.HasValue ? Math.Min(limit.Value, count) : count, offset);
+
+    /// <summary>
+    ///     <c>Skip(k)</c> over the paging already in place: the offsets add, and a limit already in place
+    ///     loses the rows skipped from its front.
+    /// </summary>
+    private static (int? Limit, int? Offset) ComposeSkip(int? limit, int? offset, int count)
+        => (limit.HasValue ? Math.Max(limit.Value - count, 0) : null, (offset ?? 0) + count);
 
     /// <summary>
     ///     A projection ends the chain as far as document members are concerned, so only one is
@@ -662,6 +852,16 @@ internal class LinqQueryParser
     /// </remarks>
     private void AddOrdering(MethodCallExpression call, bool descending, bool primary)
     {
+        // fisher#591, marten#5950: a key that reads nothing from the row is the same for every row, so
+        // every row ties on it and the keys after it decide, which is what LINQ does with it too.
+        // Dropped rather than resolved, because resolving it walked a static or a captured local as a
+        // JSON path and sorted by whichever document member shared its name.
+        if (IsConstantKey(UnwrapLambda(call)))
+        {
+            DropConstantKey(ref _orderingGroupLength, primary);
+            return;
+        }
+
         AddOrderingKey(OrderingLocatorFor(call), descending, _lastOrderingMember, primary);
     }
 
@@ -670,6 +870,19 @@ internal class LinqQueryParser
     {
         var join = CurrentJoin!;
         var length = join.OrderingGroupLength;
+
+        // fisher#596: the document path's rule (fisher#591) on the join path. A key over the joined
+        // shape that reads nothing from the row ties every row, so it is dropped and the keys after it
+        // decide. It used to reach ApplyJoinOrdering and be refused as "not a member of a joined
+        // document", which refused a query LINQ answers. A Last over nothing but such keys then meets
+        // the ordinary "requires an OrderBy" refusal, since no key reaches the statement.
+        if (IsConstantKey(UnwrapLambda(call)))
+        {
+            DropConstantKey(ref length, primary);
+            join.OrderingGroupLength = length;
+            return;
+        }
+
         join.OrderBys.Insert(OrderingInsertionIndex(ref length, primary), (UnwrapLambda(call), descending));
         join.OrderingGroupLength = length;
     }
@@ -713,6 +926,23 @@ internal class LinqQueryParser
         }
 
         return groupLength++;
+    }
+
+    /// <summary>
+    ///     What a dropped constant ordering key (fisher#591) does to the re-sort rule (fisher#588).
+    /// </summary>
+    /// <remarks>
+    ///     A constant <c>OrderBy</c> still re-sorts: <c>OrderBy(a).OrderBy(constant).ThenBy(b)</c> means
+    ///     <c>b, a</c>, so it starts a new group with no keys in it, and the <c>ThenBy</c> that follows goes
+    ///     in front of <c>a</c>. Leaving the group length alone would render <c>a, b</c>. A constant
+    ///     <c>ThenBy</c> contributes nothing and changes nothing.
+    /// </remarks>
+    internal static void DropConstantKey(ref int groupLength, bool primary)
+    {
+        if (primary)
+        {
+            groupLength = 0;
+        }
     }
 
     /// <summary>
@@ -878,6 +1108,17 @@ internal class LinqQueryParser
     /// </summary>
     private string LocatorFor(MethodCallExpression call)
     {
+        // fisher#591: an ordering key like this is dropped before it gets here. A GroupBy or a
+        // DistinctBy over one would collapse every row into a single group or a single document, which
+        // has no locator to stand for it, so it is refused rather than approximated.
+        if (IsConstantKey(UnwrapLambda(call)))
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot translate {call.Method.Name}({UnwrapLambda(call)}): the key reads nothing from the "
+                + "document, so it has the same value for every row and there is no column to key on. "
+                + "Key on a document member, or compute the result in memory.");
+        }
+
         var body = UnwrapLambda(call).Body;
 
         while (body is UnaryExpression { NodeType: ExpressionType.Convert } unary)
@@ -906,6 +1147,24 @@ internal class LinqQueryParser
         return member.TypedLocator;
     }
 
+    private static bool IsConstantKey(LambdaExpression lambda)
+    {
+        var finder = new ParameterUse(lambda.Parameters[0]);
+        finder.Visit(lambda.Body);
+        return !finder.Found;
+    }
+
+    private sealed class ParameterUse(ParameterExpression parameter) : ExpressionVisitor
+    {
+        internal bool Found { get; private set; }
+
+        protected override Expression VisitParameter(ParameterExpression node)
+        {
+            Found |= node == parameter;
+            return node;
+        }
+    }
+
     private static LambdaExpression UnwrapLambda(MethodCallExpression call)
     {
         var argument = call.Arguments[^1];
@@ -917,4 +1176,26 @@ internal class LinqQueryParser
 
         return (LambdaExpression)argument;
     }
+}
+
+/// <summary>
+///     What a query does to its page once the page has been taken — fisher#589. See
+///     <see cref="LinqQueryParser.AfterPage" />.
+/// </summary>
+internal sealed class PageBoundary
+{
+    /// <summary>Predicates over the page's rows, a terminal's included.</summary>
+    public List<ISqlFragment> Wheres { get; } = [];
+
+    /// <summary>A re-sort of the page. The page's own ordering then only breaks ties, as in LINQ.</summary>
+    public List<(string Locator, bool Descending)> OrderBys { get; } = [];
+
+    /// <summary><c>Distinct()</c> over a projected page.</summary>
+    public bool IsDistinct { get; set; }
+
+    /// <summary>Paging applied to the page.</summary>
+    public int? Limit { get; set; }
+
+    /// <inheritdoc cref="Limit" />
+    public int? Offset { get; set; }
 }

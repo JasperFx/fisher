@@ -149,6 +149,14 @@ internal class MemberFactory : IMemberResolver
             throw new BadLinqExpressionException(UnionMemberAccess.RefuseBareValue(bareUnion));
         }
 
+        // fisher#591: a chain that does not start at the lambda's parameter is a static member, a
+        // captured local or something else the caller closed over. Its value is the same for every row,
+        // and walking it as a path would read whatever document member happens to share its name.
+        if (!IsRootedAtParameter(expression))
+        {
+            throw new BadLinqExpressionException(RefuseUnrooted(expression));
+        }
+
         // The identity lives in its own column, not in the JSON body.
         if (expression.Expression is ParameterExpression && IsIdentityMember(expression.Member))
         {
@@ -373,6 +381,52 @@ internal class MemberFactory : IMemberResolver
 
         return duplicate is null ? member : new DuplicatedMember(member, duplicate.ColumnName, _qualifier);
     }
+
+    /// <summary>
+    ///     Whether this member chain starts at a lambda parameter: the document, or a collection element
+    ///     inside an <c>Any</c> (fisher#591).
+    /// </summary>
+    /// <remarks>
+    ///     The same rule the where parser's <c>IsDocumentMember</c> applies, so the two cannot disagree
+    ///     about what is a column and what is a value. A conversion is looked through, which covers a
+    ///     union case's <c>((Card)x.Payment.Value)</c> and a cast of the document itself. A static member
+    ///     (no instance), a captured local (a closure constant) and anything reached through a method
+    ///     call or an indexer are not rooted.
+    /// </remarks>
+    internal static bool IsRootedAtParameter(Expression expression)
+    {
+        var current = expression;
+
+        while (true)
+        {
+            switch (current)
+            {
+                case ParameterExpression:
+                    return true;
+
+                case MemberExpression { Expression: null }:
+                    return false;
+
+                case MemberExpression member:
+                    current = UnionMemberAccess.ParentOf(member)!;
+                    break;
+
+                case UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked
+                    or ExpressionType.TypeAs } unary:
+                    current = unary.Operand;
+                    break;
+
+                default:
+                    return false;
+            }
+        }
+    }
+
+    internal static string RefuseUnrooted(Expression expression)
+        => $"Cannot translate '{expression}' as a member of the queried document: it is not reached from "
+           + "the lambda's parameter. A static member, a captured variable or anything else the query "
+           + "closes over has one value for every row, so there is no column to read. Compare a document "
+           + "member against it, or compute the result in memory.";
 
     /// <summary>
     ///     The member access walked back to the parameter, outermost member last.

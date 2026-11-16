@@ -666,3 +666,437 @@ was measured for `FetchTen` only.
 - Revisit if Microsoft.Data.Sqlite gains a span or `ReadOnlyMemory<byte>` BLOB bind, or a span read over
   `sqlite3_column_blob`. After a provider bump, `-- binary-bind-probe` answers the first question in one
   command.
+
+---
+
+## fisher#547 round 2: busy handlers, event appends, the daemon, group commit, a bounded queue (2026-11-16, `writer-queue-round-2-547`)
+
+**Measurement only. Whether Fisher adopts any of this is the repo owner's decision, and nothing here
+makes it.** Fisher's write path is unchanged. Everything below is benchmark code under
+`src/Fisher.Benchmarks/`.
+
+```
+Fisher.Benchmarks — 2026-11-16 (Apple M5 Max)
+  OS:        macOS 26.4.1 (Arm64)
+  .NET:      .NET 10.0.14
+  CPUs:      18
+  Config:    Release
+  SQLite:    e_sqlite3 3.50.4 (SQLitePCLRaw 3.0.5), Microsoft.Data.Sqlite 10.0.9
+```
+
+### What was added
+
+All benchmark-only, wired into `writer-queue` (`Scenarios/WriterQueueScenario.cs`):
+
+- **`bh-*` modes: racing as today, with a different busy handler.** SQLitePCLRaw 3.0.5 does not expose
+  `sqlite3_busy_handler`, so `Scenarios/BusyHandlers.cs` P/Invokes it from the bundled `e_sqlite3` with an
+  `[UnmanagedCallersOnly]` callback. It is installed through `StoreOptions.Functions`, whose registrations
+  Weasel's data source runs after the connection PRAGMAs on every open. So it replaces the handler
+  `PRAGMA busy_timeout` installed, on application sessions and on the daemon's connections alike. Every
+  policy gives up after 5000 ms, as `busy_timeout = 5000` does.
+  - `bh-mimic`: a transcription of SQLite's `sqliteDefaultBusyCallback` (sleeps of 1, 2, 5, 10, 15, 20,
+    25, 25, 25, 50, 50, then 100 ms). It counts invocations and times the sleeps. This is the mechanism
+    check.
+  - `bh-yield`: `Thread.Yield()` per invocation.
+  - `bh-spin50us`: a 50 µs busy-wait per invocation.
+  - `bh-sleep1ms`: a fixed `Thread.Sleep(1)` per invocation.
+  - `bh-none`: return 0 at once, which is what `busy_timeout = 0` does. This is the "tiny busy_timeout
+    plus a retry above it" option, measured as it actually behaves (see below).
+- **`bounded1`, `bounded4`**: round 1's queue on `Channel.CreateBounded` with `FullMode.Wait`.
+- **`group`**: a group-commit prototype (`Scenarios/GroupCommitQueue.cs`). One consumer takes up to
+  `--group-size` (default 64) queued units of work. It begins one `BEGIN IMMEDIATE` on a connection it
+  opened before the writers started, and replays each unit onto an enlisted session
+  (`SessionOptions.ForTransaction`) inside its own `SAVEPOINT`. It rolls back to the savepoint on failure,
+  commits once, then completes each caller's task.
+- **`--workload events-many`**: each commit starts `--docs-per-commit` new streams with one event each.
+  **`--workload events-hot`**: every commit appends one event to the same stream. The writer reads the
+  stream's version through its own session and appends expecting it. A commit that loses is counted as a
+  version conflict (`EventStreamUnexpectedMaxEventIdException`) and is not retried.
+- **`--daemon 1`**: an async `Snapshot<BenchTally>` runs under the daemon while the writers append. The
+  scenario reports the daemon's catch-up time after the writes end, and the daemon's own
+  `fisher.write_lock.wait` (holder tag `daemon`), separately from the application's.
+- **Process CPU time per round** (`Process.TotalProcessorTime` over the timed section), and the busy
+  handler's invocations, waits and time spent inside it.
+
+### Method and commands
+
+As round 1: `-c Release`, a fresh database file per round, one discarded warmup round per mode, and the
+mode order rotated every round. Medians are over rounds. Latency percentiles are pooled over every commit
+of every round. Latency is measured from just before the commit is requested to its completion, so it
+includes queue time and the `BEGIN IMMEDIATE` wait. For the hot stream it does not include the version
+read before it.
+
+```bash
+ALL=race,queue,gate,bh-mimic,bh-yield,bh-spin50us,bh-sleep1ms,bh-none,bounded1,bounded4,group
+W=src/Fisher.Benchmarks
+dotnet run -c Release --project $W -- writer-queue --total-commits 400 --docs-per-commit 5 --rounds 11 --modes $ALL
+dotnet run -c Release --project $W -- writer-queue --writers 1,8,16 --total-commits 2000 --docs-per-commit 5  --rounds 9 --modes <ALL minus bh-none>
+dotnet run -c Release --project $W -- writer-queue --writers 1,8,16 --total-commits 1000 --docs-per-commit 50 --rounds 7 --modes <ALL minus bh-none>
+dotnet run -c Release --project $W -- writer-queue --writers 1,4,8,16 --total-commits 400 --docs-per-commit 5 --rounds 11 --workload events-many --modes race,queue,gate,bh-mimic,bh-spin50us,bh-sleep1ms,bounded4,group
+dotnet run -c Release --project $W -- writer-queue --writers 1,4,8,16 --total-commits 400 --rounds 11 --workload events-hot --modes race,queue,gate,bh-mimic,bh-spin50us,bh-sleep1ms,bounded4,group
+dotnet run -c Release --project $W -- writer-queue --writers 8,16 --total-commits 4000 --docs-per-commit 1 --rounds 7 --workload events-many --daemon 1 --modes race,queue,gate,bh-mimic,bh-spin50us,bh-sleep1ms,group
+dotnet run -c Release --project $W -- writer-queue --writers 8,16 --total-commits 2000 --docs-per-commit 5 --rounds 9 --group-size 4 --modes queue,group
+dotnet run -c Release --project $W -- writer-queue --writers 8  --rounds 21 --modes race,queue,bh-mimic,bh-yield,bh-spin50us,bh-sleep1ms,group
+dotnet run -c Release --project $W -- writer-queue --writers 16 --rounds 21 --modes race,queue,bh-mimic,bh-yield,bh-spin50us,bh-sleep1ms,group
+```
+
+**Machine load.** Another agent was using this machine. The 1-minute load average was 4-10 (on 18
+cores) during the first pass, and highest (7-10) during the 400 x 5, event and daemon runs. So the
+headline shapes were rerun once the load had dropped to about 4: 400 x 5 at 8 and 16 writers, both event
+workloads and the daemon run. The rerun numbers are the ones in the tables unless a table says otherwise.
+The two passes agreed on every ordering below. The medians moved by up to about 15 %, except race and
+`bh-mimic` at 16 writers, whose round-to-round range is wide in both passes (85-240 ms, for example).
+
+### 1. The busy handler: the mechanism, and whether a smaller change gets the gain
+
+**The mechanism is confirmed.** Round 1 inferred it; these numbers measure it.
+
+`bh-mimic` replaces SQLite's default handler with a copy that counts. If the default handler's sleeping
+is where the racing writers lose their time, then three things follow, and all three hold:
+
+- The copy reproduces racing's numbers. It does, within run-to-run noise: wall clock, p99, max and the
+  summed lock wait match `race` at every writer count and shape (tables below).
+- The time inside the handler accounts for the whole `BEGIN IMMEDIATE` wait. Its median matches the
+  median of `bh-mimic`'s summed `fisher.write_lock.wait` to within 4 % in each of the 22 cells where any
+  commit waited.
+- Swapping the handler moves the waits. With `bh-yield` or `bh-spin50us`, the p99 lock wait at 8
+  writers drops from about 20 ms to about 3.5 ms.
+
+| shape, writers | race: lock wait summed per round | bh-mimic: summed | bh-mimic: time inside the handler | commits that entered the handler | handler calls per wait |
+|---|---|---|---|---|---|
+| 400 x 5 docs, 8 | 205.9 ms | 193.8 ms | 192.6 ms | 4.2 % (15 of 400) | 2.5 |
+| 400 x 5 docs, 16 | 574.4 ms | 523.1 ms | 521.7 ms | 7.8 % (31 of 400) | 2.8 |
+| 2000 x 5 docs, 16 | 1,460.7 ms | 1,392.2 ms | 1,386.5 ms | 2.8 % (59) | 3.1 |
+| 1000 x 50 docs, 8 | 1,232.8 ms | 1,191.2 ms | 1,188.2 ms | 1.4 % (13) | 6.3 |
+| events-hot, 16 | 576.8 ms | 591.4 ms | 589.7 ms | 8.9 % (37) | 2.7 |
+| daemon, 8 | 1,598.4 ms | 1,563.4 ms | 1,585.4 ms | 1.1 % (48 of 4000) | 3.8 |
+
+Read across a row: **a few percent of commits find the lock held, and each of those sleeps 13-91 ms on
+the default schedule**, against a lock-hold time of well under 0.1 ms per 5-document commit. That sleep
+is the whole cost of racing. No Polly retry ran in any mode of any run (`fisher.retry` and
+`fisher.write_lock.retries` were 0 throughout), and the handler never gave up.
+
+⚠️ **This contradicts a note in CLAUDE.md's "Tracing" section**, which says the wait at `BEGIN IMMEDIATE`
+"comes from the connection string's `Default Timeout` and from nowhere else", and not from
+`PRAGMA busy_timeout`. Measured here, `busy_timeout`'s handler is what governs the wait for up to
+5000 ms. Microsoft.Data.Sqlite's own retry, bounded by `Default Timeout`, takes over only after the
+handler gives up, and that is what `bh-none` shows (next).
+
+**`bh-none` (`busy_timeout = 0`, in effect) is far worse, and the retry above it is not async.** When the
+handler returns 0, Microsoft.Data.Sqlite does not surface `SQLITE_BUSY`. It retries the statement itself,
+and its waits land in steps of about 150 ms: the max wait is 152 ms at 2 writers and 453 ms p99 at 8.
+That fits its synchronous `Thread.Sleep(150)` retry loop. So "a tiny `busy_timeout` plus an in-process
+async retry" cannot be built above Fisher without changing Fisher. The busy never reaches code that could
+retry asynchronously; it is retried synchronously below it. 400 x 5 wall clock with `bh-none`: 168 ms at
+2 writers, 1,063 ms at 8, 2,118 ms at 16 (against 32, 61, 111 ms racing).
+
+**400 commits x 5 documents** (rerun at load ~4, 11 rounds; the 21-round runs agree):
+
+```
+writers mode          wall (ms)  range          p50   p95   p99   max    CPU/round  lock wait summed  in handler
+   8    race             60.7    28.9 .. 113.0   0.1   0.4  19.7  108.6    26.8 ms     205.9 ms
+   8    bh-mimic         59.7    38.0 ..  86.8   0.1   0.6  19.8   83.5    37.7        193.8         192.6
+   8    bh-sleep1ms      28.8    26.7 ..  41.2   0.1   3.2   9.3   19.1    28.7        142.5         141.1
+   8    bh-spin50us      38.1    34.2 ..  53.8   0.5   2.2   3.5    7.9   248.3        220.0         192.2
+   8    bh-yield         40.7    36.3 ..  53.3   0.6   2.1   3.5   10.8   205.5        238.5          61.3
+   8    queue            23.4    21.2 ..  35.0   0.4   0.7   2.0    2.4    54.6          1.4
+   8    gate             26.8    25.9 ..  41.3   0.5   0.9   2.0    2.3    56.9          1.7
+   8    group            14.4    13.8 ..  27.2   0.3   0.5   0.9    2.6    19.7          0.0
+  16    race            113.0    85.7 .. 240.0   0.1   3.5  55.2  236.8    43.8        574.4
+  16    bh-mimic        110.2    84.4 .. 342.0   0.1   3.5  55.3  338.4    32.8        523.1         521.7
+  16    bh-sleep1ms      34.5    30.0 ..  49.6   0.1   6.4  20.3   45.7    37.1        339.7         335.5
+  16    bh-spin50us      49.0    45.0 ..  66.0   1.3   5.5   8.8   20.5   576.7        611.7         451.1
+  16    bh-yield         56.7    52.5 ..  72.3   1.5   6.2  10.0   17.6   584.3        712.9         154.3
+  16    queue            23.9    21.3 ..  35.9   0.9   1.7   2.9    3.2    56.2          1.5
+  16    gate             27.4    26.3 ..  41.6   1.1   1.9   2.8    3.2    56.8          1.8
+  16    group            12.9    12.6 ..  26.8   0.5   1.1   1.4    1.6    16.1          0.0
+```
+
+At 1, 2 and 4 writers (first pass, load ~7) every racing mode is within noise of `race` at 1 writer.
+`bh-sleep1ms` is already ahead of `race` at 2 writers (24.1 against 32.0 ms) and 4 (25.6 against
+41.4 ms).
+
+**Larger runs and heavier commits** (first pass, load ~7; wall median / p99 / max / CPU per round):
+
+```
+                          2000 x 5 docs, 9 rounds                      1000 x 50 docs, 7 rounds
+writers mode          wall    p99    max    CPU               wall    p99     max    CPU
+   8    race         145.2    3.4  184.8   112.6 ms           368.3   35.6   440.2    246.8 ms
+   8    bh-mimic     148.8    3.5  135.2   117.8              370.2   19.6   545.0    245.8
+   8    bh-sleep1ms  118.7   11.8  110.4   121.6              243.7   32.7   120.4    262.1
+   8    bh-spin50us  233.2    4.5  101.9  1526.1              341.8   10.8    19.9   2283.6
+   8    bh-yield     239.4    4.3  140.9  1270.1              305.2   10.0    60.2   1602.6
+   8    queue        100.7    1.5    4.3   237.6              223.8    3.6    12.5    321.8
+   8    group         70.4    1.4    5.5   100.8              205.9    4.2     5.4    220.2
+  16    race         196.2    9.2  336.7   124.4              476.8   83.3   844.4    264.4
+  16    bh-mimic     194.6    9.2  436.6   125.5              769.2  109.5   845.2    287.6
+  16    bh-sleep1ms  128.5   22.8   92.3   145.5              262.1   71.7   213.0    304.4
+  16    bh-spin50us  309.0   11.1  139.4  3699.0              395.8   26.9    56.5   4918.4
+  16    bh-yield     329.0   12.0   82.2  3431.7              400.6   27.6    69.3   4271.4
+  16    queue        104.1    2.3    7.1   242.5              225.3    6.1    23.9    322.8
+  16    group         63.9    1.9    4.2    78.0              200.7    6.0     6.4    205.7
+```
+
+(`bh-mimic` at 16 writers x 50 documents, 769 ms against 477 ms for `race`: both ranges are wide,
+356-861 and 559-871 ms, and they overlap. Read it as noise.)
+
+What the numbers show about the smaller change:
+
+- **A fixed 1 ms sleep closes most of the throughput gap, at racing's CPU cost.** Against the queue's wall
+  clock, `bh-sleep1ms` is 9-44 % slower (28.8 / 23.4, 34.5 / 23.9, 118.7 / 100.7, 128.5 / 104.1,
+  243.7 / 223.8, 262.1 / 225.3 ms). Racing today is 1.4-4.7x slower. Its CPU per round is the same as
+  racing's and below the queue's.
+- **It does not close the tail.** `bh-sleep1ms`'s p99 is 9-72 ms where the queue's is 1.5-6 ms. Its p99
+  is lower than racing's at 400 x 5 and 1000 x 50 but higher at 2000 x 5, though its max is 1.7-5.7x
+  lower everywhere. The handler polls every millisecond,
+  but whoever asks first after the lock is released gets it: a fresh writer, or a waiter that happened to
+  wake. So an unlucky waiter can lose many times in a row. That is an inference from the numbers (a p50
+  of 0.1 ms with a long p99); it was not traced.
+- **Spinning or yielding is the wrong small change.** It wins at 400 x 5 (38-57 ms against 61-113 ms)
+  but loses to plain racing on the longer runs (233-329 ms against 145-196 ms at 2000 x 5). It keeps
+  6-12 cores busy: at 16 writers, 3.4-4.9 s of CPU per round against 0.12-0.26 s for racing. A
+  plausible reason, not measured: spinning waiters compete for the cores the lock holder and the writers
+  building their next session need, and every handler invocation is a fresh lock probe on the WAL index.
+- **What a handler change keeps that a queue does not.** The commit runs on the caller's async flow,
+  and fails at the call. Cancellation reaches it as today. Enlisted sessions are covered. And so is every
+  other writer on the file that opens through Fisher: the daemon (section 3), Hi-Lo, a second store. One
+  limit: a handler installed through `StoreOptions.Functions` reaches only connections opened through the
+  store's data source. Weasel's migrations open their own connection, and another process has its own
+  handler.
+- **The cost of the handler change itself.** A busy handler runs inside `sqlite3_step`, so every policy
+  blocks a thread-pool thread while it waits. So does the default handler today. A fixed 1 ms poll wakes
+  a waiter up to 5000 times before it gives up, against the default schedule's roughly 60.
+
+### 2. Event appends
+
+**Many streams, one event each: the same picture as documents.** Each commit starts 5 new streams with
+one event each (rerun, 11 rounds; wall median / p99 / max / CPU per round):
+
+```
+writers mode          wall (ms)   p50   p99    max     CPU
+   8    race            117.4      0.1   36.2  135.2    63.5 ms
+   8    bh-mimic        144.1      0.1   36.6  186.7    64.9
+   8    bh-sleep1ms      65.6      0.1   25.1   69.4    68.8
+   8    queue            58.7      1.1    2.5    3.2    88.7
+   8    group            44.0      0.9    2.2    2.9    51.7
+  16    race            545.4      0.1  185.4  642.6    93.5      (range 191 .. 650; first pass median 193.3)
+  16    bh-mimic        343.1      0.1  135.8  545.5    86.5
+  16    bh-sleep1ms      71.3      0.1   43.2   76.9    80.3
+  16    queue            65.3      2.4    4.4    8.2   102.9
+  16    group            39.9      1.5    2.7    2.9    42.6
+```
+
+The first pass (load ~7) also ran 1 and 4 writers. Everything was within noise at 1 writer, and at 4
+writers the queue was ahead (65.4 against 73.3 ms racing). In that pass `bh-spin50us` was slower than
+racing at 4 writers (97.9 against 73.3 ms) and faster at 8 and 16, at 6-21x the CPU. Bounded4 matched the
+queue throughout.
+
+**The hot stream changes the question, because the version conflict rate depends on the mode.** One
+stream; each writer reads its version, appends expecting it, and commits. Nothing retries a conflict.
+Rerun, 11 rounds, 400 commits per round:
+
+```
+writers mode          wall (ms)  p99 (ms)  conflicts            successful appends/round  successful appends/s
+   4    race             43.9      3.6       2.3 %               391                        8.9k
+   4    bh-mimic         45.2      3.7       2.5 %               390                        8.6k
+   4    bh-sleep1ms      33.8      5.8       7.6 %               369                       10.9k
+   4    bh-spin50us      25.7      1.1      53.2 %               187                        7.3k
+   4    queue            36.7      0.9      74.6 %               102                        2.8k
+   4    group            34.4      0.9      74.7 %               101                        2.9k
+   8    race             61.6     19.7       5.6 %               378                        6.1k
+   8    bh-mimic         62.0     19.9       5.5 %               378                        6.1k
+   8    bh-sleep1ms      36.5     10.5      12.0 %               352                        9.6k
+   8    bh-spin50us      27.3      2.4      68.2 %               127                        4.7k
+   8    queue            39.4      1.8      86.8 %                53                        1.3k
+   8    group            36.2      1.5      87.2 %                51                        1.4k
+  16    race            111.2     36.2       9.8 %               361                        3.2k
+  16    bh-mimic         91.5     47.0       9.1 %               364                        4.0k
+  16    bh-sleep1ms      40.1     17.5      19.9 %               321                        8.0k
+  16    bh-spin50us      29.7      5.4      77.2 %                91                        3.1k
+  16    queue            40.7      3.2      92.8 %                29                        0.7k
+  16    group            34.0      2.7      93.4 %                26                        0.8k
+```
+
+The first pass agreed to within a point of conflict rate. Gate and bounded4 matched the queue exactly:
+74.5 %, 86.8 % and 92.8 %.
+
+- **Measured: serializing commits multiplies conflicts on a contended stream 9-32x, and cuts successful
+  appends per second by 3-5x.** With a queue, almost every commit in a round of K writers had read the
+  same version: K-1 of them lose. Racing loses 2-10 %.
+- **Inferred, not traced: racing's busy-handler sleep works as accidental backoff.** A writer that wakes
+  from a 10-50 ms sleep has almost always been beaten, but because most writers are asleep at any moment,
+  few of them are holding a stale read at once. The faster a mode hands the lock over, the more writers
+  hold a read at the same version, and the conflict rate climbs in that order: default handler, 1 ms
+  sleep, 50 µs spin, queue. `bh-sleep1ms` sits between, and has the highest goodput of all.
+- **A queue widens the read-to-commit window by its own length.** The writer reads before it queues, so
+  every commit ahead of it is a chance for its read to go stale. A retry loop would make this worse
+  under a queue: a retried commit goes to the back.
+- With group commit, a conflict is rolled back to its savepoint and fails alone. 93 % of units in a
+  group did nothing durable, so a group was mostly savepoints rolling back.
+
+### 3. The async daemon writing at the same time
+
+8 or 16 writers append 4000 one-event streams while an async `Snapshot<BenchTally>` runs under the
+daemon, with default polling. Rerun, 7 rounds:
+
+```
+writers mode          app wall (ms)  app p99  app max  CPU/round   daemon catch-up      daemon lock wait  daemon lock wait  daemon batches
+                                                                     after writes (ms)    max (ms)          summed (ms)       per round
+   8    race             377.7         3.5    439.3     310 ms       869 (729 .. 918)     35.5               28.2              9
+   8    bh-mimic         346.5         1.5    436.3     316          880 (816 .. 922)     81.6                8.2              9
+   8    bh-sleep1ms      318.3        14.9     70.1     348          922 (917 .. 970)     21.4               13.7              9
+   8    bh-spin50us      555.7         4.7     30.7    3788          713 (612 .. 767)      4.6                2.6              9
+   8    queue            307.4         1.9     13.5     621          922 (917 .. 1074)    82.7               30.3              9
+   8    group            178.2         1.4      2.1     191           51 (51 .. 104)       0.1                0.1              8
+  16    race             387.7         9.1    539.6     313          867 (766 .. 975)    108.6                3.8              9
+  16    bh-mimic         480.9         9.2    638.8     334          765 (562 .. 871)     55.6               10.5              9
+  16    bh-sleep1ms      334.1        31.3    116.4     401          921 (919 .. 973)     31.5               20.2              9
+  16    bh-spin50us      728.6        15.6     97.8    8940          511 (153 .. 615)      9.6                5.6              9
+  16    queue            311.6         2.9     22.3     619          922 (916 .. 1075)    83.1               20.2              9
+  16    group            177.1         1.9     10.0     199           51 (51 .. 1022)      0.1                0.2              8
+```
+
+(The first pass, at load 7-10, gave the same orderings. Gate was there too: 360-366 ms app wall and
+p99 2-3 ms.)
+
+- **Measured: the daemon is not lock-bound in any mode.** Its summed `BEGIN IMMEDIATE` wait is 0.1-56 ms
+  per round over about 9 batches, against a catch-up of 0.5-0.9 s. Catch-up is set by the daemon's own
+  polling and batching, not by contention. It barely moves between race, queue and the handlers.
+- **Measured: a queue does not protect the daemon's own waits.** The daemon races with the queue's
+  consumer, and its worst single wait was 83-109 ms across the two passes' queue runs, about the same as
+  racing (36-109 ms). The default handler's long sleeps hit the daemon too. With `bh-spin50us` its worst
+  wait was 4-12 ms. With `bh-sleep1ms` it was 21-32 ms in the rerun but 41-82 ms in the first pass, so
+  that one is not clear. These maxima come from about 60 daemon waits per cell. A handler policy reaches
+  the daemon; a queue cannot.
+- **The application's side matches section 1.** The queue has the best tail among the one-transaction
+  modes (p99 2-3 ms). `bh-sleep1ms` has the throughput but a 15-31 ms p99. Spinning is slowest and burns
+  3.8-8.9 s of CPU per round.
+- **Group's 51 ms catch-up is measured but not explained.** One round at each writer count still took
+  about 1 s, and group commit gives the daemon nothing to do differently. A guess, not checked: the
+  shorter write phase (178 ms) changes where the daemon's polling cycle falls relative to the last append.
+  Do not read it as group commit speeding up projections.
+
+### 4. Group commit (prototype)
+
+It is the fastest mode in every shape except the hot stream, and the only one that beats the queue
+clearly.
+
+```
+                       wall (ms): race / queue / group      p99 (ms): queue / group    groups: size p50 / max
+400 x 5 docs,   8      60.7 / 23.4 / 14.4                   2.0 / 0.9                   4 / 8
+400 x 5 docs,  16     113.0 / 23.9 / 12.9                   2.9 / 1.4                   8 / 15
+2000 x 5 docs,  8     145.2 / 100.7 / 70.4                  1.5 / 1.4                   4 / 8
+2000 x 5 docs, 16     196.2 / 104.1 / 63.9                  2.3 / 1.9                   8 / 16
+1000 x 50 docs, 16    476.8 / 225.3 / 200.7                 6.1 / 6.0                   7 / 15
+events-many,   16     545.4 / 65.3 / 39.9                   4.4 / 2.7                   8 / 15
+daemon run,    16     387.7 / 311.6 / 177.1                 2.9 / 1.9                   (group of up to 64)
+group capped at 4, 2000 x 5, 16 writers:   queue 106.0, group 72.6   (p99 2.3 / 1.9)
+```
+
+- Groups stay small, around K/2 for K writers. A writer only re-queues after its previous unit has
+  completed, so a group holds whoever arrived during the previous group. A cap of 4 still kept most of
+  the gain (72.6 against 63.9 ms uncapped, 106.0 for the queue).
+- It uses the least CPU of any mode, below racing: 16-20 ms per 400 x 5 round, against 27-44 ms racing
+  and 55-57 ms for the queue.
+- **The gain shrinks as commits get heavier**: 1.6-1.9x faster than the queue with 5 small documents
+  and 16 writers, 1.1x with 50 documents. With `synchronous = NORMAL` in WAL there is no fsync per commit to
+  amortize. So what grouping saves is the per-transaction cost (BEGIN, COMMIT, the WAL frame and index
+  updates, the hand-off between commits), not durability waits. That part is an inference.
+- Not one group's COMMIT failed in any run, so the "a COMMIT failure fails the whole group" path was never
+  exercised. Nothing here measures it.
+
+**Its semantic costs**, on top of everything round 1 listed for the queue (late failure, the consumer's
+async flow, cancellation, FIFO head-of-line blocking, re-entrant deadlock, enlisted sessions):
+
+- **The caller hands over a unit of work, not a session.** The transaction exists only on the consumer,
+  so the writer's own session cannot commit. The prototype replays a delegate onto a fresh enlisted
+  session. Whatever the writer's session held does not carry over: its identity map, dirty tracking,
+  per-session listeners, `SetHeader` and correlation id, and documents already stored on it. Reads still
+  happen in the writer's session, outside the transaction that writes. For the optimistic guards that is
+  the same as today, but it is a different API from `SaveChangesAsync`, not a wrapper around it.
+- **An enlisted session gives up several things, and group commit inherits all of them.** It runs no
+  resilience pipeline. It fires no post-commit hooks (`AfterCommitAsync` on listeners, the outbox and
+  participants, and the append observer), because Fisher is never told when the consumer commits. It
+  cannot create a document table on demand. It cannot reserve a new Hi-Lo block (fisher#454 refuses
+  that). All of these would need the consumer to stand in for them, after the group's COMMIT.
+- **A unit's success is not durable until the group commits.** A unit whose savepoint was released can
+  still fail if the group's COMMIT fails, though it did nothing wrong. A caller sees its task complete
+  only after the whole group: one 50-document unit delays every small unit grouped with it.
+- **Savepoints contain a unit's database writes, not its side effects.** Anything a unit did outside
+  SQLite (the in-memory version tracker, a projection's raised messages, a participant's own state) is not
+  rolled back with the savepoint. The prototype's units do none of that, and a real design would have to
+  answer for each.
+- **The group's connection is opened outside Fisher's fisher#576 open gate.** The prototype opens it once,
+  before the writers start, to stay clear of that race. A production version would have to open through
+  Fisher.
+
+### 5. A bounded channel with backpressure
+
+`bounded1` and `bounded4` (`FullMode.Wait`) matched the unbounded queue in every shape: wall clock within
+noise, p99 within 0.5 ms, the same conflict rate on the hot stream. At 400 x 5 (rerun): 8 writers 22.0 /
+22.5 ms against 23.4 for the queue; 16 writers 21.5 / 22.0 against 23.9. At 1000 x 50 and 16 writers:
+222.9 / 221.1 against 225.3 ms. With one in-flight unit per writer, the channel never holds more than K
+items, so backpressure changes little here. It would matter for a writer that does not await its commit
+before queuing the next, and this scenario has none.
+
+### Notes
+
+Measured:
+
+- At one writer every mode is the same, within noise. Every difference here is a contention effect.
+- **The default busy handler is the whole cost of racing.** Its sleep time is 98-100 % of the
+  `BEGIN IMMEDIATE` wait, and a counting copy of it reproduces racing's numbers. Retries are zero in every
+  mode.
+- **`busy_timeout = 0` hands the wait to Microsoft.Data.Sqlite's own synchronous retry**, with waits of
+  about 150 ms each. It is 5-20x slower than racing, and nothing asynchronous can be put above it without
+  changing Fisher.
+- **A fixed 1 ms busy handler recovers most of the throughput** (within 9-44 % of the queue's wall clock,
+  against 1.4-4.7x for racing), at racing's CPU. It keeps a 9-72 ms p99 where the queue's is 1.5-6 ms.
+- **Spinning or yielding in the handler keeps 6-12 cores busy and loses to racing on longer runs.**
+- **On a hot stream, serializing turns 2-10 % conflicts into 75-93 %** and cuts successful appends 3-5x.
+  `bh-sleep1ms` has the best goodput.
+- **The daemon is not lock-bound.** A queue leaves its waits as they are; a handler policy shortens them.
+- **Group commit is the fastest and cheapest mode except on a hot stream**, and it requires a different
+  API (a unit of work, not a session) on top of enlisted sessions' restrictions.
+- **A bounded channel behaves like the unbounded one here.**
+- **The queue costs 1.3-2x racing's CPU** for the same work (54-56 ms against 27-44 ms per 400 x 5 round
+  in the rerun, and 620 against 310 ms in the daemon run). A probable reason, not measured: the thread-pool
+  hand-off per commit between writer and consumer.
+
+Inferred, not traced:
+
+- The 1 ms handler's remaining tail comes from barging: a fresh writer can take the lock ahead of one that
+  has been waiting.
+- Racing's low conflict rate on a hot stream comes from the busy handler's sleeps acting as backoff.
+- Group commit's gain is per-transaction overhead, not fsync.
+
+### Comparison: each option against today's racing
+
+| Option | Measured gain (400 x 5 docs, 8 / 16 writers, unless noted) | Tail (p99) | CPU | Semantic cost |
+|---|---|---|---|---|
+| Today: race, default handler | baseline: 61 / 113 ms | 20 / 55 ms | baseline | — |
+| `busy_timeout = 0` (bh-none) | **17-19x slower** (1,063 / 2,118 ms) | 453 / 1,206 ms | same | none, but unusable: the retry above it is a synchronous 150 ms sleep |
+| Busy handler, fixed 1 ms sleep | 2.1x / 3.3x faster (29 / 35 ms). 2000 x 5: 1.2x / 1.5x. Hot stream: 1.6x / 2.5x the goodput | 9 / 20 ms: half of racing's, 4-7x the queue's | same as racing | none for callers. Covers the daemon, enlisted sessions, Hi-Lo, a second store. A thread blocks while waiting, as today. It needs `sqlite3_busy_handler`, which SQLitePCLRaw does not expose (P/Invoke, or upstream) |
+| Busy handler, spin or yield | 1.5-2.3x faster at 400 x 5, **slower** than racing at 2000 x 5 | 3.5 / 9-10 ms | **6-12 cores** | as above, plus the CPU |
+| Queue, unbounded (round 1) | 2.6x / 4.7x faster (23 / 24 ms) | 2 / 3 ms | 1.3-2x racing | round 1's list: late failure, consumer's async flow, cancellation, FIFO head-of-line, re-entrant deadlock, enlisted sessions bypass it, the daemon and other writers still race. **Hot stream: 75-93 % conflicts, 3-5x less goodput** |
+| Queue, bounded (1 or 4) | same as unbounded | same | same | same as the queue, plus a writer can wait before it is even queued |
+| Gate (semaphore) | 2.3x / 4.1x faster | 2 / 3 ms | 1.3-2x racing | as the queue, except it keeps the caller's async flow. Same hot-stream conflicts |
+| Group commit (prototype) | 4.2x / 8.8x faster (14 / 13 ms). 2000 x 5: 2.1x / 3.1x. 1000 x 50: 1.8x / 2.4x | 0.9 / 1.4 ms | below racing | everything the queue costs, plus: a unit of work instead of a session, enlisted-session restrictions (no post-commit hooks, no resilience pipeline, no on-demand tables, no Hi-Lo advance), a group's COMMIT failure fails every unit, and side effects outside SQLite are not rolled back by a savepoint. Hot stream as the queue |
+
+**Observation for the owner, not a decision.** On these numbers, a fixed short-sleep busy handler gets
+most of the queue's throughput gain. It changes nothing a caller can observe, reaches writers a queue
+cannot (the daemon, enlisted sessions, a second store), and on a contended stream does better than either
+racing or a queue. What it gives up is the queue's tight tail. If the tail is the goal, the queue and the
+gate are what deliver it, with the costs above, and group commit delivers both throughput and tail at the
+largest semantic cost. A handler change is also the smallest to undo. Its catch is plumbing:
+SQLitePCLRaw 3.0.5 has no `sqlite3_busy_handler`, so it needs a P/Invoke into `e_sqlite3`, as here, or an
+upstream addition. Policies between 1 ms fixed and the default schedule were not explored, for example
+spin briefly, then sleep 1 ms, capped at a few ms.
+
+**Not measured:** another process writing the same file; Hi-Lo advances and first-use migrations under
+contention; `synchronous = FULL`, where group commit would also save fsyncs; the queue or group commit
+with retries on version conflicts; a writer that does not await its commit before queuing the next, which
+is what bounded backpressure is for; policies between "1 ms fixed" and the default schedule; the group
+commit failure path (no COMMIT failed); thread-pool starvation from blocking busy handlers at high writer
+counts (none was seen up to 16 writers on 18 cores); net11.0; Linux or Windows, whose sleep granularity
+differs from macOS's; and any machine other than this one.

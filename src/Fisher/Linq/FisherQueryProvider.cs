@@ -259,7 +259,7 @@ public partial class FisherQueryProvider : IQueryProvider
     {
         if (JoinFor(expression) is { } joined)
         {
-            joined.Statement.Limit = enforceSingle ? 2 : 1;
+            LimitAtMost(joined.Statement, enforceSingle ? 2 : 1);
 
             return OneOf(await JoinListAsync<T>(joined.Statement, joined.Plan, token).ConfigureAwait(false),
                 enforceSingle, required);
@@ -267,14 +267,14 @@ public partial class FisherQueryProvider : IQueryProvider
 
         if (ProjectionFor(expression) is { } projected)
         {
-            projected.Statement.Limit = enforceSingle ? 2 : 1;
+            LimitAtMost(projected.Statement, enforceSingle ? 2 : 1);
 
             return OneOf(await ProjectListAsync<T>(projected, token).ConfigureAwait(false),
                 enforceSingle, required);
         }
 
         var (statement, selector) = Build<T>(expression);
-        statement.Limit = enforceSingle ? 2 : 1;
+        LimitAtMost(statement, enforceSingle ? 2 : 1);
 
         T result;
 
@@ -351,20 +351,27 @@ public partial class FisherQueryProvider : IQueryProvider
     }
 
     /// <summary>
-    ///     <c>count(*)</c> over the query's predicates with any paging discarded — what
-    ///     <c>ToPagedListAsync</c> reports as the total.
+    ///     <c>count(*)</c> over the query the pager pages — what <c>ToPagedListAsync</c> reports as the
+    ///     total.
     /// </summary>
     /// <remarks>
-    ///     Distinct from <see cref="CountAsync{T}" />, which counts the page when the query is paged.
-    ///     Both are right for their caller; conflating them would make one of the two silently wrong.
+    ///     <para>
+    ///         Distinct from <see cref="CountAsync{T}" /> in what it is handed rather than in what it
+    ///         counts: <c>ToPagedListAsync</c> passes the query before adding its own <c>Skip</c>/<c>Take</c>,
+    ///         so this counts every row the pager can reach, and a page past the end still reports it.
+    ///     </para>
+    ///     <para>
+    ///         ⚠️ <b>Paging the caller wrote is part of that query</b> (fisher#589). It used to be discarded
+    ///         here, while the items overwrote it — so <c>Take(5).ToPagedListAsync(1, 10)</c> listed ten
+    ///         rows of a five-row query and reported the whole table as the total. The pager's
+    ///         <c>Skip</c>/<c>Take</c> now compose with the caller's, so the total has to count the
+    ///         caller's page for the two to agree.
+    ///     </para>
     /// </remarks>
     internal async Task<long> CountIgnoringPagingAsync<T>(Expression expression, CancellationToken token)
         where T : notnull
     {
         var (statement, parser, _, _) = BuildStatement(SourceTypeFor(expression), expression);
-
-        statement.Limit = null;
-        statement.Offset = null;
 
         // A Stats() request rides on the expression, so this statement inherits it — and this method
         // *is* how the total gets computed, so honouring it here would recurse. ToPagedListAsync is
@@ -372,7 +379,7 @@ public partial class FisherQueryProvider : IQueryProvider
         // list half fills the statistics as usual.
         statement.ClearStatistics();
 
-        if (RowProjection.For(parser) is not null)
+        if (RowProjection.For(parser) is not null || parser.IsPaged)
         {
             return Convert.ToInt64(await ExecuteScalarAsync(
                 new Statement { Subquery = statement, SelectColumns = "count(*)" }, token)
@@ -469,6 +476,15 @@ public partial class FisherQueryProvider : IQueryProvider
                 + "outer query and join the page's items afterwards, or use ToPagedListAsync.");
         }
 
+        // fisher#589: the keyset page sets its own LIMIT and discards any OFFSET, so a Take/Skip
+        // already on the query would be silently replaced rather than honoured.
+        if (parser.IsPaged)
+        {
+            throw new BadLinqExpressionException(
+                "Keyset pagination pages the query itself, so it cannot follow Take or Skip. Pass the page "
+                + "size to ToCursorPageAsync and remove the Take/Skip.");
+        }
+
         CursorPagination.ValidateOrdering(parser.OrderByMembers);
 
         if (cursor is not null)
@@ -562,7 +578,7 @@ public partial class FisherQueryProvider : IQueryProvider
 
         if (limit.HasValue)
         {
-            statement.Limit = limit;
+            LimitAtMost(statement, limit.Value);
         }
 
         var rows = new List<string>();
@@ -845,6 +861,8 @@ public partial class FisherQueryProvider : IQueryProvider
             // while the join is in scope. Dropping them would fail with "no such column" for an
             // inner-side member and silently aggregate the outer table alone for an outer-side one.
             FromAlias = statement.FromAlias,
+            // fisher#589: a page with operators applied to it reads from the page it was taken from.
+            Subquery = statement.Subquery,
             SelectColumns = $"{locator} as agg_value",
             Limit = statement.Limit,
             Offset = statement.Offset
@@ -1135,6 +1153,8 @@ public partial class FisherQueryProvider : IQueryProvider
             // would count the outer table instead — the same number for a one-to-one join and a
             // silently different one for every other.
             FromAlias = statement.FromAlias,
+            // fisher#589: a page with operators applied to it reads from the page it was taken from.
+            Subquery = statement.Subquery,
             SelectColumns = "1",
             Limit = statement.Limit,
             Offset = statement.Offset
@@ -1145,6 +1165,17 @@ public partial class FisherQueryProvider : IQueryProvider
 
         return new Statement { Subquery = inner, SelectColumns = "count(*)" };
     }
+
+    /// <summary>
+    ///     Caps a statement's limit for a terminal that reads at most <paramref name="count" /> rows,
+    ///     without lifting a smaller limit the query already carries.
+    /// </summary>
+    /// <remarks>
+    ///     fisher#589. Overwriting it was the terminal's half of the same bug: <c>Take(0).FirstOrDefault()</c>
+    ///     returned a row, and <c>Take(1).Single()</c> fetched two and refused a query LINQ answers.
+    /// </remarks>
+    private static void LimitAtMost(Statement statement, int count)
+        => statement.Limit = statement.Limit is { } limit ? Math.Min(limit, count) : count;
 
     // ---- Include() ----
 
@@ -1368,7 +1399,77 @@ public partial class FisherQueryProvider : IQueryProvider
 
         var join = parser.Joins.Count == 0 ? null : ApplyJoin(statement, parser.Joins, selectClause);
 
-        return (ApplyDistinct(statement, parser, selectClause), parser, selectClause, join);
+        statement = ApplyDistinct(statement, parser, selectClause);
+
+        if (parser.AfterPage is { } page)
+        {
+            statement = ApplyAfterPage(statement, page);
+        }
+
+        return (statement, parser, selectClause, join);
+    }
+
+    /// <summary>
+    ///     The operators written after <c>Take</c>/<c>Skip</c>, applied to the page — fisher#589.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The paged statement becomes a subquery selecting every column of the document table, and
+    ///         the outer statement takes over its select list. So a locator over a document member
+    ///         (<c>json_extract(data, …)</c>, a duplicated column, <c>id</c>) resolves against the
+    ///         page exactly as it would against the table, and the selector reads the same columns in
+    ///         the same positions. The implicit filters stay inside, with everything else that decides
+    ///         which rows make the page. The parser has already refused every shape for which that is
+    ///         not true — see <c>LinqQueryParser.ApplyAfterPage</c>.
+    ///     </para>
+    ///     <para>
+    ///         <b>The page's own ordering is repeated outside it</b>, after any re-sort the caller wrote.
+    ///         SQL promises nothing about the order a subquery's rows reach the enclosing query in, so a
+    ///         <c>Where</c> over an ordered page would otherwise be free to come back in a different
+    ///         order; and LINQ's <c>OrderBy</c> is stable, so a re-sort keeps the page's order among its
+    ///         ties. Not under <c>Distinct()</c>, whose rows are values the page's keys no longer
+    ///         describe, and which LINQ does not order either.
+    ///     </para>
+    /// </remarks>
+    private static Statement ApplyAfterPage(Statement page, PageBoundary boundary)
+    {
+        var outer = new Statement
+        {
+            Subquery = page,
+            FromTable = page.FromTable,
+            SelectColumns = page.SelectColumns,
+            IsDistinct = boundary.IsDistinct,
+            Limit = boundary.Limit,
+            Offset = boundary.Offset
+        };
+
+        page.SelectColumns = "*";
+
+        outer.Wheres.AddRange(boundary.Wheres);
+        outer.OrderBys.AddRange(boundary.OrderBys);
+
+        if (!boundary.IsDistinct)
+        {
+            outer.OrderBys.AddRange(page.OrderBys);
+        }
+
+        var matches = new List<FullTextMatchFilter>();
+        var negated = false;
+
+        foreach (var where in outer.Wheres)
+        {
+            CollectFullTextMatches(where, matches, ref negated, insideNot: false);
+        }
+
+        if (matches.Count > 0)
+        {
+            throw new BadLinqExpressionException(
+                "Fisher cannot apply a full-text predicate after Take/Skip. It is matched against the "
+                + "document table's rowid, which a subquery over the page does not carry. Search before "
+                + "the Take/Skip.");
+        }
+
+        return outer;
     }
 
     /// <summary>

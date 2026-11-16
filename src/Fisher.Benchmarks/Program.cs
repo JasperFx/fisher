@@ -15,7 +15,8 @@ using Fisher.Benchmarks.Scenarios;
 var arguments = new Queue<string>(args);
 var command = arguments.Count > 0 ? arguments.Dequeue() : "help";
 
-var options = ParseOptions(arguments);
+var textOptions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+var options = ParseOptions(arguments, textOptions);
 
 switch (command)
 {
@@ -75,13 +76,34 @@ switch (command)
     {
         // fisher#547: racing for BEGIN IMMEDIATE (today) vs a benchmark-only Channel<T> single-writer
         // queue, same total work. --writers runs one writer count; omitted, it sweeps 1/2/4/8/16.
+        //
+        // Round 2 (fisher#547): --modes picks any of race, queue, gate, bh-mimic, bh-yield, bh-spin50us,
+        // bh-sleep1ms, bh-none, bounded1, bounded4, group (default: round 1's race,queue,gate);
+        // --workload docs | events-many | events-hot; --daemon 1 runs an async Snapshot<BenchTally>
+        // under the daemon during the writes; --group-size caps a group commit.
         PrintEnvironment();
-        int[] writerCounts = options.TryGetValue("writers", out var only) ? [only] : [1, 2, 4, 8, 16];
-        var reports = await WriterQueueScenario.RunAsync(
+        int[] writerCounts = textOptions.TryGetValue("writers", out var only)
+            ? only.Split(',').Select(int.Parse).ToArray()
+            : [1, 2, 4, 8, 16];
+        var modes = textOptions.TryGetValue("modes", out var modeList)
+            ? modeList.Split(',').Select(WriterQueueScenario.ParseMode).ToArray()
+            : WriterQueueScenario.RoundOneModes;
+        var workload = textOptions.GetValueOrDefault("workload", "docs") switch
+        {
+            "events-many" => WriterQueueScenario.Workload.EventsMany,
+            "events-hot" => WriterQueueScenario.Workload.EventsHot,
+            "docs" => WriterQueueScenario.Workload.Docs,
+            var other => throw new ArgumentException($"Unknown workload '{other}'")
+        };
+        var reports = await WriterQueueScenario.RunAsync(new WriterQueueScenario.Settings(
+            modes,
             writerCounts,
             options.GetValueOrDefault("total-commits", 400),
             options.GetValueOrDefault("docs-per-commit", 5),
-            options.GetValueOrDefault("rounds", 7));
+            options.GetValueOrDefault("rounds", 7),
+            workload,
+            options.GetValueOrDefault("daemon", 0) != 0,
+            options.GetValueOrDefault("group-size", 64)));
 
         foreach (var report in reports)
         {
@@ -156,7 +178,11 @@ switch (command)
               cold-start          [--types 20] [--rounds 5]
               writer-queue        [--writers N (default: sweep 1,2,4,8,16)] [--total-commits 400]
                                   [--docs-per-commit 5] [--rounds 7]
-                                  racing BEGIN IMMEDIATE vs a Channel<T> single-writer queue (fisher#547)
+                                  [--modes race,queue,gate,bh-mimic,bh-yield,bh-spin50us,bh-sleep1ms,
+                                           bh-none,bounded1,bounded4,group (default: race,queue,gate)]
+                                  [--workload docs|events-many|events-hot] [--daemon 1] [--group-size 64]
+                                  racing BEGIN IMMEDIATE vs a Channel<T> single-writer queue, other busy
+                                  handlers, a bounded queue and group commit (fisher#547)
               all                 every scenario at its checked-in defaults
               binary-bind-probe   which BLOB parameter shapes the provider binds (fisher#570)
 
@@ -173,7 +199,7 @@ switch (command)
 
 return;
 
-static Dictionary<string, int> ParseOptions(Queue<string> arguments)
+static Dictionary<string, int> ParseOptions(Queue<string> arguments, Dictionary<string, string> text)
 {
     var options = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
@@ -185,7 +211,9 @@ static Dictionary<string, int> ParseOptions(Queue<string> arguments)
             continue;
         }
 
-        if (int.TryParse(arguments.Dequeue(), out var value))
+        var raw = arguments.Dequeue();
+        text[flag[2..]] = raw;
+        if (int.TryParse(raw, out var value))
         {
             options[flag[2..]] = value;
         }
