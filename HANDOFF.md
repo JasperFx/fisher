@@ -12,11 +12,43 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3088 tests green on net10.0 and 3115 on net11.0** — 3017 (net10.0) / 3044 (net11.0) in `Fisher.Tests`, 40 in
+**3105 tests green on net10.0 and 3132 on net11.0** — 3034 (net10.0) / 3061 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.3.0** / Weasel **10.0.0-alpha.3**.
+On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
+
+## Weasel 10.0.0-alpha.4 (fisher#575)
+
+Weasel 10.0.0-alpha.3 → 10.0.0-alpha.4, no compile break and no Fisher code change. weasel#845 is the one that
+reaches Fisher. `FisherEventLoader` pushes a shard's event types into SQL through `EventTypeAllowList.For`, which
+turned an interface or abstract type (`IncludeType<IFoo>()`, or a projection's `Apply(IFoo e)`) into that type's
+own alias. No stored row carries it, so the page came back empty, the ceiling claimed the high-water mark, and the
+shard reported itself caught up with nothing applied and nothing logged. The allow list now admits every type in
+that case, as Marten's loader always has, and the projection or subscription dispatches after hydration.
+`interface_event_type_filtering` pins it at both levels: the loader filtered on an interface and on an abstract
+record, and through the async daemon an `Apply(IQuestMilestone)` snapshot and an `IncludeType<IQuestMilestone>()`
+subscription. All four fail on alpha.3; the daemon still reported the shards non-stale.
+
+Not done here: weasel#846 asks a paging dialect to bind the allow list as one parameter (on SQLite,
+`json_each(@types)`). `SqliteEventPagingDialect` still binds one parameter per alias, which only fails past SQLite's
+32,766 variables. weasel#840 (Hi-Lo blocks only move up) is inside `HiloSequenceBase` and needs nothing from Fisher;
+weasel#838/#839 are tenancy and PostgreSQL additions Fisher does not use.
+
+## `EventGraph` uses `EventRegistry`'s registries (fisher#574)
+
+JasperFx 3.3.0 lifted masking rules, DCB tag types, binary serializers and type/alias resolution onto
+`EventRegistry` as non-virtual members, and `EventGraph`'s same-named copies hid them (29 CS0108 warnings). Anything
+configuring the graph through `EventRegistry` was silently dropped: 11 of the 12 facts in
+`event_registry_base_typed_configuration` failed on the previous build. Fisher's copies are deleted and the base's
+are used through its hooks (`AliasFor`, `RegisterDotNetTypeNames`, `DefaultTagTableSuffixFor`,
+`OnBinarySerializersChanged`). `FisherDatabase` overrides `FindFeature` so Weasel's own `EnsureStorageExistsAsync`
+works, and its `IEventDatabase` member is `new`. The interface redeclarations are `new` after an interface-map
+check. `src/Fisher` builds with zero CS0108.
+
+Visible changes: a `Func` masking rule reaches a hierarchy; a failed tag inference throws JasperFx's
+`InvalidOperationException`; re-registering a tag type with a different inner type is refused. CLAUDE.md's
+"`EventGraph` is JasperFx's `EventRegistry`" has the detail.
 
 ## One native connection, two sessions (fisher#576)
 

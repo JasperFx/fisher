@@ -22,10 +22,8 @@ namespace Fisher.Events;
 /// </summary>
 public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuerySession>
 {
-    private readonly ConcurrentDictionary<string, Type> _aggregateTypes = new();
     private readonly ConcurrentDictionary<Type, FisherEventType> _eventTypes = new();
     private readonly StoreOptions _options;
-    private readonly List<ITagTypeRegistration> _tagTypes = new();
 
     /// <summary>
     ///     Builds each aggregate's single-stream projection, closed statically wherever it can be
@@ -151,11 +149,6 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     private Weasel.Storage.EventStorage<string> StringEventStorage
         => (Weasel.Storage.EventStorage<string>)ClosedShapeEventStorage;
 
-    /// <summary>
-    ///     Every tag type registered for Dynamic Consistency Boundary support.
-    /// </summary>
-    public IReadOnlyList<ITagTypeRegistration> TagTypes => _tagTypes;
-
     private object BuildClosedShapeEventStorage()
     {
         var dialect = new Storage.SqliteEventStoreDialect();
@@ -258,76 +251,42 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
         return EventMappingFor(eventData.GetType()).Wrap(eventData);
     }
 
+    /// <remarks>
+    ///     A new mapping is announced to <see cref="EventRegistry" />'s name cache
+    ///     (<c>RegisterDotNetTypeNames</c>), because nothing else tells the base class a registration
+    ///     happened and <see cref="EventRegistry.ResolveEventType" /> is the base's (fisher#574). Its
+    ///     serializer is <see cref="EventRegistry.FindBinarySerializerFor" />: null for a marked type with
+    ///     nothing configured, since mappings are built on read paths too.
+    /// </remarks>
     public override FisherEventType EventMappingFor(Type eventType)
-        => _eventTypes.GetOrAdd(eventType, type => new FisherEventType(type, ResolveBinarySerializerFor(type)));
+    {
+        if (_eventTypes.TryGetValue(eventType, out var existing))
+        {
+            return existing;
+        }
+
+        var mapping = _eventTypes.GetOrAdd(eventType, type => new FisherEventType(type, FindBinarySerializerFor(type)));
+        RegisterDotNetTypeNames(mapping);
+        return mapping;
+    }
 
     // ---- binary event serialization (fisher#93) ----
 
-    private readonly ConcurrentDictionary<Type, IEventBinarySerializer> _binarySerializerByType = new();
-    private IEventBinarySerializer? _defaultBinarySerializer;
+    // The registry is EventRegistry's (fisher#574): DefaultBinarySerializer, UseBinarySerializer<TEvent>,
+    // FindBinarySerializerFor and ResolveBinarySerializerFor are the base's, so a serializer configured
+    // through a base-typed reference is the one Fisher writes with. Fisher keeps the resolved answer on
+    // each mapping, which is why a change has to reach the mappings already built.
 
     /// <summary>
-    ///     The store-wide fallback serializer for event types marked
-    ///     <see cref="BinaryEventAttribute" /> that have no explicit per-type registration.
+    ///     A serializer registration changed, so refresh every mapping already built. Registration order is
+    ///     not fixed: <c>AddEventType&lt;T&gt;()</c> or a projection may build a mapping before either way
+    ///     of configuring a serializer.
     /// </summary>
-    /// <remarks>
-    ///     Assigning this refreshes every mapping already built, so configuration order does not
-    ///     matter — <c>AddEventType&lt;T&gt;()</c> before the serializer is set resolves the same way
-    ///     as after it.
-    /// </remarks>
-    public IEventBinarySerializer? DefaultBinarySerializer
-    {
-        get => _defaultBinarySerializer;
-        set
-        {
-            _defaultBinarySerializer = value;
-            refreshBinarySerializers();
-        }
-    }
-
-    /// <summary>
-    ///     Store this one event type's body through <paramref name="serializer" /> rather than as JSON
-    ///     text (fisher#93). Beats <see cref="BinaryEventAttribute" /> + <see cref="DefaultBinarySerializer" />.
-    /// </summary>
-    public EventGraph UseBinarySerializer<TEvent>(IEventBinarySerializer serializer) where TEvent : notnull
-    {
-        ArgumentNullException.ThrowIfNull(serializer);
-
-        _binarySerializerByType[typeof(TEvent)] = serializer;
-
-        // The mapping may already exist — AddEventType, a projection registration or an earlier append
-        // all build one — so refresh it rather than relying on the GetOrAdd factory having run after.
-        EventMappingFor(typeof(TEvent)).BinarySerializer = serializer;
-
-        return this;
-    }
-
-    /// <summary>
-    ///     The serializer for an event type, or null when it is stored as JSON. Explicit per-type
-    ///     registration wins; <see cref="BinaryEventAttribute" /> falls back to
-    ///     <see cref="DefaultBinarySerializer" />.
-    /// </summary>
-    /// <remarks>
-    ///     Returns null rather than throwing for an attribute-marked type with no serializer
-    ///     configured, because a mapping is built on read paths too and a store that can only ever
-    ///     read such a row should not be unable to. The refusal belongs on the append, where it is
-    ///     actionable — see <see cref="BinaryEncoderFor" />.
-    /// </remarks>
-    internal IEventBinarySerializer? ResolveBinarySerializerFor(Type eventType)
-    {
-        if (_binarySerializerByType.TryGetValue(eventType, out var explicitSerializer))
-        {
-            return explicitSerializer;
-        }
-
-        return eventType.IsDefined(typeof(BinaryEventAttribute), false) ? _defaultBinarySerializer : null;
-    }
-
-    private void refreshBinarySerializers()
+    protected override void OnBinarySerializersChanged()
     {
         foreach (var mapping in _eventTypes.Values)
         {
-            mapping.BinarySerializer = ResolveBinarySerializerFor(mapping.EventType);
+            mapping.BinarySerializer = FindBinarySerializerFor(mapping.EventType);
         }
     }
 
@@ -438,73 +397,22 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     /// </summary>
     public IReadOnlyList<FisherEventType> AllKnownEventTypes() => _eventTypes.Values.ToList();
 
-    public override Type AggregateTypeFor(string aggregateTypeName)
-    {
-        if (_aggregateTypes.TryGetValue(aggregateTypeName, out var type))
-        {
-            return type;
-        }
-
-        throw new ArgumentOutOfRangeException(nameof(aggregateTypeName),
-            $"Unknown aggregate type name '{aggregateTypeName}'.");
-    }
-
     /// <summary>
-    ///     Resolve the alias persisted in <c>fi_streams.type</c> back to its aggregate type, or null when
-    ///     this deployment has no registration for it.
-    /// </summary>
-    /// <remarks>
-    ///     Unlike <see cref="AggregateTypeFor" /> this never throws: a stream tagged by a deployment that
-    ///     knew a type this one does not must still be able to report its version and timestamps. Note
-    ///     the alias is the SIMPLE name, because that is what the column stores — two aggregate types
-    ///     with the same <c>Name</c> in different namespaces share an alias and the first seen wins.
-    /// </remarks>
-    internal Type? TryResolveAggregateType(string? aggregateTypeName)
-    {
-        if (string.IsNullOrEmpty(aggregateTypeName))
-        {
-            return null;
-        }
-
-        return _aggregateTypes.TryGetValue(aggregateTypeName, out var known) ? known : null;
-    }
-
-    public override string AggregateAliasFor(Type aggregateType)
-    {
-        _aggregateTypes.TryAdd(aggregateType.Name, aggregateType);
-        return aggregateType.Name;
-    }
-
-    private readonly ConcurrentDictionary<string, Type?> _eventTypeByDotNetName = new();
-
-    /// <summary>
-    ///     Resolve a .NET type from the <c>dotnet_type</c> name stored on an event row.
+    ///     The alias persisted in <c>fi_streams.type</c>: the aggregate type's SIMPLE name.
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         Memoized per name (fisher#156), because this runs once per event row hydrated —
-    ///         <c>Type.GetType(string)</c> parses the assembly-qualified name and probes loaded
-    ///         assemblies on every call. Marten does the same in <c>EventGraph.TypeForDotNetName</c>;
-    ///         the cache here is a <see cref="ConcurrentDictionary{TKey,TValue}" /> to match this
-    ///         class's other registries.
+    ///         Only the name is Fisher's. The cache, <see cref="EventRegistry.AggregateTypeFor" /> and
+    ///         <see cref="EventRegistry.TryResolveAggregateType" /> are the base's (fisher#574), so a
+    ///         base-typed caller resolves the aliases Fisher recorded. Two aggregate types with the same
+    ///         <c>Name</c> in different namespaces share an alias and the first seen wins.
     ///     </para>
     ///     <para>
-    ///         <b>Misses are cached too</b>, as a stored null entry, and that is the half that pays:
-    ///         Fisher deliberately returns null for a type this deployment does not know (the stream
-    ///         reads skip such rows so a store stays readable by a process without every event
-    ///         assembly), so a stream holding foreign event types would otherwise re-probe
-    ///         <c>Type.GetType</c> per row forever — precisely the path the null policy exists to
-    ///         serve. Sound because the answer cannot change mid-process for Fisher's purposes:
-    ///         event assemblies are loaded by registration before rows naming them are read.
+    ///         <see cref="EventRegistry.ResolveEventType" /> is the base's too, memoized per name with misses
+    ///         cached (fisher#156), which <see cref="EventMappingFor" /> feeds.
     ///     </para>
     /// </remarks>
-    [UnconditionalSuppressMessage("Trimming", "IL2057:UnrecognizedTypeName",
-        Justification =
-            "Resolving the dotnet_type name a row was written with is what this method is. The type is kept by the application's own registration of it (AddEventType, a projection or an append), which is also what the source-generated JsonSerializerContext a Native AOT application supplies references. A type nothing keeps resolves to null, which every read already treats as an event this deployment does not know.")]
-    internal Type? ResolveEventType(string? dotNetTypeName)
-        => string.IsNullOrEmpty(dotNetTypeName)
-            ? null
-            : _eventTypeByDotNetName.GetOrAdd(dotNetTypeName, static name => Type.GetType(name));
+    protected override string AliasFor(Type aggregateType) => aggregateType.Name;
 
     internal StreamsTable BuildStreamsTable() => new(this);
 
@@ -520,7 +428,7 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     ///     One table per registered tag type.
     /// </summary>
     internal IEnumerable<EventTagTable> BuildTagTables()
-        => _tagTypes.Select(registration => new EventTagTable(this, registration));
+        => TagTypes.Select(registration => new EventTagTable(this, registration));
 
     internal const string TagTypeInferenceUnreferencedCode =
         "Discovers the tag type's inner value through ValueTypeInfo, which reflects over its members. Under trimming or Native AOT use RegisterTagType<TTag, TInner>(Func<TTag, TInner>), which wraps TagTypeRegistration.FromUnwrapper<TTag, TInner>.";
@@ -529,88 +437,16 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
         "Closes TagTypeRegistration<TTag, TInner> with MakeGenericType. Under Native AOT use RegisterTagType<TTag, TInner>(Func<TTag, TInner>), which wraps TagTypeRegistration.FromUnwrapper<TTag, TInner> and closes nothing at runtime.";
 
     /// <summary>
-    ///     Register a tag type for Dynamic Consistency Boundary support, deriving the table suffix from
-    ///     the type name.
-    /// </summary>
-    [RequiresUnreferencedCode(TagTypeInferenceUnreferencedCode)]
-    [RequiresDynamicCode(TagTypeInferenceDynamicCode)]
-    public ITagTypeRegistration RegisterTagType<TTag>() where TTag : notnull
-        => RegisterTagType<TTag>(ToEventTypeName(typeof(TTag).Name));
-
-    /// <summary>
-    ///     Register a tag type for Dynamic Consistency Boundary support with an explicit table suffix.
+    ///     The table suffix of a tag type registered without one: the type name in Fisher's snake_case,
+    ///     <c>HarbourId</c> becoming <c>harbour_id</c>.
     /// </summary>
     /// <remarks>
-    ///     The tag's inner primitive is inferred through <c>TagTypeRegistration.Create&lt;TTag&gt;</c>,
-    ///     which needs reflection and runtime generic instantiation. A trimmed or Native AOT
-    ///     application registers through <see cref="RegisterTagType{TTag, TInner}(Func{TTag, TInner}, string?)" />
-    ///     instead.
+    ///     The registration API (<c>RegisterTagType</c>, <c>FindTagType</c>, <c>TagTypes</c>) is
+    ///     <see cref="EventRegistry" />'s (fisher#574), so a tag type registered through a base-typed
+    ///     reference gets its table. Only the suffix rule is Fisher's, because it names a table in a
+    ///     deployed store and JasperFx's default spelling differs for some names.
     /// </remarks>
-    [RequiresUnreferencedCode(TagTypeInferenceUnreferencedCode)]
-    [RequiresDynamicCode(TagTypeInferenceDynamicCode)]
-    public ITagTypeRegistration RegisterTagType<TTag>(string tableSuffix) where TTag : notnull
-        => FindTagType(typeof(TTag)) ?? AddTagType(InferTagType<TTag>(tableSuffix));
-
-    /// <summary>
-    ///     The inferring registration, naming the overload that does not infer when it fails (fisher#493).
-    /// </summary>
-    /// <remarks>
-    ///     In a native image the tag's property can be trimmed, and JasperFx then reports "Must be only a
-    ///     single public, 'gettable' property" about a type that visibly has one. The exception type stays
-    ///     the shared one, so what changes is only that the message says what to do.
-    /// </remarks>
-    [RequiresUnreferencedCode(TagTypeInferenceUnreferencedCode)]
-    [RequiresDynamicCode(TagTypeInferenceDynamicCode)]
-    private static ITagTypeRegistration InferTagType<TTag>(string tableSuffix) where TTag : notnull
-    {
-        try
-        {
-            return TagTypeRegistration.Create<TTag>(tableSuffix);
-        }
-        catch (Exception e) when (e is InvalidValueTypeException or NotSupportedException)
-        {
-            throw new InvalidValueTypeException(typeof(TTag),
-                $"Fisher could not work out the inner value of tag type '{typeof(TTag).Name}': {e.Message} "
-                + "That is expected of a type with no single value property, and of any tag in a trimmed or "
-                + $"Native AOT application. Name it instead: RegisterTagType<{typeof(TTag).Name}, TInner>(x => x.Value).");
-        }
-    }
-
-    /// <summary>
-    ///     Register a tag type for Dynamic Consistency Boundary support from an explicit unwrapper, for
-    ///     a trimmed or Native AOT application. Wraps <c>TagTypeRegistration.FromUnwrapper&lt;TTag, TInner&gt;</c>,
-    ///     which reflects over nothing and closes no generic type at runtime.
-    /// </summary>
-    /// <typeparam name="TTag">The strong-typed identifier used as the tag.</typeparam>
-    /// <typeparam name="TInner">
-    ///     The primitive the tag table stores: the type of the tag's single public value property,
-    ///     typically <see cref="Guid" />, <see cref="string" />, <see cref="int" /> or <see cref="long" />.
-    /// </typeparam>
-    /// <param name="unwrapper">Reads the inner primitive out of the tag, e.g. <c>id =&gt; id.Value</c>.</param>
-    /// <param name="tableSuffix">
-    ///     Defaults to the tag type's name in snake_case, the same suffix
-    ///     <see cref="RegisterTagType{TTag}()" /> derives.
-    /// </param>
-    public ITagTypeRegistration RegisterTagType<TTag, TInner>(Func<TTag, TInner> unwrapper, string? tableSuffix = null)
-        where TTag : notnull
-    {
-        ArgumentNullException.ThrowIfNull(unwrapper);
-        return FindTagType(typeof(TTag))
-               ?? AddTagType(TagTypeRegistration.FromUnwrapper(unwrapper,
-                   tableSuffix ?? ToEventTypeName(typeof(TTag).Name)));
-    }
-
-    private ITagTypeRegistration AddTagType(ITagTypeRegistration registration)
-    {
-        _tagTypes.Add(registration);
-        return registration;
-    }
-
-    /// <summary>
-    ///     The registration for a tag type, or null when it was never registered.
-    /// </summary>
-    public ITagTypeRegistration? FindTagType(Type tagType)
-        => _tagTypes.FirstOrDefault(t => t.TagType == tagType);
+    protected override string DefaultTagTableSuffixFor(Type tagType) => ToEventTypeName(tagType.Name);
 
     /// <summary>
     ///     Convert a PascalCase type name to a snake_case alias — <c>QuestStarted</c> becomes

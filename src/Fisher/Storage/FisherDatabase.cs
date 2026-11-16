@@ -106,6 +106,28 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
     }
 
     /// <summary>
+    ///     The feature behind a storage type, for Weasel's own <c>EnsureStorageExistsAsync</c> and
+    ///     <c>CreateMigrationAsync(Type)</c>, which a caller holding the Weasel base type reaches (fisher#574).
+    /// </summary>
+    /// <remarks>
+    ///     <see cref="JasperFx.Events.IEvent" /> and <see cref="JasperFx.Events.StreamAction" /> name the event store, as they do for
+    ///     <see cref="EnsureStorageExistsAsync" />; anything else is matched on the feature's storage type,
+    ///     which for a document is the document type. Weasel's default answers null, which its callers
+    ///     report as an unknown feature.
+    /// </remarks>
+    public override IFeatureSchema? FindFeature(Type featureType)
+    {
+        var features = BuildFeatureSchemas();
+
+        if (featureType == typeof(JasperFx.Events.IEvent) || featureType == typeof(JasperFx.Events.StreamAction))
+        {
+            return features.OfType<EventStoreFeatureSchema>().FirstOrDefault();
+        }
+
+        return features.FirstOrDefault(x => x.StorageType == featureType);
+    }
+
+    /// <summary>
     ///     Open and return a connection with this store's PRAGMAs already applied.
     /// </summary>
     internal async ValueTask<SqliteConnection> OpenConnectionAsync(CancellationToken token = default)

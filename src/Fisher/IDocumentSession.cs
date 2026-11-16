@@ -105,15 +105,15 @@ public interface IQuerySession : IAsyncDisposable, IDisposable, IDocumentReadOpe
     ///     <c>ToListAsync</c> and friends. Synchronous enumeration throws rather than blocking on the
     ///     async path; see <see cref="Linq.FisherQueryable{T}.GetEnumerator" />.
     /// </remarks>
-    IQueryable<T> Query<T>() where T : notnull;
+    new IQueryable<T> Query<T>() where T : notnull;
 
     /// <summary>
     ///     Load a document by its identity, or null when there is none.
     /// </summary>
-    Task<T?> LoadAsync<T>(Guid id, CancellationToken token = default) where T : notnull;
+    new Task<T?> LoadAsync<T>(Guid id, CancellationToken token = default) where T : notnull;
 
     /// <inheritdoc cref="LoadAsync{T}(Guid,CancellationToken)" />
-    Task<T?> LoadAsync<T>(string id, CancellationToken token = default) where T : notnull;
+    new Task<T?> LoadAsync<T>(string id, CancellationToken token = default) where T : notnull;
 
     /// <inheritdoc cref="LoadAsync{T}(Guid,CancellationToken)" />
     Task<T?> LoadAsync<T>(int id, CancellationToken token = default) where T : notnull;
@@ -160,7 +160,7 @@ public interface IQuerySession : IAsyncDisposable, IDisposable, IDocumentReadOpe
     ///         it — a <c>Guid</c> argument binds to <c>LoadAsync&lt;T&gt;(Guid)</c>, not to this.
     ///     </para>
     /// </remarks>
-    Task<T?> LoadAsync<T>(object id, CancellationToken token = default) where T : notnull;
+    new Task<T?> LoadAsync<T>(object id, CancellationToken token = default) where T : notnull;
 
     /// <summary>
     ///     Run your own SQL through this session and get typed results back.
@@ -409,30 +409,30 @@ public interface IDocumentOperations : IQuerySession, IDocumentWriteOperations
     void TryUpdateRevision<T>(T document, int revision) where T : notnull;
 
     /// <inheritdoc cref="Store{T}(T)" />
-    void Store<T>(params T[] documents) where T : notnull;
+    new void Store<T>(params T[] documents) where T : notnull;
 
     /// <summary>
     ///     Queue a document to be inserted, failing at commit if one with that identity already exists.
     /// </summary>
-    void Insert<T>(T document) where T : notnull;
+    new void Insert<T>(T document) where T : notnull;
 
     /// <summary>
     ///     Queue a document to be updated, failing at commit if no document with that identity exists.
     /// </summary>
-    void Update<T>(T document) where T : notnull;
+    new void Update<T>(T document) where T : notnull;
 
     /// <summary>
     ///     Queue a document for deletion. A soft-deleted type is flagged rather than removed.
     /// </summary>
-    void Delete<T>(T document) where T : notnull;
+    new void Delete<T>(T document) where T : notnull;
 
     /// <summary>
     ///     Queue the document with this identity for deletion, whether or not it has been loaded.
     /// </summary>
-    void Delete<T>(Guid id) where T : notnull;
+    new void Delete<T>(Guid id) where T : notnull;
 
     /// <inheritdoc cref="Delete{T}(Guid)" />
-    void Delete<T>(string id) where T : notnull;
+    new void Delete<T>(string id) where T : notnull;
 
     /// <inheritdoc cref="Delete{T}(Guid)" />
     void Delete<T>(int id) where T : notnull;
@@ -466,7 +466,7 @@ public interface IDocumentOperations : IQuerySession, IDocumentWriteOperations
     ///     The predicate is translated by the same LINQ layer <see cref="IQuerySession.Query{T}" />
     ///     uses, so it supports what that supports and refuses the rest by name.
     /// </remarks>
-    void DeleteWhere<T>(Expression<Func<T, bool>> predicate) where T : notnull;
+    new void DeleteWhere<T>(Expression<Func<T, bool>> predicate) where T : notnull;
 
     /// <summary>
     ///     Queue every document matching the predicate to be removed outright, even if its type is
@@ -653,5 +653,5 @@ public interface IDocumentSession : IDocumentOperations, JasperFx.Events.IStorag
     /// <summary>
     ///     Commit every queued operation in a single transaction.
     /// </summary>
-    Task SaveChangesAsync(CancellationToken token = default);
+    new Task SaveChangesAsync(CancellationToken token = default);
 }

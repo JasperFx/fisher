@@ -341,9 +341,11 @@ try
             options.Events.RegisterTagType<InferredTag>();
         }).Dispose();
     }
-    catch (JasperFx.Core.Reflection.InvalidValueTypeException e)
+    catch (InvalidOperationException e)
     {
-        Expect(e.Message.Contains("RegisterTagType<InferredTag, TInner>"),
+        // JasperFx's refusal since fisher#574 adopted EventRegistry's tag registration. The inner type in
+        // the line it names depends on whether the tag's members survived trimming, so it is not matched.
+        Expect(e.Message.Contains("RegisterTagType<InferredTag, "),
             "a failed tag inference names the explicit overload");
     }
 

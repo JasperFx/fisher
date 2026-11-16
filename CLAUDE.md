@@ -1354,22 +1354,22 @@ somewhere first, and it runs before anything destructive is queued.
 
 `Advanced.ApplyEventDataMaskingAsync(...)` (fisher#9) — GDPR-style erasure, rewriting protected
 information out of events already stored. JasperFx 2.41.0 lifted the *request* shape
-(`IEventDataMasking`) because Marten's and Polecat's were identical; **the rule registry was not
-lifted**, so `EventGraph.Masking.cs` is a port of Polecat's rather than a use of something shared.
-The *execution* is shared since fisher#464: `FisherEventDataMasking` is Fisher's half of JasperFx's
-`EventDataMaskingBase<TSession>` (jasperfx#1048) — the session, the archived-inclusive reads, and a
-`TryMask` that calls `EventGraph.TryMask`, so it binds to Fisher's own rule list while the #1043 registry
-lift is unadopted. `SupportsMaskingArchivedEvents` is on in the compliance fixture.
+(`IEventDataMasking`), and **the rule registry is `EventRegistry`'s since fisher#574** (jasperfx#1043):
+`AddMaskingRuleForProtectedInformation` and `TryMask` are the base's, and Fisher's `EventGraph.Masking.cs`
+port of Polecat's is deleted. The *execution* is shared since fisher#464: `FisherEventDataMasking` is
+Fisher's half of JasperFx's `EventDataMaskingBase<TSession>` (jasperfx#1048) — the session, the
+archived-inclusive reads, and a `TryMask` that calls the graph's. `SupportsMaskingArchivedEvents` is on in
+the compliance fixture.
 
 The whole batch runs in one session, so an erasure is either done or not done — a partial one is a
 compliance answer that is neither.
 
-- **The two masking overloads do not have the same reach, and that falls out of the type system.**
-  `ActionMasker` tests `@event is IEvent<T>` and `IEvent<out T>` is covariant, so an `Action` rule
-  registered against an interface or base class reaches every event body implementing it. `FuncMasker`
-  has to *assign* the replacement back and only the closed `Event<T>` exposes a setter, so a `Func`
-  rule matches its exact type only. A `record` needs the `Func` overload (a `with` expression makes a
-  new instance); a hierarchy-wide rule therefore has to be the mutating one.
+- **Both overloads reach a hierarchy, which changed with the adoption.** `IEvent<out T>` is covariant, so
+  a rule against an interface or base class matches every body implementing it. Fisher's own `FuncMasker`
+  assigned through `Event<T>`'s typed setter and so matched its exact type only; JasperFx's replaces
+  through the envelope (`IReplaceableEventData`), so a `Func` rule over an interface now applies, and must
+  return something the event can hold or the pass fails.
+  `masking_event_data.a_func_rule_against_an_interface_reaches_a_record_implementing_it` pins it.
 - **`IncludeEvents` is the only selector translated to SQL.** The two `IncludeStream` filter overloads
   take `Func<IEvent, bool>` and are applied in memory to an already-fetched stream; `IncludeEvents`
   takes an `Expression`. That asymmetry is the interface's, not Fisher's — the parameter types say so.
@@ -1579,7 +1579,8 @@ reloads an inline `Snapshot<T>`.
   `op_GreaterThan` by reflection, so the failure is in their frame before Fisher is involved. The guide says so
   and the smoke pins the `[DynamicDependency]` workaround. An inferring `RegisterTagType<TTag>()` that fails
   now names the explicit overload, where it used to report a bare "Must be only a single public, 'gettable'
-  property" about a type that visibly has one.
+  property" about a type that visibly has one. Since fisher#574 that refusal is JasperFx's
+  (`InvalidOperationException` naming the whole registration line), not Fisher's `InvalidValueTypeException`.
 - **The smoke consumer references `JasperFx.Events.SourceGenerator` itself**, because a project
   reference does not carry the analyzer the package bundles. Its version is kept in step by hand.
 
@@ -5465,6 +5466,50 @@ the two hit-count facts fail. `aggregate_write_cache` covers what the suite cann
 above, the write-back's timing and version, the tenant and logical-store components of the key, and
 that an unenrolled type never reaches the cache at all.
 
+### `EventGraph` is JasperFx's `EventRegistry`, not a copy of it — fisher#574
+
+JasperFx 3.3.0 lifted four registries onto `EventRegistry` as **non-virtual** members with state of their
+own: masking rules, DCB tag types, binary serializers, and type/alias resolution. `EventGraph` already had
+its own copies under the same names, so they **hid** the base's (29 CS0108 warnings with the interface
+redeclarations). Hiding is not overriding: anything holding the graph as an `EventRegistry` — which is what
+`IEventStore<,>.Registry` hands out, cast to the class — wrote to lists Fisher never read and read lists
+Fisher never wrote. `event_registry_base_typed_configuration` went 11 of 12 red against that (the twelfth, `ResolveEventType`, was harmless): a masking
+rule, tag type or serializer configured through the base was silently dropped, and the base answered "no
+rules / no tags / no alias" about Fisher's.
+
+**The copies are deleted and the base's are used**, with Fisher supplying only the hooks the base exposes:
+
+- `AliasFor` → the simple type name (the alias cache, `AggregateTypeFor` and `TryResolveAggregateType` are
+  the base's).
+- `EventMappingFor` calls `RegisterDotNetTypeNames` on a new mapping, because nothing else tells the base's
+  name cache a registration happened. `ResolveEventType` is the base's, misses cached in their own map and
+  expired by any registration (fisher#156's property, kept).
+- `DefaultTagTableSuffixFor` → `ToEventTypeName`. ⚠️ Load-bearing: JasperFx's default (`ToTableAlias`)
+  spells some names differently, and the suffix names a table in a deployed store.
+- `OnBinarySerializersChanged` refreshes the serializer cached on each `FisherEventType`. Fisher's old
+  `ResolveBinarySerializerFor` answered null for a marked type with nothing configured; that is the base's
+  **`FindBinarySerializerFor`** — the base's `ResolveBinarySerializerFor` *throws* there, so do not swap them.
+  `BinaryEncoderFor` keeps the write-side refusal and its message.
+
+Three visible changes came with it: a `Func` masking rule now reaches a hierarchy (see "Event data
+masking"); a failed tag inference throws JasperFx's `InvalidOperationException` rather than
+`InvalidValueTypeException`; and registering a tag type a second time with a different inner type is
+refused rather than silently returning the first.
+
+⚠️ **`FisherDatabase.EnsureStorageExistsAsync` stays `new`, because it cannot be anything else.** Weasel's
+`DatabaseBase` member is non-virtual and returns `ValueTask`; Fisher's is `IEventDatabase`'s, returning
+`Task`, with the `AutoCreate.None` refusal. What the base path lacked was Fisher's features: it called
+`FindFeature`, got Weasel's null and threw "Unknown feature type IEvent". `FindFeature` is overridden now
+(`IEvent`/`StreamAction` → the event store, else by `StorageType`), which also makes Weasel's
+`CreateMigrationAsync(Type)` work. Under `AutoCreate.None` the Weasel path does nothing, silently — Weasel's
+semantics for Weasel's method.
+
+**The interface redeclarations are `new` and were checked, not assumed**: `IQuerySession`'s
+`LoadAsync`/`Query`, `IDocumentOperations`' `Store`/`Insert`/`Update`/`Delete`/`DeleteWhere`,
+`IDocumentSession.SaveChangesAsync` and `ISerializer.FromJson` (which carries the trim annotations the base
+deliberately lacks). An interface map shows `FisherSession` and `Serializer` implement every one of the base
+members with their own method, none left to a default.
+
 ### Live aggregation
 
 `EventGraph` implements `IAggregationSourceFactory<IQuerySession>`: given an aggregate type it closes
@@ -6117,6 +6162,10 @@ interleaved.
 `StoreOptions.Events.UseBinarySerializer<TEvent>(…)` (fisher#43, reshaped by fisher#93) — an event
 body stored as a BLOB in `fi_events.data_binary` rather than as JSON text in `data`.
 
+**The registry is `EventRegistry`'s since fisher#574** — `DefaultBinarySerializer`, `UseBinarySerializer<T>`
+and the lookups are the base's, so a serializer set through a base-typed reference is used. See "`EventGraph`
+is JasperFx's `EventRegistry`".
+
 ⚠️ **The interface and the attribute live in `JasperFx.Events`, not in Fisher.** fisher#43 declared
 Fisher-native copies; jasperfx#669 promoted the pair into the core in 2.50.0 and fisher#93 deleted
 Fisher's, so one serializer implementation serves Fisher, Marten and Polecat. The core signature is
@@ -6286,7 +6335,8 @@ structurally identical to a document — so `MemberFactory`'s locators apply ver
 ### DCB tags
 
 One `fi_event_tag_<suffix>` table per registered tag type, composite primary key leading with
-`value`. That key is load-bearing twice over: a tag query filters on `value`, so leading with it makes
+`value`. The registration API is `EventRegistry`'s since fisher#574; only the default suffix rule is
+Fisher's. That key is load-bearing twice over: a tag query filters on `value`, so leading with it makes
 the lookup a range scan; and it is what lets both the append path and `AssignTagWhere` write
 `on conflict do nothing` instead of reading first, which is where idempotency comes from.
 

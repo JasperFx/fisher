@@ -8,7 +8,8 @@ namespace Fisher.Tests.Events;
 /// <summary>
 ///     The two per-event hot-path caches on <see cref="EventGraph" /> (fisher#156): the compiled
 ///     <c>Event&lt;T&gt;</c> wrapper on <see cref="FisherEventType.Wrap" />, and the memoized
-///     <c>Type.GetType</c> behind <c>ResolveEventType</c>. Both run once per event row hydrated, so
+///     <c>Type.GetType</c> behind <c>ResolveEventType</c> (<see cref="EventRegistry" />'s since fisher#574,
+///     fed by <see cref="EventGraph.EventMappingFor" />). Both run once per event row hydrated, so
 ///     these tests pin the behaviour the caches must not change and the one property a behavioural
 ///     test cannot see — that a resolution miss is cached rather than re-probed per row.
 /// </summary>
@@ -79,9 +80,8 @@ public class event_wrapping_and_type_resolution
         graph.ResolveEventType(foreign).ShouldBeNull();
         graph.ResolveEventType(foreign).ShouldBeNull();
 
-        var cache = CacheOf(graph);
-        cache.TryGetValue(foreign, out var cached).ShouldBeTrue();
-        cached.ShouldBeNull();
+        MissesOf(graph).ContainsKey(foreign).ShouldBeTrue();
+        CacheOf(graph).ContainsKey(foreign).ShouldBeFalse();
     }
 
     [Fact]
@@ -92,7 +92,8 @@ public class event_wrapping_and_type_resolution
         graph.ResolveEventType(null).ShouldBeNull();
         graph.ResolveEventType("").ShouldBeNull();
 
-        CacheOf(graph).ShouldBeEmpty();
+        CacheOf(graph).ContainsKey("").ShouldBeFalse();
+        MissesOf(graph).ShouldBeEmpty();
     }
 
     [Fact]
@@ -107,8 +108,15 @@ public class event_wrapping_and_type_resolution
         @event.EventTypeName.ShouldBe(graph.EventMappingFor(typeof(LineWetted)).EventTypeName);
     }
 
-    private static ConcurrentDictionary<string, Type?> CacheOf(EventGraph graph)
-        => (ConcurrentDictionary<string, Type?>)typeof(EventGraph)
+    // The caches are EventRegistry's since fisher#574: EventGraph no longer resolves names itself, so a
+    // base-typed caller and Fisher's row readers share one cache. Misses live in a map of their own.
+    private static ConcurrentDictionary<string, Type> CacheOf(EventGraph graph)
+        => (ConcurrentDictionary<string, Type>)typeof(EventRegistry)
             .GetField("_eventTypeByDotNetName", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(graph)!;
+
+    private static ConcurrentDictionary<string, long> MissesOf(EventGraph graph)
+        => (ConcurrentDictionary<string, long>)typeof(EventRegistry)
+            .GetField("_missedDotNetNames", BindingFlags.NonPublic | BindingFlags.Instance)!
             .GetValue(graph)!;
 }
