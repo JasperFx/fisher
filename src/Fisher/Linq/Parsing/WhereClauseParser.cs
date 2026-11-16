@@ -297,11 +297,14 @@ internal class WhereClauseParser
         }
 
         // At least one operand must be a document member, or this is a constant expression the value
-        // side's ExtractValue would have folded already.
+        // side's ExtractValue would have folded already. fisher#591: a document member, not merely a
+        // member. `Statics.Value - 4` is a member expression too, and accepting it here sent the other
+        // side (`x.Number`) to ExtractValue, which cannot compile a lambda parameter.
+        var renderedMember = false;
+
         if (!TryRenderOperand(arithmetic.Left, out var left)
             || !TryRenderOperand(arithmetic.Right, out var right)
-            || (StripConvert(arithmetic.Left) is not MemberExpression
-                && StripConvert(arithmetic.Right) is not MemberExpression))
+            || !renderedMember)
         {
             return false;
         }
@@ -327,6 +330,7 @@ internal class WhereClauseParser
                 }
 
                 rendered = _memberFactory.ResolveMember(member).TypedLocator;
+                renderedMember = true;
                 return true;
             }
 
