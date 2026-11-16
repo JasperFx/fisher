@@ -170,7 +170,7 @@ exception left** (fisher#530). `StreamLockedException`, `ExistingStreamIdCollisi
 `ArchivedStreamException`, `DuplicateNaturalKeyException` and `BadLinqExpressionException` are all thrown as the
 JasperFx types, with their canonical messages. `StreamLockedException` was last, because its `StreamIds` had to be
 lifted into JasperFx.Events first (jasperfx#1172, JasperFx 3.3.0) rather than dropped. ⚠️ The subclass was worse
-than redundant once the lift shipped: it had to call the base's message constructor, which records only the first
+than redundant once the lift shipped (fisher#569): it had to call the base's message constructor, which records only the first
 id, so a caller catching the JasperFx type saw one stream. Do not reintroduce a Fisher subclass of any of them.
 
 Three decisions in it:

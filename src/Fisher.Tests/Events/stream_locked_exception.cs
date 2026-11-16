@@ -173,6 +173,10 @@ public class stream_locked_exception : IAsyncLifetime
     ///     together — which is the one place this means something different than it does on Marten
     ///     and Polecat, where the lock really is one stream's. The base's single <c>StreamId</c> is
     ///     the first of them, so the aggregate-handler shape reads identically on all three.
+    ///     fisher#569 is why this asserts against the JasperFx type. Fisher's old subclass had to
+    ///     call the base's message constructor, which records only the first id, so a caller
+    ///     catching <c>JasperFx.Events.StreamLockedException</c> saw one stream where several lost
+    ///     the lock. Throwing the shared type directly (fisher#530) is what fixed it.
     /// </remarks>
     [Fact]
     public async Task every_stream_in_the_unit_of_work_is_named()
