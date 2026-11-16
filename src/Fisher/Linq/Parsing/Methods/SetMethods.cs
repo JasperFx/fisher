@@ -33,7 +33,7 @@ internal sealed class IsOneOf : IMethodCallParser
         }
 
         return new WhereInFilter(member.TypedLocator,
-            values.Cast<object?>().Select(member.ConvertValue).ToList());
+            FloatComparisons.MembershipValues(member, values.Cast<object?>()).Select(member.ConvertValue).ToList());
     }
 
     private static Expression StripConversions(Expression expression)

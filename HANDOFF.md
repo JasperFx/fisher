@@ -18,6 +18,14 @@ them are shared cross-store compliance tests — 612 event sourcing and 231 docu
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
 
+## A float comparison binds the value its stored text reads back as (fisher#605)
+
+`x.Weight == 0.3f` bound the widened double `0.30000001192092896` against the stored `0.3`, so it matched nothing
+and ranges were off at the boundary. A float comparison value is now bound as `double.Parse(f.ToString("R"))` in
+`ComparisonFilter`, `WhereInFilter` and raw SQL; `ExtractValue` keeps float/double conversions so a float compared
+with a double member is still widened; and a double against a float member is moved onto the neighbouring float.
+`float_comparisons` (33 tests, LINQ to Objects as the oracle) fails 30 of 33 on the previous build.
+
 ## Decimal arithmetic is folded, never computed in SQLite (fisher#603)
 
 `x.Price - 0.1m < 0.2m` was rendered as `(price - 0.1) < @p0`, which SQLite computes in double, so a price of 0.3

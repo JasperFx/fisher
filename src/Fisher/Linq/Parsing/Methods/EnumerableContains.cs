@@ -75,7 +75,7 @@ internal class EnumerableContains : IMethodCallParser
         }
 
         var values = new List<object?>();
-        foreach (var item in source)
+        foreach (var item in FloatComparisons.MembershipValues(member, source.Cast<object?>()))
         {
             values.Add(member.ConvertValue(item));
         }

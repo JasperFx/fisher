@@ -6024,6 +6024,22 @@ Six SQLite decisions that are easy to get wrong and fail silently:
     since fisher#34 (`SqliteParameterValue`, which documents this exact conversion). Two of Fisher's
     three decimal-binding paths were correct and documented while the one a caller reaches first was
     not; that is the shape rather than the exception.
+- ⚠️ **A `float` comparison value is normalised to the double its stored text parses to** (fisher#605).
+  System.Text.Json writes a float as its shortest round-trip text (`0.3`), which `json_extract` reads as
+  the double `0.3`; the provider binds `0.3f` widened, `0.30000001192092896`, so `x.Weight == 0.3f`
+  matched nothing and ranges were off at the boundary. `SqliteParameterValue.FloatAsStored` is
+  `double.Parse(f.ToString("R"))`, applied by `NormalizeComparisonValue` in `ComparisonFilter` and
+  `WhereInFilter` for fisher#304's reason, and by `ToDatabaseValue` for raw SQL. Measured over 199,189
+  random floats on net10.0 and net11.0: the serializer's text is always `ToString("R")`, `json_extract`
+  of it always equals the mapped double, and the mapping is strictly increasing.
+  - **It is right only when C# compares in single precision, so `ExtractValue` keeps a float/double
+    conversion it would otherwise strip.** `x.Ratio == f` over a double member widens `f`, and
+    `x.Weight == (float)d` narrows `d`; stripping either binds the wrong number.
+  - **A double against a float member** (`x.Weight == 0.3`, which C# widens the member for) goes through
+    `FloatComparisons`: an exact float compares as that float, anything else is never equal and a range
+    moves to the neighbouring float. `IsOneOf`/`Contains` drop a double no float equals.
+  - `float_comparisons` fails 30 of its 33 tests on the previous build; the float-against-double-member
+    guard is one of the three that pass there, and fails if `ExtractValue` strips the widening.
 - ⚠️ **Decimal arithmetic is never computed in SQLite** (fisher#603). Binding as double is fine for a
   *comparison*; an *operation* is not: `0.3 - 0.1` is `0.19999999999999998` in SQLite, so
   `x.Price - 0.1m < 0.2m` matched a price of 0.3. `TryFoldDecimalArithmetic` folds a member ± constants
