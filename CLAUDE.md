@@ -134,7 +134,9 @@ per-session failure and enlisted-session semantics) and is NOT done; the baselin
 `ConcurrentWritersScenario` (8 writers ~1.8x the wall clock of 1 writer, see `Fisher.Benchmarks/Results.md`).
 **fisher#547 has the measurement, and no decision yet:** `writer-queue` in `Fisher.Benchmarks` compares racing
 against a benchmark-only `Channel<T>` queue (and a `SemaphoreSlim` control), and `Results.md`'s fisher#547
-section has the numbers and the semantic costs. Adopting or declining it is the owner's call.
+section has the numbers and the semantic costs. Its "fisher#547 round 2" section adds replacement busy
+handlers, event appends, the daemon, group commit and a bounded queue, and confirms SQLite's default busy
+handler's sleeps as the whole cost of racing. Adopting or declining any of it is the owner's call.
 
 **`AppendExclusive` / `FetchForExclusiveWriting` / `WriteExclusivelyToAggregate` are the optimistic
 methods.** Marten and Polecat take a row lock so a competing session waits its turn. SQLite has no
