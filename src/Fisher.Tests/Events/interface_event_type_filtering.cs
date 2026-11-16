@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
 using Fisher.Events.Daemon;
+using Fisher.Subscriptions;
 using JasperFx;
+using JasperFx.Events;
 using JasperFx.Events.Daemon;
 using JasperFx.Events.Projections;
 
@@ -46,6 +49,7 @@ public class MilestoneLog
 public class interface_event_type_filtering : IAsyncLifetime
 {
     private readonly TemporaryDatabase _database = TemporaryDatabase.Create("interface-filter");
+    private readonly MilestoneSubscription _subscription = new();
     private DocumentStore _store = null!;
     private IProjectionDaemon? _daemon;
 
@@ -56,6 +60,7 @@ public class interface_event_type_filtering : IAsyncLifetime
             options.ConnectionString = _database.ConnectionString;
             options.AutoCreateSchemaObjects = AutoCreate.All;
             options.Projections.Snapshot<MilestoneLog>(SnapshotLifecycle.Async);
+            options.Projections.Subscribe(_subscription);
         });
 
         await _store.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
@@ -142,5 +147,52 @@ public class interface_event_type_filtering : IAsyncLifetime
 
         log.ShouldNotBeNull();
         log.Milestones.ShouldBe(["Weathertop", "Mithril"]);
+    }
+
+    [Fact]
+    public async Task a_subscription_that_includes_an_interface_sees_its_events_through_the_daemon()
+    {
+        await AppendAsync(new WaypointReached("Weathertop"), new CampMade("Bree"), new TreasureFound("Mithril"));
+
+        _daemon = await _store.BuildProjectionDaemonAsync();
+        await _daemon.StartAllAsync();
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
+
+        _subscription.Seen
+            .Select(x => x.Data)
+            .OfType<IQuestMilestone>()
+            .Select(x => x.Name)
+            .ShouldBe(["Weathertop", "Mithril"]);
+
+        var progress = await _store.Database
+            .ProjectionProgressFor(new ShardName(_subscription.Name), TestContext.Current.CancellationToken);
+
+        progress.ShouldBe(3);
+    }
+
+    /// <summary>
+    ///     <c>IncludeType&lt;IQuestMilestone&gt;()</c>: the subscription-side twin of
+    ///     <see cref="MilestoneLog" />'s <c>Apply(IQuestMilestone)</c>.
+    /// </summary>
+    private sealed class MilestoneSubscription : SubscriptionBase
+    {
+        public MilestoneSubscription()
+        {
+            IncludeType<IQuestMilestone>();
+        }
+
+        public ConcurrentQueue<IEvent> Seen { get; } = new();
+
+        public override Task<IDaemonChangeListener> ProcessEventsAsync(EventRange page,
+            ISubscriptionController controller, IDocumentSession operations,
+            CancellationToken cancellationToken)
+        {
+            foreach (var @event in page.Events)
+            {
+                Seen.Enqueue(@event);
+            }
+
+            return Task.FromResult<IDaemonChangeListener>(NullDaemonChangeListener.Instance);
+        }
     }
 }
