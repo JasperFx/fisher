@@ -6051,6 +6051,19 @@ default and an `OrderBy` did not order, all silently. `Nullable<T>.Value` resolv
 - `.Date`, `DayOfWeek`, every `TimeSpan` member and anything else is refused by name. `CriteriaShapeRules`
   lost its date and `Nullable.Value` rules with this, since an honest refusal reaches a console on its own.
 
+⚠️ **A member chain not rooted at the lambda's parameter is a value, never a path** (fisher#591, near
+marten#5950/#5943). `MemberFactory.ResolveMember` refuses one by name (`IsRootedAtParameter`, the where
+parser's `IsDocumentMember` rule, looking through conversions and union-case casts). It used to walk a static
+or a captured local as `$.<name>`, so where the name matched a document member the query silently read that
+member. Per caller:
+- **An ordering key that reads nothing from the row is dropped** in `LinqQueryParser.AddOrdering` (Marten's
+  ruling): every row ties on it, so later keys decide. `OrderBys` and `OrderByMembers` both skip it, so `Last`
+  reverses and a cursor seeks on what remains; `Last` over only a dropped key is refused as having no ordering.
+- **`GroupBy` and `DistinctBy` over one are refused** — a single group or row has no locator to stand for it.
+- **`Sum`/`Min`/`Max`/`Average` over one, top-level or over a group, are refused** through the factory.
+- `TryParseArithmetic` requires a *document* member on one operand, so `x.Number < Statics.Value - 4` folds the
+  right side instead of compiling `x.Number` as a value.
+
 The provider takes both the column list and the materializer from the **query-only** closed-shape
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,
 which is what keeps the query path's read layout aligned with `LoadAsync`'s.
