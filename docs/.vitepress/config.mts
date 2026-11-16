@@ -135,6 +135,7 @@ const config: UserConfig<DefaultTheme.Config> = {
             { text: 'Dynamic Consistency Boundary', link: '/events/dcb' },
             { text: 'Rewriting Events', link: '/events/rewriting' },
             { text: 'Upcasting Events', link: '/events/upcasting' },
+            { text: 'Personal Data and GDPR Erasure', link: '/events/personal-data' },
             {
               text: 'Projections Overview', link: '/events/projections/', collapsed: true, items: [
                 { text: 'Single Stream Projections', link: '/events/projections/single-stream-projections' },

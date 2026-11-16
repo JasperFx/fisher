@@ -116,6 +116,12 @@ event in it. Use `ArchiveStream` for a stream that is merely finished, and `Tomb
 data has to be gone, for example a stream started in error or a purge that a retention or erasure
 policy requires.
 
+::: tip
+A tombstone deletes the stream's rows from the live file and nothing else. Projected documents,
+backups and the file's free pages keep what they had. For a GDPR erasure request, see
+[Personal Data and GDPR Erasure](/events/personal-data).
+:::
+
 <!-- snippet: sample_tombstone_stream -->
 <a id='snippet-sample_tombstone_stream'></a>
 ```cs
@@ -197,6 +203,13 @@ The events are still there and still occupy space. If you want them **gone**, th
 Deleting events is safe **only** because `fi_events.seq_id` is `AUTOINCREMENT`. A bare
 `INTEGER PRIMARY KEY` aliases the rowid, which SQLite reuses after a delete, and a reused sequence
 below the daemon's high-water mark is an event no async projection would ever see.
+:::
+
+::: tip Archiving is not erasure
+Neither archiving nor any row in the table above erases personal data. Each one leaves a copy
+somewhere: in projections, in backups, or in the database file's free pages. The Critter Stack's
+answer to a GDPR erasure request is crypto-shredding with [Tayra](https://tayra.dev). See
+[Personal Data and GDPR Erasure](/events/personal-data).
 :::
 
 ## Archiving and projections
