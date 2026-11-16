@@ -961,6 +961,15 @@ Six things that are decisions rather than mechanics:
   passes every compliance suite, and makes `upcasting.a_subscription_filtered_on_the_new_type_receives_the_upcast_old_rows`
   time out — verified. The allow list also adds `Archived` and `Compacted<T>` for a single-stream
   aggregate projection, which the old loader did not.
+  ⚠️ **A long allow list is bound as ONE `json_each` parameter** (fisher#583, weasel#846's contract).
+  The loader filters only in SQL, so a list the provider refuses fails the shard: one parameter per alias
+  dies past SQLite's 32,766 variables with `too many SQL variables`. Past `WhereInFilter.JsonArrayThreshold`
+  (1,000, fisher#372's split) the dialect renders `type in (select value from json_each(@types))`; below
+  it, one parameter per alias as before, so a typical shard's SQL and plan are unchanged. `explain query
+  plan` reaches `fi_events` by the same SEARCH either way. `event_type_allow_list_binding` builds a
+  33,000-name list through a stub registry, because no real one is that long. Its placeholder type is
+  concrete: since weasel#845, an interface, an abstract type or `object` on the list means "admit
+  everything".
 - **The generic interface's `IEventDatabase` parameter carries the answer** (fisher#57), where for a
   long time every one of them was ignored on the true-enough grounds that a Fisher store was one file.
   Under database-per-tenant it is not, and ignoring it would read one tenant's events and write every
@@ -1808,6 +1817,16 @@ Three restrictions, each refused by name:
 One `Select` per query; a second would have to project members of the first's result, which is not a
 document and has no locators.
 
+⚠️ **`Distinct()` and identity `OrderBy` need the columns to BE the result** (fisher#590). Both act on the select
+list, so after `Select(x => x.Number % 3)` they used to act on `Number`. `IsFaithful` on both projections says
+whether the body is a column copy (a column, a lossless conversion, a `new` of copies and constants), and
+`LinqQueryParser.RequireFaithfulProjection` otherwise rebuilds the projection with `ComputedColumns`' arithmetic in
+the select list, or refuses by name. The subset is integer `%` and `/` by a constant other than 0 and -1, and unary
+minus with a `case` guard at the type minimum. Those are the only places SQLite and unchecked .NET agree for every
+value, which is why `*` and `+` are refused. A non-nullable leaf is `coalesce(…, 0)`, matching the projected read's
+NULL-to-default. The translation runs only when one of those operators asks, so the boundary above still holds for
+every other `Select`.
+
 **A NULL column becomes the target type's default, not a null.** `json_extract` yields SQL NULL for an
 absent key and an aggregate over an empty group yields NULL too, and the compiled projection *unboxes*
 each value to its declared type — so a null reaching a non-nullable value type is a
@@ -1947,6 +1966,14 @@ stitch.
   **by parameter reference, not by type** — a self-join has the same type on both sides.
 - **A member the projection computed is refused rather than sorted or filtered on**, since its value
   exists only after the row is read.
+- **An ordering key that reads nothing from the row is dropped, as on the document path** (fisher#596, the
+  join half of fisher#591). `AddJoinOrdering` checks `IsConstantKey` before the key reaches `CurrentJoin.OrderBys`,
+  so a static or captured local ties every row and the later keys decide; `Last` over only such keys meets
+  the ordinary "requires an OrderBy" refusal. It was never silently wrong here — `JoinedMember` accepts only
+  `side.Member`, so main refused every such key — but it refused a query LINQ answers.
+  ⚠️ **A dropped `OrderBy` still re-sorts** (fisher#588): `DropConstantKey` resets the group length to 0, so
+  `OrderBy(a).OrderBy(constant).ThenBy(b)` is `b, a`. Leaving the group alone renders `a, b`, silently, on
+  both paths; `join_ordering_closed_values` has a fact for each.
 - **The scalar aggregates and `Last` work over a join** (fisher#54), and cost one seam: `JoinPlan.Member`
   holds the post-join member mapping as a closure, so a terminal reaches the same attribution the
   `Where` and the `OrderBy` already used rather than re-deriving it. The two aggregate guards are the
@@ -2319,10 +2346,30 @@ can do neither, but is stable under concurrent writes and does not degrade as th
   row at all* when the page is past the end — which is exactly when a pager most needs the real total.
   Same reasoning as `a_page_past_the_end_still_reports_the_total` in the event-store explorer's paging,
   and pinned the same way here.
-- **`CountIgnoringPagingAsync` is deliberately distinct from `CountAsync`.** The latter counts the
-  *page* when the query is paged (`Take(5).CountAsync()` is 5); the former discards `Take`/`Skip`
-  because a total that counted the page would say nothing. Both are right for their caller; conflating
-  them would make one silently wrong.
+- **`CountIgnoringPagingAsync` counts the query the pager pages, before the pager's own
+  `Skip`/`Take`.** ⚠️ Paging the caller wrote is part of that query since fisher#589: it used to be
+  discarded here while the items overwrote it, so `Take(2).ToPagedListAsync(1, 3)` listed three rows and
+  reported the whole table. Now both compose, so the items and the total agree.
+- ⚠️ **An operator after `Take`/`Skip` applies to the page** (fisher#589). `Take`/`Skip` used to
+  overwrite `Limit`/`Offset` and fold everything after them into one statement, so a later `Where`,
+  `OrderBy`, `Distinct`, second `Take`/`Skip` or terminal predicate ran *before* the LIMIT, silently.
+  - **Consecutive paging composes** in `LinqQueryParser.ComposeTake`/`ComposeSkip`: the smaller
+    `Take`, `Skip`s added, `Take(n).Skip(k)` as LIMIT `max(n−k, 0)` OFFSET k. One statement, no subquery.
+  - **Anything else after paging lands on `LinqQueryParser.AfterPage`**, and
+    `FisherQueryProvider.ApplyAfterPage` makes the paged statement a subquery selecting `*`, with the
+    outer statement taking its select list. Document-member locators, duplicated columns and `id` all
+    resolve against the page, and the implicit filters stay inside. The page's own ordering is repeated
+    after any re-sort, because a subquery's row order is not promised and LINQ's `OrderBy` is stable.
+  - **Accepted after paging**: `Where`, the `OrderBy` family, `Distinct` after a `Select`, a terminal's
+    predicate, and one further `Take`/`Skip`. `Select` and the no-SQL markers stay where they are.
+    **Refused by name**: everything else, including the soft-delete, tenant and metadata filters; any
+    operator after a *join's* paging (its aliased locators do not survive a subquery); a grouped,
+    distinct or full-text page; and a second operator boundary.
+  - **Wrapping sites carry `Subquery`** (`WrapAsSubquery`, `AggregateOverPage`), and terminals cap the
+    limit with `LimitAtMost` rather than overwriting it. `ToCursorPageAsync` refuses a paged query,
+    because it sets its own LIMIT and drops the OFFSET.
+  - `operators_after_paging` fails 18 of 19 against the old parser. The repro shapes came from the
+    `marten-1115-probes` branch.
 - **Keyset pagination requires a terminal identity key**, and this is the guard that makes the rest
   honest. Without a total order, rows tied on the sort key have no defined order between them and a
   seek boundary lands mid-tie — skipping some and repeating others, silently, and only when there are
@@ -2594,6 +2641,14 @@ next opener.
 - ⚠️ **Weasel's migrations open their own `new SqliteConnection` and are not gated**, nor is application code. That
   residual is rare next to session opens. The class belongs in Weasel.Sqlite's `SqliteDataSource`, and the race
   upstream. Remove it when Microsoft.Data.Sqlite activates under the pool lock.
+- ⚠️ **The gate is a `Lock` around a wholly synchronous open, and must never become async again** (fisher#587).
+  The first version was a `SemaphoreSlim`: async opens `WaitAsync`ed and sync opens blocked in `Wait`. A contended
+  async open then returned an incomplete task, so the open, and the release of the gate, waited for a pool thread,
+  while sync waiters held pool threads. A burst of synchronous Hi-Lo stores (each advance opens synchronously)
+  stalled for 29 s, against 0.56 s now. The async override runs `base.OpenDbConnection()` under the lock and
+  returns a completed task, which is safe because Microsoft.Data.Sqlite's open and Weasel's PRAGMAs are
+  synchronous underneath. `a_contended_async_open_completes_before_it_returns` pins it without depending on timing;
+  `synchronous_hilo_burst` reproduces the stall only when run alone. Found by checking marten#5969 against Fisher.
 - fisher#311's untracked transaction may have been this too (another session's `BEGIN` on a shared handle). Not
   verified, so its defence stays.
 - `serialized_connection_opens` plants the mid-`Activate` state by reflection to pin the premise, and holds one open
@@ -2696,6 +2751,11 @@ rather than resettling the question.
   projection batch is the daemon's unit of work, not the application's; firing user listeners for it
   would run an application's `AfterCommitAsync` on the daemon's threads for every batch of every
   shard. JasperFx's `IDaemonChangeListener` is the hook for that side and Fisher already supports it.
+  The shared contract's `AddSaveListener` on a batch's session therefore **throws** rather than
+  accepting a hook it would never fire (fisher#581, below).
+- **A listener can be added to an open session through the shared contract** (`AddSaveListener`,
+  fisher#581) — see "The store-agnostic document contract". Fisher's own two lists are still read once,
+  at first use.
 - **Pending streams are collected *after* the before hook, where Marten collects them before.** Costs
   nothing, and makes "work queued in the hook joins this transaction" true of appended events as well
   as of documents. Marten's listener that starts a stream is appending to the *next* unit of work.
@@ -4099,6 +4159,45 @@ The shared suites pin the results, which the default also gets right, so they pa
 through SQLite's own `sqlite3_trace` hook, because event reads do not go through the session logger.
 Swapping in a per-id loop fails that test alone.
 
+#### `StoreObjects`, `AddTransactionParticipant(IDbTransactionParticipant)`, `AddSaveListener` — fisher#581
+
+Three members of JasperFx 3.3.0's contract that a message bus needs (jasperfx#1052) and that fell
+through to throwing defaults. All three are **explicit**, in `FisherSession.SharedHooks.cs`: Fisher's own
+`AddTransactionParticipant(ITransactionParticipant)` would make a public overload ambiguous for any
+participant implementing both. Deleting any of them still compiles; `shared_session_hooks` (19 tests,
+all holding the session as the contract) fails 19 of 19 without them.
+
+- **JasperFx's `DocumentSessionHooks` is composed, not re-implemented.** One per session, created
+  through `LazilyCreate` (projection slices enlist concurrently). Its `BeforeSaveAsync` runs after Fisher's
+  own listeners' before hooks; `BeforeCommitAsync(conn, tx, _messageBatch)` runs the shared participants
+  and then the outbox, after Fisher's native participants; `AfterCommitAsync` replaces the outbox's
+  after hook in `RunPostCommitHooksAsync`, outside the pipeline, ahead of Fisher's own after-commit work.
+  With no shared hooks the outbox's hooks run as before, but **after** the native participants now.
+- **The emptiness check reads `HasPendingParticipants`**, the contract's explicit requirement and
+  wolverine#3907's shape: a lone shared participant is a unit of work.
+- **A shared participant is released when its commit lands**, where Fisher's own stays until the session
+  is disposed — the contract's rule, so a session saved twice does not write an envelope twice.
+- ⚠️ **`AddTransactionParticipant(IDbTransactionParticipant)` throws on an enlisted session.** The caller
+  commits, Fisher never learns it landed, and `DocumentSessionHooks` has no way to release a participant
+  without also firing the listeners' after hooks — so a second save would rerun it. The contract names
+  this shape as one a store must refuse. Consequence: an outbox listener that enlists from its before
+  hook fails an enlisted session's save loudly, which beats an envelope written twice.
+- ⚠️ **`AddSaveListener` throws on a projection batch's session** (`ParticipantsOwnedByBatch`): the
+  daemon commits the batch and never runs save hooks, and the contract names that session explicitly.
+  An enlisted session accepts it and fires only the before hook, Fisher's existing listener rule.
+- **The batch runs a session's shared participants** in `FisherProjectionBatch`, gathered before the
+  pipeline (fisher#12), after the native participants and before the base's outbox hook, replayed per
+  attempt. Not released: a batch's session never commits again. Removing that loop leaves a subscription's
+  participant accepted and never run, silently — `a_shared_participant_enlisted_in_a_projection_batch_*`.
+- **Both forward from a tenant scope to the parent**, which owns the one transaction.
+- **`StoreObjects` closes `Store<T>` over each runtime type**, so a hierarchy sub-class lands in its base's
+  table with its discriminator. Null elements are skipped (Marten, Polecat); a null collection is
+  `ArgumentNullException`. The closed delegate is cached per type; the `MakeGenericMethod` carries a
+  method-level IL2060/IL3050 justification — reference-type documents use the shared canonical
+  instantiation under Native AOT, a value-type document is not covered, and `Store<T>` is the AOT-safe
+  spelling.
+- **No shared compliance suite covers any of the three** as of JasperFx.Events.ComplianceTests 3.3.0.
+
 #### `LoadAsync<T>(object)` — the eighth operation
 
 jasperfx#665 added `Task<T?> LoadAsync<T>(object id, …)` to `IDocumentReadOperations`, and fisher#89
@@ -4260,9 +4359,12 @@ the shared contract's own remarks promise.
   transaction* — a genuine self-deadlock that presents as a hang rather than an error. That is the
   single most likely way to build one wrong, and it is why the connection is a parameter rather than
   something the participant is expected to find.
-- **The hook is the last thing inside the transaction**, the position `IMessageBatch.BeforeCommitAsync`
-  already occupies — so its visibility semantics are the ones fisher#4 pinned, and
+- **The hook is at the end of the transaction, just before the outbox's `IMessageBatch.BeforeCommitAsync`**,
+  which is last on both commit paths — so its visibility semantics are the ones fisher#4 pinned, and
   `a_participants_write_is_invisible_until_the_commit` re-probes them over a separate connection.
+  ⚠️ **The session path ran the outbox FIRST until fisher#581**; the projection batch already ran it last,
+  which is what `IMessageBatch.BeforeCommitAsync` promises. Order is native participants, shared
+  `IDbTransactionParticipant`s, then the batch (`the_message_batch_runs_after_every_participant`).
 - **Both commit paths invoke participants**, `FisherSession.SaveChangesAsync` and
   `FisherProjectionBatch.ExecuteAsync` alike, so a projection or subscription that enlists one does not
   have to know which it is running under. The batch gathers them *before* the resilience pipeline for
@@ -5574,6 +5676,15 @@ had somewhere to put one. **A tenant on a store that is not multi-tenanted is re
 ignored**, the rule `QueryStreamStates` already followed one member over: `DefaultTenancy.DatabaseFor`
 resolves any id, so a quietly-unscoped reader would report every tenant's events as that tenant's.
 
+⚠️ **On the tier's three queryables (`QueryRawEvents`, `QueryStreamStates`, `QueryEventData<T>`), an
+operator after `Take`/`Skip` applies to the page** (fisher#599, fisher#589's twin in
+`EventTableQueryProvider`). Consecutive paging composes into one `LIMIT`/`OFFSET`; a `Where` or an ordering
+after it wraps the paged statement as a subquery (`select *` inside, the page's select list outside), as
+many levels deep as the chain goes, so nothing is refused. Two rules hold it together: the scope (tenant,
+event type, archived filter) and the final `seq_id` order go on the root statement, inside every page, and
+each page's ordering is repeated after the outer ordering, so a re-sort keeps LINQ's stable ties.
+`event_queries_after_paging` checks every shape against LINQ to Objects.
+
 **`HasEventStore` (jasperfx#914, fisher#354) is computed, never defaulted**: any registered event type
 other than `Archived`, or `Projections.IsActive()` — Marten's `EventGraph.IsActive` rule. The interface
 default is `true`, which makes a document-only store indistinguishable from an event store to a console
@@ -5970,6 +6081,23 @@ Six SQLite decisions that are easy to get wrong and fail silently:
     since fisher#34 (`SqliteParameterValue`, which documents this exact conversion). Two of Fisher's
     three decimal-binding paths were correct and documented while the one a caller reaches first was
     not; that is the shape rather than the exception.
+- ⚠️ **Decimal arithmetic is never computed in SQLite** (fisher#603). Binding as double is fine for a
+  *comparison*; an *operation* is not: `0.3 - 0.1` is `0.19999999999999998` in SQLite, so
+  `x.Price - 0.1m < 0.2m` matched a price of 0.3. `TryFoldDecimalArithmetic` folds a member ± constants
+  in .NET `decimal` (`c - x < v` reverses to `x > c - v`) and re-parses the result through
+  `ParseComparison`, so nesting and nullability follow the plain path. What cannot fold is refused in
+  `TryRenderArithmetic`: two decimal members, `float` arithmetic, and a `float` member widened to
+  double (its stored shortest text is not the double C# widens to). `AssertModuloIsIntegral` refuses
+  any non-integral `%`, because SQLite's `%` truncates both operands to INTEGER (`3.5 % 2` is 1).
+  Constant operands are evaluated with their conversions (`EvaluateValue`), so `(double)0.1f` renders
+  as the double C# uses. Integral and `double` Add/Subtract still translate. `decimal_arithmetic_in_predicates`
+  fails 29 of 41 against the old parser.
+
+⚠️ **A second `OrderBy` goes in front, and a `ThenBy` goes after its own `OrderBy`** (fisher#588,
+marten#5959). LINQ's `OrderBy` is a stable re-sort: `OrderBy(a).OrderBy(b)` is `b, a`, and
+`OrderBy(a).OrderBy(b).ThenBy(c)` is `b, c, a`, so plain appending is wrong for both. `LinqQueryParser.OrderingInsertionIndex`
+is the one rule, shared by the document path, the join path and the event-table providers. `OrderByMembers` is
+inserted at the same index, or keyset paging checks the wrong terminal key.
 
 **A member below a scalar is translated or refused, never rendered as a path** (fisher#483, near
 marten#5556). `ScalarMemberAccess` is where. There is nothing below one JSON value for a path to reach, so
@@ -5982,6 +6110,34 @@ default and an `OrderBy` did not order, all silently. `Nullable<T>.Value` resolv
   lands in the wrong year. The input is `RawLocator` because a duplicated column holds the UTC form.
 - `.Date`, `DayOfWeek`, every `TimeSpan` member and anything else is refused by name. `CriteriaShapeRules`
   lost its date and `Nullable.Value` rules with this, since an honest refusal reaches a console on its own.
+
+⚠️ **A member chain not rooted at the lambda's parameter is a value, never a path** (fisher#591, near
+marten#5950/#5943). `MemberFactory.ResolveMember` refuses one by name (`IsRootedAtParameter`, the where
+parser's `IsDocumentMember` rule, looking through conversions and union-case casts). It used to walk a static
+or a captured local as `$.<name>`, so where the name matched a document member the query silently read that
+member. Per caller:
+- **An ordering key that reads nothing from the row is dropped** in `LinqQueryParser.AddOrdering` (Marten's
+  ruling): every row ties on it, so later keys decide. `OrderBys` and `OrderByMembers` both skip it, so `Last`
+  reverses and a cursor seeks on what remains; `Last` over only a dropped key is refused as having no ordering.
+- **`GroupBy` and `DistinctBy` over one are refused** — a single group or row has no locator to stand for it.
+- **`Sum`/`Min`/`Max`/`Average` over one, top-level or over a group, are refused** through the factory.
+- `TryParseArithmetic` requires a *document* member on one operand, so `x.Number < Statics.Value - 4` folds the
+  right side instead of compiling `x.Number` as a value.
+
+⚠️ **A comparison that reads the row on both sides is two locators, never a bound value** (fisher#595).
+`ParseComparison` sends it to `ParseMemberToMember` before anything calls `ExtractValue`, which compiled one
+side and failed with an internal "variable 'x' ... is not defined". Each side is a member's `TypedLocator` (so
+`strftime` timestamps and integer enums compare as they do against a constant) or `TryRenderArithmetic`'s
+Add/Subtract.
+- ⚠️ **Equality is `is` / `is not`, and a range is `coalesce(a < b, 0)`.** C#'s `x.A == x.B` is true when both
+  are null, and `!(x.A < x.B)` is true when either is; plain `=` and `not (NULL)` drop those rows.
+- **Refused by name**: sides of different kinds (a string-stored enum against a number, `DateTimeOffset`
+  against `DateTime`), a range over a string-stored enum, a conversion that changes the value (`(int)x.Ratio`,
+  a cast to `object`), `decimal`/`float` arithmetic (SQLite would run it in `double`), anything that is not a
+  member or that arithmetic, and member types with no single stored value (objects, strong-typed ids).
+- **`ExtractValue` refuses a row-reading expression by name**, so the other parsers (`x.A % x.B`,
+  `x.Tags.Contains(x.Name)`) fail as a refusal rather than an internal exception. "Reads the row" is a FREE
+  parameter: `Thresholds.Count(t => t > 1)` binds its own and is still a value.
 
 The provider takes both the column list and the materializer from the **query-only** closed-shape
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,

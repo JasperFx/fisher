@@ -92,4 +92,10 @@ internal sealed class GroupJoinData
     ///     rewritten, which is what maps a projected member back to the document member behind it.
     /// </summary>
     public List<(LambdaExpression Key, bool Descending)> OrderBys { get; } = [];
+
+    /// <summary>
+    ///     How many entries of <see cref="OrderBys" /> the newest <c>OrderBy</c> and its <c>ThenBy</c>s
+    ///     contributed, which is where the next <c>ThenBy</c> goes — fisher#588.
+    /// </summary>
+    public int OrderingGroupLength { get; set; }
 }

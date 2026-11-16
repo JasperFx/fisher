@@ -72,12 +72,25 @@ namespace Fisher.Storage;
 ///         should move into Weasel.Sqlite's <see cref="SqliteDataSource" /> and go once
 ///         Microsoft.Data.Sqlite publishes the connection before activating it under the pool lock.
 ///     </para>
+///     <para>
+///         ⚠️ <b>The lock is a plain <see cref="Lock" /> held across a wholly synchronous open, never a
+///         <see cref="SemaphoreSlim" /> and never across an <c>await</c></b> (fisher#587). The first version
+///         used <c>WaitAsync</c> for async opens and a blocking <c>Wait</c> for sync ones. The
+///         async holders needed a thread-pool thread for the continuation that released the gate, while
+///         the sync waiters held pool threads blocked on it. A burst of synchronous Hi-Lo stores (each
+///         sequence advance opens synchronously) then stalled for 28–34 s. Microsoft.Data.Sqlite's open and
+///         Weasel's PRAGMAs and function registration are all synchronous underneath, so the async override
+///         runs <c>base.OpenDbConnection()</c> under the lock and returns a completed task: the holder
+///         always finishes on its own thread, and no waiter needs anything from the pool to get the lock.
+///         The cost is that a cancellation token is checked before the open, not during it. An open
+///         cannot be interrupted anyway.
+///     </para>
 /// </remarks>
 internal sealed class SerializedOpenDataSource : SqliteDataSource
 {
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, Lock> _gates = new(StringComparer.Ordinal);
 
-    private readonly SemaphoreSlim _gate;
+    private readonly Lock _gate;
 
     public SerializedOpenDataSource(string connectionString, SqlitePragmaSettings? pragmaSettings = null,
         SqliteFunctionRegistry? functions = null, SqliteExtensionSettings? extensions = null)
@@ -89,8 +102,8 @@ internal sealed class SerializedOpenDataSource : SqliteDataSource
     /// <summary>
     ///     The lock every Fisher open of <paramref name="connectionString" />'s pool takes.
     /// </summary>
-    internal static SemaphoreSlim GateFor(string connectionString)
-        => _gates.GetOrAdd(connectionString, static _ => new SemaphoreSlim(1, 1));
+    internal static Lock GateFor(string connectionString)
+        => _gates.GetOrAdd(connectionString, static _ => new Lock());
 
     /// <summary>
     ///     <see cref="SqliteConnection.ClearPool" />, under the same lock as the opens: clearing a pool
@@ -98,17 +111,10 @@ internal sealed class SerializedOpenDataSource : SqliteDataSource
     /// </summary>
     internal static void ClearPool(string connectionString)
     {
-        var gate = GateFor(connectionString);
-        gate.Wait();
-
-        try
+        lock (GateFor(connectionString))
         {
             using var pooled = new SqliteConnection(connectionString);
             SqliteConnection.ClearPool(pooled);
-        }
-        finally
-        {
-            gate.Release();
         }
     }
 
@@ -128,32 +134,19 @@ internal sealed class SerializedOpenDataSource : SqliteDataSource
         return new GatedConnection(ConnectionString, _gate);
     }
 
-    protected override async ValueTask<DbConnection> OpenDbConnectionAsync(
-        CancellationToken cancellationToken = default)
+    // Synchronous on purpose, under the lock (fisher#587): see the remarks.
+    protected override ValueTask<DbConnection> OpenDbConnectionAsync(CancellationToken cancellationToken = default)
     {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        try
-        {
-            return await base.OpenDbConnectionAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        return ValueTask.FromResult(OpenDbConnection());
     }
 
     protected override DbConnection OpenDbConnection()
     {
-        _gate.Wait();
-
-        try
+        lock (_gate)
         {
             return base.OpenDbConnection();
-        }
-        finally
-        {
-            _gate.Release();
         }
     }
 
@@ -161,20 +154,14 @@ internal sealed class SerializedOpenDataSource : SqliteDataSource
     ///     A <see cref="SqliteConnection" /> whose <see cref="Open" /> takes its pool's lock.
     ///     <c>OpenAsync</c> is <see cref="DbConnection" />'s, which calls <see cref="Open" />.
     /// </summary>
-    private sealed class GatedConnection(string connectionString, SemaphoreSlim gate)
+    private sealed class GatedConnection(string connectionString, Lock gate)
         : SqliteConnection(connectionString)
     {
         public override void Open()
         {
-            gate.Wait();
-
-            try
+            lock (gate)
             {
                 base.Open();
-            }
-            finally
-            {
-                gate.Release();
             }
         }
     }

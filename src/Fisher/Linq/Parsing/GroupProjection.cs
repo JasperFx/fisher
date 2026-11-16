@@ -30,13 +30,44 @@ namespace Fisher.Linq.Parsing;
 /// </remarks>
 internal sealed class GroupProjection
 {
-    private GroupProjection(string[] columns, Type[] columnTypes, Func<object?[], object?> build,
-        ISqlFragment? selectFragment)
+    private readonly LambdaExpression _selector;
+    private readonly GroupingTranslator _translator;
+
+    private GroupProjection(LambdaExpression selector, GroupingTranslator translator, string[] columns,
+        Type[] columnTypes, Func<object?[], object?> build, ISqlFragment? selectFragment, bool isFaithful)
     {
+        _selector = selector;
+        _translator = translator;
         Columns = columns;
         ColumnTypes = columnTypes;
         Build = build;
         SelectFragment = selectFragment;
+        IsFaithful = isFaithful;
+    }
+
+    /// <summary>
+    ///     True when the columns ARE the values the caller sees, so <c>Distinct()</c> and identity
+    ///     ordering over them answer the caller's question (fisher#590). See
+    ///     <see cref="SelectProjection.IsFaithful" />.
+    /// </summary>
+    public bool IsFaithful { get; }
+
+    /// <summary>The selector as the caller wrote it, for a refusal to name.</summary>
+    public LambdaExpression Selector => _selector;
+
+    /// <summary>
+    ///     The same projection with its integer arithmetic over the key and the aggregates moved into the
+    ///     select list, when that makes it faithful; null otherwise (fisher#590).
+    /// </summary>
+    public GroupProjection? ComputedInSql()
+    {
+        if (IsFaithful)
+        {
+            return this;
+        }
+
+        var translated = Create(_selector, _translator, translateArithmetic: true);
+        return translated.IsFaithful ? translated : null;
     }
 
     /// <summary>The SQL expressions to select, in order — the key and the aggregates.</summary>
@@ -52,8 +83,12 @@ internal sealed class GroupProjection
     public ISqlFragment? SelectFragment { get; }
 
     public static GroupProjection For(LambdaExpression selector, GroupingTranslator translator)
+        => Create(selector, translator, translateArithmetic: false);
+
+    private static GroupProjection Create(LambdaExpression selector, GroupingTranslator translator,
+        bool translateArithmetic)
     {
-        var collector = new Collector(translator, selector.Parameters[0]);
+        var collector = new Collector(translator, selector.Parameters[0], translateArithmetic);
         var body = collector.Visit(selector.Body)!;
 
         if (collector.Columns.Count == 0)
@@ -69,20 +104,23 @@ internal sealed class GroupProjection
             ? new GroupedSelect(collector.Columns, collector.Fragments)
             : null;
 
-        return new GroupProjection(collector.Columns.ToArray(), collector.ColumnTypes.ToArray(),
-            lambda.Compile(), selectFragment);
+        return new GroupProjection(selector, translator, collector.Columns.ToArray(),
+            collector.ColumnTypes.ToArray(), lambda.Compile(), selectFragment,
+            ComputedColumns.IsFaithful(body, collector.Values));
     }
 
     private sealed class Collector : ExpressionVisitor
     {
         private readonly GroupingTranslator _translator;
         private readonly ParameterExpression _group;
+        private readonly bool _translateArithmetic;
         private readonly Dictionary<string, int> _indexes = new();
 
-        public Collector(GroupingTranslator translator, ParameterExpression group)
+        public Collector(GroupingTranslator translator, ParameterExpression group, bool translateArithmetic)
         {
             _translator = translator;
             _group = group;
+            _translateArithmetic = translateArithmetic;
         }
 
         public ParameterExpression Values { get; } = Expression.Parameter(typeof(object?[]), "values");
@@ -105,6 +143,14 @@ internal sealed class GroupProjection
                 return Capture(node.ToString(), node.Type, count);
             }
 
+            // fisher#590: only when ComputedInSql asked for it. A filtered count binds values and is not
+            // a leaf a string can carry, so arithmetic over one is left to .NET and refused by the caller.
+            if (_translateArithmetic && node is not null
+                && ComputedColumns.TryTranslate(node, Leaf, out var computed))
+            {
+                return Capture(computed, node.Type, null);
+            }
+
             return base.Visit(node);
         }
 
@@ -112,6 +158,9 @@ internal sealed class GroupProjection
         ///     A call the translator declined would otherwise reach <c>Compile()</c> still naming the
         ///     group, whose error says nothing about the query.
         /// </summary>
+        private string? Leaf(Expression node)
+            => _translator.TryTranslate(node, _group, out var sql) ? sql : null;
+
         protected override Expression VisitMethodCall(MethodCallExpression node)
             => node.Arguments.Count > 0 && node.Arguments[0] == _group
                 ? throw Refused($"'{node.Method.Name}'")

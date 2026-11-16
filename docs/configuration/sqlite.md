@@ -175,6 +175,12 @@ You do not have to do anything about this. Fisher normalises the comparison valu
 binds one, so `Where(x => x.Total > 100m)`, `IsOneOf`, `Contains`, `HAVING` and arithmetic on a
 `decimal` member all compare numerically.
 
+Arithmetic is the exception to "a floating-point comparison is close enough": SQLite computes
+`0.3 - 0.1` as `0.19999999999999998`, so the subtraction itself would change which rows match. Fisher
+therefore folds a `decimal` member plus or minus constants into one constant computed in `decimal`
+(`x.Total - 10m > 90m` is sent as `total > 100`), and refuses every other `decimal` or `float`
+arithmetic shape, and any non-integral `%`, by name.
+
 ::: warning
 Do not reach around it. Microsoft.Data.Sqlite binds a raw `decimal` parameter as **TEXT**, and SQLite
 orders every numeric value below every TEXT one — so a hand-written comparison against

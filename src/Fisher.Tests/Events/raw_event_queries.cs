@@ -102,6 +102,23 @@ public class raw_event_queries : IAsyncLifetime
         actual.ShouldBe(expected);
     }
 
+    /// <summary>
+    ///     fisher#588: a second <c>OrderBy</c> becomes the primary key and the earlier one breaks its ties,
+    ///     and a <c>ThenBy</c> refines the newest <c>OrderBy</c>. The event provider used to drop the
+    ///     earlier keys, leaving ties to whatever order the rows came back in.
+    /// </summary>
+    [Fact]
+    public async Task a_second_order_by_keeps_the_earlier_keys_as_tie_breakers()
+    {
+        var resorted = await Events.OrderByDescending(x => x.Sequence).OrderBy(x => x.CorrelationId)
+            .ToListAsync(Token);
+        resorted.Select(x => x.Sequence).ShouldBe([5, 3, 1, 4, 2]);
+
+        var refined = await Events.OrderBy(x => x.Sequence).OrderBy(x => x.CorrelationId)
+            .ThenByDescending(x => x.CausationId).ToListAsync(Token);
+        refined.Select(x => x.Sequence).ShouldBe([5, 3, 1, 4, 2]);
+    }
+
     [Fact]
     public async Task an_untranslatable_member_fails_the_query_naming_it_rather_than_matching_all()
     {
