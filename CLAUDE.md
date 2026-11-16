@@ -5978,6 +5978,12 @@ Six SQLite decisions that are easy to get wrong and fail silently:
     three decimal-binding paths were correct and documented while the one a caller reaches first was
     not; that is the shape rather than the exception.
 
+⚠️ **A second `OrderBy` goes in front, and a `ThenBy` goes after its own `OrderBy`** (fisher#588,
+marten#5959). LINQ's `OrderBy` is a stable re-sort: `OrderBy(a).OrderBy(b)` is `b, a`, and
+`OrderBy(a).OrderBy(b).ThenBy(c)` is `b, c, a`, so plain appending is wrong for both. `LinqQueryParser.OrderingInsertionIndex`
+is the one rule, shared by the document path, the join path and the event-table providers. `OrderByMembers` is
+inserted at the same index, or keyset paging checks the wrong terminal key.
+
 **A member below a scalar is translated or refused, never rendered as a path** (fisher#483, near
 marten#5556). `ScalarMemberAccess` is where. There is nothing below one JSON value for a path to reach, so
 `$.count.value` was valid SQL yielding NULL: a `Where` matched nothing, a `Select` returned the type's

@@ -34,8 +34,9 @@ internal enum SoftDeleteScope
 ///     </para>
 ///     <para>
 ///         The chain arrives outermost-call-first, so it is walked to the source and then applied in
-///         reverse. Order matters for <c>ThenBy</c>, which must land after the <c>OrderBy</c> it
-///         refines.
+///         reverse. Order matters for the ordering operators: a later <c>OrderBy</c> lands in front of
+///         every earlier key, and a <c>ThenBy</c> right after the keys of the <c>OrderBy</c> it refines
+///         (fisher#588).
 ///     </para>
 /// </remarks>
 internal class LinqQueryParser
@@ -262,14 +263,22 @@ internal class LinqQueryParser
             // Past the SelectMany the element is the projected shape, not a document — so an ordering
             // key names a member of it and has to be mapped back to whichever document it came from.
             // Kept as an expression for the provider, which is where the result selector is rewritten.
+            // A new OrderBy is the primary key and everything collected so far only breaks its ties;
+            // a ThenBy refines the newest OrderBy (fisher#588, see AddOrderingKey).
             case "OrderBy" when Joined:
-            case "ThenBy" when Joined:
-                CurrentJoin!.OrderBys.Add((UnwrapLambda(call), false));
+                AddJoinOrdering(call, descending: false, primary: true);
                 break;
 
             case "OrderByDescending" when Joined:
+                AddJoinOrdering(call, descending: true, primary: true);
+                break;
+
+            case "ThenBy" when Joined:
+                AddJoinOrdering(call, descending: false, primary: false);
+                break;
+
             case "ThenByDescending" when Joined:
-                CurrentJoin!.OrderBys.Add((UnwrapLambda(call), true));
+                AddJoinOrdering(call, descending: true, primary: false);
                 break;
 
             // A post-join predicate names the joined shape, so like the ordering keys it is kept as an
@@ -313,29 +322,35 @@ internal class LinqQueryParser
             // because that is exactly what it is: OrderByRelevance().ThenBy(...) and
             // OrderBy(...).ThenByRelevance() both mean what they look like.
             case "OrderByRelevance":
+                AddRelevanceOrdering(call, descending: false, primary: true);
+                break;
+
             case "ThenByRelevance":
-                AddRelevanceOrdering(call, descending: false);
+                AddRelevanceOrdering(call, descending: false, primary: false);
                 break;
 
             case "OrderByRelevanceDescending":
+                AddRelevanceOrdering(call, descending: true, primary: true);
+                break;
+
             case "ThenByRelevanceDescending":
-                AddRelevanceOrdering(call, descending: true);
+                AddRelevanceOrdering(call, descending: true, primary: false);
                 break;
 
             case "OrderBy":
-                AddOrdering(call, descending: false);
+                AddOrdering(call, descending: false, primary: true);
                 break;
 
             case "OrderByDescending":
-                AddOrdering(call, descending: true);
+                AddOrdering(call, descending: true, primary: true);
                 break;
 
             case "ThenBy":
-                AddOrdering(call, descending: false);
+                AddOrdering(call, descending: false, primary: false);
                 break;
 
             case "ThenByDescending":
-                AddOrdering(call, descending: true);
+                AddOrdering(call, descending: true, primary: false);
                 break;
 
             case "Select":
@@ -644,10 +659,59 @@ internal class LinqQueryParser
     ///         <c>Select</c> always works and reads no worse.
     ///     </para>
     /// </remarks>
-    private void AddOrdering(MethodCallExpression call, bool descending)
+    private void AddOrdering(MethodCallExpression call, bool descending, bool primary)
     {
-        OrderBys.Add((OrderingLocatorFor(call), descending));
-        OrderByMembers.Add(_lastOrderingMember);
+        AddOrderingKey(OrderingLocatorFor(call), descending, _lastOrderingMember, primary);
+    }
+
+    /// <summary>The join path's twin of <see cref="AddOrderingKey" />, over the post-join shape.</summary>
+    private void AddJoinOrdering(MethodCallExpression call, bool descending, bool primary)
+    {
+        var join = CurrentJoin!;
+        var length = join.OrderingGroupLength;
+        join.OrderBys.Insert(OrderingInsertionIndex(ref length, primary), (UnwrapLambda(call), descending));
+        join.OrderingGroupLength = length;
+    }
+
+    /// <summary>
+    ///     Records one ordering key, keeping <see cref="OrderByMembers" /> parallel to
+    ///     <see cref="OrderBys" />.
+    /// </summary>
+    /// <remarks>
+    ///     <b>An <c>OrderBy</c> goes in front of every key collected so far; a <c>ThenBy</c> goes
+    ///     straight after the keys of the <c>OrderBy</c> it refines</b> (fisher#588, marten#5959).
+    ///     LINQ's <c>OrderBy</c> is a stable re-sort, so <c>OrderBy(a).OrderBy(b)</c> means
+    ///     <c>b, a</c>: the newest key is the primary one and the earlier keys only break its ties. Appending both kinds, which this used to do, rendered
+    ///     <c>order by a, b</c> — a plausible order and the wrong one, with nothing to signal it.
+    /// </remarks>
+    private void AddOrderingKey(string locator, bool descending, IQueryableMember? member, bool primary)
+    {
+        var index = OrderingInsertionIndex(ref _orderingGroupLength, primary);
+        OrderBys.Insert(index, (locator, descending));
+        OrderByMembers.Insert(index, member);
+    }
+
+    /// <summary>How many keys the newest <c>OrderBy</c> and its <c>ThenBy</c>s have contributed.</summary>
+    private int _orderingGroupLength;
+
+    /// <summary>
+    ///     Where the next ordering key goes: an <c>OrderBy</c> at the front, a <c>ThenBy</c> straight
+    ///     after the keys of the <c>OrderBy</c> it refines.
+    /// </summary>
+    /// <remarks>
+    ///     A <c>ThenBy</c> does not simply append. <c>OrderBy(a).OrderBy(b).ThenBy(c)</c> means
+    ///     <c>b, c, a</c>: the <c>ThenBy</c> refines the newest <c>OrderBy</c>, and the older key still only
+    ///     breaks the ties of both. Appending would render <c>b, a, c</c>.
+    /// </remarks>
+    internal static int OrderingInsertionIndex(ref int groupLength, bool primary)
+    {
+        if (primary)
+        {
+            groupLength = 1;
+            return 0;
+        }
+
+        return groupLength++;
     }
 
     /// <summary>
@@ -670,7 +734,7 @@ internal class LinqQueryParser
     ///     ordering key that is not a document member -- a rank is not a value a cursor can carry.
     ///     </para>
     /// </remarks>
-    private void AddRelevanceOrdering(MethodCallExpression call, bool descending)
+    private void AddRelevanceOrdering(MethodCallExpression call, bool descending, bool primary)
     {
         RequiresFullTextJoin = true;
 
@@ -702,8 +766,7 @@ internal class LinqQueryParser
         var table = Weasel.Sqlite.SchemaUtils.QuoteName(
             Storage.FullText.FullTextSchema.TableNameFor(mapping).Name);
 
-        OrderBys.Add((FullTextRank.Locator(table, weights), descending));
-        OrderByMembers.Add(null);
+        AddOrderingKey(FullTextRank.Locator(table, weights), descending, null, primary);
     }
 
     /// <summary>

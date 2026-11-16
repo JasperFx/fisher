@@ -12,11 +12,22 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3110 tests green on net10.0 and 3137 on net11.0** — 3039 (net10.0) / 3066 (net11.0) in `Fisher.Tests`, 40 in
+**3123 tests green on net10.0 and 3150 on net11.0** — 3052 (net10.0) / 3079 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
+
+## A second `OrderBy` re-sorts (fisher#588)
+
+`OrderBy(a).OrderBy(b)` rendered `order by a, b`; LINQ's `OrderBy` is a stable re-sort, so it means `b, a`.
+`LinqQueryParser` now puts an `OrderBy`/`OrderByDescending` (and `OrderByRelevance*`) in front of every key so
+far, and a `ThenBy` straight after the keys of the `OrderBy` it refines, since `OrderBy(a).OrderBy(b).ThenBy(c)`
+is `b, c, a` rather than `b, a, c`. `OrderByMembers` moves with `OrderBys`, so keyset paging still checks the
+right terminal key. The join path (`GroupJoinData.OrderBys`) and the event-table providers (`QueryRawEvents`,
+`QueryStreamStates`, which used to drop the earlier keys altogether) follow the same rule.
+`repeated_order_by` (12 facts, LINQ to Objects as the oracle) and one `raw_event_queries` fact all fail on the
+previous build.
 
 ## The daemon's allow list binds as one parameter (fisher#583)
 
