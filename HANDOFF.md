@@ -12,11 +12,22 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3110 tests green on net10.0 and 3137 on net11.0** — 3039 (net10.0) / 3066 (net11.0) in `Fisher.Tests`, 40 in
+**3126 tests green on net10.0 and 3153 on net11.0** — 3055 (net10.0) / 3082 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
+
+## A static or a captured local in a query is a value (fisher#591)
+
+`MemberFactory` walked any member chain as a JSON path, so `OrderBy(x => Statics.Number)` sorted by the
+document's `$.number`, `SumAsync(x => Statics.Number)` summed it, and `DistinctBy`/`GroupBy` over a static
+grouped by it. It now refuses a chain not rooted at the lambda's parameter, by name. An ordering key that reads
+nothing from the row is dropped (marten#5950's ruling), so later keys decide; `Last` and keyset paging reverse
+and seek on the keys that remain, and `Last` over only a dropped key is refused. `GroupBy`, `DistinctBy` and the
+aggregates over a closed value are refused. `TryParseArithmetic` needed a *document* member, not any member:
+`x.Number < Statics.Value - 4` threw an internal `InvalidOperationException` and now folds the right side.
+`closed_values_in_queries` has 16 facts; 15 fail on the previous build.
 
 ## The daemon's allow list binds as one parameter (fisher#583)
 
