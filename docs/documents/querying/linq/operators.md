@@ -174,6 +174,11 @@ only past a double's fifteenth digit are two values in a `Where`, an `OrderBy`, 
 `decimal` too. A comparison done in `double` in C# — `(double)x.Total > 0.5` — stays a `double`
 comparison.
 
+Comparing two members is exact as well: `x.Price < x.Cost` and `x.Price == x.Quantity` compare the decimals
+themselves, with C#'s answer when either side is null. A `double` member converted to `decimal`
+(`(decimal)x.Ratio == x.Price`) is refused with a `BadLinqExpressionException`, because C# rounds the
+double to fifteen significant digits before it compares; write the comparison in `double` instead.
+
 ## Enums
 
 Under the default `EnumStorage.AsInteger` everything works. Under `AsString`, **range comparison and

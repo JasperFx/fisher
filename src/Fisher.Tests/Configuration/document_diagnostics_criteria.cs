@@ -193,6 +193,16 @@ public class document_diagnostics_criteria : IAsyncLifetime
         yield return new("not Contains nullable", "not Note.Contains(\"frag\")")
             { Oracle = all => all.Where(x => !(x.Note?.Contains("frag") ?? false)) };
         yield return new("not Tags.Contains", "not Tags.Contains(\"vip\")");
+        yield return new("not EndsWith nullable", "not Note.EndsWith(\"ile\")")
+            { Oracle = all => all.Where(x => !(x.Note?.EndsWith("ile") ?? false)) };
+        yield return new("not Equals nullable", "not Note.Equals(\"fragile\")")
+            { Oracle = all => all.Where(x => !(x.Note?.Equals("fragile") ?? false)) };
+        yield return new("not nested StartsWith", "not ShipTo.Region.StartsWith(\"T\")")
+            { Oracle = all => all.Where(x => !(x.ShipTo?.Region?.StartsWith("T") ?? false)) };
+        yield return new("guarded not Contains", "not Note.Contains(\"frag\") or Note = null")
+            { Oracle = all => all.Where(x => x.Note == null || !x.Note.Contains("frag")) };
+        yield return new("not int? >", "not (Discount > 2)");
+        yield return new("not over or with nullable", "not (Note = \"fragile\" or Discount = 5)");
         yield return new("not Items.Any(pred)", "not Items.Any(Quantity > 5)");
         yield return new("guarded <>", "Note <> \"fragile\" or Note = null");
         yield return new("guarded nested <>", "ShipTo.City <> \"Austin\" or ShipTo.City = null")
@@ -418,21 +428,78 @@ public class document_diagnostics_criteria : IAsyncLifetime
         (await WhereAsync("Discount.HasValue")).TotalCount.ShouldBe(_orders.Count(x => x.Discount.HasValue));
     }
 
+    /// <summary>
+    ///     What JasperFx's <c>SqlNullSemantics()</c> used to refuse, and fisher#608 taught the provider to
+    ///     answer as C# does: <c>&lt;&gt;</c>, or <c>not</c> over a comparison, on a member that can be null.
+    ///     fisher#612 dropped the refusal; each now runs and keeps the rows where the member is null.
+    /// </summary>
+    private static readonly Dictionary<string, Func<CriteriaOrder, bool>> NullableInequalities = new()
+    {
+        ["Note <> \"fragile\""] = x => x.Note != "fragile",
+        ["not (Note = \"fragile\")"] = x => !(x.Note == "fragile"),
+        ["Discount <> 5"] = x => x.Discount != 5,
+        ["not (Discount > 2)"] = x => !(x.Discount > 2),
+        ["ShipTo.City <> \"Austin\""] = x => x.ShipTo?.City != "Austin",
+        ["ShipTo.City <> \"Austin\" or ShipTo = null and ShipTo.Region <> \"TX\""] =
+            x => x.ShipTo?.City != "Austin" || (x.ShipTo == null && x.ShipTo?.Region != "TX"),
+        ["Items.Any(Sku <> \"A1\") and ShipTo.Region <> \"TX\""] =
+            x => x.Items.Any(i => i.Sku != "A1") && x.ShipTo?.Region != "TX"
+    };
+
     [Theory]
-    [InlineData("Note <> \"fragile\"", "Note")]
-    [InlineData("not (Note = \"fragile\")", "Note")]
+    [InlineData("Note <> \"fragile\"")]
+    [InlineData("not (Note = \"fragile\")")]
+    [InlineData("Discount <> 5")]
+    [InlineData("not (Discount > 2)")]
+    [InlineData("ShipTo.City <> \"Austin\"")]
+    [InlineData("ShipTo.City <> \"Austin\" or ShipTo = null and ShipTo.Region <> \"TX\"")]
+    [InlineData("Items.Any(Sku <> \"A1\") and ShipTo.Region <> \"TX\"")]
+    public async Task an_inequality_on_a_member_that_can_be_null_answers_as_csharp(string where)
+    {
+        var expected = _orders.Where(NullableInequalities[where]).Select(x => x.Id).Order().ToList();
+
+        var result = await WhereAsync(where);
+
+        result.Documents.Select(x => Guid.Parse(x.Id)).Order().ToList().ShouldBe(expected);
+        result.TotalCount.ShouldBe(expected.Count);
+    }
+
+    /// <remarks>
+    ///     The one shape fisher#612 left refused: a string method on a member that can be null keeps SQL's
+    ///     answer in the provider (C# would throw), so negating it drops the rows where the member is null.
+    /// </remarks>
+    [Theory]
     [InlineData("not Note.StartsWith(\"f\")", "Note")]
-    [InlineData("Discount <> 5", "Discount")]
-    [InlineData("ShipTo.City <> \"Austin\"", "ShipTo")]
-    [InlineData("ShipTo.City <> \"Austin\" or ShipTo = null and ShipTo.Region <> \"TX\"", "ShipTo")]
-    [InlineData("Items.Any(Sku <> \"A1\") and ShipTo.Region <> \"TX\"", "ShipTo")]
-    public async Task an_inequality_on_a_member_that_can_be_null_is_refused(string where, string member)
+    [InlineData("not Note.Contains(\"frag\")", "Note")]
+    [InlineData("not Note.EndsWith(\"ile\")", "Note")]
+    [InlineData("not Note.Equals(\"fragile\")", "Note")]
+    [InlineData("not (Note.Contains(\"frag\") or Priority > 3)", "Note")]
+    [InlineData("not ShipTo.City.StartsWith(\"A\")", "ShipTo.City")]
+    [InlineData("not ShipTo.Region.Contains(\"T\")", "ShipTo.Region")]
+    public async Task a_negated_string_method_on_a_member_that_can_be_null_is_refused(string where, string member)
     {
         var refused = await Should.ThrowAsync<DocumentCriteriaNotSupportedException>(() => WhereAsync(where));
 
         refused.Criterion.ShouldBe(nameof(DocumentQueryOptions.Where));
-        refused.Message.ShouldContain($"'{member}");
+        refused.Message.ShouldContain($"'{member}'");
         refused.Message.ShouldContain("can be null");
+    }
+
+    [Fact]
+    public async Task a_negated_string_method_that_says_what_null_does_runs_and_matches_csharp()
+    {
+        (await WhereAsync("not Note.Contains(\"frag\") or Note = null")).TotalCount
+            .ShouldBe(_orders.Count(x => x.Note == null || !x.Note.Contains("frag")));
+
+        (await WhereAsync("Note != null and not Note.Contains(\"frag\")")).TotalCount
+            .ShouldBe(_orders.Count(x => x.Note != null && !x.Note.Contains("frag")));
+
+        (await WhereAsync("not ShipTo.City.StartsWith(\"A\") or ShipTo = null")).TotalCount
+            .ShouldBe(_orders.Count(x => x.ShipTo == null || !x.ShipTo.City.StartsWith("A")));
+
+        // A member the document declares non-nullable is never refused.
+        (await WhereAsync("not CustomerName.StartsWith(\"A\")")).TotalCount
+            .ShouldBe(_orders.Count(x => !x.CustomerName.StartsWith("A")));
     }
 
     /// <remarks>
