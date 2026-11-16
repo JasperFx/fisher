@@ -6111,6 +6111,21 @@ member. Per caller:
 - `TryParseArithmetic` requires a *document* member on one operand, so `x.Number < Statics.Value - 4` folds the
   right side instead of compiling `x.Number` as a value.
 
+⚠️ **A comparison that reads the row on both sides is two locators, never a bound value** (fisher#595).
+`ParseComparison` sends it to `ParseMemberToMember` before anything calls `ExtractValue`, which compiled one
+side and failed with an internal "variable 'x' ... is not defined". Each side is a member's `TypedLocator` (so
+`strftime` timestamps and integer enums compare as they do against a constant) or `TryRenderArithmetic`'s
+Add/Subtract.
+- ⚠️ **Equality is `is` / `is not`, and a range is `coalesce(a < b, 0)`.** C#'s `x.A == x.B` is true when both
+  are null, and `!(x.A < x.B)` is true when either is; plain `=` and `not (NULL)` drop those rows.
+- **Refused by name**: sides of different kinds (a string-stored enum against a number, `DateTimeOffset`
+  against `DateTime`), a range over a string-stored enum, a conversion that changes the value (`(int)x.Ratio`,
+  a cast to `object`), `decimal`/`float` arithmetic (SQLite would run it in `double`), anything that is not a
+  member or that arithmetic, and member types with no single stored value (objects, strong-typed ids).
+- **`ExtractValue` refuses a row-reading expression by name**, so the other parsers (`x.A % x.B`,
+  `x.Tags.Contains(x.Name)`) fail as a refusal rather than an internal exception. "Reads the row" is a FREE
+  parameter: `Thresholds.Count(t => t > 1)` binds its own and is still a value.
+
 The provider takes both the column list and the materializer from the **query-only** closed-shape
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,
 which is what keeps the query path's read layout aligned with `LoadAsync`'s.

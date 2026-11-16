@@ -12,11 +12,20 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3252 tests green on net10.0 and 3279 on net11.0** — 3181 (net10.0) / 3208 (net11.0) in `Fisher.Tests`, 40 in
+**3308 tests green on net10.0 and 3335 on net11.0** — 3237 (net10.0) / 3264 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
+
+## Comparing two members translates (fisher#595)
+
+`x.A < x.B`, `x.A == x.B` and `x.A - 1 < x.B` failed with an internal `InvalidOperationException`, because the
+where parser compiled one member side as a constant. They now render as two typed locators: `is` / `is not` for
+equality, so two nulls are equal as in C#, and `coalesce(… < …, 0)` for a range, so a negation keeps the null rows.
+Sides of different kinds, string-stored enum ranges, value-changing conversions and `decimal`/`float` arithmetic
+are refused by name, and `ExtractValue` now refuses any row-reading expression by name. CLAUDE.md's "LINQ" has the
+rules. `member_to_member_comparisons` (56 tests, LINQ to Objects as the oracle) fails 53 of 56 on the previous build.
 
 ## A closed ordering key after a join is dropped (fisher#596)
 

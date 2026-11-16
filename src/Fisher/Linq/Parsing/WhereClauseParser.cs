@@ -162,6 +162,12 @@ internal class WhereClauseParser
 
     private ISqlFragment ParseComparison(BinaryExpression binary, string op)
     {
+        // x.A < x.B: both sides read the row, so neither is a value to bind (fisher#595).
+        if (ReferencesFreeParameter(binary.Left) && ReferencesFreeParameter(binary.Right))
+        {
+            return ParseMemberToMember(binary, op);
+        }
+
         if (TryParseUnionNullTest(binary.Left, binary.Right, op, out var unionNull)
             || TryParseUnionNullTest(binary.Right, binary.Left, op, out unionNull))
         {
@@ -214,6 +220,202 @@ internal class WhereClauseParser
 
         throw new BadLinqExpressionException($"Cannot translate the comparison '{binary}' to SQL. " + Alternatives);
     }
+
+    /// <summary>
+    ///     <c>x.A &lt; x.B</c>, <c>x.A == x.B</c>, <c>x.A - 1 &lt; x.B</c>: a comparison whose two sides
+    ///     both read the row, rendered as two locators (fisher#595).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Each side is a document member's <see cref="IQueryableMember.TypedLocator" />, so a
+    ///         timestamp compares through <c>strftime</c> and an integer-stored enum as a number, exactly
+    ///         as against a constant; or an Add/Subtract over integral or <c>double</c> members, through
+    ///         the same rendering <see cref="TryParseArithmetic" /> uses. Anything else is refused by
+    ///         name, never compiled: compiling one side as a value is the internal exception this
+    ///         replaced.
+    ///     </para>
+    ///     <para>
+    ///         ⚠️ <b>Equality is <c>is</c> / <c>is not</c>, never <c>=</c> / <c>!=</c>.</b> C#'s
+    ///         <c>x.A == x.B</c> is true when both are null, and SQL's <c>=</c> is NULL there, so the
+    ///         row would be dropped. A range comparison is wrapped in <c>coalesce(…, 0)</c> for the
+    ///         other direction: C# says <c>!(x.A &lt; x.B)</c> is true when either is null, and
+    ///         <c>not (NULL)</c> is NULL.
+    ///     </para>
+    ///     <para>
+    ///         Refused rather than guessed: sides of different kinds (SQLite would compare them by its
+    ///         own cross-type rules, where every number sorts below every string), a range over a member
+    ///         whose stored form does not order (<see cref="AssertRangeIsMeaningful" />'s rule), a
+    ///         conversion that changes the value (<c>(int)x.Price</c> truncates in C# and not in SQL),
+    ///         and <c>decimal</c> or <c>float</c> arithmetic, which SQLite would run in <c>double</c>.
+    ///     </para>
+    /// </remarks>
+    private ISqlFragment ParseMemberToMember(BinaryExpression binary, string op)
+    {
+        var left = ComparisonOperand(binary.Left, binary);
+        var right = ComparisonOperand(binary.Right, binary);
+
+        if (!(left.Numeric && right.Numeric) && left.Type != right.Type)
+        {
+            throw RefuseMemberComparison(binary,
+                $"'{binary.Left}' is {left.Describe()} while '{binary.Right}' is {right.Describe()}. SQLite "
+                + "would compare the two by its own cross-type rules rather than C#'s");
+        }
+
+        if (RangeOperators.Contains(op))
+        {
+            foreach (var side in new[] { left, right })
+            {
+                if (!side.Orders)
+                {
+                    throw RefuseMemberComparison(binary,
+                        $"{side.Describe()} does not order in SQLite: its stored form is not order-preserving, so "
+                        + "a range comparison would return plausible but wrong rows. Equality is supported");
+                }
+            }
+
+            return new WhereFragment($"coalesce({left.Sql} {op} {right.Sql}, 0)");
+        }
+
+        return new WhereFragment($"{left.Sql} {(op == "=" ? "is" : "is not")} {right.Sql}");
+    }
+
+    /// <summary>One side of a member-to-member comparison.</summary>
+    /// <param name="Type">The non-nullable type the side compares as; meaningless when numeric.</param>
+    private readonly record struct ComparisonSide(string Sql, Type Type, bool Numeric, bool Orders)
+    {
+        public string Describe() => Numeric ? "a number" : $"a {Type.Name}";
+    }
+
+    private ComparisonSide ComparisonOperand(Expression side, BinaryExpression binary)
+    {
+        AssertConversionsKeepTheValue(side, binary);
+
+        if (StripConvert(side) is BinaryExpression { NodeType: ExpressionType.Add or ExpressionType.Subtract } arithmetic)
+        {
+            var resultType = Nullable.GetUnderlyingType(arithmetic.Type) ?? arithmetic.Type;
+            if (resultType == typeof(decimal) || resultType == typeof(float))
+            {
+                throw RefuseMemberComparison(binary,
+                    $"'{arithmetic}' is {resultType.Name} arithmetic, which SQLite would compute in double "
+                    + "precision and so round differently than C# does");
+            }
+
+            AssertConversionsKeepTheValue(arithmetic.Left, binary);
+            AssertConversionsKeepTheValue(arithmetic.Right, binary);
+
+            if (TryRenderArithmetic(arithmetic, out var sql, out _))
+            {
+                return new ComparisonSide(sql, typeof(double), Numeric: true, Orders: true);
+            }
+
+            throw RefuseMemberComparison(binary,
+                $"'{arithmetic}' is not an Add or Subtract over numeric document members and constants");
+        }
+
+        if (!TryResolveDocumentMember(side, out var member))
+        {
+            throw RefuseMemberComparison(binary,
+                $"'{side}' is not a document member. Only a member, or an Add or Subtract over numeric members, "
+                + "can be compared with another member");
+        }
+
+        // A registered strong-typed wrapper is stored as its primitive (fisher#356).
+        var classified = member! is ValueTypeMember wrapper ? wrapper.Inner : member!;
+        var type = Nullable.GetUnderlyingType(classified.MemberType) ?? classified.MemberType;
+
+        if (IsNumeric(type))
+        {
+            return new ComparisonSide(member!.TypedLocator, type, Numeric: true, Orders: true);
+        }
+
+        if (type.IsEnum)
+        {
+            // An integer-stored enum is a JSON number; a string-stored one is its name, which neither
+            // orders nor equals a number (EnumMember.AllowsRangeComparison).
+            return classified.AllowsRangeComparison
+                ? new ComparisonSide(member!.TypedLocator, type, Numeric: true, Orders: true)
+                : new ComparisonSide(member!.TypedLocator, type, Numeric: false, Orders: false);
+        }
+
+        if (type == typeof(string) || type == typeof(char) || type == typeof(bool) || type == typeof(Guid))
+        {
+            return new ComparisonSide(member!.TypedLocator, type, Numeric: false, Orders: false);
+        }
+
+        if (type == typeof(DateTimeOffset) || type == typeof(DateTime) || type == typeof(DateOnly)
+            || type == typeof(TimeOnly))
+        {
+            return new ComparisonSide(member!.TypedLocator, type, Numeric: false, Orders: true);
+        }
+
+        throw RefuseMemberComparison(binary,
+            $"'{side}' is a {type.Name}, which has no single stored value Fisher can compare with another member");
+    }
+
+    /// <summary>
+    ///     Refuses a conversion on a side of a member-to-member comparison that changes the value, where
+    ///     C# and SQLite would then disagree: <c>(int)x.Price</c> truncates in C# and not in SQL, and a
+    ///     cast to <c>object</c> makes <c>==</c> a reference comparison.
+    /// </summary>
+    private static void AssertConversionsKeepTheValue(Expression side, BinaryExpression binary)
+    {
+        while (side is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } convert)
+        {
+            var source = Nullable.GetUnderlyingType(convert.Operand.Type) ?? convert.Operand.Type;
+            var target = Nullable.GetUnderlyingType(convert.Type) ?? convert.Type;
+
+            if (!KeepsTheValue(source, target)
+                && !Members.UnionMemberAccess.TryMatchCaseConversion(convert, out _, out _))
+            {
+                throw RefuseMemberComparison(binary,
+                    $"'{convert}' converts {source.Name} to {target.Name}, which C# and SQLite would not compare "
+                    + "the same way");
+            }
+
+            side = convert.Operand;
+        }
+
+        if (side is UnaryExpression { NodeType: ExpressionType.TypeAs } typeAs)
+        {
+            throw RefuseMemberComparison(binary, $"'{typeAs}' is a type conversion with no SQL equivalent");
+        }
+    }
+
+    private static bool KeepsTheValue(Type source, Type target)
+    {
+        if (source == target)
+        {
+            return true;
+        }
+
+        if (source.IsEnum)
+        {
+            return IntegralRank(target) >= IntegralRank(Enum.GetUnderlyingType(source)) && IntegralRank(target) > 0;
+        }
+
+        var sourceRank = IntegralRank(source);
+        if (sourceRank > 0)
+        {
+            // Integral to a wider integral, to double or to decimal is exact; to float is not.
+            return IntegralRank(target) >= sourceRank || target == typeof(double) || target == typeof(decimal);
+        }
+
+        // decimal and double are both compared as REAL already, so moving between them changes nothing
+        // SQLite sees. A float is not: C# compares it in single precision.
+        return (source == typeof(decimal) && target == typeof(double))
+               || (source == typeof(double) && target == typeof(decimal));
+    }
+
+    private static int IntegralRank(Type type)
+        => type == typeof(byte) || type == typeof(sbyte) ? 1
+            : type == typeof(short) || type == typeof(ushort) ? 2
+            : type == typeof(int) || type == typeof(uint) ? 3
+            : type == typeof(long) ? 4
+            : 0;
+
+    private static BadLinqExpressionException RefuseMemberComparison(BinaryExpression binary, string reason)
+        => new($"Cannot translate the comparison '{binary}' to SQL: both sides read the document, and {reason}. "
+               + Alternatives);
 
     private bool TryParseMethodTransform(Expression methodSide, Expression valueSide, string op,
         out ISqlFragment? fragment)
@@ -288,6 +490,26 @@ internal class WhereClauseParser
     {
         fragment = null;
 
+        if (!TryRenderArithmetic(arithmeticSide, out var rendered, out _))
+        {
+            return false;
+        }
+
+        fragment = new ComparisonFilter(rendered, op, ExtractValue(valueSide)!);
+        return true;
+    }
+
+    /// <summary>
+    ///     An Add/Subtract over numeric document members and numeric constants, rendered as
+    ///     <c>(left op right)</c>. Shared by <see cref="TryParseArithmetic" /> and the member-to-member
+    ///     comparison (fisher#595), so the two agree about which arithmetic translates.
+    /// </summary>
+    /// <param name="nullable">Whether a member operand can be null, which makes the result null too.</param>
+    private bool TryRenderArithmetic(Expression arithmeticSide, out string rendered, out bool nullable)
+    {
+        rendered = string.Empty;
+        nullable = false;
+
         if (StripConvert(arithmeticSide) is not BinaryExpression
             {
                 NodeType: ExpressionType.Add or ExpressionType.Subtract
@@ -301,6 +523,7 @@ internal class WhereClauseParser
         // member. `Statics.Value - 4` is a member expression too, and accepting it here sent the other
         // side (`x.Number`) to ExtractValue, which cannot compile a lambda parameter.
         var renderedMember = false;
+        var anyNullable = false;
 
         if (!TryRenderOperand(arithmetic.Left, out var left)
             || !TryRenderOperand(arithmetic.Right, out var right)
@@ -311,12 +534,13 @@ internal class WhereClauseParser
 
         var sqlOperator = arithmetic.NodeType == ExpressionType.Add ? "+" : "-";
 
-        fragment = new ComparisonFilter($"({left} {sqlOperator} {right})", op, ExtractValue(valueSide)!);
+        rendered = $"({left} {sqlOperator} {right})";
+        nullable = anyNullable;
         return true;
 
-        bool TryRenderOperand(Expression operand, out string rendered)
+        bool TryRenderOperand(Expression operand, out string operandSql)
         {
-            rendered = string.Empty;
+            operandSql = string.Empty;
 
             if (StripConvert(operand) is MemberExpression member && IsDocumentMember(member))
             {
@@ -329,51 +553,69 @@ internal class WhereClauseParser
                     return false;
                 }
 
-                rendered = _memberFactory.ResolveMember(member).TypedLocator;
+                operandSql = _memberFactory.ResolveMember(member).TypedLocator;
                 renderedMember = true;
+                anyNullable |= Nullable.GetUnderlyingType(member.Type) != null;
                 return true;
             }
 
             // Only a parameter-free operand can be evaluated to a constant — ExtractValue compiles
             // the expression, and a lambda parameter inside it (a computed member of a join result,
             // say) is not a value to fold but a shape this parse must decline.
-            if (!ReferencesParameter(operand)
+            if (!ReferencesFreeParameter(operand)
                 && ExtractValue(operand) is { } value && IsNumeric(value.GetType()))
             {
-                rendered = Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)!;
+                operandSql = Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)!;
                 return true;
             }
 
             return false;
         }
+    }
 
-        static bool ReferencesParameter(Expression expression)
-        {
-            var finder = new ParameterFinder();
-            finder.Visit(expression);
-            return finder.Found;
-        }
-
-        static bool IsNumeric(Type type)
-        {
-            type = Nullable.GetUnderlyingType(type) ?? type;
-            return type == typeof(int) || type == typeof(long) || type == typeof(short)
-                   || type == typeof(byte) || type == typeof(double) || type == typeof(float)
-                   || type == typeof(decimal);
-        }
+    private static bool IsNumeric(Type type)
+    {
+        type = Nullable.GetUnderlyingType(type) ?? type;
+        return type == typeof(int) || type == typeof(long) || type == typeof(short)
+               || type == typeof(byte) || type == typeof(double) || type == typeof(float)
+               || type == typeof(decimal);
     }
 
     /// <summary>
-    ///     Whether an expression references a lambda parameter anywhere — the test for "cannot be
-    ///     folded to a constant" in <see cref="TryParseArithmetic" />.
+    ///     Whether an expression reads a lambda parameter it does not bind itself: the row, so it cannot
+    ///     be folded to a value. A parameter of a lambda nested inside it (<c>list.Count(t =&gt; t &gt; 2)</c>)
+    ///     is bound there and does not count.
+    /// </summary>
+    internal static bool ReferencesFreeParameter(Expression expression)
+    {
+        var finder = new ParameterFinder();
+        finder.Visit(expression);
+        return finder.Found;
+    }
+
+    /// <summary>
+    ///     Finds a lambda parameter the expression does not bind itself — the test for "cannot be folded
+    ///     to a constant".
     /// </summary>
     private sealed class ParameterFinder : ExpressionVisitor
     {
+        private readonly HashSet<ParameterExpression> _bound = [];
+
         internal bool Found { get; private set; }
+
+        protected override Expression VisitLambda<T>(Expression<T> node)
+        {
+            foreach (var parameter in node.Parameters) _bound.Add(parameter);
+            return base.VisitLambda(node);
+        }
 
         protected override Expression VisitParameter(ParameterExpression node)
         {
-            Found = true;
+            if (!_bound.Contains(node))
+            {
+                Found = true;
+            }
+
             return node;
         }
     }
@@ -543,8 +785,23 @@ internal class WhereClauseParser
     private bool TryResolveMemberAndValue(Expression memberExpr, Expression valueExpr,
         out IQueryableMember? member, out object? value)
     {
-        member = null;
         value = null;
+
+        if (!TryResolveDocumentMember(memberExpr, out member))
+        {
+            return false;
+        }
+
+        value = ExtractValue(valueExpr);
+        return true;
+    }
+
+    /// <summary>
+    ///     The document member one side of a comparison names, through any conversions.
+    /// </summary>
+    private bool TryResolveDocumentMember(Expression memberExpr, out IQueryableMember? member)
+    {
+        member = null;
 
         // (int)x.Payment.Value > 3: a primitive case of a union, possibly widened again by the compiler
         // (fisher#466). The cast is the case, so it is found before StripConvert throws it away.
@@ -556,7 +813,6 @@ internal class WhereClauseParser
                 && IsDocumentMember(unionMember))
             {
                 member = _memberFactory.ResolveUnionCase(unionMember, caseType);
-                value = ExtractValue(valueExpr);
                 return true;
             }
         }
@@ -567,7 +823,6 @@ internal class WhereClauseParser
         }
 
         member = _memberFactory.ResolveMember(me);
-        value = ExtractValue(valueExpr);
         return true;
     }
 
@@ -577,6 +832,16 @@ internal class WhereClauseParser
     internal static object? ExtractValue(Expression expression)
     {
         expression = StripConvert(expression);
+
+        // fisher#595: an expression that reads the row has no single value, and compiling it fails with
+        // an internal "variable 'x' ... is not defined". Every caller that reaches here with one is a
+        // shape no parser translated, so it is refused by name.
+        if (ReferencesFreeParameter(expression))
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot translate '{expression}' as a value: it reads the document, so it has a different "
+                + "value on every row and there is nothing to bind. " + Alternatives);
+        }
 
         if (expression is ConstantExpression constant)
         {
