@@ -3000,6 +3000,19 @@ placeholder is still SQLite's own anonymous parameter marker**, so it fails with
 the following parameters" rather than passing through as text. Only a `?` inside a string literal is
 safe. That is what the alternate-placeholder overloads are for.
 
+⚠️ **A JSON result is read with `GetString`, never by streaming the column** (fisher#613). The
+serializer's `DbDataReader` overload asks for `GetStream` first. Microsoft.Data.Sqlite 10.0.9's
+`GetStream` on a column with no origin table (a literal, `json_object(...)`) scans the row's other
+columns for a rowid, "matches" any other computed column on their shared null table name, and passes
+that null to `sqlite3_table_column_metadata`. That is a **native SIGSEGV (exit 139)**: no exception, the
+process just dies. It was not recursion and not about `object`. `QueryAsync<object, long>("select 1, 2")`
+only reached it because `object` fell through to the JSON reader, and a lone computed column never
+crashed because there was no other column to match. `object` is now a scalar: the provider's own value
+(`long`, `double`, `string`, `byte[]`, null), in any position. `a_json_column_beside_another_computed_column_is_read`
+pins the root cause and kills the runner if it regresses. A *document* result is still read by Weasel's
+selector, which streams `data`, so a document whose `data` is a computed column beside another computed
+column would still crash. Weasel's `JsonColumnStreaming` is where that belongs.
+
 ### Soft delete
 
 A document type marked with `[SoftDeleted]`, implementing `JasperFx.Metadata.ISoftDeleted`, or

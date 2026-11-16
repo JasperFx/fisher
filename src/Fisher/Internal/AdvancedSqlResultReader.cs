@@ -103,7 +103,13 @@ internal sealed class ScalarReader : AdvancedSqlResultReader
         [typeof(Guid)] = (r, i) => r.GetFieldValue<Guid>(i),
         [typeof(DateTime)] = (r, i) => r.GetFieldValue<DateTime>(i),
         [typeof(DateTimeOffset)] = (r, i) => r.GetFieldValue<DateTimeOffset>(i),
-        [typeof(byte[])] = (r, i) => r.GetFieldValue<byte[]>(i)
+        [typeof(byte[])] = (r, i) => r.GetFieldValue<byte[]>(i),
+
+        // `object` is the caller saying "whatever is there" (fisher#613), so it is the provider's own
+        // value: long for INTEGER, double for REAL, string for TEXT, byte[] for BLOB. Deserializing it
+        // as JSON instead would hand back a JsonElement for a number and throw for any text that is
+        // not JSON, which is no reading of `object` anybody asks for.
+        [typeof(object)] = (r, i) => r.GetValue(i)
     };
 
     private readonly Func<DbDataReader, int, object> _accessor;
@@ -122,6 +128,23 @@ internal sealed class ScalarReader : AdvancedSqlResultReader
 /// <summary>
 ///     One column of JSON, deserialized to an arbitrary type.
 /// </summary>
+/// <remarks>
+///     <para>
+///         ⚠️ <b>Read with <c>GetString</c>, never through the serializer's <c>DbDataReader</c> overload
+///         (fisher#613).</b> That overload asks the provider for a <see cref="Stream" /> first, and
+///         Microsoft.Data.Sqlite's <c>GetStream</c> on a column with no origin table (any expression:
+///         <c>select json_object(...)</c>, a literal) scans the row's <em>other</em> columns for a rowid
+///         to open a blob handle on. Every other expression column also has a null database and table
+///         name, so it "matches", and the provider calls <c>sqlite3_table_column_metadata</c> with a
+///         null table name. The bundled SQLite has no API armour, so that is a native SIGSEGV: the
+///         process dies with exit 139 and no managed exception, nothing to catch.
+///     </para>
+///     <para>
+///         Raw SQL is exactly where a JSON result is an expression beside other expressions, so this
+///         reader does not stream. The cost is one string per JSON value, which is what the serializer
+///         falls back to for any provider that cannot stream anyway.
+///     </para>
+/// </remarks>
 [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
     Justification = "ISerializer.FromJson(Type, string) for raw-SQL projections. Result types flow in from the caller's QueryAsync<T>() and are preserved by the consumer per the AOT publishing guide.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
@@ -140,7 +163,7 @@ internal sealed class JsonReader : AdvancedSqlResultReader
     public override int ColumnCount => 1;
 
     public override object? ReadValue(DbDataReader reader, int startColumn)
-        => reader.IsDBNull(startColumn) ? null : _serializer.FromJson(_type, reader, startColumn);
+        => reader.IsDBNull(startColumn) ? null : _serializer.FromJson(_type, reader.GetString(startColumn));
 }
 
 /// <summary>
