@@ -29,21 +29,49 @@ namespace Fisher.Linq.SqlGeneration;
 ///         equals no stored <c>0.3</c>.
 ///     </para>
 /// </remarks>
-internal class ComparisonFilter : ISqlFragment
+internal class ComparisonFilter : ISqlFragment, INegatableFragment
 {
     private readonly string _locator;
     private readonly string _op;
     private readonly object _value;
+    private readonly bool _nullSafe;
+    private readonly bool _negated;
 
-    public ComparisonFilter(string locator, string op, object value)
+    /// <param name="nullSafe">
+    ///     The locator reads a member C# compares as a lifted (or reference) value, so a null there is C#'s
+    ///     false for every operator but <c>!=</c>, which is true (fisher#608). <c>!=</c> then renders
+    ///     <c>is not</c>, and <see cref="Negate" /> answers two-valued. Off for a string method's locator,
+    ///     whose C# call throws on a null receiver, and for a member read through a union case, whose C#
+    ///     cast throws on a row of another case: those keep SQL's semantics.
+    /// </param>
+    public ComparisonFilter(string locator, string op, object value, bool nullSafe = false)
+        : this(locator, op, SqliteParameterValue.NormalizeComparisonValue(value)!, nullSafe, negated: false)
+    {
+    }
+
+    private ComparisonFilter(string locator, string op, object normalized, bool nullSafe, bool negated)
     {
         _locator = locator;
         _op = op;
-        _value = SqliteParameterValue.NormalizeComparisonValue(value)!;
+        _value = normalized;
+        _nullSafe = nullSafe;
+        _negated = negated;
     }
+
+    public ISqlFragment Negate()
+        => _nullSafe
+            ? new ComparisonFilter(_locator, _op, _value, nullSafe: true, negated: !_negated)
+            : new NotFragment(this);
 
     public void Apply(ICommandBuilder builder)
     {
+        if (_nullSafe)
+        {
+            SqlNegation.ApplyNullSafe(builder, b => b.Append(_locator), _op, _negated,
+                b => b.AppendParameter(_value));
+            return;
+        }
+
         builder.Append(_locator);
         builder.Append(' ');
         builder.Append(_op);

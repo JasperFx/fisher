@@ -6175,6 +6175,26 @@ Add/Subtract.
   `x.Tags.Contains(x.Name)`) fail as a refusal rather than an internal exception. "Reads the row" is a FREE
   parameter: `Thresholds.Count(t => t > 1)` binds its own and is still a value.
 
+⚠️ **A comparison against a null member answers as C# does, not as SQL does** (fisher#608). C#'s `x.N != 3` is
+true when `x.N` is null and `!(x.N > 3)` is true too; SQL's `!=` and `not (NULL)` are NULL, which a WHERE drops.
+- **`ComparisonFilter(nullSafe: true)` renders `!=` as `is not`**, and is what every member-vs-constant,
+  arithmetic, float and `object.Equals` comparison builds. `==` and a range stay plain, so an index still serves
+  them; `nullable_negation_semantics` asserts the plan.
+- **`ParseNot` goes through `SqlNegation.Negate`**: an `INegatableFragment` negates itself two-valued (`is` /
+  `is not` for equality, `not coalesce(… , 0)` for a range, `ModuloFilter` and `WhereInFilter` likewise), a
+  compound by De Morgan so each leaf decides, `!!p` is `p`, and anything else keeps `not (…)`.
+- ⚠️ **A string method on a null member keeps SQL's answer**, because C# would throw: `!x.S.StartsWith("a")`
+  does not match a null `S`. Its `ComparisonFilter`s (`EndsWith`, `Equals`) are built without `nullSafe`.
+  `CollectionAll`'s `is null or not (p)` arm now matters only for that shape. So does a member read through a
+  union case (`((Card)x.P.Value).Last4 != "5678"`, `ReadsAUnionCase`): its locator is NULL on another case's
+  row, where C#'s cast throws, and `union_members` pins that such a row still matches nothing.
+- **`WhereInFilter` turns a null in the set into an `or <raw> is null` arm**, since SQL's `in` never matches NULL
+  and C#'s `Contains(null)` does.
+- **An absent non-nullable member is still NULL to SQL and its default to C#.** `x.Crew == 0` misses a document
+  with no `crew` key; fixing that needs `coalesce(locator, default)`, which no index serves.
+- `CriteriaShapeRules` still carries `SqlNullSemantics()`. Measured without it, only `not Note.Contains(...)`
+  (the string-method case) comes back wrong, so the rule could narrow to that.
+
 The provider takes both the column list and the materializer from the **query-only** closed-shape
 storage (`ISelectClause.SelectFields()` / `BuildSelector()`) rather than hand-writing `select data`,
 which is what keeps the query path's read layout aligned with `LoadAsync`'s.

@@ -329,20 +329,25 @@ public class child_collections : IAsyncLifetime
 
     /// <summary>
     ///     SQL three-valued logic must not let an element slip past <c>All</c>: an element for which
-    ///     the predicate is NULL has not <em>satisfied</em> it. Beagle's null-Port stop is that shape
-    ///     — <c>NULL != 'Oslo'</c> is NULL, and a naive <c>not exists (… not (p))</c> would read that
-    ///     as passing.
+    ///     the predicate is NULL has not <em>satisfied</em> it, and a naive <c>not exists (… not (p))</c>
+    ///     would read it as passing. Since fisher#608 a comparison decides a null the way C# does, so only
+    ///     a predicate whose C# call would throw on the null reaches this, a string method here: Beagle's
+    ///     null-Port stop is undecided and fails.
     /// </summary>
-    /// <remarks>
-    ///     This follows SQL null semantics rather than the CLR's, deliberately and consistently with
-    ///     the rest of the provider: a document whose <c>Name</c> is null does not match
-    ///     <c>x.Name != "Oslo"</c> either. In-memory LINQ would say Beagle passes, because C#'s
-    ///     <c>null != "Oslo"</c> is true.
-    /// </remarks>
     [Fact]
     public async Task an_element_the_predicate_cannot_decide_fails_all()
     {
-        (await NamesMatchingAsync(x => x.Stops.All(s => s.Port != "Oslo"))).ShouldBe(["Fram"]);
+        (await NamesMatchingAsync(x => x.Stops.All(s => !s.Port.StartsWith("O")))).ShouldBe(["Fram"]);
+    }
+
+    /// <summary>
+    ///     fisher#608: <c>null != "Oslo"</c> is true in C#, so Beagle's null-Port stop passes. SQL's
+    ///     <c>NULL != 'Oslo'</c> used to fail it, and this test used to pin that.
+    /// </summary>
+    [Fact]
+    public async Task a_null_element_member_is_compared_as_csharp_compares_it()
+    {
+        (await NamesMatchingAsync(x => x.Stops.All(s => s.Port != "Oslo"))).ShouldBe(["Beagle", "Fram"]);
     }
 
     /// <summary>

@@ -80,9 +80,16 @@ phantom row, and that row is the only one whose `key` is NULL.
   `Any(c => …)` with a predicate on the element's members.
 
 ::: tip
-Predicates inside `Any`/`All`/`Count` follow **SQL null semantics**, consistently with the rest of
-the provider: an element for which the predicate is NULL (say a null `Port` compared with `!=`) has
-not satisfied it, so it fails `All` and is not counted — where C# would call `null != "Oslo"` true.
+A comparison against a null member answers as **C#** does, inside `Any`/`All`/`Count` as everywhere
+else: `x.N != 3` and `!(x.N > 3)` are true when `x.N` is null, so `!=` is rendered `is not` and a
+negated comparison two-valued. `==` and a range comparison stay plain, which is what an index serves.
+The exception is a string method on a null member (`!x.Name.StartsWith("a")`), which C# would throw
+on: it keeps SQL's answer, so a null member matches neither the method nor its negation.
+:::
+
+::: warning
+A non-nullable member that is **absent** from older documents deserializes as its default, but SQL
+reads it as NULL. So `x.Crew == 0` does not match such a document, where loading it would show `0`.
 :::
 
 ::: tip

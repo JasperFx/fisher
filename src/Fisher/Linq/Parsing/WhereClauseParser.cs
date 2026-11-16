@@ -218,12 +218,12 @@ internal class WhereClauseParser
 
         if (TryResolveMemberAndValue(binary.Left, binary.Right, out var member, out var value))
         {
-            return BuildComparisonFilter(member!, value, op);
+            return BuildComparisonFilter(member!, value, op, !ReadsAUnionCase(binary.Left));
         }
 
         if (TryResolveMemberAndValue(binary.Right, binary.Left, out member, out value))
         {
-            return BuildComparisonFilter(member!, value, ReverseOperator(op));
+            return BuildComparisonFilter(member!, value, ReverseOperator(op), !ReadsAUnionCase(binary.Right));
         }
 
         throw new BadLinqExpressionException($"Cannot translate the comparison '{binary}' to SQL. " + Alternatives);
@@ -503,7 +503,8 @@ internal class WhereClauseParser
             return false;
         }
 
-        fragment = new ComparisonFilter(rendered, op, ExtractValue(valueSide)!);
+        fragment = new ComparisonFilter(rendered, op, ExtractValue(valueSide)!,
+            nullSafe: !ReadsAUnionCase(arithmeticSide));
         return true;
     }
 
@@ -909,7 +910,11 @@ internal class WhereClauseParser
         _ => throw new ArgumentOutOfRangeException(nameof(op), op, null)
     };
 
-    private ISqlFragment BuildComparisonFilter(IQueryableMember member, object? value, string op)
+    /// <param name="nullSafe">
+    ///     Whether a null member is C#'s lifted comparison (fisher#608): false for a member read through a
+    ///     union case, whose C# cast throws on a row of another case, so that row matches nothing as before.
+    /// </param>
+    private ISqlFragment BuildComparisonFilter(IQueryableMember member, object? value, string op, bool nullSafe)
     {
         if (value == null)
         {
@@ -921,10 +926,38 @@ internal class WhereClauseParser
         // x.Weight == 0.3: C# widens the float member, so the double is compared in float terms (fisher#605)
         if (value is double number && FloatComparisons.IsFloatMember(member))
         {
-            return FloatComparisons.Compare(member, number, op);
+            return FloatComparisons.Compare(member, number, op, nullSafe);
         }
 
-        return new ComparisonFilter(member.TypedLocator, op, member.ConvertValue(value)!);
+        return new ComparisonFilter(member.TypedLocator, op, member.ConvertValue(value)!, nullSafe);
+    }
+
+    /// <summary>
+    ///     Whether the side reads a member through a union case conversion, <c>((Card)x.P.Value).Last4</c>,
+    ///     whose locator is NULL on every row of another case (fisher#466). C# throws there rather than
+    ///     comparing a null, so those comparisons keep SQL's semantics (fisher#608).
+    /// </summary>
+    private static bool ReadsAUnionCase(Expression side)
+    {
+        var finder = new UnionCaseFinder();
+        finder.Visit(side);
+        return finder.Found;
+    }
+
+    private sealed class UnionCaseFinder : ExpressionVisitor
+    {
+        internal bool Found { get; private set; }
+
+        protected override Expression VisitUnary(UnaryExpression node)
+        {
+            if (Members.UnionMemberAccess.TryMatchCaseConversion(node, out _, out _))
+            {
+                Found = true;
+                return node;
+            }
+
+            return base.VisitUnary(node);
+        }
     }
 
     /// <summary>
@@ -959,7 +992,8 @@ internal class WhereClauseParser
             return ParseBooleanMember(member, false);
         }
 
-        return new NotFragment(Parse(unary.Operand));
+        // fisher#608: C#'s answer for a null member, not SQL's three-valued one.
+        return SqlNegation.Negate(Parse(unary.Operand));
     }
 
     private ISqlFragment ParseBooleanMember(MemberExpression memberExpr, bool expectedValue)
