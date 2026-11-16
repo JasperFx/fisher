@@ -12,11 +12,19 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3129 tests green on net10.0 and 3156 on net11.0** — 3058 (net10.0) / 3085 (net11.0) in `Fisher.Tests`, 40 in
+**3144 tests green on net10.0 and 3171 on net11.0** — 3073 (net10.0) / 3100 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
+
+## The open gate no longer starves the thread pool (fisher#587)
+
+#582's gate (fisher#576) was a `SemaphoreSlim`. A contended async open handed its wait to the thread pool while
+synchronous opens held pool threads, and a first burst of synchronous Hi-Lo stores stalled for 29 s. The gate
+is now a `Lock` held around a wholly synchronous open in both the sync and async paths (0.56 s for the same
+burst). `serialized_connection_opens.a_contended_async_open_completes_before_it_returns` fails against the old
+gate. `synchronous_hilo_burst` reproduces the stall when run alone. Found by checking marten#5969 against Fisher.
 
 ## A second `OrderBy` re-sorts (fisher#588)
 

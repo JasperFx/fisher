@@ -2601,6 +2601,14 @@ next opener.
 - ⚠️ **Weasel's migrations open their own `new SqliteConnection` and are not gated**, nor is application code. That
   residual is rare next to session opens. The class belongs in Weasel.Sqlite's `SqliteDataSource`, and the race
   upstream. Remove it when Microsoft.Data.Sqlite activates under the pool lock.
+- ⚠️ **The gate is a `Lock` around a wholly synchronous open, and must never become async again** (fisher#587).
+  The first version was a `SemaphoreSlim`: async opens `WaitAsync`ed and sync opens blocked in `Wait`. A contended
+  async open then returned an incomplete task, so the open, and the release of the gate, waited for a pool thread,
+  while sync waiters held pool threads. A burst of synchronous Hi-Lo stores (each advance opens synchronously)
+  stalled for 29 s, against 0.56 s now. The async override runs `base.OpenDbConnection()` under the lock and
+  returns a completed task, which is safe because Microsoft.Data.Sqlite's open and Weasel's PRAGMAs are
+  synchronous underneath. `a_contended_async_open_completes_before_it_returns` pins it without depending on timing;
+  `synchronous_hilo_burst` reproduces the stall only when run alone. Found by checking marten#5969 against Fisher.
 - fisher#311's untracked transaction may have been this too (another session's `BEGIN` on a shared handle). Not
   verified, so its defence stays.
 - `serialized_connection_opens` plants the mid-`Activate` state by reflection to pin the premise, and holds one open
