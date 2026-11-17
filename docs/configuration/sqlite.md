@@ -76,6 +76,19 @@ Matching the siblings would mean holding a `BEGIN IMMEDIATE` open from the fetch
 `SaveChangesAsync`, blocking every other writer in the process for as long as the caller holds the
 session. That is a worse trade for an embedded database.
 
+### The busy handler
+
+`PRAGMA busy_timeout` installs SQLite's default busy handler, which sleeps 1, 2, 5, 10, 15, 20, 25, 25, 25, 50, 50 and
+then 100 ms between tries for the write lock. A waiting writer can sleep long after the lock was
+released, and with several writers on one file that sleep was nearly all of the cost
+([fisher#547](https://github.com/JasperFx/fisher/issues/547)).
+
+So Fisher 2.0 replaces it on every connection it opens with a handler that sleeps a fixed 1 ms
+between tries. The deadline is still `BusyTimeout`, and the write still fails with `SQLITE_BUSY` once
+it passes, so nothing changes for callers. At 8 to 16 concurrent writers it measured 2 to 3 times the
+throughput of the default handler. A `BusyTimeout` of zero or less is left alone, and so is a
+connection you pass to a session yourself.
+
 ### Busy retries
 
 A contended write surfaces as `SQLITE_BUSY` or `SQLITE_LOCKED`, and Fisher retries it through a real

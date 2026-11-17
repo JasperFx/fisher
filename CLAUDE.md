@@ -132,11 +132,17 @@ the only sync-over-async left in the write path and runs once per sequence. The 
 single-writer queue in front of `BEGIN IMMEDIATE`, is a benchmark-first design question (it would change
 per-session failure and enlisted-session semantics) and is NOT done; the baseline to beat is
 `ConcurrentWritersScenario` (8 writers ~1.8x the wall clock of 1 writer, see `Fisher.Benchmarks/Results.md`).
-**fisher#547 has the measurement, and no decision yet:** `writer-queue` in `Fisher.Benchmarks` compares racing
-against a benchmark-only `Channel<T>` queue (and a `SemaphoreSlim` control), and `Results.md`'s fisher#547
-section has the numbers and the semantic costs. Its "fisher#547 round 2" section adds replacement busy
-handlers, event appends, the daemon, group commit and a bounded queue, and confirms SQLite's default busy
-handler's sleeps as the whole cost of racing. Adopting or declining any of it is the owner's call.
+**fisher#547 is decided: the 1 ms busy handler is adopted, the `Channel<T>` queue is not** (Jeremy,
+2026-11-16; Fisher 2.0 only). `writer-queue` in `Fisher.Benchmarks` compares racing against a benchmark-only
+`Channel<T>` queue (and a `SemaphoreSlim` control), and `Results.md`'s fisher#547 section has the numbers and
+the semantic costs. Its "fisher#547 round 2" section adds replacement busy handlers, event appends, the daemon,
+group commit and a bounded queue, and confirms SQLite's default busy handler's sleeps as the whole cost of
+racing. `Storage/SqliteBusyHandler` installs the 1 ms handler on every connection `SerializedOpenDataSource`
+opens, after Weasel's PRAGMAs (whose `busy_timeout` installs the default one), with `BusyTimeout` as the
+deadline. SQLitePCLRaw 3.0.5 does not expose `sqlite3_busy_handler`, so it is looked up in the provider's own
+`e_sqlite3` library, and only when that is the provider; anywhere else the default handler stays. The
+`writer-queue` bh-* modes turn it off through the internal `StoreOptions.UseFixedSleepBusyHandler`, so plain
+`race` now measures Fisher's handler and `bh-mimic` measures SQLite's default.
 
 **`AppendExclusive` / `FetchForExclusiveWriting` / `WriteExclusivelyToAggregate` are the optimistic
 methods.** Marten and Polecat take a row lock so a competing session waits its turn. SQLite has no

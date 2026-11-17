@@ -8,11 +8,16 @@
              IL3050 warnings against Fisher itself so the AOT punch list shows up in our own build
              rather than downstream consumers'. -->
         <IsAotCompatible>true</IsAotCompatible>
+        <!-- fisher#547: SqliteBusyHandler passes an [UnmanagedCallersOnly] function pointer to
+             sqlite3_busy_handler. -->
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
     <ItemGroup>
         <InternalsVisibleTo Include="Fisher.Tests" />
         <InternalsVisibleTo Include="Fisher.TestUtils" />
+        <!-- fisher#547: the writer-queue benchmark turns the 1 ms busy handler off for its bh-* modes. -->
+        <InternalsVisibleTo Include="Fisher.Benchmarks" />
     </ItemGroup>
 
     <ItemGroup>
