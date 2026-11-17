@@ -12,11 +12,23 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3546 tests green on net10.0 and 3573 on net11.0** — 3475 (net10.0) / 3502 (net11.0) in `Fisher.Tests`, 40 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 846 of
-them are shared cross-store compliance tests — 612 event sourcing and 234 document.
+**3569 tests green on net10.0 and 3596 on net11.0** — 3497 (net10.0) / 3524 (net11.0) in `Fisher.Tests`, 40 in
+`Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 864 of
+them are shared cross-store compliance tests — 630 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.5.0** / Weasel **10.0.0-alpha.7**.
+On JasperFx **3.6.0** / Weasel **10.0.0-alpha.8**.
+
+## Per-identity rebuild on JasperFx 3.6.0 (fisher#629)
+
+JasperFx 3.6.0 and Weasel 10.0.0-alpha.8. `IdentityRebuildCompliance` (jasperfx#1201) is enrolled, 18 of 18 green.
+Fisher supplies the re-fold loader (`FisherIdentityRebuildLoader`: the daemon loader's query narrowed to one stream),
+`HardDeleteById`, and soft-deleted projection documents through the registrar. An idle shard's empty `(C, C]` batch
+passes the fisher#402 floor check unchanged. `RebuildSingleStreamAsync` for an async single-stream projection goes
+through a hosted daemon, refuses with `ShardLiveOnAnotherNode` when the row shows a live agent Fisher cannot reach,
+and otherwise rebuilds offline (migration guide). Fisher's daemon refuses a projection kept in `StorageProviders`
+storage, which has no `HardDeleteById`. The session answers `LastAppendedPosition`; strong-typed Guid ids and the
+patch `guid_version` use `SequentialGuid.NextPostgresOrder()`. jasperfx#1225 (a stopped agent's `Stopped` status
+is lost on `StopAllAsync`) is worked around in `rebuilding_one_stream_beside_a_daemon` until 3.6.1.
 
 ## `decimal` aggregates are exact (fisher#606)
 
@@ -1343,9 +1355,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 3.5.0 ships 66 suites; Fisher enrolls **66 of them, 846 tests**.
-Fisher passes **846 of them, across all
-66 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 3.6.0 ships 67 suites; Fisher enrolls **67 of them, 864 tests**.
+Fisher passes **864 of them, across all
+67 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -1500,9 +1512,9 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 66 suites, 846 tests
+### Green — 67 suites, 864 tests
 
-Event sourcing — 52 suites, 612 tests:
+Event sourcing — 53 suites, 630 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1510,6 +1522,7 @@ Event sourcing — 52 suites, 612 tests:
 | `DcbTagQueryAndConsistencyCompliance` | 28 |
 | `DcbAppendConditionCompliance` | 24 |
 | `ProjectionScenarioCompliance` | 20 |
+| `IdentityRebuildCompliance` | 18 |
 | `StringStreamIdentityCompliance` | 21 |
 | `EventStoreExplorerCompliance` | 18 |
 | `NaturalKeyCompliance` | 19 |
