@@ -10,6 +10,13 @@ opts.Events.EnableUserName = true;
 opts.Events.EnableHeaders = true;
 ```
 
+Or all four in one call, the same set as Marten's `Events.MetadataConfig.EnableAll()`. That includes the
+user name, so the session's `LastModifiedBy` is stored on every appended event:
+
+```cs
+opts.Events.EnableAllEventMetadata();
+```
+
 ::: warning
 These are **schema decisions**. Set them before the tables are created — and note that they also gate
 the matching filters on [event queries](/events/querying#querying-event-metadata), because a filter
