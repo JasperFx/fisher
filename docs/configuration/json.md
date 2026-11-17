@@ -29,6 +29,14 @@ Or supply a serializer of your own:
 opts.Serializer = new MyCustomSerializer();
 ```
 
+## Polymorphic types: `AllowOutOfOrderMetadataProperties`
+
+Fisher's serializer sets System.Text.Json's `AllowOutOfOrderMetadataProperties` to `true` since Fisher
+2.0, as Marten 10 does. A `[JsonDerivedType]` type then reads back even when `$type` is not the first
+property, which can happen once something other than the serializer has rewritten the JSON. It applies
+to the default `Serializer` and to `ConfigureSerialization`; a serializer you supply yourself keeps its
+own options. `StoreOptions.RestoreV1Defaults()` sets it back to `false`.
+
 ## Enum storage, and why the default matters here
 
 `EnumStorage.AsInteger` is the default, and on Fisher that is more than a preference.

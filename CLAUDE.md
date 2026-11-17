@@ -2503,8 +2503,8 @@ before anything changed: 14 of `decimal_aggregates`' 17 facts fail on the old pa
 - **`fi_decimal_sum`/`_avg`/`_min`/`_max` return TEXT**, so the grouped form is
   `(fi_decimal_sum(…) collate fi_decimal)`. That collation is what makes `HAVING`, a grouped `OrderBy` and
   `Distinct` compare as numbers, and `DecimalAggregateComparison` binds the `HAVING` value as TEXT. fisher#304's
-  REAL would sort below every TEXT and match nothing. The collation is registered by subclassing
-  `SqliteFunction` until weasel#861 adds a registry member.
+  REAL would sort below every TEXT and match nothing. The collation is registered with
+  `SqliteFunctionRegistry.AddCollation` (weasel#861), beside the aggregates.
 - **`AverageAsync` still returns `double`**, now the exact mean rounded once. `(double)decimal` is not
   correctly rounded, which is why the test's oracle parses the decimal's text instead.
 - **A borrowed connection gets the store's functions too**: `ExternalConnectionLifetime` registers them on
@@ -3015,9 +3015,12 @@ process just dies. It was not recursion and not about `object`. `QueryAsync<obje
 only reached it because `object` fell through to the JSON reader, and a lone computed column never
 crashed because there was no other column to match. `object` is now a scalar: the provider's own value
 (`long`, `double`, `string`, `byte[]`, null), in any position. `a_json_column_beside_another_computed_column_is_read`
-pins the root cause and kills the runner if it regresses. A *document* result is still read by Weasel's
-selector, which streams `data`, so a document whose `data` is a computed column beside another computed
-column would still crash. Weasel's `JsonColumnStreaming` is where that belongs.
+pins the root cause and kills the runner if it regresses. A *document* result is read by Weasel's
+selector, and since Weasel 10.0.0-alpha.6 (weasel#863) `JsonColumnStreaming` never asks a
+`SqliteDataReader` for a stream, so a document whose `data` is a computed column beside another computed
+column reads too (`a_computed_document_beside_another_computed_column_is_read`, exit 139 on alpha.4). The
+JSON reader still reads with `GetString`: a custom `ISerializer`'s `DbDataReader` overload is not Weasel's
+and could stream, and the string costs nothing over Weasel's own SQLite path.
 
 ### Soft delete
 
@@ -3453,6 +3456,28 @@ answer "which request wrote this event" and not "which request wrote this docume
 - **`IDocumentSession` now declares `CorrelationId` / `CausationId` / `CurrentUserName` / `Headers` /
   `SetHeader`.** They were public on `FisherSession` and on no interface, so setting one meant casting
   to an internal type — tolerable while only events read them, wrong once a document does.
+
+### Fisher 2.0's default changes and `RestoreV1Defaults()` — fisher#621
+
+Marten 10's marten#5812 defaults, applied where Fisher has the option: the four event metadata flags, the four
+session metadata columns on every document (`correlation_id`, `causation_id`, `last_modified_by`, `headers`;
+`created_at` stays opt-in), `EnableSideEffectsOnInlineProjections`, the `fisher.events.appended` counter and
+STJ's `AllowOutOfOrderMetadataProperties` on Fisher's `Serializer` are all on. `StoreOptions.RestoreV1Defaults()`
+puts each back, plus JasperFx 3.0's `GateSideEffectsBehindPriorVersion`; `restore_v1_defaults` pins every pair,
+and the migration guide's 2.0 table lists them. **A new 2.0 default change goes in all three together.**
+
+- **The document columns follow a store default that is read late.** An optional `MetadataColumn` keeps an
+  explicit on/off and otherwise asks `Default` (`StoreOptions.EnableDocumentMetadataByDefault`) each time
+  `Enabled` is read, which is when the table and storage are built. So `RestoreV1Defaults()` after
+  `Schema.For<T>()` still reaches that type. `Enabled = false` on a default column is allowed (it was refused
+  when every optional column was opt-in); turning off a column the same configuration turned on still throws.
+- **The serializer and the gate are applied at build** (`ApplyRestoredV1Defaults`, beside
+  `ApplyValueTypeConverters`), because `ConfigureSerialization` and projection registration can follow the call.
+- **The event counter is recorded straight from the commit behind `Counter.Enabled`**, not through
+  `ExportCounterOnChangeSets`, which would build a `ChangeSet` on every commit. That is what makes "on by
+  default" free when nothing listens.
+- Tests about a store that opts into columns one at a time start from `RestoreV1Defaults()`, and the two
+  compliance fixtures switch the metadata defaults off, because the suites name what each store captures.
 
 ### Document metadata member mapping
 

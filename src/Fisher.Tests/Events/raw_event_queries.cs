@@ -161,6 +161,9 @@ public class raw_event_queries : IAsyncLifetime
         {
             options.ConnectionString = database.ConnectionString;
             options.AutoCreateSchemaObjects = AutoCreate.All;
+
+            // The correlation column is on by default since fisher#621; this fact needs it off.
+            options.RestoreV1Defaults();
         });
         await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
 

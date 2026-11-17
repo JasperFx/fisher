@@ -11,7 +11,7 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
-**Since 2.0.0-alpha.2, main moves to Weasel 10.0.0-alpha.4 and is mostly a LINQ correctness wave**, out of a sweep
+**Since 2.0.0-alpha.2, main moves to Weasel 10.0.0-alpha.6 and is mostly a LINQ correctness wave**, out of a sweep
 of Marten's fixes for anything that also bites Fisher. Every one of these answered differently from LINQ to
 Objects, silently, and now matches it or is refused by name:
 - A second `OrderBy` re-sorts ([#588](https://github.com/JasperFx/fisher/issues/588)).
@@ -47,6 +47,13 @@ Outside LINQ:
   ([#613](https://github.com/JasperFx/fisher/issues/613); the document-selector half is weasel#863).
 - The diagnostics criteria refuse only a negated string method on a nullable member ([#612](https://github.com/JasperFx/fisher/issues/612)).
 - Docs: a Personal Data and GDPR Erasure page pointing at Tayra ([#552](https://github.com/JasperFx/fisher/issues/552)).
+
+Fisher 2.0 takes Marten 10's default changes where Fisher has the same option
+([#621](https://github.com/JasperFx/fisher/issues/621)): event and document session metadata, side effects on
+inline projections, the event counter and STJ's `AllowOutOfOrderMetadataProperties` are on, and
+`StoreOptions.RestoreV1Defaults()` puts them back. ⚠️ Inline projections now run their side effects.
+`EnableAllEventMetadata()` turns on all four event metadata flags in one call
+([#619](https://github.com/JasperFx/fisher/issues/619)).
 
 [#569](https://github.com/JasperFx/fisher/issues/569) was pinned to a regression test, and
 [#570](https://github.com/JasperFx/fisher/issues/570) measured and declined JasperFx 3.3.0's pooled binary-serializer

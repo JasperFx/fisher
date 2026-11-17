@@ -288,6 +288,29 @@ public class advanced_sql_queries : IAsyncLifetime
         trailing.ShouldBe([(1L, new Summary("Sam"))]);
     }
 
+    /// <summary>
+    ///     The document half of fisher#613: a document whose <c>data</c> is a computed column, beside
+    ///     another computed column. A document is read by Weasel's selector, not by Fisher's JSON reader,
+    ///     and before Weasel 10.0.0-alpha.6 (weasel#863) that selector asked for <c>GetStream</c> and the
+    ///     process died the same way.
+    /// </summary>
+    [Fact]
+    public async Task a_computed_document_beside_another_computed_column_is_read()
+    {
+        await using var session = _store.LightweightSession();
+
+        var rows = await session.AdvancedSql.QueryAsync<Angler, long>(
+            "select json_object('id', ?, 'name', 'Merry', 'fee', 7.5, 'active', json('true')), 2",
+            TestContext.Current.CancellationToken, KnownId.ToString());
+
+        var (angler, two) = rows.ShouldHaveSingleItem();
+        angler.Id.ShouldBe(KnownId);
+        angler.Name.ShouldBe("Merry");
+        angler.Fee.ShouldBe(7.5m);
+        angler.Active.ShouldBeTrue();
+        two.ShouldBe(2L);
+    }
+
     // ---- streaming, parameters, transaction scope ----
 
     [Fact]

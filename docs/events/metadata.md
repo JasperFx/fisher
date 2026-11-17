@@ -1,7 +1,8 @@
 # Event Metadata
 
 Every event carries `IEvent` metadata: its id, sequence, stream, version, timestamp, type and
-`dotnet_type`. Four more are opt-in, because each adds a column to `fi_events`.
+`dotnet_type`. Four more each add a column to `fi_events`. They are on by default since Fisher 2.0, as
+in Marten 10, and `StoreOptions.RestoreV1Defaults()` turns them off. Each one can be set on its own:
 
 ```cs
 opts.Events.EnableCorrelationId = true;
@@ -10,8 +11,9 @@ opts.Events.EnableUserName = true;
 opts.Events.EnableHeaders = true;
 ```
 
-Or all four in one call, the same set as Marten's `Events.MetadataConfig.EnableAll()`. That includes the
-user name, so the session's `LastModifiedBy` is stored on every appended event:
+Or all four in one call after `RestoreV1Defaults()`, the same set as Marten's
+`Events.MetadataConfig.EnableAll()`. That includes the user name, so the session's `LastModifiedBy` is
+stored on every appended event:
 
 ```cs
 opts.Events.EnableAllEventMetadata();

@@ -19,7 +19,9 @@ namespace Fisher.Services;
 ///         <b>Everything here is opt-in and nothing exists until it is asked for.</b> Each
 ///         <c>Track…</c> method creates its instrument on first call; until then the field is null and
 ///         the recording site is a null check. That matters more than usual, because the write-lock
-///         site is inside every commit.
+///         site is inside every commit. The exception is <c>fisher.events.appended</c>, on by default
+///         since Fisher 2.0 (fisher#621): an instrument nothing listens to costs one <c>Enabled</c>
+///         check.
 ///     </para>
 ///     <para>
 ///         <b>The counters are deliberately not Marten's.</b> Marten's interesting number is
@@ -76,6 +78,7 @@ public sealed class OpenTelemetryOptions: JasperFx.OpenTelemetry.OpenTelemetryOp
     // check on the commit path and nothing else.
     private Histogram<double>? _writeLockWait;
     private Counter<long>? _writeLockRetries;
+    private Counter<long>? _eventsAppended;
 
     public OpenTelemetryOptions(): base(MeterName)
     {
@@ -243,9 +246,16 @@ public sealed class OpenTelemetryOptions: JasperFx.OpenTelemetry.OpenTelemetryOp
 
     /// <summary>
     ///     Opt into <c>fisher.events.appended</c>: events appended by a committed unit of work, tagged
-    ///     by event type and tenant.
+    ///     by event type and tenant. On by default since Fisher 2.0 (fisher#621), so this is needed only
+    ///     after <c>StoreOptions.RestoreV1Defaults()</c>.
     /// </summary>
     /// <remarks>
+    ///     <para>
+    ///         <b>No cost without a listener</b>, which is why it can be on by default, as Marten 10's
+    ///         is. It is recorded straight from the commit, behind the instrument's <c>Enabled</c>
+    ///         check, rather than through <c>ExportCounterOnChangeSets</c>, which would build a change
+    ///         set on every commit whether anything was listening or not.
+    ///     </para>
     ///     <para>
     ///         The same shape as Marten's <c>TrackEventCounters</c>, and it earns its place here for a
     ///         reason Marten's does not: append volume is what turns write-lock contention from a
@@ -261,16 +271,49 @@ public sealed class OpenTelemetryOptions: JasperFx.OpenTelemetry.OpenTelemetryOp
     ///     </para>
     /// </remarks>
     public void TrackEventCounters()
-        => ExportCounterOnChangeSets<long>("fisher.events.appended", "events", (counter, commit) =>
+        => _eventsAppended ??= Meter.CreateCounter<long>("fisher.events.appended", "events",
+            "Events appended by a committed unit of work");
+
+    /// <summary>
+    ///     Whether <c>fisher.events.appended</c> is on without being asked for. True in Fisher 2.0;
+    ///     <c>StoreOptions.RestoreV1Defaults()</c> turns it off. Applied when the store is built.
+    /// </summary>
+    internal bool EventCountersByDefault { get; set; } = true;
+
+    /// <summary>
+    ///     Create the instruments that are on by default, once the configuration is final.
+    /// </summary>
+    internal void ApplyDefaultInstruments()
+    {
+        if (EventCountersByDefault)
         {
-            foreach (var e in commit.GetEvents())
+            TrackEventCounters();
+        }
+    }
+
+    /// <summary>Whether <c>fisher.events.appended</c> exists on this store, listened to or not.</summary>
+    internal bool TracksEventCounters => _eventsAppended is not null;
+
+    /// <summary>
+    ///     Count a committed unit of work's appended events. One field read and a branch when nothing is
+    ///     listening.
+    /// </summary>
+    internal void RecordEventsAppended(IReadOnlyList<StreamAction> streams)
+    {
+        var counter = _eventsAppended;
+        if (counter is null || !counter.Enabled || streams.Count == 0) return;
+
+        foreach (var stream in streams)
+        {
+            foreach (var e in stream.Events)
             {
                 counter.Add(1, new TagList
                 {
                     { StoreTag, StoreName }, { EventTypeTag, e.EventTypeName }, { TenantTag, e.TenantId }
                 });
             }
-        });
+        }
+    }
 
     /// <summary>
     ///     Opt into <c>fisher.documents.written</c>: documents a committed unit of work inserted,

@@ -128,9 +128,10 @@ public class event_store_schema_creation : IAsyncLifetime
     }
 
     [Fact]
-    public async Task optional_metadata_columns_are_absent_until_enabled()
+    public async Task optional_metadata_columns_are_absent_with_fisher_1_defaults()
     {
-        await using var database = DatabaseFor();
+        // On by default since fisher#621; restore_v1_defaults covers the 2.0 default.
+        await using var database = DatabaseFor(x => x.RestoreV1Defaults());
         await database.ApplyAllConfiguredChangesToDatabaseAsync(ct: TestContext.Current.CancellationToken);
 
         var names = (await ColumnsAsync("fi_events")).Select(x => x.Name).ToList();
@@ -146,6 +147,7 @@ public class event_store_schema_creation : IAsyncLifetime
     {
         await using var database = DatabaseFor(x =>
         {
+            x.RestoreV1Defaults();
             x.Events.EnableCorrelationId = true;
             x.Events.EnableCausationId = true;
             x.Events.EnableHeaders = true;

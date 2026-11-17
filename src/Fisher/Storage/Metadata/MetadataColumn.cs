@@ -24,13 +24,22 @@ public class MetadataColumn
 {
     private readonly bool _optional;
 
+    // For an optional column: true or false once something said so, null while it follows the default.
+    private bool? _explicit;
+
     internal MetadataColumn(string name, Type memberType, bool optional = false)
     {
         Name = name;
         MemberType = memberType;
         _optional = optional;
-        Enabled = !optional;
     }
+
+    /// <summary>
+    ///     What an optional column does when nothing turned it on or off: the store-wide default
+    ///     (fisher#621). Read every time <see cref="Enabled" /> is, which is when the table and the
+    ///     storage are built, so it sees the configuration as it finally is.
+    /// </summary>
+    internal Func<bool>? Default { get; set; }
 
     /// <summary>The column's name on the document table.</summary>
     public string Name { get; }
@@ -52,11 +61,31 @@ public class MetadataColumn
     ///         fisher#29 added, and <see cref="Enable" /> throws on the others rather than pretending.
     ///     </para>
     ///     <para>
-    ///         Off by default for the opt-in columns, so adding the feature does not widen a table
-    ///         nobody asked to widen.
+    ///         Off by default for <c>created_at</c> and the <c>tenant_id</c> read-back. Since Fisher 2.0
+    ///         (fisher#621) <c>correlation_id</c>, <c>causation_id</c>, <c>last_modified_by</c> and
+    ///         <c>headers</c> follow <c>StoreOptions</c>' store-wide default, which is on and which
+    ///         <c>RestoreV1Defaults()</c> turns off.
     ///     </para>
     /// </remarks>
-    public bool Enabled { get; private set; }
+    public bool Enabled => !_optional || (_explicit ?? Default?.Invoke() ?? false);
+
+    /// <summary>Whether this column was turned on explicitly, rather than by the store-wide default.</summary>
+    internal bool ExplicitlyEnabled => _explicit == true;
+
+    /// <summary>
+    ///     Keep an optional column off for this document type even when the store-wide default is on.
+    /// </summary>
+    internal void Disable()
+    {
+        if (_explicit == true)
+        {
+            throw new InvalidOperationException(
+                $"Metadata column '{Name}' has already been enabled. Dropping a column that may hold data is "
+                + "a migration, not a configuration flag.");
+        }
+
+        _explicit = false;
+    }
 
     /// <inheritdoc cref="Enabled" />
     public void Enable()
@@ -68,7 +97,7 @@ public class MetadataColumn
                 + "document's own configuration, so enabling it here would mean nothing.");
         }
 
-        Enabled = true;
+        _explicit = true;
     }
 
     /// <summary>
@@ -94,7 +123,7 @@ public class MetadataColumn
 
         if (_optional)
         {
-            Enabled = true;
+            _explicit = true;
         }
     }
 

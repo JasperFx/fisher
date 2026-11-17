@@ -51,6 +51,14 @@ public class DocumentMapping
         DocumentType = documentType;
         StoreOptions = options;
 
+        // fisher#621: on by default in Fisher 2.0, as in Marten 10. A function rather than a value so a
+        // RestoreV1Defaults() call after Schema.For<T>() still reaches this mapping.
+        Func<bool> metadataByDefault = () => options.EnableDocumentMetadataByDefault;
+        Metadata.CorrelationId.Default = metadataByDefault;
+        Metadata.CausationId.Default = metadataByDefault;
+        Metadata.LastModifiedBy.Default = metadataByDefault;
+        Metadata.Headers.Default = metadataByDefault;
+
         // Resolved but not demanded. A type with no usable identity member is only a problem once
         // something tries to store one, and refusing here would make Schema.For<T>().Identity(...)
         // unreachable for exactly the type it exists for (fisher#218) — the mapping would throw while

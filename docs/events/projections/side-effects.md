@@ -93,10 +93,10 @@ re-flushing the first one's messages.
 
 ## Inline projections
 
-Off by default:
+On by default since Fisher 2.0, as in Marten 10. To turn them off:
 
 ```cs
-opts.Events.EnableSideEffectsOnInlineProjections = true;
+opts.Events.EnableSideEffectsOnInlineProjections = false;
 ```
 
 ## Generic dispatch

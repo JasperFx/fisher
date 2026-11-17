@@ -47,9 +47,15 @@ namespace Fisher.Serialization;
 /// </remarks>
 public class Serializer : SystemTextJsonSerializer, ISerializer, Weasel.Storage.IStorageSerializer
 {
-    /// <summary>Construct with <see cref="SystemTextJsonSerializer.DefaultOptions" />.</summary>
+    /// <summary>
+    ///     Construct with <see cref="SystemTextJsonSerializer.DefaultOptions" />, plus
+    ///     <c>AllowOutOfOrderMetadataProperties = true</c> (fisher#621, as Marten 10), so a polymorphic
+    ///     <c>[JsonDerivedType]</c> document reads back even when <c>$type</c> is not its first property.
+    ///     <c>StoreOptions.RestoreV1Defaults()</c> turns it off again.
+    /// </summary>
     public Serializer()
     {
+        Options.AllowOutOfOrderMetadataProperties = true;
     }
 
     /// <summary>Construct over caller-supplied options.</summary>

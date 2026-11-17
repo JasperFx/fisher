@@ -81,6 +81,10 @@ public partial class DocumentStore : IDocumentStore
         // and nothing has serialized a document yet.
         options.ApplyValueTypeConverters();
 
+        // fisher#621. RestoreV1Defaults() marks what it can only apply now: the serializer can still be
+        // replaced and projections registered after the call, and both are final here.
+        options.ApplyRestoredV1Defaults();
+
         // fisher#257. Beside AssertEveryMappingHasIdentity for the same reason: this is the first
         // moment the configuration is final — an IConfigureFisher contribution may have added a
         // document type or turned conjoined tenancy on long after the configuration lambda ran — and
@@ -109,6 +113,9 @@ public partial class DocumentStore : IDocumentStore
         // Stamped here rather than in StoreOptions' constructor, where the name is not set yet and an
         // IConfigureFisher contribution has not run.
         options.OpenTelemetry.StoreName = options.StoreName;
+
+        // fisher#621: fisher.events.appended is on by default in Fisher 2.0, unless RestoreV1Defaults().
+        options.OpenTelemetry.ApplyDefaultInstruments();
 
         if (options.OpenTelemetry.Applications.Count > 0)
         {
