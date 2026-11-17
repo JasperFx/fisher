@@ -940,6 +940,13 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         // commit can make, and Fisher is not told when that happens.
         var notifyListeners = Listeners.Count > 0 && EnlistedTransaction is null;
 
+        // fisher#621. Counted where the listeners are notified and on the same terms, which is what the
+        // change-set counter it replaced saw; free when nothing listens to the instrument.
+        if (EnlistedTransaction is null)
+        {
+            Options.OpenTelemetry.RecordEventsAppended(streams);
+        }
+
         // fisher#207. The change set is what both consumers want, and it is built at most once for
         // the two of them — which is the whole reason this is a local rather than two `new`s.
         //

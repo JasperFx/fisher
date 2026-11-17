@@ -60,10 +60,11 @@ write lock. So:
 
 ## Side effects
 
-By default an inline projection cannot publish messages. Opt in:
+Since Fisher 2.0 an inline projection publishes its messages and raises its events by default. In
+Fisher 1 it could not. To turn that off:
 
 ```cs
-opts.Events.EnableSideEffectsOnInlineProjections = true;
+opts.Events.EnableSideEffectsOnInlineProjections = false;
 ```
 
 See [Side Effects](/events/projections/side-effects) — and note the default outbox drops every

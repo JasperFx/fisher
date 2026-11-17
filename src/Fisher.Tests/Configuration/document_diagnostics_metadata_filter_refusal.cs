@@ -34,6 +34,9 @@ public class document_diagnostics_metadata_filter_refusal : IAsyncLifetime
         {
             options.ConnectionString = _database.ConnectionString;
             options.AutoCreateSchemaObjects = AutoCreate.All;
+            // These facts opt into metadata columns one at a time, so the store starts from Fisher 1's
+            // defaults, where none is on (fisher#621).
+            options.RestoreV1Defaults();
 
             // Captures nothing optional.
             options.Schema.For<Lighthouse>();
@@ -150,6 +153,7 @@ public class document_diagnostics_metadata_filter_refusal : IAsyncLifetime
         await using var store = DocumentStore.For(options =>
         {
             options.ConnectionString = fresh.ConnectionString;
+            options.RestoreV1Defaults();
             options.Schema.For<Lighthouse>();
         });
 

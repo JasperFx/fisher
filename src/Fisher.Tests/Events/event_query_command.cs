@@ -44,6 +44,10 @@ public class event_query_command : IAsyncLifetime
         {
             options.ConnectionString = _database.ConnectionString;
             options.AutoCreateSchemaObjects = AutoCreate.All;
+
+            // an_unsupported_filter_is_refused_by_name_with_a_failure_return needs a store with no
+            // user_name column, which is Fisher 1's default and no longer 2.0's (fisher#621).
+            options.RestoreV1Defaults();
         });
 
         await store.ApplyAllConfiguredChangesToDatabaseAsync(TestContext.Current.CancellationToken);
@@ -73,7 +77,11 @@ public class event_query_command : IAsyncLifetime
     ///     reused across Execute calls.
     /// </summary>
     private IHostBuilder fisherHostBuilder()
-        => new HostBuilder().ConfigureServices(services => services.AddFisher(_database.ConnectionString));
+        => new HostBuilder().ConfigureServices(services => services.AddFisher(options =>
+        {
+            options.ConnectionString = _database.ConnectionString;
+            options.RestoreV1Defaults();
+        }));
 
     /// <summary>
     ///     Execute the command with stdout captured, and hand back the parsed JSON report alongside

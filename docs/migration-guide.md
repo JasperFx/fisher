@@ -414,7 +414,57 @@ public class QuestProjection : SingleStreamProjection<Quest, Guid>
 ```
 
 `side_effect_gate_behind_prior_version` in Fisher's own suite runs both cases against a real file and the
-real daemon.
+real daemon. `RestoreV1Defaults()` (below) turns the gate off for every registered projection at once.
+
+### Store defaults that follow Marten 10, and `RestoreV1Defaults()`
+
+Fisher 2.0 takes the default changes Marten 10 made in marten#5812 wherever Fisher has the same option
+(fisher#621). `StoreOptions.RestoreV1Defaults()` puts every one of them back, so call it first if you
+want Fisher 1's behaviour and add your own settings after it:
+
+```cs
+var store = DocumentStore.For(opts =>
+{
+    opts.ConnectionString = connectionString;
+    opts.RestoreV1Defaults();
+
+    // then anything you want on again, for example
+    opts.Events.EnableCorrelationId = true;
+});
+```
+
+::: danger Inline projections now run their side effects
+**`Events.EnableSideEffectsOnInlineProjections` is on by default. An application whose inline projections
+publish messages or raise events starts doing so on upgrade, inside `SaveChangesAsync`.** In Fisher 1
+those side effects were dropped for inline projections. Messages go to `Events.MessageOutbox`, which drops
+them unless you configured one. Before you upgrade, check every inline projection that publishes a
+message or raises an event, and set `opts.Events.EnableSideEffectsOnInlineProjections = false` (or call
+`RestoreV1Defaults()`) to keep Fisher 1's behaviour.
+:::
+
+| Setting | Fisher 1 | Fisher 2 | Effect on an existing file | Restored by `RestoreV1Defaults()` |
+| :--- | :--- | :--- | :--- | :--- |
+| `Events.EnableCorrelationId`, `EnableCausationId`, `EnableHeaders`, `EnableUserName` | off | **on** | Adds `correlation_id`, `causation_id`, `headers` and `user_name` to `fi_events`. Existing events read `null`. | yes |
+| Document `correlation_id`, `causation_id`, `last_modified_by`, `headers` columns | off unless a type enabled them | **on for every document type** | Adds the four columns to every document table. Existing rows read `null`. Turn one off for one type with `Metadata(m => m.Headers.Enabled = false)`. `created_at` stays opt-in. | yes |
+| `Events.EnableSideEffectsOnInlineProjections` | off | **on** | None on the file. See the warning above. | yes |
+| The `fisher.events.appended` counter | after `OpenTelemetry.TrackEventCounters()` | **on** | None. With nothing listening it costs one check per commit. | yes |
+| System.Text.Json `AllowOutOfOrderMetadataProperties` on Fisher's `Serializer` | `false` | **`true`** | None. Reads accept `$type` anywhere in the object. | yes, applied when the store is built |
+| `GateSideEffectsBehindPriorVersion` (JasperFx 3.0, above) | off | **on** | None. | yes, on every registered projection, applied when the store is built |
+
+**The new columns are an ordinary migration.** Under `AutoCreate.All` or `CreateOrUpdate`, Fisher adds them
+to existing tables the first time the store touches them. Under `AutoCreate.None`, apply the migration
+first (`ApplyAllConfiguredChangesToDatabaseAsync`, `db-apply` or the generated DDL). Otherwise the first
+write fails with `table … has no column named correlation_id`. Adding a column does not rewrite the table.
+
+What marten#5812 changed that has **no Fisher equivalent**, so nothing changes here:
+
+- Event skipping in projections and subscriptions. Fisher has no `is_skipped` column or skipping filter.
+- `FetchForWriting` metrics. Fisher has no such instruments.
+- Indexes that start with the tenant id for conjoined documents. A conjoined Fisher table's primary key
+  already starts with `tenant_id`, and Fisher has no option to lead secondary indexes with it.
+- Archived-stream partitioning and strict stream identity enforcement. SQLite has no partitioning.
+- The sticky connection lifetime option and the store-wide "all documents multi-tenanted with
+  partitioning" policy. Fisher never had either.
 
 ### Types that move to shared packages
 

@@ -48,6 +48,13 @@ Outside LINQ:
 - The diagnostics criteria refuse only a negated string method on a nullable member ([#612](https://github.com/JasperFx/fisher/issues/612)).
 - Docs: a Personal Data and GDPR Erasure page pointing at Tayra ([#552](https://github.com/JasperFx/fisher/issues/552)).
 
+Fisher 2.0 takes Marten 10's default changes where Fisher has the same option
+([#621](https://github.com/JasperFx/fisher/issues/621)): event and document session metadata, side effects on
+inline projections, the event counter and STJ's `AllowOutOfOrderMetadataProperties` are on, and
+`StoreOptions.RestoreV1Defaults()` puts them back. ⚠️ Inline projections now run their side effects.
+`EnableAllEventMetadata()` turns on all four event metadata flags in one call
+([#619](https://github.com/JasperFx/fisher/issues/619)).
+
 [#569](https://github.com/JasperFx/fisher/issues/569) was pinned to a regression test, and
 [#570](https://github.com/JasperFx/fisher/issues/570) measured and declined JasperFx 3.3.0's pooled binary-serializer
 members.

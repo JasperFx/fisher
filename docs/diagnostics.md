@@ -75,8 +75,10 @@ to both:
 builder.Services.AddOpenTelemetry().WithMetrics(metrics => metrics.AddMeter("Fisher"));
 ```
 
-**Everything is opt-in and nothing is created until it is asked for.** A store that opts into nothing
-publishes no instruments and pays a null check on the commit path.
+**Everything is opt-in and nothing is created until it is asked for, except `fisher.events.appended`.**
+That one is on by default since Fisher 2.0, as Marten 10's event counter is. With nothing listening it
+costs one `Enabled` check per commit. `StoreOptions.RestoreV1Defaults()` turns it off. A store that opts
+into nothing else publishes no other instruments and pays a null check on the commit path.
 
 ```cs
 builder.Services.AddFisher(opts =>

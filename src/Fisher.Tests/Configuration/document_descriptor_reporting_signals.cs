@@ -31,6 +31,9 @@ public class document_descriptor_reporting_signals : IAsyncLifetime
         {
             options.ConnectionString = _database.ConnectionString;
             options.AutoCreateSchemaObjects = AutoCreate.All;
+            // These facts opt into metadata columns one at a time, so the store starts from Fisher 1's
+            // defaults, where none is on (fisher#621).
+            options.RestoreV1Defaults();
 
             options.Schema.For<Lighthouse>()
                 .Duplicate(x => x.Keeper)
