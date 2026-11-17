@@ -21,8 +21,9 @@ namespace Fisher.Events.Schema;
 ///         operator came looking for.
 ///     </para>
 ///     <para>
-///         The <c>id</c> is a version-7 Guid assigned by JasperFx when the dead letter is constructed,
-///         so it is time-ordered and known before the (retried, background) write lands. It binds as
+///         The <c>id</c> is a time-ordered Guid assigned by JasperFx when the dead letter is constructed
+///         (<c>SequentialGuid.NextPostgresOrder()</c> since JasperFx 3.6.0, a version-7 Guid before), so it
+///         is known before the (retried, background) write lands. It binds as
 ///         lowercase canonical TEXT like every other Guid in Fisher.
 ///     </para>
 /// </remarks>

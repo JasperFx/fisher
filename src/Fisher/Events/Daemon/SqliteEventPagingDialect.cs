@@ -84,6 +84,36 @@ internal sealed class SqliteEventPagingDialect : IEventPagingDialect
         return new EventPageCommand(sql.ToString(), parameters);
     }
 
+    /// <summary>
+    ///     One stream's page for a per-identity rebuild's re-fold (fisher#629, jasperfx#1201): the daemon's
+    ///     page, narrowed to one stream.
+    /// </summary>
+    /// <remarks>
+    ///     Built on the same <c>where</c> as <see cref="BuildPageCommand" />, so the re-fold reads with the
+    ///     daemon's own rules: archived events only when asked, the tenant when the query names one, and the
+    ///     allow list with its upcast source names. A re-fold that read differently from the shard would
+    ///     write a document the shard never would have.
+    /// </remarks>
+    /// <param name="query">The range, limit and filters. <see cref="EventPageQuery.BatchSize" /> is the limit.</param>
+    /// <param name="streamId">The stream's identity as it is stored: a <see cref="Guid" /> or a string.</param>
+    internal EventPageCommand BuildStreamPageCommand(EventPageQuery query, object streamId)
+    {
+        var parameters = new List<EventPageParameter>();
+        var sql = new StringBuilder("select ")
+            .Append(FisherEventsRowReader.ComposeSelectColumns(_options.Events))
+            .Append(" from ").Append(_events.EventsTableName);
+
+        appendWhere(sql, parameters, query);
+
+        sql.Append(" and stream_id = @stream_id");
+        parameters.Add(new EventPageParameter("@stream_id", SqliteStorageDialect<Guid>.ToDatabaseValue(streamId)));
+
+        sql.Append(" order by seq_id limit @batch_size");
+        parameters.Add(new EventPageParameter("@batch_size", query.BatchSize));
+
+        return new EventPageCommand(sql.ToString(), parameters);
+    }
+
     private void appendWhere(StringBuilder sql, List<EventPageParameter> parameters, EventPageQuery query)
     {
         sql.Append(" where seq_id > @floor and seq_id <= @ceiling");

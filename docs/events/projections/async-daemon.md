@@ -364,7 +364,7 @@ no longer registered is ignored rather than waited on — that is what
 ### Reading your own writes
 
 The waits above are for the high-water mark, which includes every other writer's events. To read back what you
-just wrote, wait for your own events instead. `session.LastAppendedSequence` says where the last commit's events
+just wrote, wait for your own events instead. `session.LastAppendedPosition` says where the last commit's events
 are, and `WaitForProjectionsAsync` waits for the named asynchronous projections to get that far:
 
 ```cs
@@ -373,7 +373,7 @@ session.Events.StartStream(Guid.NewGuid(), new QuestStarted("Destroy the ring"))
 await session.SaveChangesAsync();
 
 var result = await store.WaitForProjectionsAsync(
-    session.LastAppendedSequence!, [typeof(QuestParty)], TimeSpan.FromSeconds(5));
+    session.LastAppendedPosition!, [typeof(QuestParty)], TimeSpan.FromSeconds(5));
 
 if (result.Reached)
 {

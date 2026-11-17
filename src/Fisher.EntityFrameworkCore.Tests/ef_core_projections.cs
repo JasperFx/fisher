@@ -200,6 +200,33 @@ public class ef_core_projections : IAsyncLifetime
 
         tallies.ShouldHaveSingleItem().Members.ShouldBe(1);
     }
+
+    /// <remarks>
+    ///     fisher#629. The re-fold clears the identity with <c>HardDeleteById</c> inside the shard's own batch,
+    ///     and EF-backed storage does not implement it. Found out there, it would fail the batch and stop the
+    ///     shard, so Fisher's daemon refuses before anything is queued and the shard keeps running.
+    /// </remarks>
+    [Fact]
+    public async Task a_per_identity_rebuild_of_an_ef_backed_projection_is_refused_and_the_shard_keeps_running()
+    {
+        var streamId = await AppendAsync(new MemberJoined("Frodo"));
+        await RunDaemonAsync();
+
+        var refused = await Should.ThrowAsync<IdentityRebuildRefusedException>(() =>
+            _daemon!.RebuildIdentityAsync("TallyEntity", null, streamId, Token));
+
+        refused.Reason.ShouldBe(IdentityRebuildRefusal.NotSupportedByStore);
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.Append(streamId, new MemberJoined("Sam"));
+            await session.SaveChangesAsync(Token);
+        }
+
+        await _store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
+
+        (await TalliesAsync()).ShouldHaveSingleItem().Members.ShouldBe(2);
+    }
 }
 
 /// <summary>

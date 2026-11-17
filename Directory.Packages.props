@@ -301,21 +301,40 @@
              INERT:
              jasperfx#1099/#1103 fold an HTTP endpoint and a message handler in the Event Model, which
              Fisher contributes to but does not assert on. -->
+        <!-- JasperFx 3.6.0 (from 3.5.0). One compliance suite added: IdentityRebuildCompliance (jasperfx#1201),
+             enrolled in fisher#629, 18 facts green.
+
+             ADOPTED:
+             jasperfx#1201/#1216 - per-identity rebuild. Fisher answers SupportsIdentityRebuild, loads one
+             stream for the re-fold (FisherIdentityRebuildLoader), implements HardDeleteById, and
+             Advanced.RebuildSingleStreamAsync routes through a hosted daemon or refuses a shard live elsewhere.
+             jasperfx#1218/#1219 - IStorageOperations.LastAppendedPosition replaces LastAppendedSequence, which
+             stays as an obsolete forwarder; the session implements the new name.
+             jasperfx#1217/#1220 - SequentialGuid. Strong-typed Guid document ids and the patch guid_version
+             come from SequentialGuid.NextPostgresOrder() (SQLite stores Guids as lowercase text, the PostgreSQL
+             order). Event, stream and dead letter ids change upstream with no Fisher code.
+
+             INHERITED, no Fisher change needed:
+             jasperfx#1210 (projections advance), #1211 (StreamState.ColdVersion, null on Fisher, which has no
+             cold store), #1214 (a Compacted<T> marker as the slice's last event).
+
+             FOUND: jasperfx#1225 - with extended progression on, StopAllAsync loses the agents' Stopped status
+             write. rebuilding_one_stream_beside_a_daemon works around it until 3.6.1. -->
         <!-- JasperFx 3.5.0 (from 3.3.0, spanning 3.4.0), for read-your-writes (marten#6004). The compliance
              package adds three DocumentConjoinedTenancyCompliance facts, green with no Fisher change. -->
         <!-- JasperFx 3.3.0 (from 3.0.1, spanning 3.1.0 and 3.2.0). Bumped here because 3.2.0 is the first
              release with DcbAppendConditionCompliance (jasperfx#1183), which this branch enrolls. No compile
              break. The rest of the span is adopted in fisher#554. -->
-        <PackageVersion Include="JasperFx" Version="3.5.0" />
-        <PackageVersion Include="JasperFx.Events" Version="3.5.0" />
+        <PackageVersion Include="JasperFx" Version="3.6.0" />
+        <PackageVersion Include="JasperFx.Events" Version="3.6.0" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="3.5.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="3.5.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="3.6.0" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="3.6.0" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="3.5.0" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="3.6.0" />
 
         <!-- Weasel 9.46.0 (from 9.42.0, spanning 9.43.0, 9.44.0, 9.45.0 and 9.45.1). JasperFx floor
              2.90.2, which Fisher already pins. Reaching Fisher:
@@ -493,8 +512,15 @@
              place) and weasel#870/#872 (a key column's type change migrates across foreign keys on other
              tables). No dependency floor moved: JasperFx 3.0.0 and Microsoft.Data.Sqlite 10.0.15, as on
              alpha.6. -->
-        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.7" />
-        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.7" />
+        <!-- Weasel 10.0.0-alpha.8 (from alpha.7). Nothing reaches Fisher. The changes in packages Fisher uses
+             are in Weasel.Core: weasel#875's ProvisioningCommandTimeout for CREATE/DROP DATABASE and extension
+             installs, which SQLite never runs. INERT: weasel#877 (SQL Server partition split timeout), #869 and
+             #871 (PostgreSQL / SQL Server index and partitioning). Floors: JasperFx 3.5.0 (Weasel.Core and
+             Weasel.Storage nuspecs, satisfied by the 3.6.0 pins) and Microsoft.Data.Sqlite 10.0.15, unchanged.
+             Weasel.Core's SequentialGuidIdentification still uses Guid.CreateVersion7() for plain Guid document
+             ids in alpha.8. -->
+        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.8" />
+        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.8" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.15" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,

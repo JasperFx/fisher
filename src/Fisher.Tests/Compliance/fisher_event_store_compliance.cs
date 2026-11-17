@@ -669,3 +669,13 @@ public class document_metadata_compliance
 /// </summary>
 public class projection_step_through_compliance
     : ProjectionStepThroughCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * fisher#629 / jasperfx#1201 (JasperFx 3.6.0) — rebuild one identity of a single-stream projection inside the
+ * shard that runs it, bound to the shard's next batch. Fisher supplies the re-fold loader (the daemon loader's
+ * rules, narrowed to one stream), HardDeleteById on its projection storage, and soft-deleted projected documents
+ * through the registrar. An idle shard's empty (C, C] batch passes the fisher#402 floor check as it is.
+ */
+
+public class identity_rebuild_compliance
+    : IdentityRebuildCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

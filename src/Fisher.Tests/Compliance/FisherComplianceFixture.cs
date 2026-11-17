@@ -409,18 +409,23 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     ///     Start the async projection daemon for the suite's store.
     /// </summary>
     /// <remarks>
-    ///     One daemon per fixture, kept so <see cref="DisposeAsync" /> can stop it — a suite that started
-    ///     a second one would leave the first still polling the same file, which on SQLite means two
-    ///     writers contending for one lock and a rebuild racing catch-up.
+    ///     <para>
+    ///         One daemon per fixture, kept so <see cref="DisposeAsync" /> can stop it — a suite that started
+    ///         a second one would leave the first still polling the same file, which on SQLite means two
+    ///         writers contending for one lock and a rebuild racing catch-up.
+    ///     </para>
+    ///     <para>
+    ///         <b>The kept daemon is started again every time</b> (fisher#629). The suite's own
+    ///         <c>StopDaemonAsync</c> stops every agent and keeps the daemon, so handing it back as it was left
+    ///         a "started" daemon with nothing running. <c>IdentityRebuildCompliance</c> is the first suite to
+    ///         stop a daemon mid-fact and start it again, and its waits timed out on a stopped shard.
+    ///         <c>StartAllAsync</c> skips an agent that is already running, so a daemon that was never stopped
+    ///         is unaffected.
+    ///     </para>
     /// </remarks>
     public override async Task<IProjectionDaemon> StartDaemonAsync()
     {
-        if (_daemon is not null)
-        {
-            return _daemon;
-        }
-
-        _daemon = await Store.BuildProjectionDaemonAsync().ConfigureAwait(false);
+        _daemon ??= await Store.BuildProjectionDaemonAsync().ConfigureAwait(false);
         await _daemon.StartAllAsync().ConfigureAwait(false);
 
         return _daemon;
@@ -608,6 +613,19 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     ///     <c>Advanced.EventProjectionScenarioAsync</c>.
     /// </summary>
     public override bool SupportsProjectionScenario => true;
+
+    /// <summary>
+    ///     fisher#629 / jasperfx#1201 — the per-identity rebuild seams: the store's re-fold loader,
+    ///     <c>FisherProjectionStorage.HardDeleteById</c>, and a projection batch that records progression for
+    ///     an empty range <c>(C, C]</c>.
+    /// </summary>
+    public override bool SupportsIdentityRebuild => true;
+
+    /// <summary>
+    ///     fisher#629 — the registrar maps a projected document type soft-deleted, through
+    ///     <c>Schema.For&lt;T&gt;().SoftDeleted()</c>.
+    /// </summary>
+    public override bool SupportsSoftDeletedProjectionDocuments => true;
 
     /// <summary>
     ///     Forwards to Fisher's own documented entry point rather than re-implementing the three lines
@@ -1021,6 +1039,12 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
 
         public void Snapshot<TDoc>(SnapshotLifecycle lifecycle) where TDoc : notnull
             => _options.Projections.Snapshot<TDoc>(lifecycle);
+
+        /// <summary>
+        ///     fisher#629 — store a projected document type soft-deleted, for the per-identity rebuild facts.
+        /// </summary>
+        public void SoftDeleted<TDoc>() where TDoc : notnull
+            => _options.Schema.For<TDoc>().SoftDeleted();
 
         public void AddProjection(ProjectionBase projection, ProjectionLifecycle lifecycle)
             => _options.Projections.Add(projection, lifecycle);

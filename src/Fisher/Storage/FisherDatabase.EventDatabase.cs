@@ -115,6 +115,49 @@ public partial class FisherDatabase : IEventDatabase
     }
 
     /// <summary>
+    ///     One shard's progression row, with what says whether an agent is running it, or null when there is
+    ///     no row (fisher#629).
+    /// </summary>
+    /// <remarks>
+    ///     The input to <see cref="JasperFx.Events.Daemon.IdentityRebuildGuard.IsLive" /> for
+    ///     <c>Advanced.RebuildSingleStreamAsync</c>: <c>last_updated</c> always, and the agent status,
+    ///     heartbeat and node only under extended progression tracking, which is the only time they are
+    ///     written.
+    /// </remarks>
+    internal async Task<ShardState?> ReadShardLivenessAsync(string shardIdentity, CancellationToken token)
+    {
+        return await ReadWhenStorageExistsAsync(async ct =>
+        {
+            var extended = _events.EnableExtendedProgressionTracking;
+            var columns = extended
+                ? "last_seq_id, last_updated, agent_status, heartbeat, running_on_node"
+                : "last_seq_id, last_updated";
+
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"select {columns} from {_events.ProgressionTableName} where name = @name";
+            command.Parameters.AddWithValue("@name", shardIdentity);
+
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (!await reader.ReadAsync(ct).ConfigureAwait(false)) return null;
+
+            var state = new ShardState(shardIdentity, reader.GetInt64(0))
+            {
+                LastUpdated = reader.IsDBNull(1) ? null : SqliteTimestamp.FromDatabaseValue(reader.GetString(1))
+            };
+
+            if (extended)
+            {
+                state.AgentStatus = reader.IsDBNull(2) ? null : reader.GetString(2);
+                state.LastHeartbeat = reader.IsDBNull(3) ? null : SqliteTimestamp.FromDatabaseValue(reader.GetString(3));
+                state.RunningOnNode = reader.IsDBNull(4) ? null : Convert.ToInt32(reader.GetValue(4));
+            }
+
+            return state;
+        }, (ShardState?)null, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
     ///     Every shard's progress, including the high-water row.
     /// </summary>
     public async Task<IReadOnlyList<ShardState>> AllProjectionProgress(CancellationToken token = default)
@@ -1038,7 +1081,7 @@ public partial class FisherDatabase : IEventDatabase
     ///         a storage context — is ignored.
     ///     </para>
     ///     <para>
-    ///         The write is an upsert on the version-7 id JasperFx assigns at construction. The daemon
+    ///         The write is an upsert on the time-ordered id JasperFx assigns at construction. The daemon
     ///         retries this write in the background, so a retry that lands after a successful first
     ///         attempt must not fail on the primary key.
     ///     </para>
