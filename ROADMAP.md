@@ -3,15 +3,16 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **three open issues: one is Fisher 2.0's share of Marten 10's default changes, one is a small Marten
-parity helper, and the other one is blocked upstream.** The 2.0 issue is part of the Critter Stack .NET 11
-release train. 1.28.0 took JasperFx
+Status: **one open issue, and it is blocked upstream.** Fisher 2.0's share of Marten 10's default changes
+([#621](https://github.com/JasperFx/fisher/issues/621)), the Marten parity helper
+([#619](https://github.com/JasperFx/fisher/issues/619)) and the busy-handler docs correction
+([#624](https://github.com/JasperFx/fisher/issues/624)) are done. 1.28.0 took JasperFx
 2.100's compliance additions ([#519](https://github.com/JasperFx/fisher/issues/519)). 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
-**Since 2.0.0-alpha.2, main moves to Weasel 10.0.0-alpha.6 and is mostly a LINQ correctness wave**, out of a sweep
+**Since 2.0.0-alpha.2, main moves to Weasel 10.0.0-alpha.7 and is mostly a LINQ correctness wave**, out of a sweep
 of Marten's fixes for anything that also bites Fisher. Every one of these answered differently from LINQ to
 Objects, silently, and now matches it or is refused by name:
 - A second `OrderBy` re-sorts ([#588](https://github.com/JasperFx/fisher/issues/588)).
@@ -54,6 +55,11 @@ inline projections, the event counter and STJ's `AllowOutOfOrderMetadataProperti
 `StoreOptions.RestoreV1Defaults()` puts them back. ⚠️ Inline projections now run their side effects.
 `EnableAllEventMetadata()` turns on all four event metadata flags in one call
 ([#619](https://github.com/JasperFx/fisher/issues/619)).
+
+The diagnostics page, the SQLite configuration page and CLAUDE.md now say which layer waits at
+`BEGIN IMMEDIATE` ([#624](https://github.com/JasperFx/fisher/issues/624)): SQLite's busy handler first, bounded by
+`busy_timeout`, then Microsoft.Data.Sqlite's own retry, bounded by `Default Timeout`. #586 measured it; the old
+text said `busy_timeout` did not cover it.
 
 [#569](https://github.com/JasperFx/fisher/issues/569) was pinned to a regression test, and
 [#570](https://github.com/JasperFx/fisher/issues/570) measured and declined JasperFx 3.3.0's pooled binary-serializer
@@ -412,14 +418,7 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is three items: one of them for Fisher 2.0, one a Marten parity helper, and one blocked upstream.
-
-**Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.3, Weasel 10.0, `net10.0;net11.0`):
-[#621](https://github.com/JasperFx/fisher/issues/621) applies Marten 10's default changes (marten#5812) where Fisher
-has the same option.
-
-**Marten parity.** [#619](https://github.com/JasperFx/fisher/issues/619): a one-call helper that enables every optional
-event metadata field, user name included, as Marten 10's `MetadataConfig.EnableAll()` does after marten#6012.
+What is left is one item, and it is blocked upstream.
 
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.

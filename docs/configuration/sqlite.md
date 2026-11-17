@@ -97,21 +97,27 @@ deliberately run *outside* the pipeline, because retrying them would double-writ
 
 ### Timeouts, and which knob does what
 
-This trips people up, so it is worth being precise. Three different things bound three different
-waits:
+This trips people up, so it is worth being precise. A writer that finds the lock held waits in two
+layers, one after the other:
+
+1. **SQLite's busy handler** waits first, for every statement, `BEGIN IMMEDIATE` included. Its deadline
+   is `PRAGMA busy_timeout` (Weasel's `BusyTimeout`, 5 seconds by default). This is where nearly all
+   contended waits happen and end.
+2. **Microsoft.Data.Sqlite's own retry loop** only starts once the busy handler gives up. It retries the
+   statement synchronously, about every 150 ms, until the command's timeout passes.
 
 | Setting | What it bounds |
 | :--- | :--- |
-| `SessionOptions.Timeout` / `opts.CommandTimeout` | How long a **statement** waits for the write lock. |
-| `PRAGMA busy_timeout` | The engine's own busy handler for statements. |
-| Connection string `Default Timeout` | The wait at `BEGIN IMMEDIATE`, and connection open. |
+| `PRAGMA busy_timeout` | The busy handler: the first wait, for every statement and for `BEGIN IMMEDIATE`. |
+| `SessionOptions.Timeout` / `opts.CommandTimeout` | Microsoft.Data.Sqlite's retry for a **statement**, after the busy handler gives up. |
+| Connection string `Default Timeout` | Microsoft.Data.Sqlite's retry for `BEGIN IMMEDIATE`, after the busy handler gives up, and connection open. |
 
-`SessionOptions.Timeout` does **not** bound the wait at `BEGIN IMMEDIATE`, because the transaction is
-begun on the connection rather than through a command — that wait comes from the connection string's
+`SessionOptions.Timeout` does **not** bound the retry at `BEGIN IMMEDIATE`, because the transaction is
+begun on the connection rather than through a command. That retry is bounded by the connection string's
 `Default Timeout`, 30 seconds by default. And `Default Timeout=0` means *no limit*, not "do not
 wait".
 
-Neither of them interrupts a query that is genuinely slow. They bound lock contention, not work.
+None of them interrupts a query that is genuinely slow. They bound lock contention, not work.
 
 ### Isolation levels
 

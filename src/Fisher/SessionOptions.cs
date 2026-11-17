@@ -117,9 +117,11 @@ public class SessionOptions
     ///     </para>
     ///     <para>
     ///         And it does not bound the wait at <c>BEGIN IMMEDIATE</c>. That transaction is begun on
-    ///         the connection rather than through a command, so its busy wait comes from the connection
-    ///         string's <c>Default Timeout</c> — 30 seconds unless the store's connection string says
-    ///         otherwise. Both halves verified against Microsoft.Data.Sqlite 10.0.9.
+    ///         the connection rather than through a command. Its wait is SQLite's busy handler first,
+    ///         bounded by <c>PRAGMA busy_timeout</c>, and then Microsoft.Data.Sqlite's own retry,
+    ///         bounded by the connection string's <c>Default Timeout</c> — 30 seconds unless the
+    ///         store's connection string says otherwise (fisher#586). Both halves verified against
+    ///         Microsoft.Data.Sqlite 10.0.9.
     ///     </para>
     /// </remarks>
     public int? Timeout { get; set; }

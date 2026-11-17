@@ -175,9 +175,10 @@ public class tracing : IAsyncLifetime
     ///     <para>
     ///         <b>Driven through the store's own pipeline with a planted busy exception rather than by
     ///         contending two real writers</b>, and the reason is worth recording. Real contention was
-    ///         tried first and does not reach the retry: the wait at <c>BEGIN IMMEDIATE</c> comes from
-    ///         the connection string's <c>Default Timeout</c> (30s, and 0 means <em>no limit</em> rather
-    ///         than "do not wait"), so a contended save either sits for the full wait and then succeeds
+    ///         tried first and does not reach the retry: the wait at <c>BEGIN IMMEDIATE</c> is SQLite's
+    ///         busy handler, bounded by <c>PRAGMA busy_timeout</c>, and after it the provider's own retry,
+    ///         bounded by the connection string's <c>Default Timeout</c> (30s, and 0 means <em>no
+    ///         limit</em> rather than "do not wait"), so a contended save either waits and then succeeds
     ///         — no retry — or fails outside the pipeline while the connection is being opened, because
     ///         opening one applies the PRAGMAs and <c>journal_mode</c> wants the write lock. So the
     ///         honest statement of what this pins is the wiring: the pipeline's <c>OnRetry</c> reaches

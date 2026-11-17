@@ -488,8 +488,13 @@
              source alias that is also a live alias; SqliteEventPagingDialect matches on the type column,
              whose IN list is unchanged. INERT: weasel#850/#856 (a synchronous control-table seam on
              MasterTableTenancyBase, default off). -->
-        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.6" />
-        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.6" />
+        <!-- Weasel 10.0.0-alpha.7 (from alpha.6). Nothing reaches Fisher: the only changes are in
+             Weasel.SqlServer. INERT: weasel#868 (move an existing table onto a RANGE partition scheme in
+             place) and weasel#870/#872 (a key column's type change migrates across foreign keys on other
+             tables). No dependency floor moved: JasperFx 3.0.0 and Microsoft.Data.Sqlite 10.0.15, as on
+             alpha.6. -->
+        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.7" />
+        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.7" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.15" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,

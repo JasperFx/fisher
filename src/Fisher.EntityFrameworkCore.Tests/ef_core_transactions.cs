@@ -256,7 +256,7 @@ public class ef_core_transactions : IAsyncLifetime
     ///     <para>
     ///         The busy is planted by a second participant rather than by contending two real writers,
     ///         for the reason <c>tracing.a_busy_retry_is_recorded_on_the_span_it_contended</c> records:
-    ///         real contention waits on the connection string's <c>Default Timeout</c> and never
+    ///         real contention waits in SQLite's busy handler and never
     ///         reaches the retry. Registration order is the point — the EF participant runs first, so
     ///         it has already saved when the throw rolls the attempt back.
     ///     </para>

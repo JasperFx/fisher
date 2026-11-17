@@ -51,11 +51,12 @@ every feature added to the interface.
 
 ::: warning
 **A contended write does not reach the retry the way you would expect.** The wait at `BEGIN IMMEDIATE`
-comes from the connection string's `Default Timeout` and nowhere else — not `SessionOptions.Timeout`,
-which bounds a command, and not `PRAGMA busy_timeout`, which does not cover it. And `Default Timeout=0`
-means *no limit*, not "do not wait".
+happens in SQLite's busy handler first, bounded by `PRAGMA busy_timeout` (5 seconds by default). Only
+when that gives up does Microsoft.Data.Sqlite retry the statement itself, bounded by the connection
+string's `Default Timeout` — not `SessionOptions.Timeout`, which bounds a command. And
+`Default Timeout=0` means *no limit*, not "do not wait".
 
-So a contended save either sits for the full wait and succeeds with no retry, or fails while the
+So a contended save either waits and succeeds with no retry, or fails while the
 connection is still being opened — since opening one applies the PRAGMAs, and `journal_mode` wants the
 write lock.
 :::
@@ -109,8 +110,7 @@ a session's side alone.
 rather than an opinion.** Fisher's Polly pipeline already emits a `fisher.retry` activity event, so
 counting retries is the obvious move. Under the benchmark harness's concurrent-writers scenario that
 counter reads **zero** while throughput visibly collapses — a contended writer sits inside
-`BEGIN IMMEDIATE` under the connection string's busy timeout and eventually succeeds, never reaching
-the retry.
+`BEGIN IMMEDIATE`, in SQLite's busy handler, and eventually succeeds, never reaching the retry.
 :::
 
 So a dashboard built on retries alone shows a flat line through the exact incident it exists to
