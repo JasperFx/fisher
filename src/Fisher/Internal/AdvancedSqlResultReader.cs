@@ -141,8 +141,11 @@ internal sealed class ScalarReader : AdvancedSqlResultReader
 ///     </para>
 ///     <para>
 ///         Raw SQL is exactly where a JSON result is an expression beside other expressions, so this
-///         reader does not stream. The cost is one string per JSON value, which is what the serializer
-///         falls back to for any provider that cannot stream anyway.
+///         reader does not stream. Since Weasel 10.0.0-alpha.6 (weasel#863) the default serializer's
+///         <c>DbDataReader</c> overload never asks a SQLite reader for a stream either, but
+///         <see cref="StoreOptions.Serializer" /> can be any <c>ISerializer</c>, and this is the one
+///         path that would hand that serializer the reader itself. Reading the string here costs
+///         nothing over Weasel's own SQLite path, which reads the same string.
 ///     </para>
 /// </remarks>
 [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",

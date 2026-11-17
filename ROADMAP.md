@@ -11,7 +11,7 @@ follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybri
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
 Model canvas it contributes to; 1.11.0 finished the search wave; 1.12.0 was a correctness wave.
 
-**Since 2.0.0-alpha.2, main moves to Weasel 10.0.0-alpha.4 and is mostly a LINQ correctness wave**, out of a sweep
+**Since 2.0.0-alpha.2, main moves to Weasel 10.0.0-alpha.6 and is mostly a LINQ correctness wave**, out of a sweep
 of Marten's fixes for anything that also bites Fisher. Every one of these answered differently from LINQ to
 Objects, silently, and now matches it or is refused by name:
 - A second `OrderBy` re-sorts ([#588](https://github.com/JasperFx/fisher/issues/588)).
