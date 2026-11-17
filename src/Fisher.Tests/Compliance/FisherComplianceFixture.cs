@@ -108,6 +108,13 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
                 options.Events.StreamIdentity = config.StreamIdentity.Value;
             }
 
+            // The suites turn each metadata column on through the config below and expect the rest
+            // off, which was Fisher 1's default. Fisher 2.0 turns all four on (fisher#621).
+            options.Events.EnableCorrelationId = false;
+            options.Events.EnableCausationId = false;
+            options.Events.EnableUserName = false;
+            options.Events.EnableHeaders = false;
+
             if (config.EnableCorrelationTracking)
             {
                 options.Events.EnableCorrelationId = true;

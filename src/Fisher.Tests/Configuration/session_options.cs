@@ -393,7 +393,8 @@ public class session_options : IAsyncLifetime
             ddl.Transaction = transaction;
             ddl.CommandText =
                 "create table fi_doc_quarry (id text not null primary key, data text not null, "
-                + "dotnet_type text, last_modified text)";
+                + "dotnet_type text, last_modified text, correlation_id text, causation_id text, "
+                + "last_modified_by text, headers text)";
             await ddl.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
         }
 

@@ -62,6 +62,9 @@ public class event_store_usage : IAsyncLifetime
             options.Projections.Snapshot<SurveyTally>(SnapshotLifecycle.Inline);
             options.Projections.Snapshot<ChartTally>(SnapshotLifecycle.Async);
 
+            // The usage report is checked against a store that turned on two of the four, so it starts
+            // from Fisher 1's defaults, where none is on (fisher#621).
+            options.RestoreV1Defaults();
             options.Events.EnableCorrelationId = true;
             options.Events.EnableUserName = true;
         });

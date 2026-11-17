@@ -80,8 +80,16 @@ public sealed class OptionalMetadataColumnExpression<T, TValue> : MetadataColumn
     ///     Create the column and start writing it, without projecting it onto a member.
     /// </summary>
     /// <remarks>
-    ///     Setting it false again is deliberately not offered: a column is created by the migration and
-    ///     removing one is a schema change with data in it, so "off" means "was never turned on".
+    ///     <para>
+    ///         <c>false</c> keeps a column that is on by default (fisher#621: <c>correlation_id</c>,
+    ///         <c>causation_id</c>, <c>last_modified_by</c> and <c>headers</c> in Fisher 2.0) off for this
+    ///         one type. Like any other change to a table's columns, it takes effect when the schema is
+    ///         migrated, and Fisher's migrations do not drop a column that is already there.
+    ///     </para>
+    ///     <para>
+    ///         Turning a column off after this configuration turned it on is refused: removing one is a
+    ///         schema change with data in it, not a configuration flag.
+    ///     </para>
     /// </remarks>
     public bool Enabled
     {
@@ -92,11 +100,15 @@ public sealed class OptionalMetadataColumnExpression<T, TValue> : MetadataColumn
             {
                 _column.Enable();
             }
-            else if (_column.Enabled)
+            else if (_column.ExplicitlyEnabled)
             {
                 throw new InvalidOperationException(
                     $"Metadata column '{_column.Name}' has already been enabled for {typeof(T).Name}. "
                     + "Dropping a column that may hold data is a migration, not a configuration flag.");
+            }
+            else
+            {
+                _column.Disable();
             }
         }
     }

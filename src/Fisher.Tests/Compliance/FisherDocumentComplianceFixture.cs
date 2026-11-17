@@ -67,6 +67,10 @@ public class FisherDocumentComplianceFixture : DocumentStorageComplianceFixture
             options.AutoCreateSchemaObjects = AutoCreate.All;
             options.DatabaseSchemaName = schemaName;
 
+            // The suites name the metadata each type captures and expect the rest off, which was
+            // Fisher 1's default. Fisher 2.0 turns the session metadata columns on (fisher#621).
+            options.EnableDocumentMetadataByDefault = false;
+
             // Before the mappings: a document keyed by a wrapper has to have that wrapper resolvable
             // as an identity type by the time its mapping is built, or the mapping has no identity
             // member to find. Fisher discovers wrappers by itself, so this is an assertion rather than

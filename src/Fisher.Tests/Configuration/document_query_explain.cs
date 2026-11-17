@@ -33,6 +33,10 @@ public class document_query_explain : IAsyncLifetime
             options.ConnectionString = _database.ConnectionString;
             options.AutoCreateSchemaObjects = AutoCreate.All;
 
+            // it_refuses_what_the_query_refuses needs a type that captures no correlation id, which is
+            // Fisher 1's default and no longer 2.0's (fisher#621).
+            options.RestoreV1Defaults();
+
             options.Schema.For<Lighthouse>().Index(x => x.Name);
             options.Schema.For<Beacon>();
         });

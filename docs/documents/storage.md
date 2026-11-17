@@ -37,7 +37,8 @@ Optional columns arrive with the feature that needs them:
 | `guid_version` | `UseOptimisticConcurrency()` |
 | `revision` | `UseNumericRevisions()` |
 | `is_deleted`, `deleted_at` | `SoftDeleted()` |
-| `created_at`, `correlation_id`, `causation_id`, `last_modified_by`, `headers` | [metadata opt-ins](/documents/metadata) |
+| `correlation_id`, `causation_id`, `last_modified_by`, `headers` | on by default since 2.0; see [metadata](/documents/metadata) |
+| `created_at` | [metadata opt-in](/documents/metadata) |
 | one generated column per member | [`Duplicate(...)`](/documents/indexing/duplicated-fields) |
 
 ## Type mapping

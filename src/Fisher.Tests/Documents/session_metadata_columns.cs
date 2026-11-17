@@ -33,6 +33,10 @@ public class session_metadata_columns : IAsyncLifetime
         {
             o.ConnectionString = _database.ConnectionString;
             o.AutoCreateSchemaObjects = AutoCreate.All;
+
+            // These facts are about opting in column by column, so the store starts from Fisher 1's
+            // defaults, where none is on (fisher#621).
+            o.RestoreV1Defaults();
             o.Events.EnableCorrelationId = true;
             o.Events.EnableCausationId = true;
 

@@ -96,6 +96,7 @@ since that registration is what maps the snapshot's document type.
 opts.Events.StreamIdentity = StreamIdentity.AsGuid;   // or AsString
 opts.Events.TenancyStyle = TenancyStyle.Conjoined;    // or Single
 
+// All four are on by default since Fisher 2.0; RestoreV1Defaults() turns them off
 opts.Events.EnableCorrelationId = true;
 opts.Events.EnableCausationId = true;
 opts.Events.EnableUserName = true;
@@ -109,7 +110,7 @@ opts.Events.AddEventType<OrderPlaced>();
 ```
 
 The four `Enable*` flags each add a column to `fi_events`, so they are schema decisions — set them
-before the tables are created. They also gate the matching filters on
+before the tables are created. They are on by default since Fisher 2.0. They also gate the matching filters on
 [event queries](/events/querying): a filter on a column that does not exist would be
 `no such column` rather than an empty result, so an ungated one is ignored.
 
@@ -122,7 +123,7 @@ Other event options worth knowing:
 | `Events.HighWaterLivenessInterval` | How often an idle daemon re-stamps its liveness mark. |
 | `Events.MessageOutbox` | The [side-effect](/events/projections/side-effects) sink. |
 | `Events.AppendObserver` | A callback with every appended event, after commit. |
-| `Events.EnableSideEffectsOnInlineProjections` | Lets inline projections publish messages. |
+| `Events.EnableSideEffectsOnInlineProjections` | Lets inline projections publish messages. On by default since Fisher 2.0. |
 | `Events.RegisterTagType<T>()` | Registers a [DCB tag](/events/dcb) type and its table. |
 | `Events.RegisterTagType<T, TInner>(Func<T, TInner>)` | The same, from an explicit unwrapper, for [Native AOT](/configuration/native-aot#dcb-tag-types). |
 
