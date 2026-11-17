@@ -301,6 +301,8 @@
              INERT:
              jasperfx#1099/#1103 fold an HTTP endpoint and a message handler in the Event Model, which
              Fisher contributes to but does not assert on. -->
+        <!-- JasperFx 3.5.0 (from 3.3.0, spanning 3.4.0), for read-your-writes (marten#6004). The compliance
+             package adds three DocumentConjoinedTenancyCompliance facts, green with no Fisher change. -->
         <!-- JasperFx 3.3.0 (from 3.0.1, spanning 3.1.0 and 3.2.0). Bumped here because 3.2.0 is the first
              release with DcbAppendConditionCompliance (jasperfx#1183), which this branch enrolls. No compile
              break. The rest of the span is adopted in fisher#554. -->
