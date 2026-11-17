@@ -898,6 +898,10 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             throw;
         }
 
+        // marten#6004: where this unit of work's events are, before any post-commit hook or listener, so an
+        // AfterCommitAsync listener can carry the position on
+        recordAppendedPosition(streams);
+
         // fisher#581. Built ahead of the post-commit hooks when the shared hooks will need it, because
         // DocumentSessionHooks.AfterCommitAsync runs in the place the message batch's hook always ran.
         Services.ChangeSet? sharedCommit = _hooks is not null && EnlistedTransaction is null
@@ -2069,6 +2073,31 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     // ---- IMetadataContext ----
 
     public string TenantId { get; internal set; }
+
+    /// <summary>
+    ///     marten#6004: where the events this session committed are, for
+    ///     <see cref="IDocumentStore.WaitForProjectionsAsync(JasperFx.Events.EventStorePosition, IReadOnlyList{Type}, TimeSpan, CancellationToken)" />.
+    ///     The highest event sequence any <c>SaveChangesAsync</c> on this session appended, with the session's
+    ///     database and tenant. Null until a commit appends events.
+    /// </summary>
+    public JasperFx.Events.EventStorePosition? LastAppendedSequence { get; private set; }
+
+    private void recordAppendedPosition(IReadOnlyList<JasperFx.Events.StreamAction> streams)
+    {
+        long highest = 0;
+        foreach (var stream in streams)
+        {
+            foreach (var @event in stream.Events)
+            {
+                highest = Math.Max(highest, @event.Sequence);
+            }
+        }
+
+        // Only ever forward: a later commit on the same session cannot move the position back
+        if (highest <= 0 || LastAppendedSequence?.Sequence >= highest) return;
+
+        LastAppendedSequence = new JasperFx.Events.EventStorePosition(FisherDatabase.Identifier, TenantId, highest);
+    }
 
     // Delegated on a tenant scope: correlation, causation, user and headers describe the unit of work
     // rather than the tenant, and there is one unit of work. So a document written for another tenant
