@@ -310,6 +310,13 @@ public class StoreOptions
         = Weasel.Sqlite.SqlitePragmaSettings.Default;
 
     /// <summary>
+    ///     Whether connections wait for the write lock through Fisher's 1 ms busy handler rather than
+    ///     SQLite's default schedule (fisher#547, <see cref="Storage.SqliteBusyHandler" />). Internal and
+    ///     always on; the benchmarks turn it off to measure other handlers against it.
+    /// </summary>
+    internal bool UseFixedSleepBusyHandler { get; set; } = true;
+
+    /// <summary>
     ///     Application-defined SQLite functions registered on every connection the store opens
     ///     (weasel#588). Fisher registers <c>fi_vector_distance</c> here for vector search; add your
     ///     own and they are on every connection too, tenants included. Functions live on the

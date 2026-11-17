@@ -1100,3 +1100,26 @@ is what bounded backpressure is for; policies between "1 ms fixed" and the defau
 commit failure path (no COMMIT failed); thread-pool starvation from blocking busy handlers at high writer
 counts (none was seen up to 16 writers on 18 cores); net11.0; Linux or Windows, whose sleep granularity
 differs from macOS's; and any machine other than this one.
+
+## fisher#547 decision: the 1 ms busy handler is adopted (2026-11-16)
+
+Jeremy's decision: Fisher 2.0 adopts the fixed 1 ms busy handler and nothing else. The `Channel<T>` queue,
+the gate and group commit stay benchmark-only, and there is no 1.x backport. `Storage/SqliteBusyHandler`
+installs it on every connection Fisher opens, with `BusyTimeout` as the deadline.
+
+**What the modes mean from here on.** Plain `race` is now Fisher's own handler. The bh-* modes turn Fisher's
+handler off (`StoreOptions.UseFixedSleepBusyHandler`, internal) so each measures its own policy, and
+`bh-mimic` is SQLite's default, which is what `race` measured before this change.
+
+A check run on the shipped code, `--writers 8,16 --total-commits 400 --docs-per-commit 5 --rounds 11 --modes
+race,bh-mimic,bh-sleep1ms`, on a box shared with other agents (load average 50-64 on 18 cores, so absolute
+numbers are slower and noisier than round 2's):
+
+| writers | race (Fisher's handler) wall / p99 | bh-sleep1ms wall / p99 | bh-mimic (SQLite's default) wall / p99 |
+|---:|---:|---:|---:|
+| 8 | 57.4 / 14.2 ms | 51.9 / 12.4 ms | 73.2 / 20.4 ms |
+| 16 | 60.4 / 20.9 ms | 64.3 / 23.9 ms | 99.3 / 40.7 ms |
+
+`race` and `bh-sleep1ms` agree, which shows the production handler is the measured one. The gain over the default
+is smaller than round 2's 2.1x / 3.3x because of the load, but it is the same ordering. Retries and failed
+commits were zero in every mode.

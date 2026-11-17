@@ -3,9 +3,9 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **three open issues: one is the Fisher 2.0 milestone (whether to adopt the single-writer queue), one is
-a small Marten parity helper, and the other one is blocked upstream.** The 2.0 issue is Fisher's share of the
-Critter Stack .NET 11 release train. 1.28.0 took JasperFx
+Status: **three open issues: one is Fisher 2.0's share of Marten 10's default changes, one is a small Marten
+parity helper, and the other one is blocked upstream.** The 2.0 issue is part of the Critter Stack .NET 11
+release train. 1.28.0 took JasperFx
 2.100's compliance additions ([#519](https://github.com/JasperFx/fisher/issues/519)). 1.5.0 closed both of 1.4.0's
 follow-ups and the whole of JasperFx 2.69.x's compliance wave; 1.6.0 added hybrid search; 1.7.0 closed
 the vector story; 1.8.0 through 1.10.0 settled how a Fisher store identifies itself and which Event
@@ -30,6 +30,11 @@ Objects, silently, and now matches it or is refused by name:
 - A `float` comparison binds the value its stored text reads back as ([#605](https://github.com/JasperFx/fisher/issues/605)).
 
 Outside LINQ:
+- Writers wait for SQLite's write lock through a 1 ms busy handler instead of SQLite's default schedule
+  ([#547](https://github.com/JasperFx/fisher/issues/547)). Same `busy_timeout` deadline, no change for callers, and
+  2-3x the throughput at 8-16 writers in #586's measurements. The `Channel<T>` single-writer queue measured beside it
+  is **not** adopted: it moves a failure away from the call, loses the caller's async flow, cannot cover the daemon
+  or enlisted sessions, and raised hot-stream version conflicts to 75-93 %. Fisher 2.0 only, no 1.x backport.
 - Fisher serializes connection opens per connection string, because Microsoft.Data.Sqlite's pool could hand one
   native connection to two sessions ([#576](https://github.com/JasperFx/fisher/issues/576)). The gate is a `Lock`
   around a synchronous open, so a burst of synchronous Hi-Lo stores no longer starves the thread pool
@@ -400,15 +405,11 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is three items: one of them the Fisher 2.0 milestone, one a Marten parity helper, and one blocked
-upstream.
+What is left is three items: one of them for Fisher 2.0, one a Marten parity helper, and one blocked upstream.
 
 **Fisher 2.0, the Critter Stack .NET 11 release train** (JasperFx 3.3, Weasel 10.0, `net10.0;net11.0`):
-[#547](https://github.com/JasperFx/fisher/issues/547) the `Channel<T>` single-writer queue. It is measured twice.
-At 8+ writers an in-process queue roughly halved wall clock and cut worst-case commit latency by an order of
-magnitude (#564). Round 2 (#586) found SQLite's busy-handler sleeps to be the whole cost of racing: a 1 ms busy
-handler alone gives 2–3× the throughput with no semantic change, while a queue raises hot-stream version conflicts.
-Which of them to adopt, if any, is still to decide. It does not land in a 1.x release.
+[#621](https://github.com/JasperFx/fisher/issues/621) applies Marten 10's default changes (marten#5812) where Fisher
+has the same option.
 
 **Marten parity.** [#619](https://github.com/JasperFx/fisher/issues/619): a one-call helper that enables every optional
 event metadata field, user name included, as Marten 10's `MetadataConfig.EnableAll()` does after marten#6012.

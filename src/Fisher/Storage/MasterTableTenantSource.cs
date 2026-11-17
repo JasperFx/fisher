@@ -115,7 +115,8 @@ public sealed class MasterTableTenantSource
     ///     any other, and an operator adding a tenant while the store is running is a writer.
     /// </remarks>
     protected override SqliteDataSource BuildDataSource(string connectionString)
-        => new SerializedOpenDataSource(connectionString, _options.PragmaSettings);
+        => new SerializedOpenDataSource(connectionString, _options.PragmaSettings,
+            fixedSleepBusyHandler: _options.UseFixedSleepBusyHandler);
 
     /// <remarks>
     ///     A row, not a database. See the class remarks for why the base is closed over this type.

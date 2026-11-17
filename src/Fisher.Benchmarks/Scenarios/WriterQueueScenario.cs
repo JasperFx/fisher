@@ -216,6 +216,10 @@ public static class WriterQueueScenario
 
             if (policy is { } p)
             {
+                // Fisher installs its own 1 ms handler after every open since fisher#547, which would
+                // replace this one. Turn it off so a bh-* mode measures its own policy; plain "race" is
+                // now Fisher's handler, and bh-mimic is SQLite's default.
+                options.UseFixedSleepBusyHandler = false;
                 BusyHandlers.InstallOn(options, p);
             }
         });
