@@ -91,12 +91,17 @@ internal sealed class SerializedOpenDataSource : SqliteDataSource
     private static readonly ConcurrentDictionary<string, Lock> _gates = new(StringComparer.Ordinal);
 
     private readonly Lock _gate;
+    private readonly SqlitePragmaSettings _pragmaSettings;
+    private readonly bool _fixedSleepBusyHandler;
 
     public SerializedOpenDataSource(string connectionString, SqlitePragmaSettings? pragmaSettings = null,
-        SqliteFunctionRegistry? functions = null, SqliteExtensionSettings? extensions = null)
+        SqliteFunctionRegistry? functions = null, SqliteExtensionSettings? extensions = null,
+        bool fixedSleepBusyHandler = true)
         : base(connectionString, pragmaSettings, functions, extensions)
     {
         _gate = GateFor(connectionString);
+        _pragmaSettings = pragmaSettings ?? SqlitePragmaSettings.Default;
+        _fixedSleepBusyHandler = fixedSleepBusyHandler;
     }
 
     /// <summary>
@@ -144,10 +149,21 @@ internal sealed class SerializedOpenDataSource : SqliteDataSource
 
     protected override DbConnection OpenDbConnection()
     {
+        DbConnection connection;
         lock (_gate)
         {
-            return base.OpenDbConnection();
+            connection = base.OpenDbConnection();
         }
+
+        // After Weasel's PRAGMAs, whose busy_timeout installs SQLite's default handler: this replaces
+        // it with the 1 ms one, same deadline (fisher#547). Outside the lock, because it is one native
+        // call on a connection nothing else holds yet.
+        if (_fixedSleepBusyHandler)
+        {
+            SqliteBusyHandler.TryInstall((SqliteConnection)connection, _pragmaSettings.BusyTimeout);
+        }
+
+        return connection;
     }
 
     /// <summary>

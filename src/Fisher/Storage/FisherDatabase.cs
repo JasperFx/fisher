@@ -47,7 +47,8 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
         _events = options.EventGraph;
         // fisher#576: every open of this file's pool is serialized, to keep Microsoft.Data.Sqlite's pool
         // from handing one native connection to two sessions. See SerializedOpenDataSource.
-        _dataSource = new SerializedOpenDataSource(connectionString, options.PragmaSettings, options.Functions);
+        _dataSource = new SerializedOpenDataSource(connectionString, options.PragmaSettings, options.Functions,
+            fixedSleepBusyHandler: options.UseFixedSleepBusyHandler);
         TenantId = tenantId;
     }
 
