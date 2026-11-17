@@ -1028,7 +1028,7 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
                 //
                 // fisher#208. Taking the lock up front is also what makes this the one place worth
                 // measuring: every millisecond a contended writer spends waiting is spent HERE, inside
-                // this await, under the connection string's busy timeout — not in a Polly retry, which
+                // this await, in SQLite's busy handler (fisher#586) — not in a Polly retry, which
                 // is why a retry counter alone reads zero through real contention. Zero when nothing
                 // asked for the histogram, so an unwatched store does not even read the clock.
                 var waitedFrom = Options.OpenTelemetry.StartWriteLockWait();

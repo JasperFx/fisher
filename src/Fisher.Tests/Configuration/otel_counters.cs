@@ -160,7 +160,7 @@ public class otel_counters : IAsyncLifetime
     ///     <para>
     ///         A second connection holds the file's write lock across the whole of this session's
     ///         commit. That commit does not fail and is not retried — it sits inside
-    ///         <c>BEGIN IMMEDIATE</c> under the connection string's <c>Default Timeout</c> until the
+    ///         <c>BEGIN IMMEDIATE</c>, in SQLite's busy handler, until the
     ///         lock is free, which is precisely fisher#163's finding: contention here is <em>waiting</em>,
     ///         not retrying.
     ///     </para>

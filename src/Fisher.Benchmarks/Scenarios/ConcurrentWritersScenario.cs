@@ -11,8 +11,8 @@ namespace Fisher.Benchmarks.Scenarios;
 ///     <para>
 ///         Retries are surfaced through Fisher's own telemetry: the <c>fisher.retry</c> activity
 ///         events the Polly pipeline records on the enclosing span (see <see cref="RetryCounter" />).
-///         Two caveats when reading the numbers. First, the wait at <c>BEGIN IMMEDIATE</c> comes from
-///         the connection string's <c>Default Timeout</c> (30s), so a contended commit can simply
+///         Two caveats when reading the numbers. First, the wait at <c>BEGIN IMMEDIATE</c> is in
+///         SQLite's busy handler (<c>PRAGMA busy_timeout</c>), so a contended commit can simply
 ///         wait and succeed with <em>no</em> retry — a low retry count with a high wall clock is
 ///         still contention. Second, the retry event only fires when a command-level
 ///         SQLITE_BUSY/SQLITE_LOCKED reaches the resilience pipeline.

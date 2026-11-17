@@ -2611,8 +2611,9 @@ across and behaves identically.
 **`SessionOptions.Timeout` means something different here than on either sibling, in two ways.** It
 bounds how long a *statement* waits for the write lock before `SQLITE_BUSY`; it does not interrupt a
 query that is genuinely slow. And it does not bound the wait at `BEGIN IMMEDIATE`, because the
-transaction is begun on the connection rather than through a command — that busy wait comes from the
-connection string's `Default Timeout`, 30s by default. Both halves verified.
+transaction is begun on the connection rather than through a command. That wait is SQLite's busy
+handler first, bounded by `PRAGMA busy_timeout`, and then Microsoft.Data.Sqlite's own retry, bounded by
+the connection string's `Default Timeout`, 30s by default (fisher#586, fisher#624). Both halves verified.
 
 **`Tracking` and `Listeners` were both absent as knobs that would silently do nothing, and both now
 mean something** — see "Session tracking" and "Session listeners".
@@ -4945,10 +4946,14 @@ slow.
 Two things learned while writing the tests, both worth keeping:
 
 - **A contended write does not reach the retry the way you would expect.** The wait at
-  `BEGIN IMMEDIATE` comes from the connection string's `Default Timeout` and from nowhere else — not
-  `SessionOptions.Timeout`, which bounds a command, and not `PRAGMA busy_timeout`, which does not cover
-  it. And `Default Timeout=0` means *no limit*, not "do not wait". So a contended save either sits for
-  the full wait and succeeds with no retry, or fails while the connection is still being opened, since
+  `BEGIN IMMEDIATE` is in two layers. SQLite's busy handler waits first, bounded by `PRAGMA busy_timeout`
+  (Fisher 2.0's 1 ms handler keeps the same deadline). Only when it gives up does Microsoft.Data.Sqlite
+  retry the statement itself, synchronously, bounded by the connection string's `Default Timeout` — not
+  `SessionOptions.Timeout`, which bounds a command. fisher#586 measured the first layer: the time inside
+  a counting copy of the default handler matched the summed `fisher.write_lock.wait` to within 4 %
+  (fisher#624 corrected the old note here, which said `busy_timeout` did not cover it). And
+  `Default Timeout=0` means *no limit*, not "do not wait". So a contended save either waits and succeeds
+  with no retry, or fails while the connection is still being opened, since
   opening one applies the PRAGMAs and `journal_mode` wants the write lock. `a_busy_retry_is_recorded_on_the_span_it_contended`
   therefore drives the store's own pipeline with a planted `SQLITE_BUSY` and says so.
 - **An `ActivityListener` is process-wide, and xUnit runs collections in parallel.** A test that
@@ -4967,7 +4972,7 @@ creates it**, so a store that opts into nothing pays a null field read per commi
   than an opinion.** It is the obvious one — the Polly pipeline already emits a `fisher.retry`
   activity event and `Fisher.Benchmarks`' `RetryCounter` counts them — and under fisher#163's
   concurrent-writers scenario it reads **zero** while throughput collapses, because a contended writer
-  sits inside `BEGIN IMMEDIATE` under the connection string's busy timeout and eventually succeeds. A
+  sits inside `BEGIN IMMEDIATE`, in SQLite's busy handler, and eventually succeeds. A
   dashboard built on it shows a flat line through the exact incident it exists to diagnose, which is
   worse than no instrument: a flat line reads as "not the database".
   So the instrument is **`fisher.write_lock.wait`**, a histogram of the elapsed time inside

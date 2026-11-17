@@ -35,10 +35,11 @@ public class stream_locked_exception : IAsyncLifetime
     {
         _store = DocumentStore.For(options =>
         {
-            // A short timeout on both halves of the wait. PRAGMA busy_timeout bounds SQLite's own
-            // retry loop; the connection string's Default Timeout bounds the provider's loop around
-            // BEGIN, and it is the one that covers BEGIN IMMEDIATE — both have to be short or the
-            // contended commit sits for thirty seconds before failing.
+            // A short timeout on both halves of the wait. PRAGMA busy_timeout bounds SQLite's busy
+            // handler, which waits first, BEGIN IMMEDIATE included; the connection string's Default
+            // Timeout bounds the provider's own retry around BEGIN once the handler gives up
+            // (fisher#586) — both have to be short or the contended commit sits for thirty seconds
+            // before failing.
             options.ConnectionString =
                 new SqliteConnectionStringBuilder(_database.ConnectionString) { DefaultTimeout = 1 }
                     .ToString();

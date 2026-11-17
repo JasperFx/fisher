@@ -16,7 +16,7 @@ scoreboard and the things that are true right now but not obvious from either.
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 846 of
 them are shared cross-store compliance tests — 612 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.5.0** / Weasel **10.0.0-alpha.6**.
+On JasperFx **3.5.0** / Weasel **10.0.0-alpha.7**.
 
 ## `decimal` aggregates are exact (fisher#606)
 
@@ -172,6 +172,11 @@ keep one parameter per alias, so nothing a real shard runs changes. Past SQLite'
 failed the shard with `too many SQL variables`. No real registry gets near that, so this is conformance rather
 than a reported failure. `event_type_allow_list_binding` covers the page and the skip-ahead probe over a
 33,000-name list, upcast source names on the `json_each` form (fisher#191), and the query plan.
+
+## Weasel 10.0.0-alpha.7
+
+Weasel 10.0.0-alpha.6 → 10.0.0-alpha.7, no Fisher change. Everything in it is Weasel.SqlServer (weasel#868,
+weasel#872), and no dependency floor moved.
 
 ## Weasel 10.0.0-alpha.6
 
