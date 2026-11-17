@@ -469,10 +469,27 @@
              arrives after an overlapping advance installed a higher one, so ids only increase.
              weasel#838: MasterTableTenancyBase.TryResolveTenant, additive. INERT: weasel#839
              (SingleServerDatabaseCollection). -->
-        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.4" />
-        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.4" />
+        <!-- Weasel 10.0.0-alpha.6 (from alpha.4, spanning alpha.5). JasperFx floor still 3.0.0.
+             weasel#861/#866: SqliteFunctionRegistry.AddCollation. The fi_decimal collation is registered
+             through it now, and DecimalCollation, the SqliteFunction subclass that stood in for it, is gone.
+             weasel#863/#864: JsonColumnStreaming never asks a SqliteDataReader for GetStream, so a document
+             whose data is a computed column beside another computed column no longer crashes the process
+             (the selector half of fisher#613). AdvancedSql's JsonReader keeps reading with GetString: it
+             hands the serializer a string, so a custom ISerializer's own DbDataReader overload is never
+             reached on that path.
+             weasel#857/#860: Weasel.Sqlite now depends on Microsoft.Data.Sqlite 10.0.15, which fixes the
+             pool lending one native handle to two connections (fisher#576). The pin below has to follow it
+             (NU1605 otherwise). Fisher's open gate (fisher#582, fisher#587) stays: it also keeps a burst of
+             synchronous opens off the thread pool.
+             weasel#849/#855: HiloSequenceBase.TrySetCurrentHi(raw, installCountBefore), additive; Fisher's
+             HiloSequence.SetFloor installs its block through an advance, never from outside one. weasel#851/#854: UpcastSourceAliases keeps a
+             source alias that is also a live alias; SqliteEventPagingDialect matches on the type column,
+             whose IN list is unchanged. INERT: weasel#850/#856 (a synchronous control-table seam on
+             MasterTableTenancyBase, default off). -->
+        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.6" />
+        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.6" />
 
-        <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+        <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.15" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
              GHSA-2m69-gcr7-jv3q) with the 3.0.x line, which ships the patched SQLite 3.50.x+ build.
              That build is also what puts JSONB and the json1 functions Fisher's storage relies on

@@ -1,6 +1,5 @@
 using System.Globalization;
 using Fisher.Linq.Members;
-using Microsoft.Data.Sqlite;
 using Weasel.Core;
 using Weasel.Core.SqlGeneration;
 using Weasel.Sqlite.Functions;
@@ -234,10 +233,7 @@ internal static class DecimalAggregates
         functions.AddScalar<byte[]?>(SortKeyFunctionName,
             static (object? value) => SortKeyOf(value), isDeterministic: true);
 
-        // A collation through the function registry's extension point, since the registry has no collation
-        // member of its own and a collation lives on the connection exactly as a function does. weasel#861
-        // asks for one; when it ships, DecimalCollation goes.
-        functions.Add(new DecimalCollation());
+        functions.AddCollation(CollationName, CompareAsNumbers);
     }
 
     internal static string FunctionFor(AggregateFunction function) => function switch
@@ -327,25 +323,19 @@ internal static class DecimalAggregates
     /// </summary>
     private readonly record struct Accumulator(decimal Value, long Count);
 
-    private sealed class DecimalCollation() : SqliteFunction(CollationName)
+    // The fi_decimal collation. fisher#609: the same reading the aggregates make, so a number written as a JSON
+    // string compares as the number. Identical text is equal without parsing, which is the common case for a key.
+    private static int CompareAsNumbers(string? x, string? y)
     {
-        public override void Register(SqliteConnection connection)
-            => connection.CreateCollation(CollationName, Compare);
-
-        // fisher#609: the same reading the aggregates make, so a number written as a JSON string compares
-        // as the number. Identical text is equal without parsing, which is the common case for a key.
-        private static int Compare(string? x, string? y)
+        if (string.Equals(x, y, StringComparison.Ordinal))
         {
-            if (string.Equals(x, y, StringComparison.Ordinal))
-            {
-                return 0;
-            }
-
-            return TryParseJson(x, out var left) && left.HasValue
-                   && TryParseJson(y, out var right) && right.HasValue
-                ? left.Value.CompareTo(right.Value)
-                : string.CompareOrdinal(x, y);
+            return 0;
         }
+
+        return TryParseJson(x, out var left) && left.HasValue
+               && TryParseJson(y, out var right) && right.HasValue
+            ? left.Value.CompareTo(right.Value)
+            : string.CompareOrdinal(x, y);
     }
 }
 
