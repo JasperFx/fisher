@@ -12,11 +12,11 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3539 tests green on net10.0 and 3566 on net11.0** — 3468 (net10.0) / 3495 (net11.0) in `Fisher.Tests`, 40 in
-`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
-them are shared cross-store compliance tests — 612 event sourcing and 231 document.
+**3546 tests green on net10.0 and 3573 on net11.0** — 3475 (net10.0) / 3502 (net11.0) in `Fisher.Tests`, 40 in
+`Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 846 of
+them are shared cross-store compliance tests — 612 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.3.0** / Weasel **10.0.0-alpha.6**.
+On JasperFx **3.5.0** / Weasel **10.0.0-alpha.6**.
 
 ## `decimal` aggregates are exact (fisher#606)
 
@@ -1338,8 +1338,8 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 3.3.0 ships 66 suites; Fisher enrolls **66 of them, 843 tests**.
-Fisher passes **843 of them, across all
+`JasperFx.Events.ComplianceTests` 3.5.0 ships 66 suites; Fisher enrolls **66 of them, 846 tests**.
+Fisher passes **846 of them, across all
 66 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
@@ -1495,7 +1495,7 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 66 suites, 843 tests
+### Green — 66 suites, 846 tests
 
 Event sourcing — 52 suites, 612 tests:
 
@@ -1554,7 +1554,7 @@ Event sourcing — 52 suites, 612 tests:
 | `EventProjectionRegistrationCompliance` | 9 |
 | `AutoDiscoveredAggregateCompliance` | 2 |
 
-Documents — 14 suites, 231 tests, through `FisherDocumentComplianceFixture`:
+Documents — 14 suites, 234 tests, through `FisherDocumentComplianceFixture`:
 
 | Suite | Tests |
 |---|---|
@@ -1562,7 +1562,7 @@ Documents — 14 suites, 231 tests, through `FisherDocumentComplianceFixture`:
 | `SoftDeleteCompliance` | 15 |
 | `DocumentMetadataCompliance` | 5 |
 | `DocumentQueryCompliance` | 17 |
-| `DocumentConjoinedTenancyCompliance` | 10 |
+| `DocumentConjoinedTenancyCompliance` | 13 |
 | `DocumentSearchCompliance` | 15 |
 | `DocumentLoadAndStoreCompliance` | 15 |
 | `DocumentCommitListenerCompliance` | 10 |

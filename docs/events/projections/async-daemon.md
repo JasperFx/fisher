@@ -361,6 +361,32 @@ no longer registered is ignored rather than waited on — that is what
 `DeleteProjectionProgressByShardNameAsync` is for.
 :::
 
+### Reading your own writes
+
+The waits above are for the high-water mark, which includes every other writer's events. To read back what you
+just wrote, wait for your own events instead. `session.LastAppendedSequence` says where the last commit's events
+are, and `WaitForProjectionsAsync` waits for the named asynchronous projections to get that far:
+
+```cs
+await using var session = store.LightweightSession();
+session.Events.StartStream(Guid.NewGuid(), new QuestStarted("Destroy the ring"));
+await session.SaveChangesAsync();
+
+var result = await store.WaitForProjectionsAsync(
+    session.LastAppendedSequence!, [typeof(QuestParty)], TimeSpan.FromSeconds(5));
+
+if (result.Reached)
+{
+    // read the projected documents
+}
+```
+
+The result is a value, not an exception. `TimedOut` means the projection is still behind your events, and
+`Shards` says how far each shard got. A paused or rebuilding projection returns right away with `Paused` or
+`Rebuilding`. The wait polls `fi_event_progression`, so another process on the same file can do it too. You
+can pass projection names instead of types. The position carries the database, so under database-per-tenant it
+reads the right file, and `ToString()` / `EventStorePosition.Parse()` give a compact text form for a header.
+
 ## Event-emitting projections
 
 A projection can raise events, and they are appended inside the batch's own transaction.
