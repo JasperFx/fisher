@@ -752,6 +752,22 @@ public class EventStoreOptions : IEventStoreInstrumentation
     public bool EnableUserName { get; set; }
 
     /// <summary>
+    ///     Enable all optional event metadata: <see cref="EnableCorrelationId" />,
+    ///     <see cref="EnableCausationId" />, <see cref="EnableHeaders" /> and
+    ///     <see cref="EnableUserName" />. That includes the user name, so the session's
+    ///     <c>LastModifiedBy</c> is stored on every appended event. The same set as Marten's
+    ///     <c>Events.MetadataConfig.EnableAll()</c>. Each flag adds a column to <c>fi_events</c>,
+    ///     so call this before the tables are created.
+    /// </summary>
+    public void EnableAllEventMetadata()
+    {
+        EnableCorrelationId = true;
+        EnableCausationId = true;
+        EnableHeaders = true;
+        EnableUserName = true;
+    }
+
+    /// <summary>
     ///     The store-wide fallback serializer for event types marked
     ///     <see cref="JasperFx.Events.BinaryEventAttribute" /> (fisher#93). Null — the default —
     ///     means every such type must name its own serializer through

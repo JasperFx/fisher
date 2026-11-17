@@ -100,6 +100,8 @@ opts.Events.EnableCorrelationId = true;
 opts.Events.EnableCausationId = true;
 opts.Events.EnableUserName = true;
 opts.Events.EnableHeaders = true;
+// or all four at once, user name included
+opts.Events.EnableAllEventMetadata();
 
 opts.Events.DatabaseSchemaName = "events";            // events in their own prefix
 
