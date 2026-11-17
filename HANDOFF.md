@@ -12,11 +12,11 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3534 tests green on net10.0 and 3561 on net11.0** — 3463 (net10.0) / 3490 (net11.0) in `Fisher.Tests`, 40 in
+**3521 tests green on net10.0 and 3548 on net11.0** — 3450 (net10.0) / 3477 (net11.0) in `Fisher.Tests`, 40 in
 `Fisher.AspNetCore.Tests` and 31 in `Fisher.EntityFrameworkCore.Tests`. 843 of
 them are shared cross-store compliance tests — 612 event sourcing and 231 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.3.0** / Weasel **10.0.0-alpha.4**.
+On JasperFx **3.3.0** / Weasel **10.0.0-alpha.6**.
 
 ## `decimal` aggregates are exact (fisher#606)
 
@@ -26,7 +26,8 @@ for values no double holds. All four now read the JSON text (`IQueryableMember.J
 `fi_decimal_*` aggregates Fisher registers on every connection, borrowed ones included, and the grouped forms carry an
 `fi_decimal` collation so `HAVING`, grouped `OrderBy` and `Distinct` compare as numbers. `decimal_aggregates`
 (17 facts, LINQ to Objects as the oracle) fails 14 on the previous build. Plain `Select`/`Where` beyond 15
-significant digits is fisher#609; the collation's registry member is weasel#861.
+significant digits is fisher#609. The collation is registered through Weasel's `SqliteFunctionRegistry.AddCollation`
+(weasel#861).
 
 ## Comparing two decimal members is exact (fisher#615)
 
@@ -171,6 +172,21 @@ keep one parameter per alias, so nothing a real shard runs changes. Past SQLite'
 failed the shard with `too many SQL variables`. No real registry gets near that, so this is conformance rather
 than a reported failure. `event_type_allow_list_binding` covers the page and the skip-ahead probe over a
 33,000-name list, upcast source names on the `json_each` form (fisher#191), and the query plan.
+
+## Weasel 10.0.0-alpha.6
+
+Weasel 10.0.0-alpha.4 → 10.0.0-alpha.6, spanning alpha.5. Two changes reach Fisher's code. The `fi_decimal`
+collation is registered with `SqliteFunctionRegistry.AddCollation` (weasel#861), and `DecimalCollation`, the
+`SqliteFunction` subclass that stood in for it, is gone. weasel#863 stops `JsonColumnStreaming` asking a
+`SqliteDataReader` for `GetStream`, which closes the document half of fisher#613: a document whose `data` is a
+computed column beside another computed column used to kill the process with exit 139 inside Weasel's selector.
+`a_computed_document_beside_another_computed_column_is_read` pins it (exit 139 on alpha.4). AdvancedSql's JSON
+reader keeps reading with `GetString`, since a custom `ISerializer`'s `DbDataReader` overload is not Weasel's.
+
+Weasel.Sqlite now depends on Microsoft.Data.Sqlite 10.0.15 (weasel#857), which fixes the pool lending one native
+handle to two connections (fisher#576), so Fisher's pin moves with it. The open gate stays; it also keeps a burst of
+synchronous opens off the thread pool (fisher#587). weasel#849 (Hi-Lo floors), weasel#851 (upcast source aliases
+on a `dotnet_type` dialect) and weasel#850 (synchronous control-table provisioning) need nothing from Fisher.
 
 ## Weasel 10.0.0-alpha.4 (fisher#575)
 

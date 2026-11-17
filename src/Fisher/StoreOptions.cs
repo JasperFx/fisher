@@ -310,6 +310,13 @@ public class StoreOptions
         = Weasel.Sqlite.SqlitePragmaSettings.Default;
 
     /// <summary>
+    ///     Whether connections wait for the write lock through Fisher's 1 ms busy handler rather than
+    ///     SQLite's default schedule (fisher#547, <see cref="Storage.SqliteBusyHandler" />). Internal and
+    ///     always on; the benchmarks turn it off to measure other handlers against it.
+    /// </summary>
+    internal bool UseFixedSleepBusyHandler { get; set; } = true;
+
+    /// <summary>
     ///     Application-defined SQLite functions registered on every connection the store opens
     ///     (weasel#588). Fisher registers <c>fi_vector_distance</c> here for vector search; add your
     ///     own and they are on every connection too, tenants included. Functions live on the
@@ -842,6 +849,22 @@ public class EventStoreOptions : IEventStoreInstrumentation
     ///     <c>Events.MetadataConfig.EnableAll()</c>. Each flag adds a column to <c>fi_events</c>,
     ///     so call this before the tables are created. All four are on by default since Fisher 2.0, so
     ///     this matters after <see cref="StoreOptions.RestoreV1Defaults" />.
+    /// </summary>
+    public void EnableAllEventMetadata()
+    {
+        EnableCorrelationId = true;
+        EnableCausationId = true;
+        EnableHeaders = true;
+        EnableUserName = true;
+    }
+
+    /// <summary>
+    ///     Enable all optional event metadata: <see cref="EnableCorrelationId" />,
+    ///     <see cref="EnableCausationId" />, <see cref="EnableHeaders" /> and
+    ///     <see cref="EnableUserName" />. That includes the user name, so the session's
+    ///     <c>LastModifiedBy</c> is stored on every appended event. The same set as Marten's
+    ///     <c>Events.MetadataConfig.EnableAll()</c>. Each flag adds a column to <c>fi_events</c>,
+    ///     so call this before the tables are created.
     /// </summary>
     public void EnableAllEventMetadata()
     {

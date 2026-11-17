@@ -132,11 +132,17 @@ the only sync-over-async left in the write path and runs once per sequence. The 
 single-writer queue in front of `BEGIN IMMEDIATE`, is a benchmark-first design question (it would change
 per-session failure and enlisted-session semantics) and is NOT done; the baseline to beat is
 `ConcurrentWritersScenario` (8 writers ~1.8x the wall clock of 1 writer, see `Fisher.Benchmarks/Results.md`).
-**fisher#547 has the measurement, and no decision yet:** `writer-queue` in `Fisher.Benchmarks` compares racing
-against a benchmark-only `Channel<T>` queue (and a `SemaphoreSlim` control), and `Results.md`'s fisher#547
-section has the numbers and the semantic costs. Its "fisher#547 round 2" section adds replacement busy
-handlers, event appends, the daemon, group commit and a bounded queue, and confirms SQLite's default busy
-handler's sleeps as the whole cost of racing. Adopting or declining any of it is the owner's call.
+**fisher#547 is decided: the 1 ms busy handler is adopted, the `Channel<T>` queue is not** (Jeremy,
+2026-11-16; Fisher 2.0 only). `writer-queue` in `Fisher.Benchmarks` compares racing against a benchmark-only
+`Channel<T>` queue (and a `SemaphoreSlim` control), and `Results.md`'s fisher#547 section has the numbers and
+the semantic costs. Its "fisher#547 round 2" section adds replacement busy handlers, event appends, the daemon,
+group commit and a bounded queue, and confirms SQLite's default busy handler's sleeps as the whole cost of
+racing. `Storage/SqliteBusyHandler` installs the 1 ms handler on every connection `SerializedOpenDataSource`
+opens, after Weasel's PRAGMAs (whose `busy_timeout` installs the default one), with `BusyTimeout` as the
+deadline. SQLitePCLRaw 3.0.5 does not expose `sqlite3_busy_handler`, so it is looked up in the provider's own
+`e_sqlite3` library, and only when that is the provider; anywhere else the default handler stays. The
+`writer-queue` bh-* modes turn it off through the internal `StoreOptions.UseFixedSleepBusyHandler`, so plain
+`race` now measures Fisher's handler and `bh-mimic` measures SQLite's default.
 
 **`AppendExclusive` / `FetchForExclusiveWriting` / `WriteExclusivelyToAggregate` are the optimistic
 methods.** Marten and Polecat take a row lock so a competing session waits its turn. SQLite has no
@@ -2497,8 +2503,8 @@ before anything changed: 14 of `decimal_aggregates`' 17 facts fail on the old pa
 - **`fi_decimal_sum`/`_avg`/`_min`/`_max` return TEXT**, so the grouped form is
   `(fi_decimal_sum(…) collate fi_decimal)`. That collation is what makes `HAVING`, a grouped `OrderBy` and
   `Distinct` compare as numbers, and `DecimalAggregateComparison` binds the `HAVING` value as TEXT. fisher#304's
-  REAL would sort below every TEXT and match nothing. The collation is registered by subclassing
-  `SqliteFunction` until weasel#861 adds a registry member.
+  REAL would sort below every TEXT and match nothing. The collation is registered with
+  `SqliteFunctionRegistry.AddCollation` (weasel#861), beside the aggregates.
 - **`AverageAsync` still returns `double`**, now the exact mean rounded once. `(double)decimal` is not
   correctly rounded, which is why the test's oracle parses the decimal's text instead.
 - **A borrowed connection gets the store's functions too**: `ExternalConnectionLifetime` registers them on
@@ -3009,9 +3015,12 @@ process just dies. It was not recursion and not about `object`. `QueryAsync<obje
 only reached it because `object` fell through to the JSON reader, and a lone computed column never
 crashed because there was no other column to match. `object` is now a scalar: the provider's own value
 (`long`, `double`, `string`, `byte[]`, null), in any position. `a_json_column_beside_another_computed_column_is_read`
-pins the root cause and kills the runner if it regresses. A *document* result is still read by Weasel's
-selector, which streams `data`, so a document whose `data` is a computed column beside another computed
-column would still crash. Weasel's `JsonColumnStreaming` is where that belongs.
+pins the root cause and kills the runner if it regresses. A *document* result is read by Weasel's
+selector, and since Weasel 10.0.0-alpha.6 (weasel#863) `JsonColumnStreaming` never asks a
+`SqliteDataReader` for a stream, so a document whose `data` is a computed column beside another computed
+column reads too (`a_computed_document_beside_another_computed_column_is_read`, exit 139 on alpha.4). The
+JSON reader still reads with `GetString`: a custom `ISerializer`'s `DbDataReader` overload is not Weasel's
+and could stream, and the string costs nothing over Weasel's own SQLite path.
 
 ### Soft delete
 
