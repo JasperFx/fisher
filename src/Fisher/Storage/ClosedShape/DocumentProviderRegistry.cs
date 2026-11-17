@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
+using JasperFx.Core;
 using JasperFx.Core.Reflection;
 using Weasel.Core.Identity;
 using Weasel.Core.Sequences;
@@ -221,7 +222,7 @@ internal class DocumentProviderRegistry : ProviderGraphBase
     /// </summary>
     /// <remarks>
     ///     The same strategies <see cref="BuildStrongTyped" /> builds reflectively, with the inner type
-    ///     switched over instead of reflected on: version-7 Guid, the document type's Hi-Lo sequence, or
+    ///     switched over instead of reflected on: a time-ordered Guid, the document type's Hi-Lo sequence, or
     ///     no generator for a string. A caller-supplied strategy wins, as it does on the other paths.
     ///     Null when the mapping's identity is no longer <typeparamref name="TId" />, so the caller falls
     ///     through rather than building storage for a member that is not the identity any more.
@@ -249,7 +250,7 @@ internal class DocumentProviderRegistry : ProviderGraphBase
         if (inner == typeof(Guid))
         {
             return BuildTypedProvider(mapping, new StrongTypedIdentification<TDoc, TId, Guid>(info, member,
-                _ => Guid.CreateVersion7()));
+                _ => SequentialGuid.NextPostgresOrder()));
         }
 
         if (inner == typeof(string))
@@ -315,7 +316,7 @@ internal class DocumentProviderRegistry : ProviderGraphBase
     ///     wrapper and the type it wraps, with a generator matching the inner type.
     /// </summary>
     /// <remarks>
-    ///     The generators mirror the raw strategies exactly — version-7 Guid, or the document type's
+    ///     The generators mirror the raw strategies — a time-ordered Guid, or the document type's
     ///     Hi-Lo sequence — so a wrapper gets the same ids its unwrapped counterpart would. A
     ///     string-backed wrapper gets none, because <c>StringIdentification</c> generates none either:
     ///     a string key is externally assigned.
@@ -331,7 +332,7 @@ internal class DocumentProviderRegistry : ProviderGraphBase
 
         object? generate = inner switch
         {
-            var t when t == typeof(Guid) => (Func<ISequenceSource, Guid>)(_ => Guid.CreateVersion7()),
+            var t when t == typeof(Guid) => (Func<ISequenceSource, Guid>)(_ => SequentialGuid.NextPostgresOrder()),
             var t when t == typeof(int) => (Func<ISequenceSource, int>)(s =>
                 s.SequenceFor(documentType).NextInt()),
             var t when t == typeof(long) => (Func<ISequenceSource, long>)(s =>

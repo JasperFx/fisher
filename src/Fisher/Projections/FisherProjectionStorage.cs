@@ -94,6 +94,18 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
 
     public void HardDelete(TDoc snapshot) => HardDelete(snapshot, TenantId);
 
+    /// <summary>
+    ///     Remove the row with this identity outright, soft-deleted or not (fisher#629, jasperfx#1201).
+    /// </summary>
+    /// <remarks>
+    ///     A per-identity rebuild clears the identity this way before it writes the re-fold, so a stream that
+    ///     folds to nothing leaves no row and a soft-deleted row does not survive a fold that recreates it. Queued
+    ///     like every other projection write, so it lands in the batch's transaction ahead of the store that
+    ///     follows it.
+    /// </remarks>
+    public void HardDeleteById(TId identity)
+        => _session.QueueOperation(_storage.HardDeleteForId(identity, TenantId));
+
     public void HardDelete(TDoc snapshot, string tenantId)
         => _session.QueueOperation(_storage.HardDeleteForDocument(snapshot, tenantId));
 

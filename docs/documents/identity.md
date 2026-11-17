@@ -5,7 +5,7 @@ Fisher finds a document's identity member by convention — a public member name
 
 | Id type | Column | Assigned by |
 | :--- | :--- | :--- |
-| `Guid` | TEXT, lowercase canonical | Fisher, a version-7 Guid |
+| `Guid` | TEXT, lowercase canonical | Fisher, a time-ordered Guid |
 | `string` | TEXT | You |
 | `int` | INTEGER | Fisher, from a [Hi-Lo sequence](#hi-lo-sequences) |
 | `long` | INTEGER | Fisher, from a Hi-Lo sequence |
@@ -179,7 +179,7 @@ Two things fall out of the design and are worth knowing:
 - **A Guid-backed wrapper goes through the same lowercase-canonical conversion as a raw one.** That
   conversion lives in the identity strategy precisely so a wrapper cannot lose it.
 
-Generation mirrors the raw strategies: a version-7 Guid, or the document type's Hi-Lo sequence. A
+Generation mirrors the raw strategies: a time-ordered Guid, or the document type's Hi-Lo sequence. A
 string-backed wrapper generates nothing, because a raw string key is externally assigned too.
 
 ## Overriding the identity member
@@ -214,7 +214,7 @@ opts.Schema.For<Boat>()
     .IdStrategy(new PrefixedKeys());
 ```
 
-Fisher otherwise picks by the id's type: a version-7 Guid, an externally-assigned string, a Hi-Lo
+Fisher otherwise picks by the id's type: a time-ordered Guid, an externally-assigned string, a Hi-Lo
 `int` or `long`, or the unwrapping strategy for a strong-typed wrapper. This is the seam for anything
 else — a ULID in a string key, a snowflake `long`, a tenant-prefixed key.
 

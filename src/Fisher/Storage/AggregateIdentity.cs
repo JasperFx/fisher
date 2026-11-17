@@ -148,6 +148,13 @@ internal static class AggregateIdentity
     /// <summary>
     ///     The stream id as a value an identity member of <paramref name="memberType" /> can hold, or null.
     /// </summary>
+    /// <summary>
+    ///     A stream id as a projection keyed by <paramref name="identityType" /> addresses it: the id itself, or a
+    ///     strong-typed id wrapping it (fisher#629).
+    /// </summary>
+    internal static object ProjectedIdentityFor(Type identityType, object streamId)
+        => IdentityValueFor(identityType, streamId) ?? streamId;
+
     private static object? IdentityValueFor(Type memberType, object streamId)
     {
         if (memberType.IsInstanceOfType(streamId))

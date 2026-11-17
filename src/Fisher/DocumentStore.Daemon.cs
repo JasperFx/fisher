@@ -224,6 +224,35 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         return batch;
     }
 
+    // ---- per-identity rebuild (fisher#629, jasperfx#1201) ----
+
+    /// <summary>
+    ///     Fisher implements the per-identity rebuild seams: the re-fold loader below,
+    ///     <see cref="Projections.FisherProjectionStorage{TDoc,TId}" />'s <c>HardDeleteById</c>, and a projection
+    ///     batch that records progression for an empty range <c>(C, C]</c>.
+    /// </summary>
+    /// <remarks>
+    ///     The empty range needs nothing of its own. <see cref="Storage.ShardProgressionOperation" />'s guarded
+    ///     upsert writes <c>last_seq_id = C where last_seq_id = C</c>, which matches and returns its row, so the
+    ///     floor check (fisher#402) passes and an idle shard's progression does not move. A batch with no
+    ///     session of its own still writes it, through the session <see cref="FisherProjectionBatch" /> opens
+    ///     for that case.
+    /// </remarks>
+    bool IEventStore<IDocumentSession, IQuerySession>.SupportsIdentityRebuild => true;
+
+    /// <summary>
+    ///     One stream's events for a per-identity re-fold, read with the daemon loader's rules. See
+    ///     <see cref="FisherIdentityRebuildLoader" />.
+    /// </summary>
+    Task<IReadOnlyList<IEvent>> IEventStore<IDocumentSession, IQuerySession>.LoadEventsForIdentityRebuildAsync(
+        IEventDatabase database, IdentityRebuildEventRequest request, CancellationToken token)
+    {
+        var loader = new FisherIdentityRebuildLoader(DatabaseFrom(database), Options);
+
+        return Options.ResiliencePipeline.ExecuteAsync(
+            async ct => await loader.LoadAsync(request, ct).ConfigureAwait(false), token).AsTask();
+    }
+
     // ---- progression bookkeeping ----
 
     /// <summary>

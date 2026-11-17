@@ -810,16 +810,45 @@ public class AdvancedOperations
     private Events.Daemon.FisherHighWaterDetector DetectorFor(Storage.FisherDatabase database)
         => new(database, _store.Options.EventGraph);
 
-    // ---- rebuilding one stream (fisher#173) ----
+    // ---- rebuilding one stream (fisher#173, fisher#629) ----
 
     /// <summary>
-    ///     Rebuild the projected document of type <typeparamref name="T" /> for a single stream, by
-    ///     live-aggregating it and storing the result.
+    ///     Rebuild the projected document of type <typeparamref name="T" /> for a single stream.
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         The repair that does not need the daemon: one stream's read model is wrong, and a full
-    ///         <c>RebuildProjectionAsync</c> would replay every stream the projection owns to fix it.
+    ///         The repair for one stream whose read model is wrong, where a full <c>RebuildProjectionAsync</c>
+    ///         would replay every stream the projection owns to fix it.
+    ///     </para>
+    ///     <para>
+    ///         <b>Three paths, chosen in this order (fisher#629).</b> When <typeparamref name="T" /> is written
+    ///         by an asynchronous single-stream projection:
+    ///     </para>
+    ///     <list type="number">
+    ///         <item>
+    ///             A daemon this process hosts (<c>AddAsyncDaemon</c>) is running the projection's shard: the
+    ///             rebuild goes through it, <c>IProjectionDaemon.RebuildIdentityAsync</c>, and is bound to the
+    ///             shard's next batch. The stream is re-folded inside the shard and committed with its
+    ///             progression, so it cannot race the shard. This returns when that batch commits.
+    ///         </item>
+    ///         <item>
+    ///             Otherwise, when the shard's progression row was written within the last 30 seconds by a
+    ///             running agent, the rebuild is refused with <see cref="IdentityRebuildRefusedException" />
+    ///             (<see cref="IdentityRebuildRefusal.ShardLiveOnAnotherNode" />). Something this store cannot
+    ///             reach is advancing the shard: a daemon built by hand with <c>BuildProjectionDaemonAsync</c>,
+    ///             one run as Wolverine agents, or a second process over the same file, which Fisher does not
+    ///             support (fisher#402). Rebuild through that daemon instead.
+    ///         </item>
+    ///         <item>
+    ///             Otherwise the stream is live-aggregated and stored here, outside any daemon. <b>That is only
+    ///             safe when no daemon is running the projection.</b> Without extended progression tracking an
+    ///             idle shard stops rewriting its row, so a daemon that has had nothing to do for 30 seconds
+    ///             looks stopped and the write is not refused.
+    ///         </item>
+    ///     </list>
+    ///     <para>
+    ///         An inline or live projection, or a type no projection writes, always takes the third path: there is
+    ///         no shard to race.
     ///     </para>
     ///     <para>
     ///         <b>A stream that folds to nothing deletes the document, where Marten's equivalent throws
@@ -836,9 +865,13 @@ public class AdvancedOperations
     ///         Rebuild those through the daemon.
     ///     </para>
     /// </remarks>
+    /// <exception cref="IdentityRebuildRefusedException">
+    ///     The projection's shard is running somewhere this store cannot reach, or the daemon running it here
+    ///     refused (it has never committed, or it is being rebuilt).
+    /// </exception>
     public Task RebuildSingleStreamAsync<T>(Guid id, string? tenantId = null,
         CancellationToken token = default) where T : class
-        => RebuildSingleStreamAsync<T>(
+        => RebuildSingleStreamAsync<T>(id,
             (session, ct) => session.Events.AggregateStreamAsync<T>(id, token: ct),
             session => session.Delete<T>(id), tenantId, token);
 
@@ -848,12 +881,12 @@ public class AdvancedOperations
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamKey);
 
-        return RebuildSingleStreamAsync<T>(
+        return RebuildSingleStreamAsync<T>(streamKey,
             (session, ct) => session.Events.AggregateStreamAsync<T>(streamKey, token: ct),
             session => session.Delete<T>(streamKey), tenantId, token);
     }
 
-    private async Task RebuildSingleStreamAsync<T>(
+    private async Task RebuildSingleStreamAsync<T>(object streamId,
         Func<IDocumentSession, CancellationToken, Task<T?>> aggregate, Action<IDocumentSession> deleteById,
         string? tenantId, CancellationToken token) where T : class
     {
@@ -867,6 +900,13 @@ public class AdvancedOperations
         }
 
         await using var session = _store.LightweightSession(tenantId);
+        var fisherSession = (Internal.FisherSession)session;
+
+        if (AsyncSingleStreamProjectionFor(typeof(T)) is { } projection
+            && await TryRebuildThroughDaemonAsync(projection, fisherSession, streamId, token).ConfigureAwait(false))
+        {
+            return;
+        }
 
         var document = await aggregate(session, token).ConfigureAwait(false);
 
@@ -882,10 +922,70 @@ public class AdvancedOperations
         else
         {
             // As a projection stores it, so a revisioned document keeps the stream version (fisher#369).
-            ((Internal.FisherSession)session).StoreProjected(document);
+            fisherSession.StoreProjected(document);
         }
 
         await session.SaveChangesAsync(token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     The asynchronous single-stream projection that writes <paramref name="documentType" />, or null when
+    ///     none does.
+    /// </summary>
+    private IProjectionSource<IDocumentSession, IQuerySession>? AsyncSingleStreamProjectionFor(Type documentType)
+        => _store.Options.Projections.All.FirstOrDefault(x =>
+            x is JasperFx.Events.Aggregation.IAggregateProjection
+            {
+                Scope: AggregationScope.SingleStream,
+                Lifecycle: ProjectionLifecycle.Async
+            } aggregate
+            && aggregate.AggregateType == documentType);
+
+    /// <summary>
+    ///     The first two paths of <see cref="RebuildSingleStreamAsync{T}(Guid, string, CancellationToken)" />:
+    ///     true when a daemon in this process rebuilt the stream, an exception when a shard this store cannot
+    ///     reach is live, and false when neither applies and the caller should rebuild offline.
+    /// </summary>
+    private async Task<bool> TryRebuildThroughDaemonAsync(IProjectionSource<IDocumentSession, IQuerySession> projection,
+        Internal.FisherSession session, object streamId, CancellationToken token)
+    {
+        var name = projection.Name;
+        var database = session.FisherDatabase;
+        var tenantId = session.TenantId;
+
+        // The shard for every tenant, or this tenant's own under per-tenant partitioning
+        var shards = _store.Options.Projections.AllShards()
+            .Select(x => x.Name)
+            .Where(x => x.Name == name && (x.TenantId is null || x.TenantId == tenantId))
+            .ToArray();
+
+        if (_store.RunningDaemons is { } coordinator)
+        {
+            foreach (var daemon in await coordinator.AllDaemonsAsync().ConfigureAwait(false))
+            {
+                if (daemon is not Events.Daemon.FisherProjectionDaemon fisherDaemon
+                    || !string.Equals(fisherDaemon.Database.Identifier, database.Identifier, StringComparison.OrdinalIgnoreCase)
+                    || !shards.Any(x => daemon.StatusFor(x.Identity) == JasperFx.AgentStatus.Running))
+                {
+                    continue;
+                }
+
+                var identity = Storage.AggregateIdentity.ProjectedIdentityFor(
+                    ((JasperFx.Events.Aggregation.IAggregateProjection)projection).IdentityType, streamId);
+
+                await fisherDaemon.RebuildIdentityAsync(name, tenantId, identity, token).ConfigureAwait(false);
+                return true;
+            }
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var shard in shards)
+        {
+            var progression = await database.ReadShardLivenessAsync(shard.Identity, token).ConfigureAwait(false);
+            IdentityRebuildGuard.AssertNotLiveElsewhere(name, streamId, progression, now);
+        }
+
+        return false;
     }
 
     /// <summary>

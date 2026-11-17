@@ -2087,7 +2087,12 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     ///     The highest event sequence any <c>SaveChangesAsync</c> on this session appended, with the session's
     ///     database and tenant. Null until a commit appends events.
     /// </summary>
-    public JasperFx.Events.EventStorePosition? LastAppendedSequence { get; private set; }
+    /// <remarks>
+    ///     JasperFx 3.6.0's name (jasperfx#1218). The 3.5.0 name, <c>LastAppendedSequence</c>, is an obsolete
+    ///     forwarder to this one on <see cref="JasperFx.Events.IStorageOperations" />, so a caller still using it
+    ///     gets the same answer.
+    /// </remarks>
+    public JasperFx.Events.EventStorePosition? LastAppendedPosition { get; private set; }
 
     private void recordAppendedPosition(IReadOnlyList<JasperFx.Events.StreamAction> streams)
     {
@@ -2101,9 +2106,9 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         }
 
         // Only ever forward: a later commit on the same session cannot move the position back
-        if (highest <= 0 || LastAppendedSequence?.Sequence >= highest) return;
+        if (highest <= 0 || LastAppendedPosition?.Sequence >= highest) return;
 
-        LastAppendedSequence = new JasperFx.Events.EventStorePosition(FisherDatabase.Identifier, TenantId, highest);
+        LastAppendedPosition = new JasperFx.Events.EventStorePosition(FisherDatabase.Identifier, TenantId, highest);
     }
 
     // Delegated on a tenant scope: correlation, causation, user and headers describe the unit of work

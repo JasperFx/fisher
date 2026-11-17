@@ -3,7 +3,8 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **one open issue, and it is blocked upstream.** Fisher 2.0's share of Marten 10's default changes
+Status: **one open issue, and it is blocked upstream.** JasperFx 3.6.0's per-identity rebuild
+([#629](https://github.com/JasperFx/fisher/issues/629)) is done, on Weasel 10.0.0-alpha.8. Fisher 2.0's share of Marten 10's default changes
 ([#621](https://github.com/JasperFx/fisher/issues/621)), the Marten parity helper
 ([#619](https://github.com/JasperFx/fisher/issues/619)) and the busy-handler docs correction
 ([#624](https://github.com/JasperFx/fisher/issues/624)) are done. 1.28.0 took JasperFx
@@ -895,7 +896,7 @@ Test counts keep understating the suites that matter. `AsyncDaemonCompliance` is
 the whole daemon; `FlatTableProjectionCompliance` is eight that demand an upsert generator, a
 migration hook and rebuild teardown.
 
-Being green on all sixty-six is not the same as being feature-complete against Marten. The suites
+Being green on all sixty-seven is not the same as being feature-complete against Marten. The suites
 cover what is portable across stores; the deliberate gaps listed in HANDOFF.md are still gaps.
 
 ## Filed follow-ups

@@ -555,7 +555,7 @@ public class DocumentMappingExpression<T> where T : notnull
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         Fisher otherwise picks by <c>IdType</c>: a version-7 Guid, an externally-assigned
+    ///         Fisher otherwise picks by <c>IdType</c>: a time-ordered Guid, an externally-assigned
     ///         string, a Hi-Lo <c>int</c> or <c>long</c>, or the unwrapping strategy for a strong-typed
     ///         wrapper. This is the seam for anything else — a ULID in a string key, a snowflake
     ///         <c>long</c>, a tenant-prefixed key.

@@ -1,4 +1,5 @@
 using System.Data.Common;
+using JasperFx.Core;
 using Fisher.Storage;
 using JasperFx;
 using Weasel.Core;
@@ -93,7 +94,7 @@ internal sealed class PatchOperation : Weasel.Storage.IStorageOperation
         if (_mapping.UseOptimisticConcurrency)
         {
             builder.Append(", guid_version = ");
-            builder.AppendParameter(Guid.CreateVersion7().ToString());
+            builder.AppendParameter(SequentialGuid.NextPostgresOrder().ToString());
         }
 
         if (_mapping.UseNumericRevisions)

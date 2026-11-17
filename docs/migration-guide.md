@@ -495,3 +495,37 @@ Landed in 2.0.0-alpha.1 (fisher#468 via #541) as the new `Fisher.Aspire.Hosting`
 file's volume, and [Aspire](/configuration/aspire) documents the `CommunityToolkit` `AddSqliteConnection`
 path, OpenTelemetry registration and the high-water health check. The existing
 `AddFisher(...)` registration in this guide is unchanged.
+
+### `RebuildSingleStreamAsync` goes through the daemon, or refuses
+
+Landed in fisher#629, on JasperFx 3.6.0's per-identity rebuild (jasperfx#1201). This only matters for a document
+written by an **asynchronous** single-stream projection. Inline and live projections rebuild one stream the way
+they always did.
+
+In Fisher 1, `Advanced.RebuildSingleStreamAsync<T>(id)` always aggregated the stream and stored the result on its
+own connection, whether or not a daemon was running that projection. If the daemon was running, the two could
+race. Now Fisher picks one of three paths:
+
+1. A daemon this process hosts (`AddAsyncDaemon()`) is running the projection: the rebuild goes through it,
+   `IProjectionDaemon.RebuildIdentityAsync`, and commits with the shard's next batch. Nothing races.
+2. The projection's progression row was written by a running agent in the last 30 seconds, and Fisher cannot
+   reach that agent: the call throws `IdentityRebuildRefusedException` with
+   `Reason == IdentityRebuildRefusal.ShardLiveOnAnotherNode`. That is a daemon you built yourself with
+   `BuildProjectionDaemonAsync()`, one running as Wolverine agents, or a second process on the same file.
+   Rebuild through that daemon instead:
+
+   ```cs
+   await daemon.RebuildIdentityAsync("Trip", tenantId: null, identity: tripId, token);
+   ```
+
+3. Otherwise the stream is rebuilt offline, as before. That is only safe when no daemon is running the
+   projection.
+
+The refusal is the behaviour change. Code that called `RebuildSingleStreamAsync` next to a hand-built daemon
+used to succeed and now throws. Without extended progression tracking, an idle shard stops rewriting its row, so
+it reads as stopped after 30 seconds and the offline path runs. With it on, a stopped agent writes `Stopped` and
+the offline path runs straight away.
+
+A projection whose documents live in storage registered through `Projections.StorageProviders` (EF Core) cannot
+be rebuilt one identity at a time. The daemon refuses with `IdentityRebuildRefusal.NotSupportedByStore`. Use
+`RebuildProjectionAsync`.

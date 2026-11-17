@@ -8,9 +8,9 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and sixty-six are enrolled from
- * JasperFx.Events.ComplianceTests 3.5.0, which itself ships sixty-six concrete suites: every one
- * it ships (DcbAppendConditionCompliance, jasperfx#1183, is the 3.2.0 addition). MultiDatabaseExplorerCompliance is one file holding two arms.
+ * Suites were added one at a time as Fisher grew into them, and sixty-seven are enrolled from
+ * JasperFx.Events.ComplianceTests 3.6.0, which itself ships sixty-seven concrete suites: every one
+ * it ships (IdentityRebuildCompliance, jasperfx#1201, is the 3.6.0 addition). MultiDatabaseExplorerCompliance is one file holding two arms.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
  * reason recorded at the flag on FisherComplianceFixture rather than here:
@@ -669,3 +669,13 @@ public class document_metadata_compliance
 /// </summary>
 public class projection_step_through_compliance
     : ProjectionStepThroughCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * fisher#629 / jasperfx#1201 (JasperFx 3.6.0) — rebuild one identity of a single-stream projection inside the
+ * shard that runs it, bound to the shard's next batch. Fisher supplies the re-fold loader (the daemon loader's
+ * rules, narrowed to one stream), HardDeleteById on its projection storage, and soft-deleted projected documents
+ * through the registrar. An idle shard's empty (C, C] batch passes the fisher#402 floor check as it is.
+ */
+
+public class identity_rebuild_compliance
+    : IdentityRebuildCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
