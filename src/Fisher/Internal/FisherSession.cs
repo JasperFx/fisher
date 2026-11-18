@@ -544,13 +544,13 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
 
     private void RemoveChangeTrackers(Predicate<IChangeTracker> match) => _changeTrackers?.RemoveAll(match);
 
-    private List<(JasperFx.Events.Tags.EventTagQuery Query, long LastSeenSequence)>? _boundaries;
+    private List<TrackedBoundary>? _boundaries;
 
     /// <summary>
     ///     Record a DCB boundary's consistency marker for checking at commit.
     /// </summary>
-    internal void TrackBoundary(JasperFx.Events.Tags.EventTagQuery query, long lastSeenSequence)
-        => (_boundaries ??= []).Add((query, lastSeenSequence));
+    internal void TrackBoundary(TrackedBoundary boundary)
+        => (_boundaries ??= []).Add(boundary);
 
     private void ClearBoundaries() => _boundaries?.Clear();
 
@@ -601,8 +601,8 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         => _participants ?? (IReadOnlyList<ITransactionParticipant>)[];
 
     /// <summary>
-    ///     Fail the commit if any event matching a tracked boundary's query has been appended since the
-    ///     boundary was read.
+    ///     Fail the commit if what a tracked boundary read has changed since: an event matching its query
+    ///     appended, or its events removed, hidden, brought back or newly tagged (fisher#635).
     /// </summary>
     /// <remarks>
     ///     Runs on the session's own connection inside the write transaction. <c>BEGIN IMMEDIATE</c>
@@ -627,12 +627,11 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             return;
         }
 
-        foreach (var (query, lastSeen) in _boundaries)
+        foreach (var boundary in _boundaries)
         {
-            if (await Events.AnyMatchingEventBeyondAsync(query, lastSeen, connection, transaction, token)
-                    .ConfigureAwait(false))
+            if (await boundary.HasMovedAsync(connection, transaction, token).ConfigureAwait(false))
             {
-                throw new JasperFx.Events.DcbConcurrencyException(query, lastSeen);
+                throw new JasperFx.Events.DcbConcurrencyException(boundary.Query, boundary.LastSeenSequence);
             }
         }
 

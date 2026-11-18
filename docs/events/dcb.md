@@ -65,6 +65,17 @@ The boundary records the highest sequence it saw. At commit, Fisher checks **ins
 transaction, before anything is written**, that no later event matches the query — and fails the
 commit if one does.
 
+The same check fails the commit when something changed the events the boundary read without appending
+(fisher#635, as on Marten): a tombstone, an archive or un-archive, an `AssignTagWhere`, or a compaction or
+event replacement that touched them. Each of those moves a version per tag value in `fi_dcb_tag_version`,
+for every tag on the events it touched. The boundary reads those versions before it reads the events, and
+the commit compares them. A condition that names an event type is checked against that type's version, so
+tombstoning a stream whose tagged events are of another type does not fail it. Appends do not move the
+versions: the sequence check above already covers them.
+
+A tombstone deletes the version of a tag no event carries any more, so the tag value does not outlive the
+stream. Versions come from `fi_dcb_tag_version_sequence` and never repeat.
+
 ::: tip
 Checking *after* would be checking against the session's own appends. Checking *outside* the
 transaction would prove nothing, because `BEGIN IMMEDIATE` is what holds the write lock.

@@ -51,6 +51,17 @@ internal sealed class DeleteEventsOperation : Weasel.Storage.IStorageOperation, 
             return;
         }
 
+        // fisher#635: a DCB boundary that read these events finds out through the tag versions, as it does for a
+        // tombstone. Before the deletes, while the tag rows still say what the events carried.
+        Fisher.Events.Storage.DcbTagVersions.AppendBump(builder, _graph, b =>
+        {
+            b.Append("select seq_id, type, tenant_id from ");
+            b.Append(_graph.EventsTableName);
+            b.Append(" where seq_id in (");
+            AppendSequences(b);
+            b.Append(")");
+        });
+
         foreach (var registration in _graph.TagTypes)
         {
             AppendDelete(builder, _graph.TagTableName(registration));
@@ -67,7 +78,12 @@ internal sealed class DeleteEventsOperation : Weasel.Storage.IStorageOperation, 
         builder.Append("delete from ");
         builder.Append(table);
         builder.Append(" where seq_id in (");
+        AppendSequences(builder);
+        builder.Append(");");
+    }
 
+    private void AppendSequences(ICommandBuilder builder)
+    {
         for (var i = 0; i < _sequences.Length; i++)
         {
             if (i > 0)
@@ -77,7 +93,5 @@ internal sealed class DeleteEventsOperation : Weasel.Storage.IStorageOperation, 
 
             EventRewriteBinding.Bind(builder, _sequences[i], StorageColumnType.Long);
         }
-
-        builder.Append(");");
     }
 }

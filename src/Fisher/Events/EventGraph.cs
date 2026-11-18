@@ -108,6 +108,18 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
         FisherTableNaming.QuotedTableName(DatabaseSchemaName, Schema.DeadLetterTable.TableSuffix);
 
     /// <summary>
+    ///     <c>fi_dcb_tag_version</c> (fisher#635). See <see cref="Schema.DcbTagVersionTable" />.
+    /// </summary>
+    internal string DcbTagVersionTableName =>
+        FisherTableNaming.QuotedTableName(DatabaseSchemaName, Schema.DcbTagVersionTable.TableSuffix);
+
+    /// <summary>
+    ///     <c>fi_dcb_tag_version_sequence</c> (fisher#635). See <see cref="Schema.DcbTagVersionSequenceTable" />.
+    /// </summary>
+    internal string DcbTagVersionSequenceTableName =>
+        FisherTableNaming.QuotedTableName(DatabaseSchemaName, Schema.DcbTagVersionSequenceTable.TableSuffix);
+
+    /// <summary>
     ///     The quoted table name holding one DCB tag type's rows.
     /// </summary>
     internal string TagTableName(ITagTypeRegistration registration)
@@ -429,6 +441,17 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     /// </summary>
     internal IEnumerable<EventTagTable> BuildTagTables()
         => TagTypes.Select(registration => new EventTagTable(this, registration));
+
+    /// <summary>
+    ///     The DCB tag version tables (fisher#635), only when a tag type is registered.
+    /// </summary>
+    internal IEnumerable<Weasel.Sqlite.Tables.Table> BuildDcbTagVersionTables()
+    {
+        if (TagTypes.Count == 0) yield break;
+
+        yield return new DcbTagVersionTable(this);
+        yield return new DcbTagVersionSequenceTable(this);
+    }
 
     internal const string TagTypeInferenceUnreferencedCode =
         "Discovers the tag type's inner value through ValueTypeInfo, which reflects over its members. Under trimming or Native AOT use RegisterTagType<TTag, TInner>(Func<TTag, TInner>), which wraps TagTypeRegistration.FromUnwrapper<TTag, TInner>.";

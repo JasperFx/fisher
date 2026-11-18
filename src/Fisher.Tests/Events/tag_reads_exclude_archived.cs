@@ -123,11 +123,31 @@ public class tag_reads_exclude_archived : IAsyncLifetime
     }
 
     /// <summary>
-    ///     The commit-time half: an event archived before the commit is not a concurrent change to a
+    ///     The commit-time half: an event archived before the boundary read it is not a change to the
     ///     boundary. The live twin is what shows the guard is still armed.
     /// </summary>
     [Fact]
-    public async Task the_boundary_check_at_commit_ignores_an_archived_event()
+    public async Task the_boundary_check_at_commit_ignores_an_event_archived_before_the_read()
+    {
+        await BerthAsync("Seen");
+        await ArchiveAsync(await BerthAsync("Retired before the read"));
+
+        await using var session = _store.LightweightSession();
+        var boundary = await session.Events.FetchForWritingByTags<DockLog>(Query, Token);
+
+        var @event = session.Events.BuildEvent(new ShipBerthed("Mine"));
+        @event.WithTag(_dock);
+        boundary.AppendOne(@event);
+
+        await session.SaveChangesAsync(Token);
+    }
+
+    /// <summary>
+    ///     fisher#635: an event appended and archived while the boundary is open is a change to it. The archive
+    ///     moves the tag's version, as on Marten, where the append alone already would.
+    /// </summary>
+    [Fact]
+    public async Task the_boundary_check_at_commit_sees_an_event_appended_and_archived_meanwhile()
     {
         await BerthAsync("Seen");
 
@@ -140,7 +160,7 @@ public class tag_reads_exclude_archived : IAsyncLifetime
         @event.WithTag(_dock);
         boundary.AppendOne(@event);
 
-        await session.SaveChangesAsync(Token);
+        await Should.ThrowAsync<DcbConcurrencyException>(() => session.SaveChangesAsync(Token));
     }
 
     [Fact]

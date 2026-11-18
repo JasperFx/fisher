@@ -73,6 +73,16 @@ internal sealed class ReplaceEventOperation : Weasel.Storage.IStorageOperation, 
         // is neither "the stream is still tagged" nor "the tagged events are gone".
         //
         // No foreign key problem either way — the row survives, so this is semantics, not integrity.
+        //
+        // fisher#635: dropping the tags changes what a DCB boundary over them reads, so their versions move first.
+        Fisher.Events.Storage.DcbTagVersions.AppendBump(builder, _graph, b =>
+        {
+            b.Append("select seq_id, type, tenant_id from ");
+            b.Append(_graph.EventsTableName);
+            b.Append(" where seq_id = ");
+            Bind(b, _sequence, StorageColumnType.Long);
+        });
+
         foreach (var registration in _graph.TagTypes)
         {
             builder.Append("delete from ");

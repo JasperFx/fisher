@@ -103,6 +103,13 @@ internal sealed class FisherDocumentCleaner : IDocumentCleaner
         ordered.Add(events.ProgressionTableName);
         ordered.Add(events.DeadLetterTableName);
 
+        // fisher#635. The tag versions go with the events; their counter, fi_dcb_tag_version_sequence, stays so
+        // that no version is ever handed out twice.
+        if (events.TagTypes.Count > 0)
+        {
+            ordered.Add(events.DcbTagVersionTableName);
+        }
+
         return ExecuteAgainstOrderedTablesAsync(ordered, table => $"delete from \"{table}\"", token);
     }
 

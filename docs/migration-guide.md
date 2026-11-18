@@ -417,6 +417,21 @@ public class QuestProjection : SingleStreamProjection<Quest, Guid>
 `side_effect_gate_behind_prior_version` in Fisher's own suite runs both cases against a real file and the
 real daemon. `RestoreV1Defaults()` (below) turns the gate off for every registered projection at once.
 
+### DCB boundaries see tombstones, archiving and `AssignTagWhere`
+
+Landed in fisher#635, the port of marten#6035 and marten#6078. A boundary from `FetchForWritingByTags` now
+fails its commit with `DcbConcurrencyException` when, after it read, a tombstone, an archive or un-archive,
+an `AssignTagWhere`, or a compaction changed the events it read. In Fisher 1 those went through, because the
+check only looked for events appended after the boundary's last sequence. See
+[Dynamic Consistency Boundary](/events/dcb#writing-against-a-boundary).
+
+**Effect on an existing file.** A store with a registered tag type gets two new tables,
+`fi_dcb_tag_version` and `fi_dcb_tag_version_sequence`. Under `AutoCreate.All` or `CreateOrUpdate` they are
+created the first time the store touches the event tables. Under `AutoCreate.None`, apply the migration
+first, or the first `FetchForWritingByTags` fails with `no such table`. Nothing is back-filled: a tag with
+no row reads as version 0, and Fisher checks that the events a boundary read are still there whenever one
+of its tags has no row.
+
 ### A new projection version gets its own table
 
 Landed in fisher#638, matching Marten. An aggregation projection (single or multi stream) with `Version`
