@@ -386,20 +386,44 @@ public class child_collections : IAsyncLifetime
     public void a_member_access_on_a_scalar_element_is_refused()
     {
         var ex = Should.Throw<BadLinqExpressionException>(
-            () => SqlFor(x => x.Tags.Any(t => t.Length > 3)));
+            () => SqlFor(x => x.CrewIds.Any(c => c.Variant > 3)));
 
         ex.Message.ShouldContain("no members to extract");
     }
 
     /// <summary>
-    ///     A bare-element predicate (<c>t =&gt; t == "urgent"</c>) is not translated yet;
-    ///     <c>Contains</c> is the spelling for an element equality test. Refused rather than
-    ///     mis-translated.
+    ///     fisher#639: a predicate over the element of a collection of primitives compares
+    ///     <c>each_1.value</c> itself, as Marten translates it.
     /// </summary>
     [Fact]
-    public void a_bare_element_comparison_is_refused()
+    public async Task a_bare_element_comparison_in_any()
     {
-        Should.Throw<BadLinqExpressionException>(() => SqlFor(x => x.Tags.Any(t => t == "urgent")));
+        SqlFor(x => x.Depths.Any(d => d > 100)).ShouldContain("each_1.value");
+
+        (await NamesMatchingAsync(x => x.Tags.Any(t => t == "urgent"))).ShouldBe(["Endurance"]);
+        (await NamesMatchingAsync(x => x.Tags.Any(t => t != "urgent"))).ShouldBe(["Beagle", "Endurance"]);
+        (await NamesMatchingAsync(x => x.Depths.Any(d => d > 100))).ShouldBe(["Endurance"]);
+        (await NamesMatchingAsync(x => x.Depths.Any(d => d < 6 || d == 250))).ShouldBe(["Beagle", "Endurance"]);
+        (await NamesMatchingAsync(x => x.Grades.Any(g => g == Grade.Pass))).ShouldBe(["Beagle"]);
+        (await NamesMatchingAsync(x => x.CrewIds.Any(c => c == _shackletonId))).ShouldBe(["Endurance"]);
+    }
+
+    [Fact]
+    public async Task a_bare_element_comparison_in_all()
+    {
+        (await NamesMatchingAsync(x => x.Depths.All(d => d > 6))).ShouldBe(["Endurance", "Fram"]);
+
+        // Beagle's null tag is not "urgent" in C#, so it passes.
+        (await NamesMatchingAsync(x => x.Tags.All(t => t != "urgent"))).ShouldBe(["Beagle", "Fram"]);
+    }
+
+    [Fact]
+    public async Task string_methods_and_length_on_the_element()
+    {
+        (await NamesMatchingAsync(x => x.Tags.Any(t => t.StartsWith("s")))).ShouldBe(["Beagle"]);
+        (await NamesMatchingAsync(x => x.Tags.Any(t => t.Contains("ol")))).ShouldBe(["Endurance"]);
+        (await NamesMatchingAsync(x => x.Tags.Any(t => t.Length == 4))).ShouldBe(["Endurance"]);
+        (await NamesMatchingAsync(x => x.Tags.Any(t => t.ToUpper() == "SURVEY"))).ShouldBe(["Beagle"]);
     }
 
     [Fact]

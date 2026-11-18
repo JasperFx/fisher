@@ -61,18 +61,23 @@ a migrating Marten user hits first.
 Querying *into* a document's own collection members works over correlated `json_each` sub-queries:
 
 - `Contains(value)` over **scalar** element collections — strings, numbers, Guids, enums, bools.
-- `Any()`, and `Any(c => …)` with a predicate over a complex element's own members.
+- `Any()`, and `Any(c => …)` with a predicate over a complex element's own members, or over a scalar
+  element itself (`x.Numbers.Any(n => n > 3)`, `x.Tags.Any(t => t.StartsWith("a"))`).
 - `All(c => …)`, vacuously true over an absent, empty or JSON-null collection.
 - `Count()` compared to a value in either operand order, the `.Count` property, an array's `.Length`,
   and `Count(c => …)`.
 - Nesting — `x.Stops.Any(s => s.Cargo.Contains("fuel"))` — one alias deeper per level.
+- `SelectMany(x => x.Children)` over values, enums, strings and child documents, with `Where`, ordering,
+  paging, `Distinct` over values and a `Select` after it (fisher#641).
 
 Still missing against Marten, and refused by name rather than answered wrongly:
 
 - **Dictionary members.** `IDictionary<,>` and `IReadOnlyDictionary<,>` are excluded outright, so
   querying a dictionary member is not expressible at all.
-- **`SelectMany` over a child collection**, and therefore anything that flattens elements into the
-  result — including ordering or projecting by a child element's member.
+- **Some shapes around `SelectMany` over a child collection** (fisher#641 added the operator): a second
+  `SelectMany`, `Distinct` over child documents or after a `Select`, an operator after a result selector
+  other than paging, and `LastAsync` or streaming over it. See the
+  [operators page](/documents/querying/linq/operators#selectmany-over-a-collection).
 - **`Select` projecting a child collection.**
 - A string method on a null member (`!x.Name.StartsWith("a")`) follows **SQL null semantics**, since
   C# would throw: the row matches neither the method nor its negation. A comparison answers as C#
@@ -387,7 +392,8 @@ JasperFx 3.0, Fisher included. Fisher does not set it itself, so the default arr
 bump.
 
 **What it does.** It matters only when you raise a projection's `Version` (a blue/green or rolling deploy of
-a changed projection). The new version replays the event store to build its own documents. With the gate on, it
+a changed projection). The new version replays the event store to build its own documents, in its own table
+(see [a new projection version gets its own table](#a-new-projection-version-gets-its-own-table)). With the gate on, it
 does that with **side effects suppressed** up to where the previous version's progression stopped, and
 publishes messages and raises events only for events the previous version never processed. In Fisher 1 the
 new version re-published everything it replayed, so every message the old version had already sent went out a
@@ -415,6 +421,40 @@ public class QuestProjection : SingleStreamProjection<Quest, Guid>
 
 `side_effect_gate_behind_prior_version` in Fisher's own suite runs both cases against a real file and the
 real daemon. `RestoreV1Defaults()` (below) turns the gate off for every registered projection at once.
+
+### DCB boundaries see tombstones, archiving and `AssignTagWhere`
+
+Landed in fisher#635, the port of marten#6035 and marten#6078. A boundary from `FetchForWritingByTags` now
+fails its commit with `DcbConcurrencyException` when, after it read, a tombstone, an archive or un-archive,
+an `AssignTagWhere`, or a compaction changed the events it read. In Fisher 1 those went through, because the
+check only looked for events appended after the boundary's last sequence. See
+[Dynamic Consistency Boundary](/events/dcb#writing-against-a-boundary).
+
+**Effect on an existing file.** A store with a registered tag type gets two new tables,
+`fi_dcb_tag_version` and `fi_dcb_tag_version_sequence`. Under `AutoCreate.All` or `CreateOrUpdate` they are
+created the first time the store touches the event tables. Under `AutoCreate.None`, apply the migration
+first, or the first `FetchForWritingByTags` fails with `no such table`. Nothing is back-filled: a tag with
+no row reads as version 0, and Fisher checks that the events a boundary read are still there whenever one
+of its tags has no row.
+
+### A new projection version gets its own table
+
+Landed in fisher#638, matching Marten. An aggregation projection (single or multi stream) with `Version`
+above 1 now writes its documents to a table with the version on the end: `fi_doc_quest_2` for version 2 of a
+projection of `Quest`. Version 1 keeps `fi_doc_quest`. The members of a composite projection take the
+composite's `Version`, so bumping the composite gives every member new progression rows and new tables.
+
+In Fisher 1 the new version wrote into the old version's table. An aggregation loaded the document the old
+version had built and applied every event to it again, so a projection that counted events ended up with
+double the count. A composite bump was worse: the members kept their own version, reused the old progression
+rows, and the composite stopped with `ProgressionProgressOutOfOrderException`.
+
+**Effect on an existing file.** A projection that has `Version` above 1 reads and writes a new, empty table
+after the upgrade. Its progression row (`Quest:V2:All`) is already where Fisher 1 left it, so the daemon
+will not fill the new table on its own: rebuild the projection (`RebuildProjectionAsync`) once after the
+upgrade. The old table stays where it is with its data; drop it yourself once nothing reads it. Under `AutoCreate.None`, apply the migration first to create the new table. Code that reads the table by
+name in raw SQL needs the new name. Projections at version 1, and documents that no projection writes, keep
+their tables.
 
 ### Store defaults that follow Marten 10, and `RestoreV1Defaults()`
 

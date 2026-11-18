@@ -46,6 +46,12 @@ internal class EventStoreFeatureSchema : FeatureSchemaBase
             yield return tagTable;
         }
 
+        // fisher#635. No foreign keys; a store with no tag types has neither table.
+        foreach (var table in _events.BuildDcbTagVersionTables())
+        {
+            yield return table;
+        }
+
         // The natural key lookups (fisher#40). No foreign key to fi_streams, so their position here is
         // presentational rather than an ordering constraint — see NaturalKeyTable for why not.
         foreach (var naturalKeyTable in _events.BuildNaturalKeyTables(_naturalKeys))

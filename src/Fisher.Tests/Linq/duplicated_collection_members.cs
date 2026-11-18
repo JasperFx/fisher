@@ -76,6 +76,16 @@ public class duplicated_collection_members : IAsyncLifetime
         (await NamesWhere(q => q.Where(x => x.Labels.Count == 0))).ShouldBe(["three"]);
     }
 
+    /// <summary>fisher#639, the issue's own shapes, over a plain and a duplicated array.</summary>
+    [Fact]
+    public async Task any_and_all_with_a_predicate_over_the_elements()
+    {
+        (await NamesWhere(q => q.Where(x => x.Names.Any(n => n == "xy")))).ShouldBe(["one"]);
+        (await NamesWhere(q => q.Where(x => x.Numbers.Any(n => n > 3)))).ShouldBe(["two"]);
+        (await NamesWhere(q => q.Where(x => x.Numbers.All(n => n < 4)))).ShouldBe(["one", "three"]);
+        (await NamesWhere(q => q.Where(x => x.Labels.Any(l => l.StartsWith("gr"))))).ShouldBe(["two"]);
+    }
+
     [Fact]
     public async Task selecting_a_duplicated_array_still_works()
     {

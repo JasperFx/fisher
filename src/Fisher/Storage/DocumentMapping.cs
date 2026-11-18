@@ -851,6 +851,23 @@ public class DocumentMapping
     /// </summary>
     internal string TableSuffix => $"doc_{Alias}";
 
+    private string? _projectionVersionSuffix;
+
+    /// <summary>
+    ///     fisher#638. Suffix the alias, and with it the table name, with a projection's version when it
+    ///     is above 1. Idempotent, so it is safe to reach twice.
+    /// </summary>
+    internal void ApplyProjectionVersion(uint version)
+    {
+        if (version <= 1 || _projectionVersionSuffix is not null) return;
+
+        _projectionVersionSuffix = "_" + version;
+        if (!Alias.EndsWith(_projectionVersionSuffix, StringComparison.Ordinal))
+        {
+            Alias += _projectionVersionSuffix;
+        }
+    }
+
     internal SqliteObjectName TableName
         => FisherTableNaming.ObjectFor(StoreOptions.DatabaseSchemaName, TableSuffix);
 
@@ -1060,7 +1077,49 @@ public class DocumentSchema
         AssertNotEventStoreInfrastructure(documentType);
 
         return BaseMappingFor(documentType)
-               ?? _mappings.GetOrAdd(documentType, type => new DocumentMapping(type, _options));
+               ?? _mappings.GetOrAdd(documentType, type =>
+               {
+                   var mapping = new DocumentMapping(type, _options);
+                   if (_projectionVersionsFinal) applyProjectionVersion(mapping);
+                   return mapping;
+               });
+    }
+
+    private bool _projectionVersionsFinal;
+
+    /// <summary>
+    ///     fisher#638: give the document of a versioned aggregation projection a table of its own, as
+    ///     Marten's <c>ProjectionVersionAliasPolicy</c> does — <c>_2</c> on the alias for Version 2, and
+    ///     so on. Version 1 keeps the plain name.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Without it, a new version of a projection rebuilds into the table the old version built
+    ///         (and may still be writing during a blue/green deploy), so an aggregation loads the old
+    ///         version's document and applies every event a second time.
+    ///     </para>
+    ///     <para>
+    ///         Called from <c>DocumentStore</c>'s constructor, the first moment both the projections and
+    ///         their versions are final; a composite's members take its version when it is registered. A
+    ///         mapping created later, on first use, gets its suffix as it is created.
+    ///     </para>
+    /// </remarks>
+    internal void ApplyProjectionVersions()
+    {
+        _projectionVersionsFinal = true;
+
+        foreach (var mapping in AllMappings())
+        {
+            applyProjectionVersion(mapping);
+        }
+    }
+
+    private void applyProjectionVersion(DocumentMapping mapping)
+    {
+        if (_options.Projections.TryFindAggregate(mapping.DocumentType, out var projection))
+        {
+            mapping.ApplyProjectionVersion(projection.Version);
+        }
     }
 
     /// <summary>

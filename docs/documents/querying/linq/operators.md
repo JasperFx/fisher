@@ -11,6 +11,7 @@
 | `Distinct` / `DistinctBy` | yes, with restrictions |
 | `GroupBy` + `Select` | yes — see [grouping](/documents/querying/linq/grouping) |
 | `Join` / `GroupJoin` + `SelectMany` | yes — see [joins](/documents/querying/linq/joins) |
+| `SelectMany` over a document's own collection | yes — see [below](#selectmany-over-a-collection) |
 | `Count` / `Any` / `First` / `Single` / `Last` | yes, with predicate overloads |
 | `Sum` / `Min` / `Max` / `Average` | yes — see [aggregates](/documents/querying/linq/grouping#aggregates) |
 | `Include` | yes — see [including related documents](/documents/querying/linq/includes) |
@@ -43,6 +44,11 @@ sub-query over SQLite's `json_each` table-valued function:
 .Where(x => x.Tags.Count() > 2)                 // also .Count property and array .Length
 .Where(x => x.Stops.Count(s => s.Days < 5) == 2)
 
+// scalar elements — a predicate on the element itself (fisher#639)
+.Where(x => x.Depths.Any(d => d > 100))
+.Where(x => x.Tags.Any(t => t.StartsWith("ur")))
+.Where(x => x.Tags.All(t => t.Length < 10))
+
 // child objects — member predicates on the element
 .Where(x => x.Stops.Any(s => s.Port == "Oslo"))
 .Where(x => x.Stops.Any(s => s.Days > 5 && s.Resupplied))
@@ -73,9 +79,8 @@ phantom row, and that row is the only one whose `key` is NULL.
 - A predicate referencing anything outside the element's own scope — the outer document
   (`x.Stops.Any(s => s.Port == x.Name)`), or an enclosing lambda's element. Compare against locals
   or constants instead.
-- A member access on a scalar element (`x.Tags.Any(t => t.Length > 3)`) — the elements are plain
-  values with no members to extract.
-- A bare element comparison (`x.Tags.Any(t => t == "urgent")`) — use `Contains`.
+- A member access on a scalar element other than a string's `Length`
+  (`x.CrewIds.Any(c => c.Variant > 3)`) — the elements are plain values with no members to extract.
 - `Contains` against another document member, and `Contains` over child-object elements — use
   `Any(c => …)` with a predicate on the element's members.
 
@@ -105,6 +110,54 @@ there" is an honest yes.
 unwraps the span back to the array first, since a `ReadOnlySpan<T>` is a ref struct that cannot be
 returned as `object`.
 :::
+
+## SelectMany over a collection
+
+`SelectMany` flattens a collection member of the documents into one result per element (fisher#641):
+values, enums, strings, Guids, decimals and child documents.
+
+```cs
+var tags = await session.Query<Post>().SelectMany(x => x.Tags).ToListAsync();
+
+var lines = await session.Query<Order>()
+    .Where(x => x.Customer == "Acme")
+    .OrderBy(x => x.Placed)
+    .Take(10)                          // the first ten orders
+    .SelectMany(x => x.Lines)
+    .Where(l => l.Quantity > 2)
+    .OrderByDescending(l => l.Quantity)
+    .Select(l => l.Sku)
+    .ToListAsync();
+
+var pairs = await session.Query<Order>()
+    .SelectMany(x => x.Lines, (order, line) => new { order.Number, line.Sku })
+    .ToListAsync();
+```
+
+Rows come back in LINQ's order: the documents' order, then each collection's own. `Take` and `Skip`
+before the `SelectMany` page the documents; after it they page the flattened rows. Each element is read
+as its own JSON and deserialized like the rest of the document, so an enum under either `EnumStorage`, a
+Guid and a decimal come back exactly.
+
+After the `SelectMany` Fisher translates `Where` over the element (the element itself for values, its
+members for child documents, and a string's methods and `Length`), the `OrderBy` family, `Take`, `Skip`,
+`Distinct()` over values, and one `Select`. The `Select` and a result selector run over the elements once
+they are read. The terminals are `ToListAsync`, the `First`/`Single` family, `CountAsync`,
+`LongCountAsync`, `AnyAsync` and the aggregates over the element or one of its members.
+
+**Refused rather than mis-translated:** a second `SelectMany`, a `Select` before the `SelectMany`,
+`Where` or ordering after `Take`/`Skip`, a result selector or a `Select`, `Distinct` over child documents
+or after a `Select`, and `LastAsync`, `ToAsyncEnumerable` and `ToPagedListAsync` over a flattened query.
+
+The SQL unrolls each document's array with `json_each` over a subquery of the documents:
+
+```sql
+select (__fi_p.data -> each_1.fullkey)
+from (select data, row_number() over (order by ...) as __fi_ord from fi_doc_order where ... limit 10) as __fi_p,
+     json_each(__fi_p.data, '$.lines') as each_1
+where each_1.key is not null and ...
+order by ..., __fi_p.__fi_ord, each_1.key
+```
 
 ## Strings
 

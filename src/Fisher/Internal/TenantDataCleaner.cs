@@ -62,6 +62,9 @@ internal sealed class TenantDataCleaner
             var tables = (await ReadTableNamesAsync(connection, ct).ConfigureAwait(false))
                 .Where(x => x.StartsWith(Prefix, StringComparison.Ordinal))
                 .Where(x => !x.Equals(Unquoted(events.ProjectionFloorsTableName), StringComparison.OrdinalIgnoreCase))
+                // fisher#635: the DCB tag version counter holds no data, and clearing it would let a version be
+                // handed out a second time.
+                .Where(x => !x.Equals(Unquoted(events.DcbTagVersionSequenceTableName), StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             var tenanted = new List<string>();
@@ -72,6 +75,14 @@ internal sealed class TenantDataCleaner
                 {
                     tenanted.Add(table);
                 }
+            }
+
+            // fisher#635: fi_dcb_tag_version keys every row on the default tenant unless events are conjoined,
+            // so it is only the tenant's by column under conjoined events. Under database-per-tenant it is then
+            // cleared with the file's other untenanted tables below, tag values being possibly personal data.
+            if (events.TenancyStyle != JasperFx.MultiTenancy.TenancyStyle.Conjoined)
+            {
+                tenanted.RemoveAll(x => x.Equals(Unquoted(events.DcbTagVersionTableName), StringComparison.OrdinalIgnoreCase));
             }
 
             // **"Has a tenant_id column" is not the question, and reading it as one would make this

@@ -32,6 +32,12 @@ internal sealed class SetStreamArchivedOperation : Weasel.Storage.IStorageOperat
     {
         var flag = _archived ? 1 : 0;
 
+        // fisher#635 (marten#6078): archiving hides the stream's events from tag reads and un-archiving brings
+        // them back, without appending anything, so a DCB boundary that read them could only find out through
+        // the tag versions.
+        DcbTagVersions.AppendBump(builder, _events, b => b.Append(
+            $"select seq_id, type, tenant_id from {_events.EventsTableName} where stream_id = @id and tenant_id = @tenant_id"));
+
         builder.Append($"""
                         update {_events.StreamsTableName} set is_archived = {flag}
                         where id = @id and tenant_id = @tenant_id;
@@ -82,6 +88,11 @@ internal sealed class TombstoneStreamOperation : Weasel.Storage.IStorageOperatio
 
     public void ConfigureCommand(ICommandBuilder builder, IStorageSession session)
     {
+        // fisher#635 (marten#6035): while the events and their tag rows are still here to say which tags they
+        // carried. A DCB boundary that read them fails its save.
+        DcbTagVersions.AppendBump(builder, _events, b => b.Append(
+            $"select seq_id, type, tenant_id from {_events.EventsTableName} where stream_id = @id and tenant_id = @tenant_id"));
+
         // The sub-select re-reads the same tenant-and-stream predicate the event delete below uses, so
         // a tag row can only be reached through an event this operation is already removing.
         foreach (var registration in _events.TagTypes)
@@ -115,7 +126,11 @@ internal sealed class TombstoneStreamOperation : Weasel.Storage.IStorageOperatio
                         where stream_id = @id and tenant_id = @tenant_id;
                         delete from {_events.StreamsTableName}
                         where id = @id and tenant_id = @tenant_id;
+
                         """);
+
+        // A tag value can be personal data: the rows this tombstone moved that no event carries any more go too.
+        DcbTagVersions.AppendForgetUncarried(builder, _events);
 
         builder.AddParameters(new Dictionary<string, object?>
         {

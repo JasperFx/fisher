@@ -71,7 +71,24 @@ internal sealed class AssignTagWhereOperation : Weasel.Storage.IStorageOperation
             builder.AppendParameter(_tenantId);
         }
 
-        builder.Append(" on conflict do nothing;");
+        builder.Append(" on conflict do nothing;\n");
+
+        // fisher#635 (marten#6078): the newly tagged events sit below any boundary's last sequence, so only the
+        // tag version tells a boundary over this tag that what it read has changed.
+        DcbTagVersions.AppendBumpForAssignedTag(builder, _events, _registration, _value, b =>
+        {
+            b.Append("select type, tenant_id from ");
+            b.Append(_events.EventsTableName);
+            b.Append(" where (");
+            _predicate.Apply(b);
+            b.Append(")");
+
+            if (_tenantId != null)
+            {
+                b.Append(" and tenant_id = ");
+                b.AppendParameter(_tenantId);
+            }
+        });
     }
 
     public Task PostprocessAsync(DbDataReader reader, IList<Exception> exceptions, CancellationToken token)

@@ -69,7 +69,12 @@ public partial class EventOperations
                 + "would assert nothing on save.", nameof(query));
         }
 
-        var events = await QueryByTagsAsync(query, cancellation).ConfigureAwait(false);
+        // fisher#635: the tag versions are read BEFORE the events. Read after, a version that moved in between
+        // would pair a fresh version with stale events and the save would miss the change; read before, the
+        // worst case is a stale version with fresh events, a conflict the caller retries (marten#5300).
+        var versions = await CaptureTagVersionsAsync(query, cancellation).ConfigureAwait(false);
+
+        var (events, rowsRead) = await queryByTagsAsync(query, cancellation).ConfigureAwait(false);
 
         var aggregate = events.Count == 0
             ? null
@@ -77,9 +82,10 @@ public partial class EventOperations
 
         // The shared boundary (jasperfx#1044). Built over THIS operations instance, which under ForTenant is
         // the tenant scope's, because that decides the tenant of what the boundary appends. It enforces
-        // nothing itself: the guard is the tracked LastSeenSequence, checked at SaveChangesAsync.
+        // nothing itself: the guard is what is tracked here, checked at SaveChangesAsync.
         var boundary = new EventBoundary<T>(this, Graph, Graph.TagTypes, aggregate, events);
-        _session.TrackBoundary(query, boundary.LastSeenSequence);
+        _session.TrackBoundary(new global::Fisher.Internal.TrackedBoundary(this, query, boundary.LastSeenSequence, versions,
+            rowsRead));
 
         return boundary;
     }
@@ -138,9 +144,19 @@ public partial class EventOperations
     {
         ArgumentNullException.ThrowIfNull(query);
 
+        return (await queryByTagsAsync(query, cancellation).ConfigureAwait(false)).Events;
+    }
+
+    /// <summary>
+    ///     <see cref="QueryByTagsAsync" />, also counting the rows read, which includes an event whose type this
+    ///     process cannot resolve and so is left out of the list.
+    /// </summary>
+    private async Task<(IReadOnlyList<IEvent> Events, int RowsRead)> queryByTagsAsync(EventTagQuery query,
+        CancellationToken cancellation)
+    {
         if (query.Conditions.Count == 0)
         {
-            return [];
+            return ([], 0);
         }
 
         var options = _session.Options.Events;
@@ -174,9 +190,11 @@ public partial class EventOperations
         var isGuid = IsGuidIdentity;
 
         var results = new List<IEvent>();
+        var rowsRead = 0;
         await using var reader = await command.ExecuteReaderAsync(cancellation).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellation).ConfigureAwait(false))
         {
+            rowsRead++;
             var @event = await FisherEventsRowReader
                 .ReadEventAcrossStreams(reader, ctx, slots, isGuid, cancellation).ConfigureAwait(false);
 
@@ -188,7 +206,7 @@ public partial class EventOperations
             }
         }
 
-        return results;
+        return (results, rowsRead);
     }
 
     /// <summary>
@@ -272,6 +290,98 @@ public partial class EventOperations
         command.CommandText = sql.ToString();
 
         return Convert.ToInt64(await command.ExecuteScalarAsync(token).ConfigureAwait(false)) != 0;
+    }
+
+    /// <summary>
+    ///     The <c>fi_dcb_tag_version</c> keys a boundary over <paramref name="query" /> is checked against: the tag
+    ///     value's own for a condition with no event type, the (tag value, event type) one for a condition with
+    ///     one (fisher#635).
+    /// </summary>
+    internal IReadOnlyList<(string TagTable, object TagValue)> TagVersionTargetsFor(EventTagQuery query)
+    {
+        var targets = new List<(string, object)>(query.Conditions.Count);
+
+        foreach (var condition in query.Conditions)
+        {
+            var registration = Graph.FindTagType(condition.TagType)
+                               ?? throw new InvalidOperationException(
+                                   $"Tag type '{condition.TagType.Name}' is not registered on this event store. "
+                                   + $"Call RegisterTagType<{condition.TagType.Name}>() before querying by it.");
+
+            var key = DcbTagVersions.KeyFor(registration,
+                condition.EventType is null ? null : Graph.EventMappingFor(condition.EventType).EventTypeName);
+
+            var value = EventTagWriter.ToDatabaseValue(registration.ExtractValue(condition.TagValue));
+
+            if (!targets.Contains((key, value)))
+            {
+                targets.Add((key, value));
+            }
+        }
+
+        return targets;
+    }
+
+    private async Task<DcbTagVersionCapture[]> CaptureTagVersionsAsync(EventTagQuery query, CancellationToken token)
+    {
+        var connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
+
+        return await DcbTagVersions.ReadAsync(Graph, TagVersionTargetsFor(query),
+            DcbTagVersions.TenantFor(Graph, TenantId), connection, null, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Whether the tag versions a boundary captured have moved, inside the save's write transaction
+    ///     (fisher#635).
+    /// </summary>
+    internal async Task<bool> TagVersionsMovedAsync(EventTagQuery query, IReadOnlyList<DcbTagVersionCapture> captured,
+        SqliteConnection connection, SqliteTransaction transaction, CancellationToken token)
+    {
+        var current = await DcbTagVersions.ReadAsync(Graph, TagVersionTargetsFor(query),
+            DcbTagVersions.TenantFor(Graph, TenantId), connection, transaction, token).ConfigureAwait(false);
+
+        for (var i = 0; i < current.Length; i++)
+        {
+            if (current[i].Version != captured[i].Version) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    ///     How many events matching the query sit at or below <paramref name="lastSeenSequence" />, which a
+    ///     boundary compares with what it read when a tag it read had no version row (fisher#635).
+    /// </summary>
+    /// <remarks>
+    ///     A tombstone deletes the version row of a tag no event carries any more, which reads as 0 again, the
+    ///     same as a tag no tombstone, archive or <c>AssignTagWhere</c> has touched yet. So for a boundary that
+    ///     read events and captured a 0, only the count can say they are still there. Polecat makes the same
+    ///     check (<c>DcbBoundaryRead</c>).
+    /// </remarks>
+    internal async Task<long> CountMatchingEventsUpToAsync(EventTagQuery query, long lastSeenSequence,
+        SqliteConnection connection, SqliteTransaction transaction, CancellationToken token)
+    {
+        var sql = new StringBuilder("select count(*) from ")
+            .Append(Graph.EventsTableName)
+            .Append(" where ");
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+
+        AppendConditions(query, sql, command);
+
+        sql.Append(" and seq_id <= @last_seen");
+        command.Parameters.AddWithValue("@last_seen", lastSeenSequence);
+
+        if (IsConjoined)
+        {
+            sql.Append(" and tenant_id = @tenant_id");
+            command.Parameters.AddWithValue("@tenant_id", TenantId);
+        }
+
+        command.CommandText = sql.ToString();
+
+        return Convert.ToInt64(await command.ExecuteScalarAsync(token).ConfigureAwait(false));
     }
 
     /// <summary>

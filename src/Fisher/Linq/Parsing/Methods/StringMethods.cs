@@ -48,6 +48,13 @@ internal static class StringMethods
     /// </summary>
     internal static IQueryableMember MemberOf(IMemberResolver memberFactory, MethodCallExpression expression)
     {
+        // fisher#639: n.StartsWith("a") inside x.Names.Any(n => ...), on the element itself.
+        if (expression.Object is ParameterExpression parameter
+            && memberFactory.ResolveParameter(parameter) is { } element)
+        {
+            return element;
+        }
+
         if (expression.Object is not MemberExpression member)
         {
             throw new BadLinqExpressionException(
@@ -186,7 +193,7 @@ internal class StringEquals : IMethodCallParser
     public bool Matches(MethodCallExpression expression)
         => expression.Method.Name == "Equals"
            && expression.Method.DeclaringType == typeof(string)
-           && expression.Object is MemberExpression
+           && expression.Object is MemberExpression or ParameterExpression
            && expression.Arguments.Count >= 1
            && expression.Arguments[0].Type == typeof(string);
 
