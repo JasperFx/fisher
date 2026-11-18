@@ -109,6 +109,12 @@ internal class Statement
     public Statement? Subquery { get; set; }
 
     /// <summary>
+    ///     A FROM clause that is neither a table nor one subquery, rendered in place of both: a flattened
+    ///     <c>SelectMany</c>'s parent subquery and its <c>json_each</c> (fisher#641).
+    /// </summary>
+    public ISqlFragment? FromFragment { get; set; }
+
+    /// <summary>
     ///     Wraps the statement so it yields a single 0/1 rather than rows — what
     ///     <c>EventsExistAsync</c> reads. SQLite has no boolean type, so this is an INTEGER by
     ///     necessity, matching how Fisher stores every other boolean.
@@ -229,7 +235,11 @@ internal class Statement
 
         builder.Append(" from ");
 
-        if (Subquery != null)
+        if (FromFragment != null)
+        {
+            FromFragment.Apply(builder);
+        }
+        else if (Subquery != null)
         {
             builder.Append('(');
             Subquery.Apply(builder);

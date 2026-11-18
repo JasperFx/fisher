@@ -276,6 +276,14 @@ internal class LinqQueryParser
                 ApplySelectMany(call);
                 break;
 
+            // fisher#641: a SelectMany over a document's collection is translated by the provider
+            // (FlattenedQuery) for the terminals it answers. Reaching here means another one.
+            case "SelectMany" when CurrentJoin is null:
+                throw new BadLinqExpressionException(
+                    "A SelectMany over a document's collection answers ToListAsync, the First/Single family, "
+                    + "CountAsync/LongCountAsync, AnyAsync, the aggregates and ToSql. This operator is not "
+                    + "supported over it. " + WhereClauseParser.Alternatives);
+
             // Query syntax puts a transparent identifier in a plain Join's result selector whenever
             // anything follows the join clause, and spells what the caller actually wanted as this
             // Select. Same two-selector shape a GroupJoin has, one call earlier.

@@ -67,13 +67,17 @@ Querying *into* a document's own collection members works over correlated `json_
 - `Count()` compared to a value in either operand order, the `.Count` property, an array's `.Length`,
   and `Count(c => …)`.
 - Nesting — `x.Stops.Any(s => s.Cargo.Contains("fuel"))` — one alias deeper per level.
+- `SelectMany(x => x.Children)` over values, enums, strings and child documents, with `Where`, ordering,
+  paging, `Distinct` over values and a `Select` after it (fisher#641).
 
 Still missing against Marten, and refused by name rather than answered wrongly:
 
 - **Dictionary members.** `IDictionary<,>` and `IReadOnlyDictionary<,>` are excluded outright, so
   querying a dictionary member is not expressible at all.
-- **`SelectMany` over a child collection**, and therefore anything that flattens elements into the
-  result — including ordering or projecting by a child element's member.
+- **Some shapes around `SelectMany` over a child collection** (fisher#641 added the operator): a second
+  `SelectMany`, `Distinct` over child documents or after a `Select`, an operator after a result selector
+  other than paging, and `LastAsync` or streaming over it. See the
+  [operators page](/documents/querying/linq/operators#selectmany-over-a-collection).
 - **`Select` projecting a child collection.**
 - A string method on a null member (`!x.Name.StartsWith("a")`) follows **SQL null semantics**, since
   C# would throw: the row matches neither the method nor its negation. A comparison answers as C#

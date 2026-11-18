@@ -74,6 +74,11 @@ public partial class FisherQueryProvider : IQueryProvider
 
     internal async Task<IReadOnlyList<T>> ToListAsync<T>(Expression expression, CancellationToken token)
     {
+        if (FlattenFor(expression) is { } flattened)
+        {
+            return await FlattenedListAsync<T>(flattened, flattened.BuildStatement(), token).ConfigureAwait(false);
+        }
+
         if (JoinFor(expression) is { } joined)
         {
             return await JoinListAsync<T>(joined.Statement, joined.Plan, token).ConfigureAwait(false);
@@ -137,6 +142,12 @@ public partial class FisherQueryProvider : IQueryProvider
             throw new BadLinqExpressionException(
                 "ToAsyncEnumerable does not stream a joined query. Use ToListAsync, which materializes "
                 + "both sides through the join plan.");
+        }
+
+        if (FlattenFor(expression) is not null)
+        {
+            throw new BadLinqExpressionException(
+                "ToAsyncEnumerable does not stream a SelectMany over a document's collection. Use ToListAsync.");
         }
 
         return ProjectionFor(expression) is { } projected
@@ -257,6 +268,15 @@ public partial class FisherQueryProvider : IQueryProvider
     internal async Task<T?> FirstAsync<T>(Expression expression, bool enforceSingle, bool required,
         CancellationToken token)
     {
+        if (FlattenFor(expression) is { } flattened)
+        {
+            var flat = flattened.BuildStatement();
+            LimitAtMost(flat, enforceSingle ? 2 : 1);
+
+            return OneOf(await FlattenedListAsync<T>(flattened, flat, token).ConfigureAwait(false),
+                enforceSingle, required);
+        }
+
         if (JoinFor(expression) is { } joined)
         {
             LimitAtMost(joined.Statement, enforceSingle ? 2 : 1);
@@ -322,6 +342,11 @@ public partial class FisherQueryProvider : IQueryProvider
     internal async Task<long> CountAsync<T>(Expression expression, CancellationToken token)
     {
         RefuseIncludesOn(expression, "CountAsync/LongCountAsync");
+
+        if (FlattenFor(expression) is { } flattened)
+        {
+            return await FlattenedCountAsync(flattened, token).ConfigureAwait(false);
+        }
 
         var (statement, parser, _, _) = BuildStatement(SourceTypeFor(expression), expression);
 
@@ -537,7 +562,9 @@ public partial class FisherQueryProvider : IQueryProvider
     /// </summary>
     internal string ToSql<T>(Expression expression) where T : notnull
     {
-        var (statement, _, _, _) = BuildStatement(SourceTypeFor(expression), expression);
+        var statement = FlattenFor(expression) is { } flattened
+            ? flattened.BuildStatement()
+            : BuildStatement(SourceTypeFor(expression), expression).Statement;
 
         var builder = new Weasel.Sqlite.CommandBuilder();
         statement.Apply(builder);
@@ -622,6 +649,11 @@ public partial class FisherQueryProvider : IQueryProvider
     {
         RefuseIncludesOn(expression, "AnyAsync");
 
+        if (FlattenFor(expression) is { } flattened)
+        {
+            return await FlattenedAnyAsync(flattened, token).ConfigureAwait(false);
+        }
+
         // Built non-generically so it answers a projected query too — whether any row exists does not
         // depend on what the rows are shaped into.
         var (statement, _, _, _) = BuildStatement(SourceTypeFor(expression), expression);
@@ -653,6 +685,13 @@ public partial class FisherQueryProvider : IQueryProvider
     internal async Task<T?> LastAsync<T>(Expression expression, bool required, CancellationToken token)
         where T : notnull
     {
+        if (FlattenFor(expression) is not null)
+        {
+            throw new BadLinqExpressionException(
+                "LastAsync is not supported after a SelectMany over a document's collection. Use FirstAsync "
+                + "against the reverse ordering.");
+        }
+
         if (JoinFor(expression) is { } joined)
         {
             return await LastJoinedAsync<T>(joined.Statement, joined.Plan, required, token)
@@ -819,6 +858,11 @@ public partial class FisherQueryProvider : IQueryProvider
         AggregateFunction function, LambdaExpression selector, CancellationToken token)
     {
         RefuseIncludesOn(expression, $"{function}Async");
+
+        if (FlattenFor(expression) is { } flattened)
+        {
+            return await FlattenedAggregateAsync<TResult>(flattened, function, selector, token).ConfigureAwait(false);
+        }
 
         // Built non-generically, from the chain's own source type rather than from the terminal's
         // element type. A join's element type is the caller's result shape and a projection's is
