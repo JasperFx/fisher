@@ -519,8 +519,17 @@
              Weasel.Storage nuspecs, satisfied by the 3.6.0 pins) and Microsoft.Data.Sqlite 10.0.15, unchanged.
              Weasel.Core's SequentialGuidIdentification still uses Guid.CreateVersion7() for plain Guid document
              ids in alpha.8. -->
-        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.8" />
-        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.8" />
+        <!-- Weasel 10.0.0-alpha.10 (from alpha.8, spanning alpha.9). Builds with no Fisher change. Floors: JasperFx
+             3.6.0 (Weasel.Core and Weasel.Storage nuspecs, matching the pins above), Microsoft.Data.Sqlite 10.0.15
+             and SQLitePCLRaw.bundle_e_sqlite3 3.0.5, unchanged.
+             weasel#880 (alpha.9): SequentialGuidIdentification, ValueTypeIdentification and the Identifications
+             factories take an IGuidGenerator, defaulting to SequentialGuid.PostgresOrder. Plain Guid document ids
+             now come from SequentialGuid.NextPostgresOrder() rather than Guid.CreateVersion7(), the same generator
+             Fisher already used for strong-typed Guid ids and the patch guid_version, so every generated Guid
+             follows one order. Weasel.Storage's version binder moves off CombGuidIdGeneration the same way.
+             INERT: weasel#882/#884 (alpha.10), a PostgreSQL partitioning rebuild locks the table first. -->
+        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.10" />
+        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.10" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.15" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,

@@ -4,7 +4,7 @@ Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.
 architecture and the SQLite-specific decisions.
 
 Status: **one open issue, and it is blocked upstream.** JasperFx 3.6.0's per-identity rebuild
-([#629](https://github.com/JasperFx/fisher/issues/629)) is done, on Weasel 10.0.0-alpha.8. Fisher 2.0's share of Marten 10's default changes
+([#629](https://github.com/JasperFx/fisher/issues/629)) is done. 2.0.0-alpha.3 moves to Weasel 10.0.0-alpha.10. Fisher 2.0's share of Marten 10's default changes
 ([#621](https://github.com/JasperFx/fisher/issues/621)), the Marten parity helper
 ([#619](https://github.com/JasperFx/fisher/issues/619)) and the busy-handler docs correction
 ([#624](https://github.com/JasperFx/fisher/issues/624)) are done. 1.28.0 took JasperFx
