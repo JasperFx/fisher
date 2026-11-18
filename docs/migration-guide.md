@@ -387,7 +387,8 @@ JasperFx 3.0, Fisher included. Fisher does not set it itself, so the default arr
 bump.
 
 **What it does.** It matters only when you raise a projection's `Version` (a blue/green or rolling deploy of
-a changed projection). The new version replays the event store to build its own documents. With the gate on, it
+a changed projection). The new version replays the event store to build its own documents, in its own table
+(see [a new projection version gets its own table](#a-new-projection-version-gets-its-own-table)). With the gate on, it
 does that with **side effects suppressed** up to where the previous version's progression stopped, and
 publishes messages and raises events only for events the previous version never processed. In Fisher 1 the
 new version re-published everything it replayed, so every message the old version had already sent went out a
@@ -415,6 +416,25 @@ public class QuestProjection : SingleStreamProjection<Quest, Guid>
 
 `side_effect_gate_behind_prior_version` in Fisher's own suite runs both cases against a real file and the
 real daemon. `RestoreV1Defaults()` (below) turns the gate off for every registered projection at once.
+
+### A new projection version gets its own table
+
+Landed in fisher#638, matching Marten. An aggregation projection (single or multi stream) with `Version`
+above 1 now writes its documents to a table with the version on the end: `fi_doc_quest_2` for version 2 of a
+projection of `Quest`. Version 1 keeps `fi_doc_quest`. The members of a composite projection take the
+composite's `Version`, so bumping the composite gives every member new progression rows and new tables.
+
+In Fisher 1 the new version wrote into the old version's table. An aggregation loaded the document the old
+version had built and applied every event to it again, so a projection that counted events ended up with
+double the count. A composite bump was worse: the members kept their own version, reused the old progression
+rows, and the composite stopped with `ProgressionProgressOutOfOrderException`.
+
+**Effect on an existing file.** A projection that has `Version` above 1 reads and writes a new, empty table
+after the upgrade. Its progression row (`Quest:V2:All`) is already where Fisher 1 left it, so the daemon
+will not fill the new table on its own: rebuild the projection (`RebuildProjectionAsync`) once after the
+upgrade. The old table stays where it is with its data; drop it yourself once nothing reads it. Under `AutoCreate.None`, apply the migration first to create the new table. Code that reads the table by
+name in raw SQL needs the new name. Projections at version 1, and documents that no projection writes, keep
+their tables.
 
 ### Store defaults that follow Marten 10, and `RestoreV1Defaults()`
 

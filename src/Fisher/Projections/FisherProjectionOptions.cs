@@ -207,6 +207,14 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
         configure(composite);
         composite.AssembleAndAssertValidity();
 
+        // fisher#638, as Marten does (ProjectionOptions.CompositeProjectionFor). A member keeps no
+        // version of its own: bumping the composite has to give every member a new progression row and,
+        // for an aggregation, a new table, or the new version writes into the old version's state.
+        foreach (var child in composite.AllProjections().OfType<ProjectionBase>())
+        {
+            child.OverwriteVersion(composite.Version);
+        }
+
         foreach (var child in composite.AllProjections().OfType<ProjectionBase>())
         {
             foreach (var eventType in child.IncludedEventTypes)

@@ -68,6 +68,11 @@ public partial class DocumentStore : IDocumentStore
             flatTable.ResolveTableName(options.DatabaseSchemaName);
         }
 
+        // fisher#638. A versioned aggregation projection's document gets a table of its own, as on
+        // Marten. Here because a projection's Version and the document's alias are both final now, and
+        // before anything below reads a table name.
+        options.Schema.ApplyProjectionVersions();
+
         // Every document type configured so far has to have an identity, and this is the first moment
         // that is settled: Schema.For<T>().Identity(x => x.Member) can name one the conventions did
         // not find, so the mapping cannot refuse while it is being created (fisher#218) without making
