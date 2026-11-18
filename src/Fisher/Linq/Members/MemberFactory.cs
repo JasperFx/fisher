@@ -379,7 +379,13 @@ internal class MemberFactory : IMemberResolver
         var member = CreateMember(BuildJsonPath(chain), GetMemberType(chain[^1]));
         var duplicate = _mapping?.DuplicateFor(chain);
 
-        return duplicate is null ? member : new DuplicatedMember(member, duplicate.ColumnName, _qualifier);
+        // fisher#637: a duplicated collection stays a CollectionMember. Contains / Any / All / Count
+        // unroll it with json_each, which needs the collection member, and the column (the array's JSON
+        // text) would give an index nothing to seek on anyway. The column is still generated from this
+        // member's locator, so it holds the same JSON.
+        return duplicate is null || member is CollectionMember
+            ? member
+            : new DuplicatedMember(member, duplicate.ColumnName, _qualifier);
     }
 
     /// <summary>
