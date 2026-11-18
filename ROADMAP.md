@@ -3,7 +3,9 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **one open issue, and it is blocked upstream.** JasperFx 3.6.0's per-identity rebuild
+Status: **two open issues, one of them blocked upstream.** 2.0.0-alpha.4 moves to JasperFx 3.8.0 and Weasel
+10.0.0-alpha.11 and implements 3.7.0's event-range marks; its stored-event rewrite and backfill seams are
+[#643](https://github.com/JasperFx/fisher/issues/643). JasperFx 3.6.0's per-identity rebuild
 ([#629](https://github.com/JasperFx/fisher/issues/629)) is done. 2.0.0-alpha.3 moves to Weasel 10.0.0-alpha.10. Fisher 2.0's share of Marten 10's default changes
 ([#621](https://github.com/JasperFx/fisher/issues/621)), the Marten parity helper
 ([#619](https://github.com/JasperFx/fisher/issues/619)) and the busy-handler docs correction
@@ -419,7 +421,10 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is one item, and it is blocked upstream.
+What is left is two items.
+
+[#643](https://github.com/JasperFx/fisher/issues/643): the stored-event rewrite and projection backfill seams JasperFx
+3.7.0 added to `IEventStore`. The event-range marks they build on are done; both suites are excused until this lands.
 
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.
@@ -896,7 +901,7 @@ Test counts keep understating the suites that matter. `AsyncDaemonCompliance` is
 the whole daemon; `FlatTableProjectionCompliance` is eight that demand an upsert generator, a
 migration hook and rebuild teardown.
 
-Being green on all sixty-seven is not the same as being feature-complete against Marten. The suites
+Being green on all sixty-eight is not the same as being feature-complete against Marten. The suites
 cover what is portable across stores; the deliberate gaps listed in HANDOFF.md are still gaps.
 
 ## Filed follow-ups

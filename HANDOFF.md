@@ -12,11 +12,21 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3569 tests green on net10.0 and 3596 on net11.0** — 3497 (net10.0) / 3524 (net11.0) in `Fisher.Tests`, 40 in
-`Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 864 of
-them are shared cross-store compliance tests — 630 event sourcing and 234 document.
+**3657 tests green on net10.0 and 3684 on net11.0** — 3585 (net10.0) / 3612 (net11.0) in `Fisher.Tests`, 40 in
+`Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 876 of
+them are shared cross-store compliance tests — 642 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.6.0** / Weasel **10.0.0-alpha.10** (2.0.0-alpha.3).
+On JasperFx **3.8.0** / Weasel **10.0.0-alpha.11** (2.0.0-alpha.4).
+
+## JasperFx 3.8.0 and Weasel 10.0.0-alpha.11 (2.0.0-alpha.4)
+
+From JasperFx 3.6.0, spanning 3.7.0 and 3.7.1. 3.8.0 carries jasperfx#1242: the generated Evolve dispatcher applies
+conventional `Apply` methods inherited from a base class. 3.7.0 added three seams with default members and a suite
+each. Fisher implements the event-range marks on `IEventDatabase` (jasperfx#1215 / #1222) over a new
+`fi_event_range_marks` table, stored like the projection floors so a mark outlives rebuild teardown,
+`DeleteAllEventDataAsync` and tenant wipes; `EventRangeMarkCompliance` is enrolled, 12 of 12 green. The stored-event
+rewrite (`EventRewriteCompliance`) and projection backfill (`BackfillCompliance`) seams are not implemented and both
+suites are excused in `compliance_suite_inventory` until [fisher#643](https://github.com/JasperFx/fisher/issues/643).
 
 ## Per-identity rebuild on JasperFx 3.6.0 (fisher#629)
 
@@ -1355,9 +1365,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 3.6.0 ships 67 suites; Fisher enrolls **67 of them, 864 tests**.
-Fisher passes **864 of them, across all
-67 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 3.8.0 ships 70 suites; Fisher enrolls **68 of them, 876 tests**.
+Fisher passes **876 of them, across all
+68 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -1512,9 +1522,9 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 67 suites, 864 tests
+### Green — 68 suites, 876 tests
 
-Event sourcing — 53 suites, 630 tests:
+Event sourcing — 54 suites, 642 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1523,6 +1533,7 @@ Event sourcing — 53 suites, 630 tests:
 | `DcbAppendConditionCompliance` | 24 |
 | `ProjectionScenarioCompliance` | 20 |
 | `IdentityRebuildCompliance` | 18 |
+| `EventRangeMarkCompliance` | 12 |
 | `StringStreamIdentityCompliance` | 21 |
 | `EventStoreExplorerCompliance` | 18 |
 | `NaturalKeyCompliance` | 19 |

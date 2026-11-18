@@ -301,6 +301,16 @@
              INERT:
              jasperfx#1099/#1103 fold an HTTP endpoint and a message handler in the Event Model, which
              Fisher contributes to but does not assert on. -->
+        <!-- JasperFx 3.8.0 (from 3.6.0, spanning 3.7.0 and 3.7.1), for 2.0.0-alpha.4. No compile break: the new
+             IEventStore and IEventDatabase members have defaults. 3.8.0 carries jasperfx#1242, the generated Evolve
+             dispatcher applying conventional Apply methods inherited from a base class.
+
+             ADOPTED:
+             jasperfx#1215/#1222 - event-range marks on IEventDatabase, over fi_event_range_marks, stored like the
+             projection floors. EventRangeMarkCompliance enrolled, 12 facts green.
+
+             NOT YET (fisher#643): the stored-event rewrite (EventRewriteCompliance) and projection backfill
+             (BackfillCompliance) seams. Both suites are excused in compliance_suite_inventory. -->
         <!-- JasperFx 3.6.0 (from 3.5.0). One compliance suite added: IdentityRebuildCompliance (jasperfx#1201),
              enrolled in fisher#629, 18 facts green.
 
@@ -528,6 +538,8 @@
              Fisher already used for strong-typed Guid ids and the patch guid_version, so every generated Guid
              follows one order. Weasel.Storage's version binder moves off CombGuidIdGeneration the same way.
              INERT: weasel#882/#884 (alpha.10), a PostgreSQL partitioning rebuild locks the table first. -->
+        <!-- Weasel 10.0.0-alpha.11 (from alpha.10). Builds with no Fisher change; floors JasperFx 3.6.0 and
+             Microsoft.Data.Sqlite 10.0.15, satisfied by the pins. -->
         <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.11" />
         <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.11" />
 
