@@ -114,7 +114,8 @@ public partial class EventOperations
         var predicate = new WhereClauseParser(new EventMemberFactory(Graph)).Parse(expression.Body);
 
         _session.QueueOperation(new AssignTagWhereOperation(Graph, registration,
-            EventTagWriter.ToDatabaseValue(registration.ExtractValue(tag)), predicate));
+            EventTagWriter.ToDatabaseValue(registration.ExtractValue(tag)), predicate,
+            IsConjoined ? TenantId : null));
     }
 
     /// <summary>
