@@ -57,7 +57,21 @@ internal sealed class FisherBatchedQuery : IBatchedQuery
             {
                 // Faulted rather than left uncompleted: a caller awaiting this item after Execute
                 // would otherwise hang instead of seeing why. Execute rethrows as well — see there.
-                completion.SetException(e);
+                // A read stopped by the caller's token cancels the item rather than faulting it.
+                if (e is OperationCanceledException && token.IsCancellationRequested)
+                {
+                    completion.SetCanceled(token);
+                }
+                else
+                {
+                    completion.SetException(e);
+
+                    // The caller already has this exception from Execute and may never await the
+                    // item, so mark it observed rather than let an unawaited item raise
+                    // TaskScheduler.UnobservedTaskException later.
+                    _ = completion.Task.Exception;
+                }
+
                 throw;
             }
         });
@@ -87,32 +101,13 @@ internal sealed class FisherBatchedQuery : IBatchedQuery
 
     public Task<T> QueryByPlan<T>(IQueryPlan<T> plan) => Enqueue(t => plan.Fetch(_session, t));
 
+    // Both go through Enqueue like every other member, so a read that throws faults the item's task
+    // instead of leaving it pending forever after Execute fails (fisher#633, marten#6034).
     public Task<bool> EventsExist(EventTagQuery query)
-    {
-        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        _pending.Add(async token =>
-        {
-            var result = await _events.EventsExistAsync(query, token).ConfigureAwait(false);
-            completion.SetResult(result);
-        });
-
-        return completion.Task;
-    }
+        => Enqueue(t => _events.EventsExistAsync(query, t));
 
     public Task<IEventBoundary<T>> FetchForWritingByTags<T>(EventTagQuery query) where T : class
-    {
-        var completion =
-            new TaskCompletionSource<IEventBoundary<T>>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        _pending.Add(async token =>
-        {
-            var boundary = await _events.FetchForWritingByTags<T>(query, token).ConfigureAwait(false);
-            completion.SetResult(boundary);
-        });
-
-        return completion.Task;
-    }
+        => Enqueue(t => _events.FetchForWritingByTags<T>(query, t));
 
     /// <summary>
     ///     Run every declared read, in declaration order.
@@ -153,7 +148,9 @@ internal sealed class FisherBatchedQuery : IBatchedQuery
             }
         }
 
-        if (failures.Count == 1)
+        // Every item stopped by the caller's token: that is one cancellation, not an aggregate of them
+        if (failures.Count == 1 || (token.IsCancellationRequested && failures.Count > 0 &&
+                                    failures.TrueForAll(e => e is OperationCanceledException)))
         {
             throw failures[0];
         }

@@ -35,7 +35,7 @@ namespace Fisher.Storage.Sequences;
 ///         DDL, matching how document and event tables behave.
 ///     </para>
 /// </remarks>
-internal sealed class HiloSequence : HiloSequenceBase
+internal class HiloSequence : HiloSequenceBase
 {
     private readonly AutoCreate _autoCreate;
     private readonly SqliteDataSource _dataSource;
@@ -73,24 +73,31 @@ internal sealed class HiloSequence : HiloSequenceBase
 
     private string SetFloorSql => $"update {_quotedTable} set hi_value = @floor where entity_name = @entity";
 
-    public override async Task AdvanceToNextHi(CancellationToken ct = default)
+    public override Task AdvanceToNextHi(CancellationToken ct = default) => AdvanceAsync(null, ct);
+
+    /// <summary>
+    ///     Reserve the next block and install it.
+    /// </summary>
+    /// <param name="installCountBefore">
+    ///     Null for an advance reached through <c>NextLongAsync</c>, which the base class already judges by
+    ///     its overlap rule. <see cref="SetFloor" /> passes the <see cref="HiloSequenceBase.InstallCount" />
+    ///     it took once the row moved, so its block follows the same rule from outside an advance.
+    /// </param>
+    private async Task AdvanceAsync(long? installCountBefore, CancellationToken ct)
     {
         AssertAdvanceIsAllowed();
 
         await _resilience.ExecuteAsync(async cancellation =>
         {
-            await using var conn = (SqliteConnection)await _dataSource
-                .OpenConnectionAsync(cancellation).ConfigureAwait(false);
-
-            await EnsureTableAsync(conn, cancellation).ConfigureAwait(false);
-
             for (var attempts = 0; attempts < Settings.MaxAdvanceToNextHiAttempts; attempts++)
             {
-                await using var command = conn.CreateCommand();
-                command.CommandText = AdvanceSql;
-                command.Parameters.AddWithValue("@entity", EntityName);
+                var raw = await ReserveNextHiAsync(cancellation).ConfigureAwait(false);
 
-                if (TrySetCurrentHi(await command.ExecuteScalarAsync(cancellation).ConfigureAwait(false)))
+                var settled = installCountBefore is { } before
+                    ? TrySetCurrentHi(raw, before)
+                    : TrySetCurrentHi(raw);
+
+                if (settled)
                 {
                     return;
                 }
@@ -98,6 +105,27 @@ internal sealed class HiloSequence : HiloSequenceBase
 
             throw new HiloSequenceAdvanceToNextHiAttemptsExceededException();
         }, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Move <c>fi_hilo</c> on by one block and return the raw hi it now holds, without installing it.
+    /// </summary>
+    /// <remarks>
+    ///     Virtual only so a test can hold <see cref="SetFloor" /> between reserving its block and
+    ///     installing it (fisher#636).
+    /// </remarks>
+    internal virtual async Task<object?> ReserveNextHiAsync(CancellationToken ct)
+    {
+        await using var conn = (SqliteConnection)await _dataSource
+            .OpenConnectionAsync(ct).ConfigureAwait(false);
+
+        await EnsureTableAsync(conn, ct).ConfigureAwait(false);
+
+        await using var command = conn.CreateCommand();
+        command.CommandText = AdvanceSql;
+        command.Parameters.AddWithValue("@entity", EntityName);
+
+        return await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -139,9 +167,19 @@ internal sealed class HiloSequence : HiloSequenceBase
     ///     Reset the sequence so every subsequent id is greater than <paramref name="floor" />.
     /// </summary>
     /// <remarks>
-    ///     Advancing first is what guarantees the row exists for the UPDATE to hit; advancing again is
-    ///     what makes this instance pick the new floor up rather than keep issuing from the allocation
-    ///     it already held.
+    ///     <para>
+    ///         Advancing first is what guarantees the row exists for the UPDATE to hit; advancing again is
+    ///         what makes this instance pick the new floor up rather than keep issuing from the allocation
+    ///         it already held.
+    ///     </para>
+    ///     <para>
+    ///         fisher#636 (port of marten#6058, weasel#849): the second advance runs outside
+    ///         <c>NextLong</c>, so the base class would install its block as given. A concurrent
+    ///         <c>NextLong</c> that reserves after the row moved, and installs first, holds a higher block
+    ///         that is above the floor too; installing the floor's lower block over it would hand out ids
+    ///         behind ones already issued. So the install count is taken once the row has moved, and the
+    ///         floor's block is dropped as a gap when a higher one was installed since.
+    ///     </para>
     /// </remarks>
     public override async Task SetFloor(long floor)
     {
@@ -162,7 +200,9 @@ internal sealed class HiloSequence : HiloSequenceBase
             await command.ExecuteNonQueryAsync(cancellation).ConfigureAwait(false);
         }).ConfigureAwait(false);
 
-        await AdvanceToNextHi().ConfigureAwait(false);
+        var installsBefore = InstallCount;
+
+        await AdvanceAsync(installsBefore, CancellationToken.None).ConfigureAwait(false);
     }
 
     /// <summary>

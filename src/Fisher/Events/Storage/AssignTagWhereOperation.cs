@@ -21,6 +21,12 @@ namespace Fisher.Events.Storage;
 ///         second time, which <c>assign_tag_where_is_idempotent</c> pins — and it costs nothing on the
 ///         first run, unlike a guarding <c>not exists</c> subquery.
 ///     </para>
+///     <para>
+///         Under conjoined tenancy the select is limited to the session's tenant (fisher#632, port of
+///         marten#6080). The tag tables carry no tenant column, so a tag written onto another tenant's
+///         event would show up in that tenant's own tag reads. The user's predicate is wrapped in
+///         parentheses so an <c>||</c> in it cannot escape the tenant filter.
+///     </para>
 /// </remarks>
 internal sealed class AssignTagWhereOperation : Weasel.Storage.IStorageOperation, Fisher.Events.Storage.IEventStorageOperation
 {
@@ -28,14 +34,17 @@ internal sealed class AssignTagWhereOperation : Weasel.Storage.IStorageOperation
     private readonly ITagTypeRegistration _registration;
     private readonly object _value;
     private readonly ISqlFragment _predicate;
+    private readonly string? _tenantId;
 
+    /// <param name="tenantId">The tenant to limit the tagging to, or null when events are not conjoined.</param>
     internal AssignTagWhereOperation(EventGraph events, ITagTypeRegistration registration, object value,
-        ISqlFragment predicate)
+        ISqlFragment predicate, string? tenantId)
     {
         _events = events;
         _registration = registration;
         _value = value;
         _predicate = predicate;
+        _tenantId = tenantId;
     }
 
     public Type DocumentType => typeof(object);
@@ -50,9 +59,17 @@ internal sealed class AssignTagWhereOperation : Weasel.Storage.IStorageOperation
         builder.AppendParameter(_value);
         builder.Append(", seq_id from ");
         builder.Append(_events.EventsTableName);
-        builder.Append(" where ");
+        builder.Append(" where (");
 
         _predicate.Apply(builder);
+
+        builder.Append(")");
+
+        if (_tenantId != null)
+        {
+            builder.Append(" and tenant_id = ");
+            builder.AppendParameter(_tenantId);
+        }
 
         builder.Append(" on conflict do nothing;");
     }
