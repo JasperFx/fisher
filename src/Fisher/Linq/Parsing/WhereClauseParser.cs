@@ -536,6 +536,14 @@ internal class WhereClauseParser
             return false;
         }
 
+        // fisher#639: n.Length inside x.Names.Any(n => ...), on the element itself.
+        if (lengthExpr.Expression is ParameterExpression { Type: var type } parameter && type == typeof(string)
+            && _memberFactory.ResolveParameter(parameter) is { } element)
+        {
+            fragment = new FunctionComparisonFilter("length", element.RawLocator, op, ExtractValue(valueSide)!);
+            return true;
+        }
+
         if (lengthExpr.Expression is not MemberExpression innerMember
             || !IsDocumentMember(innerMember)
             || innerMember.Type != typeof(string))
@@ -1113,6 +1121,14 @@ internal class WhereClauseParser
                 member = _memberFactory.ResolveUnionCase(unionMember, caseType);
                 return true;
             }
+        }
+
+        // fisher#639: n in x.Numbers.Any(n => n > 3), the element of a collection of primitives.
+        if (StripConvert(memberExpr) is ParameterExpression parameter
+            && _memberFactory.ResolveParameter(parameter) is { } element)
+        {
+            member = element;
+            return true;
         }
 
         if (StripConvert(memberExpr) is not MemberExpression me || !IsDocumentMember(me))

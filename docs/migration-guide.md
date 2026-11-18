@@ -61,7 +61,8 @@ a migrating Marten user hits first.
 Querying *into* a document's own collection members works over correlated `json_each` sub-queries:
 
 - `Contains(value)` over **scalar** element collections — strings, numbers, Guids, enums, bools.
-- `Any()`, and `Any(c => …)` with a predicate over a complex element's own members.
+- `Any()`, and `Any(c => …)` with a predicate over a complex element's own members, or over a scalar
+  element itself (`x.Numbers.Any(n => n > 3)`, `x.Tags.Any(t => t.StartsWith("a"))`).
 - `All(c => …)`, vacuously true over an absent, empty or JSON-null collection.
 - `Count()` compared to a value in either operand order, the `.Count` property, an array's `.Length`,
   and `Count(c => …)`.

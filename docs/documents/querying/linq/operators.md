@@ -43,6 +43,11 @@ sub-query over SQLite's `json_each` table-valued function:
 .Where(x => x.Tags.Count() > 2)                 // also .Count property and array .Length
 .Where(x => x.Stops.Count(s => s.Days < 5) == 2)
 
+// scalar elements — a predicate on the element itself (fisher#639)
+.Where(x => x.Depths.Any(d => d > 100))
+.Where(x => x.Tags.Any(t => t.StartsWith("ur")))
+.Where(x => x.Tags.All(t => t.Length < 10))
+
 // child objects — member predicates on the element
 .Where(x => x.Stops.Any(s => s.Port == "Oslo"))
 .Where(x => x.Stops.Any(s => s.Days > 5 && s.Resupplied))
@@ -73,9 +78,8 @@ phantom row, and that row is the only one whose `key` is NULL.
 - A predicate referencing anything outside the element's own scope — the outer document
   (`x.Stops.Any(s => s.Port == x.Name)`), or an enclosing lambda's element. Compare against locals
   or constants instead.
-- A member access on a scalar element (`x.Tags.Any(t => t.Length > 3)`) — the elements are plain
-  values with no members to extract.
-- A bare element comparison (`x.Tags.Any(t => t == "urgent")`) — use `Contains`.
+- A member access on a scalar element other than a string's `Length`
+  (`x.CrewIds.Any(c => c.Variant > 3)`) — the elements are plain values with no members to extract.
 - `Contains` against another document member, and `Contains` over child-object elements — use
   `Any(c => …)` with a predicate on the element's members.
 

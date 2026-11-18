@@ -184,6 +184,15 @@ internal sealed class ElementMemberResolver : IMemberResolver
         _element = element;
     }
 
+    /// <summary>
+    ///     fisher#639: the element itself, for a collection of primitives — <c>n</c> in
+    ///     <c>x.Names.Any(n =&gt; n == "xy")</c> is <c>each_N.value</c>.
+    /// </summary>
+    public IQueryableMember? ResolveParameter(ParameterExpression parameter)
+        => ReferenceEquals(parameter, _parameter) && _element is not null && _element is not ValueTypeMember
+            ? _element
+            : null;
+
     public IQueryableMember ResolveMember(MemberExpression expression)
     {
         var root = RootParameterOf(expression);

@@ -10,6 +10,16 @@ internal interface IMemberResolver
     IQueryableMember ResolveMember(MemberExpression expression);
 
     /// <summary>
+    ///     A lambda parameter that is itself a value to compare, or null when it is not one here.
+    /// </summary>
+    /// <remarks>
+    ///     fisher#639: the element of a collection of primitives, as in <c>x.Numbers.Any(n =&gt; n &gt; 3)</c>,
+    ///     where the comparison's member side is the parameter itself. Everywhere else a parameter is a
+    ///     document or an object, which has no single value.
+    /// </remarks>
+    IQueryableMember? ResolveParameter(ParameterExpression parameter) => null;
+
+    /// <summary>
     ///     The document mapping the members belong to, or null where they belong to something that is
     ///     not a document — an event body or a stream-state row.
     /// </summary>
