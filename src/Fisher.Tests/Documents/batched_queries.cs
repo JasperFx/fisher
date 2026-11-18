@@ -1,6 +1,7 @@
 using Fisher.Batching;
 using Fisher.Linq;
 using JasperFx;
+using JasperFx.Events.Tags;
 
 namespace Fisher.Tests.Documents;
 
@@ -153,6 +154,58 @@ public class batched_queries : IAsyncLifetime
 
         await Should.ThrowAsync<BadLinqExpressionException>(() => bad);
         (await declaredAfterTheFailure)!.Name.ShouldBe("Frodo");
+    }
+
+    /// <summary>
+    ///     fisher#633 (port of marten#6034): the two DCB reads built their own completion and only ever
+    ///     set a result, so after a failed <c>Execute</c> their tasks stayed pending and awaiting one
+    ///     hung. Both now fault with the read's failure.
+    /// </summary>
+    [Fact]
+    public async Task a_failing_dcb_batch_item_faults_its_task_after_execute_fails()
+    {
+        await using var session = Session();
+        var batch = session.CreateBatchQuery();
+
+        // No tag type is registered, so both reads throw
+        var exists = batch.EventsExist(new EventTagQuery().Or<string>("nope"));
+        var boundary = batch.FetchForWritingByTags<Angler>(new EventTagQuery().Or<string>("nope"));
+        var declaredAfterTheFailures = batch.Load<Angler>(_frodo);
+
+        await Should.ThrowAsync<AggregateException>(() => batch.Execute(Token));
+
+        await shouldBeFinished(exists);
+        await shouldBeFinished(boundary);
+
+        exists.IsFaulted.ShouldBeTrue();
+        boundary.IsFaulted.ShouldBeTrue();
+        (await declaredAfterTheFailures)!.Name.ShouldBe("Frodo");
+    }
+
+    [Fact]
+    public async Task items_are_cancelled_when_execute_is_cancelled()
+    {
+        await using var session = Session();
+        var batch = session.CreateBatchQuery();
+
+        var load = batch.Load<Angler>(_frodo);
+        var exists = batch.EventsExist(new EventTagQuery().Or<string>("nope"));
+
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => batch.Execute(cancellation.Token));
+
+        await shouldBeFinished(load);
+        await shouldBeFinished(exists);
+        load.IsCanceled.ShouldBeTrue();
+    }
+
+    private static async Task shouldBeFinished(Task item)
+    {
+        // Before fisher#633 a DCB item never finished, so the wait is bounded rather than hanging the run
+        await Task.WhenAny(item, Task.Delay(TimeSpan.FromSeconds(5), Token));
+        item.IsCompleted.ShouldBeTrue("the batch item never completed after Execute() failed");
     }
 
     [Fact]
