@@ -167,6 +167,12 @@ follows. Live aggregation, `FetchForWriting` and the daemon all inherit it.
 - **Every compacted event's tag rows go**, including the replaced one.
 - **An archived stream is compacted too**, and its snapshot row stays archived. Marten and Polecat read
   the stream through their default read, so compacting an archived stream does nothing on either.
+- **It waits for async projections and subscriptions.** Compacting deletes events, so Fisher refuses to
+  compact a stream while any asynchronous projection or subscription has not processed them yet.
+  `CompactStreamAsync()` throws an `InvalidOperationException` naming the ones that are behind, and
+  nothing is compacted; compact again once they caught up. One that has never run counts as behind. A
+  single stream projection of the type you are compacting to is not checked, since it reads the
+  `Compacted<T>` snapshot instead of the deleted events.
 
 ### There is no version guard, and that is not an oversight
 

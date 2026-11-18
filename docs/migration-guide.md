@@ -496,6 +496,14 @@ file's volume, and [Aspire](/configuration/aspire) documents the `CommunityToolk
 path, OpenTelemetry registration and the high-water health check. The existing
 `AddFisher(...)` registration in this guide is unchanged.
 
+### Stream compaction waits for async projections and subscriptions
+
+Landed in fisher#634, the port of marten#6050. `CompactStreamAsync()` now throws an `InvalidOperationException`
+while an asynchronous projection or subscription has not processed the events it would delete, including one that
+has never run. Nothing is compacted; compact again once they caught up. A single stream projection of the compacted
+type is not checked, since it reads the `Compacted<T>` snapshot. In Fisher 1 those events were deleted anyway, and a
+multi-stream projection or a subscription that was behind never saw them ([compacting](/events/rewriting#stream-compacting)).
+
 ### `RebuildSingleStreamAsync` goes through the daemon, or refuses
 
 Landed in fisher#629, on JasperFx 3.6.0's per-identity rebuild (jasperfx#1201). This only matters for a document

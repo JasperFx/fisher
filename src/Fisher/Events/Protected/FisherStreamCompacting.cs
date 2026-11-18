@@ -1,6 +1,9 @@
 using Fisher.Events.Storage;
 using Fisher.Internal;
 using JasperFx.Events;
+using JasperFx.Events.Aggregation;
+using JasperFx.Events.Daemon;
+using JasperFx.Events.Projections;
 using JasperFx.Events.Documents;
 using JasperFx.Events.Protected;
 
@@ -54,9 +57,83 @@ internal sealed class FisherStreamCompacting : StreamCompactingExecution<FisherS
 
     protected override async ValueTask<T?> BuildAggregateAsync<T>(FisherSession session,
         IReadOnlyList<IEvent> events, CancellationToken token) where T : class
-        => await session.Options.EventGraph.AggregatorFor<T>()
+    {
+        var aggregate = await session.Options.EventGraph.AggregatorFor<T>()
             .BuildAsync(events, session, null, token)
             .ConfigureAwait(false);
+
+        // Called ahead of anything being queued, and only with the events about to be folded: the last one
+        // becomes the Compacted<T>, and the rest are deleted. A stream that folds to nothing is left alone anyway.
+        if (aggregate != null && events.Count > 0)
+        {
+            await EnsureNoAsyncShardIsBehindAsync<T>(session, events[^1], token).ConfigureAwait(false);
+        }
+
+        return aggregate;
+    }
+
+    /// <summary>
+    ///     fisher#634 (port of marten#6050): refuse to compact while an async projection or subscription has not
+    ///     processed the events being compacted. Compaction deletes them and rewrites the last one into a
+    ///     <see cref="Compacted{T}" />, so a multi-stream projection, a composite, another view of the stream or
+    ///     a subscription that had not reached them yet would never see them. A single-stream projection of
+    ///     <typeparamref name="T" /> itself is exempt: it fast-forwards over the snapshot.
+    /// </summary>
+    /// <remarks>
+    ///     A shard is behind unless its <c>fi_event_progression</c> row has reached the last event's sequence,
+    ///     and a shard with no row (one that never ran) is behind. A shard's row is the one for this session's
+    ///     tenant when the daemon keeps per-tenant progress, else the store-global one. Read before anything is
+    ///     queued: a shard only moves forward, so one that has caught up here is still caught up at commit.
+    /// </remarks>
+    private static async Task EnsureNoAsyncShardIsBehindAsync<T>(FisherSession session, IEvent last,
+        CancellationToken token) where T : class
+    {
+        var projections = session.Options.Projections;
+
+        var exempt = projections.All
+            .Where(x => x is IAggregateProjection { Scope: AggregationScope.SingleStream } aggregate &&
+                        aggregate.AggregateType == typeof(T))
+            .Select(x => x.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var tenantId = session.TenantId;
+        var shards = projections.AllShards()
+            .Select(x => x.Name)
+            .Where(x => !exempt.Contains(x.Name))
+            // A shard partitioned to another tenant never reads this tenant's events
+            .Where(x => x.TenantId is null || x.TenantId == tenantId)
+            .Select(x => (Global: x.Identity,
+                Tenant: x.TenantId is null
+                    ? ShardName.Compose(x.Name, x.ShardKey, tenantId, x.Version).Identity
+                    : x.Identity))
+            .Distinct()
+            .ToArray();
+
+        if (shards.Length == 0)
+        {
+            return;
+        }
+
+        var progress = (await session.FisherDatabase.AllProjectionProgress(token).ConfigureAwait(false))
+            .ToDictionary(x => x.ShardName, x => x.Sequence, StringComparer.Ordinal);
+
+        var behind = shards
+            .Select(x => progress.TryGetValue(x.Tenant, out var atTenant)
+                ? (Name: x.Tenant, Seq: atTenant)
+                : (Name: x.Global, Seq: progress.GetValueOrDefault(x.Global)))
+            .Where(x => x.Seq < last.Sequence)
+            .Select(x => $"{x.Name} (at {x.Seq})")
+            .ToArray();
+
+        if (behind.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Cannot compact stream '{(object?)last.StreamKey ?? last.StreamId}' through version {last.Version} " +
+                $"(sequence {last.Sequence}) yet: these async projections or subscriptions have not processed its " +
+                $"events: {string.Join(", ", behind)}. Compacting deletes them, so those would never see them. " +
+                "Nothing was compacted; try again once they caught up.");
+        }
+    }
 
     // IEventsArchiver<T> is invariant, so every operations type a caller could reasonably close it over is
     // accepted. One Fisher does not offer fails the compaction rather than being skipped.
