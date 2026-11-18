@@ -5,8 +5,7 @@ using Shouldly;
 // Deliberately NOT Fisher.Tests.Compliance, although it sits beside the fixtures it audits:
 // scripts/check_scoreboard.py counts every test class in that namespace as an enrolled compliance suite,
 // and this class is an audit of the enrollment, not a suite JasperFx ships. In that namespace it would
-// read as a sixty-fifth enrolled suite of the sixty-five 2.102.0 ships, while it exists to prove that
-// exactly one of them (SingleTenantedEventSlicingCompliance) is not enrolled.
+// read as one more enrolled suite, while it exists to prove that every shipped suite is enrolled or excused.
 namespace Fisher.Tests;
 
 /// <summary>
@@ -15,8 +14,14 @@ namespace Fisher.Tests;
 /// </summary>
 public class compliance_suite_inventory
 {
-    // JasperFx 3.0.0 no longer ships SingleTenantedEventSlicingCompliance, so nothing is excused.
-    private static readonly Dictionary<Type, string> EventExcuses = new();
+    private static readonly Dictionary<Type, string> EventExcuses = new()
+    {
+        [typeof(EventRewriteCompliance<,,>)] =
+            "Fisher does not rewrite stored events yet (fisher#643). SupportsEventRewrites stays false until then",
+        [typeof(BackfillCompliance<,,>)] =
+            "Fisher does not run projection backfills yet (fisher#643), as Marten (marten#5632) and Polecat "
+            + "(polecat#1055) do not. SupportsBackfills stays false until then"
+    };
 
     [Fact]
     public void every_event_suite_is_enrolled_or_excused()

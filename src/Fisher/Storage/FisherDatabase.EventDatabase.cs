@@ -408,6 +408,105 @@ public partial class FisherDatabase : IEventDatabase
         command.Parameters.AddWithValue("@tenant", tenantId ?? Fisher.Events.Schema.ProjectionFloorsTable.StoreGlobalTenant);
     }
 
+    // ---- event-range marks (jasperfx#1215 / #1222) ----
+
+    /// <summary>
+    ///     The event-range mark stored under <paramref name="key" /> for <paramref name="tenantId" />, or null when
+    ///     none is stored.
+    /// </summary>
+    /// <remarks>
+    ///     Stored in <c>fi_event_range_marks</c> the way the projection floors are stored, so a mark outlives
+    ///     rebuild teardown and data cleaning. A missing table answers null, as the floors do.
+    /// </remarks>
+    public Task<long?> FetchEventRangeMarkAsync(string key, string? tenantId, CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+        return ReadWhenStorageExistsAsync<long?>(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                $"select mark from {_events.EventRangeMarksTableName} where mark_key = @key and tenant_id = @tenant";
+            BindRangeMarkKey(command, key, tenantId);
+
+            return await command.ExecuteScalarAsync(ct).ConfigureAwait(false) is long mark ? mark : null;
+        }, null, token);
+    }
+
+    /// <summary>
+    ///     Store <paramref name="mark" /> only if no mark is stored yet, and return the mark stored afterwards, the
+    ///     winner of any race.
+    /// </summary>
+    /// <remarks>
+    ///     One statement, for the reason <see cref="TrySetProjectionFloorAsync" /> gives.
+    /// </remarks>
+    public async Task<long> TrySetEventRangeMarkAsync(string key, string? tenantId, long mark,
+        CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+        await EnsureEventStorageAsync(token).ConfigureAwait(false);
+
+        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"""
+                                   insert into {_events.EventRangeMarksTableName} (mark_key, tenant_id, mark, last_updated)
+                                   values (@key, @tenant, @mark, {SqliteTimestamp.NowExpression})
+                                   on conflict (mark_key, tenant_id) do update set mark = mark
+                                   returning mark
+                                   """;
+            BindRangeMarkKey(command, key, tenantId);
+            command.Parameters.AddWithValue("@mark", mark);
+
+            return Convert.ToInt64(await command.ExecuteScalarAsync(ct).ConfigureAwait(false));
+        }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Set the mark under <paramref name="key" /> unconditionally, or clear it with a null
+    ///     <paramref name="mark" />. Runs nothing by itself.
+    /// </summary>
+    public async Task SetEventRangeMarkAsync(string key, string? tenantId, long? mark,
+        CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+        await EnsureEventStorageAsync(token).ConfigureAwait(false);
+
+        await _options.ResiliencePipeline.ExecuteAsync(async ct =>
+        {
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+
+            command.CommandText = mark is null
+                ? $"delete from {_events.EventRangeMarksTableName} where mark_key = @key and tenant_id = @tenant"
+                : $"""
+                   insert into {_events.EventRangeMarksTableName} (mark_key, tenant_id, mark, last_updated)
+                   values (@key, @tenant, @mark, {SqliteTimestamp.NowExpression})
+                   on conflict (mark_key, tenant_id) do update
+                     set mark = excluded.mark, last_updated = excluded.last_updated
+                   """;
+
+            BindRangeMarkKey(command, key, tenantId);
+
+            if (mark is not null)
+            {
+                command.Parameters.AddWithValue("@mark", mark.Value);
+            }
+
+            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }, token).ConfigureAwait(false);
+    }
+
+    private static void BindRangeMarkKey(SqliteCommand command, string key, string? tenantId)
+    {
+        command.Parameters.AddWithValue("@key", key);
+        command.Parameters.AddWithValue("@tenant", tenantId ?? Fisher.Events.Schema.EventRangeMarksTable.StoreGlobalTenant);
+    }
+
     /// <summary>
     ///     Persist one shard's extended progression telemetry onto its progression row (fisher#395).
     /// </summary>

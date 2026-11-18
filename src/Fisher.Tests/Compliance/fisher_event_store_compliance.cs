@@ -679,3 +679,12 @@ public class projection_step_through_compliance
 
 public class identity_rebuild_compliance
     : IdentityRebuildCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * JasperFx 3.7.0 (jasperfx#1215 / #1222): the event-range marks on IEventDatabase, over fi_event_range_marks.
+ * The two suites built on them, EventRewriteCompliance and BackfillCompliance, are excused in
+ * compliance_suite_inventory until Fisher has the rewrite and backfill seams.
+ */
+
+public class event_range_mark_compliance
+    : EventRangeMarkCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
