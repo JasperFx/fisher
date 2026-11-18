@@ -39,6 +39,9 @@ internal class EventStoreFeatureSchema : FeatureSchemaBase
         // teardown and data cleaning. See ProjectionFloorsTable.
         yield return _events.BuildProjectionFloorsTable();
 
+        // jasperfx#1215 / #1222. Kept like the floors: it outlives rebuild teardown and data cleaning.
+        yield return _events.BuildEventRangeMarksTable();
+
         // Tag tables last: each carries a real foreign key to fi_events(seq_id), so the referenced
         // table has to exist first.
         foreach (var tagTable in _events.BuildTagTables())

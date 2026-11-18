@@ -598,6 +598,12 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override bool SupportsProjectionFloors => true;
 
     /// <summary>
+    ///     jasperfx#1215 / #1222: the event-range marks, in <c>fi_event_range_marks</c>, stored like the projection
+    ///     floors so they survive <c>DeleteAllEventDataAsync</c>, which is what <c>CleanEventDataAsync</c> calls.
+    /// </summary>
+    public override bool SupportsEventRangeMarks => true;
+
+    /// <summary>
     ///     jasperfx#1150 — <c>FetchFirstEventTimestampsAfterAsync</c>, the age of the oldest event a
     ///     shard has not processed yet.
     /// </summary>

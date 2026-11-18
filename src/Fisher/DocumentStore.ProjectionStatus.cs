@@ -50,7 +50,7 @@ namespace Fisher;
 ///         the other way because this is the page an operator opens to ask about <em>read models</em>,
 ///         and a subscription has no document behind it — a row for one is something a reader cannot
 ///         click through to. <b>Nothing is lost</b>: subscription progress stays reachable
-///         non-generically through <see cref="IEventStore.RegisteredShardNames" /> correlated against
+///         non-generically through <see cref="IEventStore.RegisteredShardNames()" /> correlated against
 ///         <c>IEventDatabase.FetchProjectionLagAsync</c>, which is the pairing jasperfx#815 built for
 ///         exactly that question.
 ///     </para>

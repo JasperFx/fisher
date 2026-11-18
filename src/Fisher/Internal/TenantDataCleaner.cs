@@ -62,6 +62,8 @@ internal sealed class TenantDataCleaner
             var tables = (await ReadTableNamesAsync(connection, ct).ConfigureAwait(false))
                 .Where(x => x.StartsWith(Prefix, StringComparison.Ordinal))
                 .Where(x => !x.Equals(Unquoted(events.ProjectionFloorsTableName), StringComparison.OrdinalIgnoreCase))
+                // Event-range marks (jasperfx#1222) are left alone like the floors.
+                .Where(x => !x.Equals(Unquoted(events.EventRangeMarksTableName), StringComparison.OrdinalIgnoreCase))
                 // fisher#635: the DCB tag version counter holds no data, and clearing it would let a version be
                 // handed out a second time.
                 .Where(x => !x.Equals(Unquoted(events.DcbTagVersionSequenceTableName), StringComparison.OrdinalIgnoreCase))
