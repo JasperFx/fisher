@@ -147,7 +147,6 @@ const config: UserConfig<DefaultTheme.Config> = {
                 { text: 'Vector Projections', link: '/events/projections/vector' },
                 { text: 'Composite Projections', link: '/events/projections/composite' },
                 { text: 'Asynchronous Projections', link: '/events/projections/async-daemon' },
-                { text: 'Projection Backfills', link: '/events/projections/backfills' },
                 { text: 'EF Core Projections', link: '/events/projections/efcore' },
                 { text: 'Container-Scoped Projections', link: '/events/projections/container-scoped' },
                 { text: 'ProjectLatest — Include Pending Events', link: '/events/projections/project-latest' },

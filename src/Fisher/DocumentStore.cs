@@ -104,10 +104,6 @@ public partial class DocumentStore : IDocumentStore
         // IConfigureFisher contribution, and only now is the answer final.
         Projections.ProjectionTenancyGuard.AssertAggregateDocumentsMatchEventTenancy(options);
 
-        // fisher#643. A backfill runs as a Wolverine job, so it needs the job host Wolverine's integration sets,
-        // which may come after the projection was registered.
-        Events.Backfills.BackfillGuards.AssertDeclarationsCanRun(options);
-
         // Builds the async shard registry and fails fast on duplicate projection names.
         options.Projections.AssertValidity(options);
 
