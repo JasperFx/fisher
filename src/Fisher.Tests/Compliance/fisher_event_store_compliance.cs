@@ -8,10 +8,10 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and sixty-nine are enrolled from
- * JasperFx.Events.ComplianceTests 3.8.0, which itself ships seventy concrete suites. The one left out,
- * BackfillCompliance (3.7.0), is excused in compliance_suite_inventory until the backfill half of
- * fisher#643. MultiDatabaseExplorerCompliance is one file holding two arms.
+ * Suites were added one at a time as Fisher grew into them, and seventy are enrolled from
+ * JasperFx.Events.ComplianceTests 3.8.0, which itself ships seventy concrete suites, so none is left out.
+ * The last one, BackfillCompliance (3.7.0), came with fisher#643. MultiDatabaseExplorerCompliance is one
+ * file holding two arms.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
  * reason recorded at the flag on FisherComplianceFixture rather than here:
@@ -683,8 +683,8 @@ public class identity_rebuild_compliance
 
 /*
  * JasperFx 3.7.0 (jasperfx#1215 / #1222): the event-range marks on IEventDatabase, over fi_event_range_marks,
- * and the stored-event rewrite built on them (fisher#643). BackfillCompliance, the other suite built on the
- * marks, is excused in compliance_suite_inventory until Fisher has the backfill seam.
+ * and the two seams built on them (fisher#643): the stored-event rewrite and the projection backfill. The
+ * backfill is declared with Fisher's Backfill(...) in ComplianceBackfillProjection.Fisher.cs.
  */
 
 public class event_range_mark_compliance
@@ -692,3 +692,6 @@ public class event_range_mark_compliance
 
 public class event_rewrite_compliance
     : EventRewriteCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class backfill_compliance
+    : BackfillCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

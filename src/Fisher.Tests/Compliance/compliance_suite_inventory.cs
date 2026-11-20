@@ -14,13 +14,8 @@ namespace Fisher.Tests;
 /// </summary>
 public class compliance_suite_inventory
 {
-    private static readonly Dictionary<Type, string> EventExcuses = new()
-    {
-        [typeof(BackfillCompliance<,,>)] =
-            "Fisher does not run projection backfills yet (fisher#643, the backfill half; the rewrite half is "
-            + "done), as Marten (marten#5632) and Polecat (polecat#1055) do not. SupportsBackfills stays false "
-            + "until then"
-    };
+    // Nothing is excused: BackfillCompliance, the last one, was enrolled with fisher#643
+    private static readonly Dictionary<Type, string> EventExcuses = new();
 
     [Fact]
     public void every_event_suite_is_enrolled_or_excused()

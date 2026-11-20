@@ -142,6 +142,10 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
                 options.ConfigurePolly(_ => { });
             }
 
+            // jasperfx#1222 / fisher#643: what Wolverine's integration sets. The store refuses a Backfill(...)
+            // declaration without it, when it is built.
+            options.EventGraph.HasJobHost = config.HasJobHost;
+
             // Conjoined event tenancy is a schema decision, not a runtime one — StreamsTable and
             // EventsTable read TenancyStyle when they build their columns and their primary key — so
             // it has to be set before ApplyAllConfiguredChangesToDatabaseAsync below.
@@ -608,6 +612,13 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     ///     cursor are read and written in one <c>BEGIN IMMEDIATE</c> transaction.
     /// </summary>
     public override bool SupportsEventRewrites => true;
+
+    /// <summary>
+    ///     jasperfx#1222 / fisher#643: the projection backfill, over the event-range marks. Each page, the documents
+    ///     it patches and its cursor are read and written in one <c>BEGIN IMMEDIATE</c> transaction. The backfill
+    ///     is declared with Fisher's own <c>Backfill(...)</c> in <c>ComplianceBackfillProjection.Fisher.cs</c>.
+    /// </summary>
+    public override bool SupportsBackfills => true;
 
     /// <summary>
     ///     jasperfx#1150 — <c>FetchFirstEventTimestampsAfterAsync</c>, the age of the oldest event a

@@ -322,6 +322,10 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
             Options.OpenTelemetry.RecordWriteLockWait(
                 waitedFrom, Services.OpenTelemetryOptions.RebuildHolder);
 
+            // fisher#643: before anything is deleted, so a refused rebuild leaves the projection as it was
+            await Events.Backfills.BackfillGuards.AssertNoUnfinishedBackfillAsync(Options, subscriptionName, "rebuild",
+                connection, transaction, ct).ConfigureAwait(false);
+
             // A composite's members keep progression rows of their own, and they are rebuilt with it,
             // so they are cleared with it too. Before fisher#402 a leftover member row was simply
             // overwritten when the replay reached it; the progression write is now guarded on the
