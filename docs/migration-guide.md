@@ -75,8 +75,8 @@ Still missing against Marten, and refused by name rather than answered wrongly:
 - **Dictionary members.** `IDictionary<,>` and `IReadOnlyDictionary<,>` are excluded outright, so
   querying a dictionary member is not expressible at all.
 - **Some shapes around `SelectMany` over a child collection** (fisher#641 added the operator): a second
-  `SelectMany`, `Distinct` over child documents or after a `Select`, an operator after a result selector
-  other than paging, and `LastAsync` or streaming over it. See the
+  `SelectMany`, `Distinct` over child documents or after a result selector, ordering after a result selector
+  or a `Select`, and `LastAsync` or streaming over it. See the
   [operators page](/documents/querying/linq/operators#selectmany-over-a-collection).
 - **`Select` projecting a child collection.**
 - A string method on a null member (`!x.Name.StartsWith("a")`) follows **SQL null semantics**, since

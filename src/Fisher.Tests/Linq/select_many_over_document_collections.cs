@@ -35,7 +35,21 @@ public class FlatParent
 
     [DuplicateField]
     public int[] Codes { get; set; } = [];
+
+    /// <summary>A duplicated scalar, read from its own column rather than from data.</summary>
+    [DuplicateField]
+    public int Rank { get; set; }
 }
+
+/// <summary>A result selector's row built with an object initializer.</summary>
+public class FlatRow
+{
+    public int Number { get; set; }
+    public string Name { get; set; } = "";
+}
+
+/// <summary>A result selector's row built through a constructor, whose members cannot be traced back.</summary>
+public record FlatPair(int Number, string Name);
 
 /// <summary>
 ///     fisher#641, the parity of polecat#1016: <c>SelectMany()</c> over a collection the documents hold (child
@@ -68,7 +82,8 @@ public class select_many_over_document_collections : IAsyncLifetime
         ColourList = n == 4 ? [] : [(FlatColour)(n % 3)],
         Refs = n == 4 ? [] : [Guid.NewGuid()],
         Amounts = n == 4 ? [] : [n + 0.1m, 1234567890.123456789m],
-        Codes = n == 4 ? [] : Enumerable.Range(0, n % 3 + 1).Select(i => n * 100 + i).ToArray()
+        Codes = n == 4 ? [] : Enumerable.Range(0, n % 3 + 1).Select(i => n * 100 + i).ToArray(),
+        Rank = n * 7 % 5
     }).ToArray();
 
     public ValueTask InitializeAsync() => ValueTask.CompletedTask;
@@ -337,6 +352,69 @@ public class select_many_over_document_collections : IAsyncLifetime
         sql.ShouldContain("row_number() over (order by");
     }
 
+    public static TheoryData<string> AfterAProjectionShapes =>
+    [
+        "child_member_distinct", "child_string_distinct", "child_enum_distinct", "child_arithmetic_distinct",
+        "value_modulo_distinct", "where_then_select_distinct", "distinct_then_where",
+        "result_selector_then_where", "result_selector_where_on_the_parent", "result_selector_where_on_a_duplicated_member",
+        "result_selector_object_initializer", "result_selector_returning_the_element", "where_after_select",
+        "where_after_a_value_select"
+    ];
+
+    // The two shapes fisher#641 left refused and Polecat translates: Distinct after a Select over the elements, and
+    // Where after a result selector (and after a Select), filtering on what the row was computed from
+    [Theory]
+    [MemberData(nameof(AfterAProjectionShapes))]
+    public Task after_a_projection(string shape) => shape switch
+    {
+        "child_member_distinct" => matches(q => q.SelectMany(x => x.Children).Select(c => c.Index).Distinct(), anyOrder: true),
+        "child_string_distinct" => matches(q => q.SelectMany(x => x.Children).Select(c => c.Name).Distinct(), anyOrder: true),
+        "child_enum_distinct" => matches(q => q.SelectMany(x => x.Children).Select(c => c.Colour).Distinct(), anyOrder: true),
+        "child_arithmetic_distinct" => matches(q =>
+            q.SelectMany(x => x.Children).Select(c => c.Parent / 2).Distinct(), anyOrder: true),
+        "value_modulo_distinct" => matches(q => q.SelectMany(x => x.Values).Select(v => v % 3).Distinct(), anyOrder: true),
+        "where_then_select_distinct" => matches(q =>
+            q.SelectMany(x => x.Children).Where(c => c.Index > 0).Select(c => c.Parent).Distinct(), anyOrder: true),
+        "distinct_then_where" => matches(q =>
+            q.SelectMany(x => x.Children).Select(c => c.Index).Distinct().Where(i => i > 0), anyOrder: true),
+        "result_selector_then_where" => matches(q =>
+            Ordered(q).SelectMany(x => x.Children, (x, c) => new { x.Number, c.Index, c.Name })
+                .Where(r => r.Number > 2 && r.Index == 0).Select(r => r.Name)),
+        "result_selector_where_on_the_parent" => matches(q =>
+            Ordered(q).SelectMany(x => x.Children, (x, c) => new { x.Number, x.Title, c.Name })
+                .Where(r => r.Title.StartsWith("s"))),
+        "result_selector_where_on_a_duplicated_member" => matches(q =>
+            Ordered(q).SelectMany(x => x.Children, (x, c) => new { x.Rank, c.Name })
+                .Where(r => r.Rank > 1 && r.Name != "c1-0")),
+        "result_selector_object_initializer" => matches(q =>
+            Ordered(q).SelectMany(x => x.Children, (x, c) => new FlatRow { Number = x.Number, Name = c.Name })
+                .Where(r => r.Number < 4).Select(r => r.Name)),
+        "result_selector_returning_the_element" => matches(q =>
+            Ordered(q).SelectMany(x => x.Children, (x, c) => c).Where(c => c.Index == 1).Select(c => c.Name)),
+        "where_after_select" => matches(q =>
+            Ordered(q).SelectMany(x => x.Children).Select(c => new { c.Index, c.Name }).Where(r => r.Index > 0)),
+        "where_after_a_value_select" => matches(q =>
+            Ordered(q).SelectMany(x => x.Values).Select(v => v).Where(v => v > 30)),
+        _ => throw new ArgumentOutOfRangeException(nameof(shape))
+    };
+
+    [Fact]
+    public async Task distinct_after_a_select_counts_and_compares_whole_rows()
+    {
+        await SeedAsync();
+        await using var session = _store.QuerySession();
+        var parents = session.Query<FlatParent>();
+        IQueryable<FlatParent> local = Parents.AsQueryable();
+
+        (await parents.SelectMany(x => x.Children).Select(c => c.Index).Distinct().CountAsync(Ct))
+            .ShouldBe(local.SelectMany(x => x.Children).Select(c => c.Index).Distinct().Count());
+        (await parents.SelectMany(x => x.Children).Select(c => c.Index).Distinct().AnyAsync(Ct)).ShouldBeTrue();
+
+        (await parents.SelectMany(x => x.Children).Select(c => new { c.Index, c.Colour }).Distinct().ToListAsync(Ct))
+            .ShouldBe(local.SelectMany(x => x.Children).Select(c => new { c.Index, c.Colour }).Distinct().ToList(),
+                ignoreOrder: true);
+    }
+
     [Fact]
     public async Task shapes_without_a_translation_are_refused()
     {
@@ -353,10 +431,19 @@ public class select_many_over_document_collections : IAsyncLifetime
         await Should.ThrowAsync<BadLinqExpressionException>(() =>
             parents.SelectMany(x => x.Children).Distinct().ToListAsync(Ct));
         await Should.ThrowAsync<BadLinqExpressionException>(() =>
-            parents.SelectMany(x => x.Children).Select(c => c.Index).Distinct().ToListAsync(Ct));
+            parents.SelectMany(x => x.Children).Select(c => c.Name.ToUpper()).Distinct().ToListAsync(Ct));
         await Should.ThrowAsync<BadLinqExpressionException>(() =>
-            parents.SelectMany(x => x.Children, (x, c) => new { x.Number, c.Index }).Where(r => r.Number > 2)
+            parents.SelectMany(x => x.Children).Select(c => c.Index * 10 + c.Parent).Distinct().ToListAsync(Ct));
+        await Should.ThrowAsync<BadLinqExpressionException>(() =>
+            parents.SelectMany(x => x.Children, (x, c) => new { x.Number, c.Index }).Distinct().ToListAsync(Ct));
+        await Should.ThrowAsync<BadLinqExpressionException>(() =>
+            parents.SelectMany(x => x.Children, (x, c) => new FlatPair(x.Number, c.Name)).Where(r => r.Number > 2)
                 .ToListAsync(Ct));
+        await Should.ThrowAsync<BadLinqExpressionException>(() =>
+            parents.SelectMany(x => x.Children, (x, c) => new { x.Number, c.Index }).OrderBy(r => r.Number)
+                .ToListAsync(Ct));
+        await Should.ThrowAsync<BadLinqExpressionException>(() =>
+            parents.SelectMany(x => x.Children).Select(c => c.Index).Take(2).Where(i => i > 0).ToListAsync(Ct));
         await Should.ThrowAsync<BadLinqExpressionException>(() =>
             parents.Select(x => x.Number).SelectMany(n => new[] { n }).ToListAsync(Ct));
     }

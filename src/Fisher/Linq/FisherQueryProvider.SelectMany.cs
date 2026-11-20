@@ -91,10 +91,8 @@ public partial class FisherQueryProvider
             ? ""
             : "order by " + string.Join(", ", parent.OrderBys.Select(x => x.Descending ? x.Locator + " desc" : x.Locator));
 
-        parent.SelectColumns = $"data, row_number() over ({ordering}) as {FlattenedQuery.OrdinalColumn}";
-
-        var flattened = new FlattenedQuery(parent, collection, sourceType,
-            selectMany.Arguments.Count == 3 ? Unquote(selectMany.Arguments[2]) : null);
+        var flattened = new FlattenedQuery(parent, ordering, mapping.MembersFor(FlattenedQuery.ParentAlias),
+            collection, sourceType, selectMany.Arguments.Count == 3 ? Unquote(selectMany.Arguments[2]) : null);
 
         for (var i = index - 1; i >= 0; i--)
         {
@@ -114,6 +112,26 @@ public partial class FisherQueryProvider
         var results = new List<T>();
 
         await using var reader = await ExecuteReaderAsync(statement, token).ConfigureAwait(false);
+
+        // Select(...).Distinct(): the rows are the projection's own columns, computed in SQL
+        if (flattened.DistinctProjection is { } projection)
+        {
+            var values = new object?[projection.Locators.Length];
+
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                for (var i = 0; i < values.Length; i++)
+                {
+                    values[i] = reader.IsDBNull(i)
+                        ? DefaultFor(projection.ColumnTypes[i])
+                        : CoerceTo(reader.GetValue(i), projection.ColumnTypes[i]);
+                }
+
+                results.Add((T)projection.Build(values)!);
+            }
+
+            return results;
+        }
 
         while (await reader.ReadAsync(token).ConfigureAwait(false))
         {

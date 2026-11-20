@@ -178,10 +178,38 @@ internal sealed class SelectProjection
             return base.Visit(node);
         }
 
-        private string? Leaf(Expression node)
-            => node is MemberExpression member && IsDocumentMember(member)
-                ? _members.ResolveMember(member).TypedLocator
-                : null;
+        private string? Leaf(Expression node) => node switch
+        {
+            MemberExpression member when IsDocumentMember(member) => _members.ResolveMember(member).TypedLocator,
+            ParameterExpression parameter when parameter == _document => _members.ResolveParameter(parameter)?.TypedLocator,
+            _ => null
+        };
+
+        /// <summary>
+        ///     The row itself, where the row is a value with a locator of its own: the element of a collection of
+        ///     values that a <c>SelectMany</c> flattened, as in <c>SelectMany(x =&gt; x.Values).Select(v =&gt; v % 3)</c>.
+        ///     A document parameter resolves to nothing and is left as it is.
+        /// </summary>
+        protected override Expression VisitParameter(ParameterExpression node)
+        {
+            if (node != _document || _members.ResolveParameter(node) is not { } element)
+            {
+                return base.VisitParameter(node);
+            }
+
+            var locator = DecimalPrecision.ColumnFor(element);
+
+            if (!_indexes.TryGetValue(locator, out var index))
+            {
+                index = Locators.Count;
+                _indexes[locator] = index;
+                Locators.Add(locator);
+                DistinctKeys.Add(DecimalPrecision.OrderingFor(element));
+                ColumnTypes.Add(node.Type);
+            }
+
+            return Expression.Convert(Expression.ArrayIndex(Values, Expression.Constant(index)), node.Type);
+        }
 
         private Expression Capture(string locator, Type type)
         {
