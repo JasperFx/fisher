@@ -604,6 +604,12 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override bool SupportsEventRangeMarks => true;
 
     /// <summary>
+    ///     jasperfx#1215 / fisher#643: the stored-event rewrite, over the event-range marks. Each page and its
+    ///     cursor are read and written in one <c>BEGIN IMMEDIATE</c> transaction.
+    /// </summary>
+    public override bool SupportsEventRewrites => true;
+
+    /// <summary>
     ///     jasperfx#1150 — <c>FetchFirstEventTimestampsAfterAsync</c>, the age of the oldest event a
     ///     shard has not processed yet.
     /// </summary>
@@ -1034,6 +1040,10 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
         /// </remarks>
         public void AddMaskingRule<TEvent>(Action<TEvent> rule) where TEvent : notnull
             => _options.Events.AddMaskingRuleForProtectedInformation(rule);
+
+        /// <summary>jasperfx#1215: a named transform for the stored-event rewrite facts.</summary>
+        public void AddRewriteTransform<TEvent>(string name, Func<TEvent, TEvent> transform) where TEvent : class
+            => _options.Events.AddRewriteTransform(name, transform);
 
         /// <summary>
         ///     Register a replacing masking rule — the functional form, which is what a <c>record</c>

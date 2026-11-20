@@ -1080,6 +1080,17 @@ public class EventStoreOptions : IEventStoreInstrumentation
         where TTag : notnull
         => EventGraph!.RegisterTagType(unwrapper, tableSuffix);
 
+    /// <summary>
+    ///     Register a transform that a stored-event rewrite (<see cref="JasperFx.Events.EventRewriteDefinition" />)
+    ///     can name, to change events read as <typeparamref name="T" /> before the rewrite writes them back
+    ///     (jasperfx#1215).
+    /// </summary>
+    /// <remarks>
+    ///     This rewrites history. Projections, natural keys and tags built from the old events are not updated.
+    /// </remarks>
+    public void AddRewriteTransform<T>(string name, Func<T, T> transform) where T : class
+        => EventGraph!.AddRewriteTransform(name, transform);
+
     /// <inheritdoc cref="EventGraph.AddMaskingRuleForProtectedInformation{T}(Action{T})" />
     public void AddMaskingRuleForProtectedInformation<T>(Action<T> masking) where T : notnull
         => EventGraph!.AddMaskingRuleForProtectedInformation(masking);

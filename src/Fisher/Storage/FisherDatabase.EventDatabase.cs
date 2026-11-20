@@ -481,24 +481,33 @@ public partial class FisherDatabase : IEventDatabase
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
 
-            command.CommandText = mark is null
-                ? $"delete from {_events.EventRangeMarksTableName} where mark_key = @key and tenant_id = @tenant"
-                : $"""
-                   insert into {_events.EventRangeMarksTableName} (mark_key, tenant_id, mark, last_updated)
-                   values (@key, @tenant, @mark, {SqliteTimestamp.NowExpression})
-                   on conflict (mark_key, tenant_id) do update
-                     set mark = excluded.mark, last_updated = excluded.last_updated
-                   """;
-
-            BindRangeMarkKey(command, key, tenantId);
-
-            if (mark is not null)
-            {
-                command.Parameters.AddWithValue("@mark", mark.Value);
-            }
+            ConfigureSetEventRangeMark(command, key, tenantId, mark);
 
             await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     The statement <see cref="SetEventRangeMarkAsync" /> runs, for a caller that writes the mark inside a
+    ///     transaction of its own: a stored-event rewrite stores its cursor with each page (jasperfx#1215).
+    /// </summary>
+    internal void ConfigureSetEventRangeMark(SqliteCommand command, string key, string? tenantId, long? mark)
+    {
+        command.CommandText = mark is null
+            ? $"delete from {_events.EventRangeMarksTableName} where mark_key = @key and tenant_id = @tenant"
+            : $"""
+               insert into {_events.EventRangeMarksTableName} (mark_key, tenant_id, mark, last_updated)
+               values (@key, @tenant, @mark, {SqliteTimestamp.NowExpression})
+               on conflict (mark_key, tenant_id) do update
+                 set mark = excluded.mark, last_updated = excluded.last_updated
+               """;
+
+        BindRangeMarkKey(command, key, tenantId);
+
+        if (mark is not null)
+        {
+            command.Parameters.AddWithValue("@mark", mark.Value);
+        }
     }
 
     private static void BindRangeMarkKey(SqliteCommand command, string key, string? tenantId)

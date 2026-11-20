@@ -16,11 +16,10 @@ public class compliance_suite_inventory
 {
     private static readonly Dictionary<Type, string> EventExcuses = new()
     {
-        [typeof(EventRewriteCompliance<,,>)] =
-            "Fisher does not rewrite stored events yet (fisher#643). SupportsEventRewrites stays false until then",
         [typeof(BackfillCompliance<,,>)] =
-            "Fisher does not run projection backfills yet (fisher#643), as Marten (marten#5632) and Polecat "
-            + "(polecat#1055) do not. SupportsBackfills stays false until then"
+            "Fisher does not run projection backfills yet (fisher#643, the backfill half; the rewrite half is "
+            + "done), as Marten (marten#5632) and Polecat (polecat#1055) do not. SupportsBackfills stays false "
+            + "until then"
     };
 
     [Fact]
