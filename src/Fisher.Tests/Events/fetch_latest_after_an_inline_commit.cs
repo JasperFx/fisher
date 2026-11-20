@@ -7,6 +7,9 @@ public record TallyStarted;
 
 public record TallyBumped;
 
+/// <summary>An event whose <c>Apply</c> hands back a new instance, even on the mutable aggregate.</summary>
+public record TallyReplaced;
+
 /// <summary>A mutable aggregate: <c>Apply</c> changes the instance it is given.</summary>
 public partial class MutableTally
 {
@@ -16,6 +19,8 @@ public partial class MutableTally
     public static MutableTally Create(TallyStarted _) => new();
 
     public void Apply(TallyBumped _) => Count++;
+
+    public MutableTally Apply(TallyReplaced _) => new() { Id = Id, Count = Count };
 }
 
 /// <summary>An immutable aggregate: <c>Apply</c> returns a new record.</summary>
@@ -27,6 +32,8 @@ public partial record ImmutableTally
     public static ImmutableTally Create(TallyStarted _) => new();
 
     public ImmutableTally Apply(TallyBumped _) => this with { Count = Count + 1 };
+
+    public ImmutableTally Apply(TallyReplaced _) => this with { };
 }
 
 /// <summary>
