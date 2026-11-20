@@ -12,9 +12,9 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3909 tests green on net10.0 and 3936 on net11.0** — 3837 (net10.0) / 3864 (net11.0) in `Fisher.Tests`, 40 in
-`Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 884 of
-them are shared cross-store compliance tests — 650 event sourcing and 234 document.
+**3926 tests green on net10.0 and 3953 on net11.0** — 3854 (net10.0) / 3881 (net11.0) in `Fisher.Tests`, 40 in
+`Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 892 of
+them are shared cross-store compliance tests — 658 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.8.0** / Weasel **10.0.0-alpha.11** (2.0.0-alpha.4).
 
@@ -27,8 +27,15 @@ each. Fisher implements the event-range marks on `IEventDatabase` (jasperfx#1215
 `DeleteAllEventDataAsync` and tenant wipes; `EventRangeMarkCompliance` is enrolled, 12 of 12 green. Since then the
 stored-event rewrite (`EventRewriteCompliance`, jasperfx#1215) is implemented over those marks and enrolled, 8 of 8
 green: each page and its cursor are read and written in one `BEGIN IMMEDIATE` transaction. The projection backfill
-(`BackfillCompliance`) is not implemented and its suite is excused in `compliance_suite_inventory` until the backfill
-half of [fisher#643](https://github.com/JasperFx/fisher/issues/643).
+(`BackfillCompliance`, jasperfx#1222) is implemented too and enrolled, 8 of 8 green, which finishes
+[fisher#643](https://github.com/JasperFx/fisher/issues/643) and leaves `compliance_suite_inventory` with nothing
+excused. A single-stream projection declares one with `Backfill(name).On<TEvent>(...)`; each page, the documents it
+patches and its cursor share one `BEGIN IMMEDIATE` transaction. Fisher refuses three things rather than patch nothing
+or apply an event twice: a backfill without `HasJobHost` or on a non-async projection (startup), capturing the ceiling
+when the prior version's documents are in another table (fisher#638's `_N` tables), and a rebuild (of the projection
+or one stream) while a declared backfill has not finished. Still open, and documented: the live projection loads a
+document before its transaction, so a backfill page committed in between is overwritten (jasperfx#1222 left that race
+to each store).
 
 ## Per-identity rebuild on JasperFx 3.6.0 (fisher#629)
 
@@ -1367,9 +1374,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 3.8.0 ships 70 suites; Fisher enrolls **69 of them, 884 tests**.
-Fisher passes **884 of them, across all
-69 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 3.8.0 ships 70 suites; Fisher enrolls **70 of them, 892 tests**.
+Fisher passes **892 of them, across all
+70 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -1524,9 +1531,9 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 69 suites, 884 tests
+### Green — 70 suites, 892 tests
 
-Event sourcing — 55 suites, 650 tests:
+Event sourcing — 56 suites, 658 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1537,6 +1544,7 @@ Event sourcing — 55 suites, 650 tests:
 | `IdentityRebuildCompliance` | 18 |
 | `EventRangeMarkCompliance` | 12 |
 | `EventRewriteCompliance` | 8 |
+| `BackfillCompliance` | 8 |
 | `StringStreamIdentityCompliance` | 21 |
 | `EventStoreExplorerCompliance` | 18 |
 | `NaturalKeyCompliance` | 19 |
