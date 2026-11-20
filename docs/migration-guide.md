@@ -371,8 +371,15 @@ themselves.
 
 ### JasperFx 3.0 and Weasel 10
 
-Fisher 2 requires JasperFx 3.3.0 and Weasel.Sqlite / Weasel.Storage 10.0. An application referencing
+Fisher 2 requires JasperFx 3.9.0 and Weasel.Sqlite / Weasel.Storage 10.0. An application referencing
 either directly has to move them together; mixing a 2.x JasperFx with Fisher 2 does not restore.
+
+### JasperFx 3.9.0: culture-independent names, and bare `case` labels in `Evolve()`
+
+JasperFx 3.9.0 stops lowercasing names with the machine's culture ([details](https://shared-libs.jasperfx.net/migration-guide#key-changes-in-3-9-0)).
+Nothing changes for Fisher: its event type names, tag table names and duplicated-field columns come from Fisher's
+own snake casing, which never depended on the culture. Separately, `Evolve()` methods may now use bare `case Foo:`
+labels, and the source generator bundled in the Fisher package picks them up.
 
 ### The native SQLite build
 
