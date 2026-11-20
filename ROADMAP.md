@@ -3,9 +3,11 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **two open issues, one of them blocked upstream.** 2.0.0-alpha.4 moves to JasperFx 3.8.0 and Weasel
-10.0.0-alpha.11 and implements 3.7.0's event-range marks; its stored-event rewrite and backfill seams are
-[#643](https://github.com/JasperFx/fisher/issues/643). JasperFx 3.6.0's per-identity rebuild
+Status: **two open issues, one of them blocked upstream.** Since 2.0.0-alpha.4, main implements the stored-event
+rewrite seam over the event-range marks, so only the projection backfill half of
+[#643](https://github.com/JasperFx/fisher/issues/643) is left, and fixes `FetchLatest` of an Inline immutable aggregate
+after a commit on an identity session ([#645](https://github.com/JasperFx/fisher/issues/645)). 2.0.0-alpha.4 moves to
+JasperFx 3.8.0 and Weasel 10.0.0-alpha.11 and implements 3.7.0's event-range marks. JasperFx 3.6.0's per-identity rebuild
 ([#629](https://github.com/JasperFx/fisher/issues/629)) is done. 2.0.0-alpha.3 moves to Weasel 10.0.0-alpha.10. Fisher 2.0's share of Marten 10's default changes
 ([#621](https://github.com/JasperFx/fisher/issues/621)), the Marten parity helper
 ([#619](https://github.com/JasperFx/fisher/issues/619)) and the busy-handler docs correction
@@ -423,8 +425,9 @@ application's to maintain on every write path.
 
 What is left is two items.
 
-[#643](https://github.com/JasperFx/fisher/issues/643): the stored-event rewrite and projection backfill seams JasperFx
-3.7.0 added to `IEventStore`. The event-range marks they build on are done; both suites are excused until this lands.
+[#643](https://github.com/JasperFx/fisher/issues/643): the projection backfill seam JasperFx 3.7.0 added to
+`IEventStore`. The event-range marks and the stored-event rewrite are done; `BackfillCompliance` is excused until the
+backfill lands, as it is on Marten and Polecat.
 
 [#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
 an unanswered question about the stage graph.

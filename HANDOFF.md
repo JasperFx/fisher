@@ -24,9 +24,11 @@ From JasperFx 3.6.0, spanning 3.7.0 and 3.7.1. 3.8.0 carries jasperfx#1242: the 
 conventional `Apply` methods inherited from a base class. 3.7.0 added three seams with default members and a suite
 each. Fisher implements the event-range marks on `IEventDatabase` (jasperfx#1215 / #1222) over a new
 `fi_event_range_marks` table, stored like the projection floors so a mark outlives rebuild teardown,
-`DeleteAllEventDataAsync` and tenant wipes; `EventRangeMarkCompliance` is enrolled, 12 of 12 green. The stored-event
-rewrite (`EventRewriteCompliance`) and projection backfill (`BackfillCompliance`) seams are not implemented and both
-suites are excused in `compliance_suite_inventory` until [fisher#643](https://github.com/JasperFx/fisher/issues/643).
+`DeleteAllEventDataAsync` and tenant wipes; `EventRangeMarkCompliance` is enrolled, 12 of 12 green. Since then the
+stored-event rewrite (`EventRewriteCompliance`, jasperfx#1215) is implemented over those marks and enrolled, 8 of 8
+green: each page and its cursor are read and written in one `BEGIN IMMEDIATE` transaction. The projection backfill
+(`BackfillCompliance`) is not implemented and its suite is excused in `compliance_suite_inventory` until the backfill
+half of [fisher#643](https://github.com/JasperFx/fisher/issues/643).
 
 ## Per-identity rebuild on JasperFx 3.6.0 (fisher#629)
 
