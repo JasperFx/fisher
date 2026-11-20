@@ -138,6 +138,62 @@ node-local and therefore not reachable from the process doing the masking at all
 whose history you mask unenrolled.
 :::
 
+## Rewriting stored events in bulk
+
+`IEventStore.RewriteStoredEventsAsync` reads the stored events a rewrite selects, puts each one through
+named transforms, and writes it back the way an append would store it today. It is the seam a Wolverine job
+drives, and it suits a fix that has to reach every event of a type rather than a few known sequences.
+
+Register the transforms on the store:
+
+<!-- snippet: sample_register_a_rewrite_transform -->
+<a id='snippet-sample_register_a_rewrite_transform'></a>
+```cs
+options.Events.AddRewriteTransform<CustomerNoted>("trim-notes",
+    x => x with { Note = x.Note.Trim() });
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/rewriting_samples.cs#L18-L21' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_register_a_rewrite_transform' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+Then run a rewrite against each database:
+
+<!-- snippet: sample_rewrite_stored_events -->
+<a id='snippet-sample_rewrite_stored_events'></a>
+```cs
+var definition = new EventRewriteDefinition
+{
+    Name = "trim-customer-notes",
+    Transforms = ["trim-notes"],
+    BatchSize = 500
+};
+
+foreach (var database in await store.AllDatabases())
+{
+    // The first request stores each tenant's ceiling. A later one resumes after the stored cursor.
+    var run = await EventRewriteRun.FromMarksAsync(database, definition, token);
+    var totals = await store.RewriteStoredEventsAsync(run, token);
+}
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/rewriting_samples.cs#L26-L40' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_rewrite_stored_events' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+What it does:
+
+- The events selected are the types the definition lists, the types its transforms apply to, and the stored
+  names an upcaster reads into either. `AllEventTypes` selects everything, and a row whose type the application
+  no longer knows is left alone and counted.
+- An upcast event is written back under its current type, and a binary event keeps its body in `data_binary`.
+  A row that would be stored the same is not written.
+- Each page and its cursor are read and written in one `BEGIN IMMEDIATE` transaction, kept in
+  `fi_event_range_marks`. A run that stops resumes after its cursor, so no event goes through a transform twice,
+  and events appended after the first request are past the ceiling and left alone.
+- Appends wait while a page is transformed. `BatchSize` and `PauseBetweenBatches` are how you give the
+  application room.
+- `DryRun` counts what would change and writes nothing, not even the cursor.
+
+Like the operations above, a rewrite does not reach projections, natural keys or tags already built from the
+old events. Rebuild what depends on them.
+
 ## Stream compacting
 
 Replace a stream's events with a single `Compacted<T>` event carrying the aggregate state.
