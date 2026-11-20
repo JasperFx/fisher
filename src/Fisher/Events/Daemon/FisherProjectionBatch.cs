@@ -53,6 +53,9 @@ internal sealed class FisherProjectionBatch : ProjectionBatchBase<IDocumentSessi
     private readonly ConcurrentQueue<ParkedIdentity> _parks = new();
     private readonly ConcurrentQueue<ParkedIdentityKey> _unparks = new();
     private readonly ConcurrentQueue<SliceIndexRows> _sliceIndex = new();
+
+    // fisher#654: the shards this batch records progress for, whose parked_count it sets after a park or unpark
+    private readonly ConcurrentQueue<string> _progressShards = new();
     private readonly Fisher.Storage.FisherDatabase _database;
 
     // Gathered before the resilience pipeline (fisher#12) and told about the commit after it.
@@ -93,6 +96,7 @@ internal sealed class FisherProjectionBatch : ProjectionBatchBase<IDocumentSessi
         _progress.Enqueue(new Storage.ShardProgressionOperation(_events.ProgressionTableName,
             range.ShardName.Identity, range.SequenceFloor, range.SequenceCeiling,
             _events.EnableExtendedProgressionTracking));
+        _progressShards.Enqueue(range.ShardName.Identity);
 
         return ValueTask.CompletedTask;
     }
@@ -212,6 +216,15 @@ internal sealed class FisherProjectionBatch : ProjectionBatchBase<IDocumentSessi
                 await _database.WriteParkedAsync(parked, connection, transaction, ct).ConfigureAwait(false);
             }
 
+            // fisher#654: parked_count counted from the rows just written, in this transaction. The daemon's own
+            // Parked/Unparked publications don't reach the progression row while periodic heartbeats are off
+            // (jasperfx#1255), and the writer never overwrites a count written here.
+            if (!_parks.IsEmpty || !_unparks.IsEmpty)
+            {
+                await _database.RefreshParkedCountsAsync(connection, transaction, parkedShards(), ct)
+                    .ConfigureAwait(false);
+            }
+
             foreach (var rows in _sliceIndex)
             {
                 await _database.WriteSliceIndexAsync(rows, connection, transaction, ct).ConfigureAwait(false);
@@ -241,6 +254,13 @@ internal sealed class FisherProjectionBatch : ProjectionBatchBase<IDocumentSessi
             await transaction.CommitAsync(ct).ConfigureAwait(false);
         }, token).ConfigureAwait(false);
     }
+
+    // The shards this batch recorded progress for, and the default-shaped name of every parked or unparked key, in
+    // case a park ever arrives in a batch that records no progress for its shard
+    private IEnumerable<string> parkedShards()
+        => _progressShards
+            .Concat(_parks.Select(x => new ShardName(x.ProjectionName, x.ShardKey, x.ProjectionVersion).Identity))
+            .Concat(_unparks.Select(x => new ShardName(x.ProjectionName, x.ShardKey, x.ProjectionVersion).Identity));
 
     // Runs after the commit, outside the resilience pipeline and not on the shard's token (fisher#434):
     // the base calls it once the write is durable, and a participant holding its work replayable across

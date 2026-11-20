@@ -1476,6 +1476,17 @@ start.
 - Cleanup: teardown clears both, a rewind deletes rows above the floor, `DeleteProjectionProgressByShardNameAsync`
   (eject) takes the shard's, `DeleteAllEventDataAsync` clears both, and `TenantDataCleaner` finds both by their
   `tenant_id` column with no special case.
+- **`parked_count` (extended progression only) is counted from `fi_parked_identities`, not taken from the
+  daemon** (fisher#654). `FisherDatabase.RefreshParkedCountsAsync` sets it in the batch transaction that parks or
+  unparks, and after a rewind, eject or tenant wipe. `WriteExtendedProgressionAsync` only fills it in while it is
+  null (`coalesce(parked_count, @parked_count)`): JasperFx's writer drops the `Parked`/`Unparked` publications while
+  periodic heartbeats are off ([jasperfx#1255](https://github.com/JasperFx/jasperfx/issues/1255)), and a state
+  stamped before a batch committed must not put a stale count back. `AllProjectionProgress` reads it into
+  `ShardState.ParkedCount`; null means the shard doesn't park or hasn't said yet.
+- The step-through's `EventRecord -> IEvent` conversion (`DocumentStore.ProjectionReplay.cs`) copies
+  `EventRecord.Tags` back onto the event (fisher#654), so `IdentityFromTag` groups a stepped event. A record names
+  a tag by CLR name or table suffix (`FindByTagName`) with its simple value as text; an unregistered name is left
+  off, an unparseable value is an `ArgumentException` naming the tag.
 - No high-water skip tracking applies: SQLite has one writer, so the mark never waits on a gap.
 
 ### Document storage layout

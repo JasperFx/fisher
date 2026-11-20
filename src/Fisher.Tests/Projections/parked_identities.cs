@@ -442,6 +442,194 @@ public class parked_identities : IAsyncLifetime
         }
     }
 
+    private static async Task waitForParkedCountAsync(DocumentStore store, ShardName shard, int expected)
+    {
+        using var timeout = new CancellationTokenSource(DaemonWait.Timeout);
+        while (true)
+        {
+            var state = (await store.Advanced.AllProjectionProgress(token: Token))
+                .SingleOrDefault(x => x.ShardName == shard.Identity);
+            if (state?.ParkedCount == expected) return;
+
+            if (timeout.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"{shard.Identity} never showed {expected} parked in ShardState; it last read {state?.ParkedCount?.ToString() ?? "null"}");
+            }
+
+            await Task.Delay(50, Token);
+        }
+    }
+
+    private static async Task setParkedCountColumnAsync(DocumentStore store, ShardName shard, int? count)
+    {
+        await using var connection = await store.Database.OpenConnectionAsync(Token);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "update fi_event_progression set parked_count = @count where name = @name";
+        command.Parameters.AddWithValue("@count", (object?)count ?? DBNull.Value);
+        command.Parameters.AddWithValue("@name", shard.Identity);
+        (await command.ExecuteNonQueryAsync(Token)).ShouldBe(1);
+    }
+
+    private static async Task<int?> parkedCountInShardStateAsync(DocumentStore store, ShardName shard)
+        => (await store.Advanced.AllProjectionProgress(token: Token))
+            .Single(x => x.ShardName == shard.Identity).ParkedCount;
+
+    /// <summary>
+    ///     fisher#654: the count is set by the projection batch, in the transaction that parks or unparks, so it is
+    ///     right with periodic heartbeats off, which is when JasperFx's writer drops the Parked and Unparked
+    ///     publications (jasperfx#1255).
+    /// </summary>
+    [Fact]
+    public async Task all_projection_progress_reads_the_parked_count_back_into_shard_state()
+    {
+        await using var store = guidStore(options =>
+        {
+            options.Events.EnableExtendedProgressionTracking = true;
+            options.Projections.ExtendedProgressionHeartbeatInterval = TimeSpan.Zero;
+        });
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        var replayed = Guid.NewGuid();
+        var discarded = Guid.NewGuid();
+        ParkTallyPoison.On(replayed);
+        ParkTallyPoison.On(discarded);
+
+        using var daemon = await store.BuildProjectionDaemonAsync();
+        try
+        {
+            await appendAsync(store, Guid.NewGuid(), new ParkTallied());
+            await appendAsync(store, replayed, new ParkTallied(), new ParkTallyPoisoned());
+            await appendAsync(store, discarded, new ParkTallied(), new ParkTallyPoisoned());
+            await daemon.StartAllAsync();
+            await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
+
+            var shard = store.Advanced.AllAsyncProjectionShardNames().Single();
+            (await parkedAsync(store)).Count.ShouldBe(2);
+            await waitForParkedCountAsync(store, shard, 2);
+
+            // A replay that succeeds takes one off the count
+            ParkTallyPoison.Off(replayed);
+            (await daemon.ReplayParkedIdentityAsync(shard.Name, null, replayed, Token)).Outcome
+                .ShouldBe(ParkedReplayOutcome.Replayed);
+            await waitForParkedCountAsync(store, shard, 1);
+
+            // A discard takes the other, and the count is 0 rather than null: the shard still parks
+            (await daemon.DiscardParkedIdentityAsync(shard.Name, null, discarded, Token)).Outcome
+                .ShouldBe(ParkedReplayOutcome.Discarded);
+            await waitForParkedCountAsync(store, shard, 0);
+            (await parkedAsync(store)).ShouldBeEmpty();
+
+            // The daemon stopping publishes its own count; it lands on the batch's, not over it
+            await daemon.StopAllAsync();
+            (await parkedCountInShardStateAsync(store, shard)).ShouldBe(0);
+
+            // A stale state from the progression writer never overwrites a count the batch wrote...
+            var sequence = await store.Database.ProjectionProgressFor(shard, Token);
+            await store.Database.WriteExtendedProgressionAsync(
+                new ShardState(shard.Identity, sequence) { AgentStatus = "Running", ParkedCount = 2 }, Token);
+            (await parkedCountInShardStateAsync(store, shard)).ShouldBe(0);
+
+            // ...and only fills the column in while nothing has set it
+            await setParkedCountColumnAsync(store, shard, null);
+            await store.Database.WriteExtendedProgressionAsync(
+                new ShardState(shard.Identity, sequence) { AgentStatus = "Running", ParkedCount = 0 }, Token);
+            (await parkedCountInShardStateAsync(store, shard)).ShouldBe(0);
+        }
+        finally
+        {
+            ParkTallyPoison.Off(replayed);
+            ParkTallyPoison.Off(discarded);
+            await daemon.StopAllAsync();
+        }
+    }
+
+    [Fact]
+    public async Task a_rewind_and_a_tenant_wipe_take_the_parked_count_with_the_rows()
+    {
+        await using var store = guidStore(options =>
+        {
+            options.Events.EnableExtendedProgressionTracking = true;
+            options.Events.TenancyStyle = TenancyStyle.Conjoined;
+            options.Schema.For<GuidParkTally>().MultiTenanted();
+        });
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        var red = Guid.NewGuid();
+        var blue = Guid.NewGuid();
+        ParkTallyPoison.On(red);
+        ParkTallyPoison.On(blue);
+
+        async Task appendForAsync(string tenant, Guid stream)
+        {
+            await using var session = store.LightweightSession(tenant);
+            session.Events.Append(stream, new ParkTallied(), new ParkTallyPoisoned());
+            await session.SaveChangesAsync(Token);
+        }
+
+        using var daemon = await store.BuildProjectionDaemonAsync();
+        try
+        {
+            await appendForAsync("red", red);
+            await appendForAsync("blue", blue);
+            await daemon.StartAllAsync();
+            await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
+
+            var shard = store.Advanced.AllAsyncProjectionShardNames().Single();
+            await waitForParkedCountAsync(store, shard, 2);
+            await daemon.StopAllAsync();
+
+            // Wiping one tenant's data takes its parked row, and the count with it
+            await store.Advanced.DeleteAllTenantDataAsync("red", Token);
+            (await parkedAsync(store)).ShouldHaveSingleItem().TenantId.ShouldBe("blue");
+            (await parkedCountInShardStateAsync(store, shard)).ShouldBe(1);
+
+            // A rewind below the failure takes the other
+            var row = (await parkedAsync(store)).Single();
+            await ((IEventStore<IDocumentSession, IQuerySession>)store).RewindAgentProgressAsync(store.Database,
+                shard.Identity, Token, row.FirstFailingSequence - 1);
+            (await parkedAsync(store)).ShouldBeEmpty();
+            (await parkedCountInShardStateAsync(store, shard)).ShouldBe(0);
+        }
+        finally
+        {
+            ParkTallyPoison.Off(red);
+            ParkTallyPoison.Off(blue);
+            await daemon.StopAllAsync();
+        }
+    }
+
+    [Fact]
+    public async Task without_extended_progression_shard_state_has_no_parked_count()
+    {
+        await using var store = guidStore();
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        var stream = Guid.NewGuid();
+        ParkTallyPoison.On(stream);
+
+        using var daemon = await store.BuildProjectionDaemonAsync();
+        try
+        {
+            await appendAsync(store, stream, new ParkTallied(), new ParkTallyPoisoned());
+            await daemon.StartAllAsync();
+            await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
+            (await parkedAsync(store)).ShouldHaveSingleItem();
+
+            // No parked_count column, so the read leaves it out instead of failing into an empty answer
+            var shard = store.Advanced.AllAsyncProjectionShardNames().Single();
+            var state = (await store.Advanced.AllProjectionProgress(token: Token))
+                .Single(x => x.ShardName == shard.Identity);
+            state.Sequence.ShouldBeGreaterThan(0);
+            state.ParkedCount.ShouldBeNull();
+        }
+        finally
+        {
+            ParkTallyPoison.Off(stream);
+            await daemon.StopAllAsync();
+        }
+    }
+
     [Fact]
     public async Task the_slice_index_is_written_with_the_batch_and_cleared_with_the_projection()
     {

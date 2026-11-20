@@ -142,6 +142,9 @@ internal sealed class TenantDataCleaner
                     await ExecuteAsync(connection, $"delete from \"{table}\"", ct).ConfigureAwait(false);
                 }
             }
+
+            // fisher#654: the tenant's parked rows are gone, so the progression rows' parked_count follows them
+            await database.RefreshParkedCountsAsync(connection, null, _ => true, ct).ConfigureAwait(false);
         }, token).ConfigureAwait(false);
     }
 

@@ -218,7 +218,9 @@ What's Fisher's own:
   the ones above the new floor, `DeleteAllTenantDataAsync` takes a tenant's, and ejecting a retired version's
   progression takes that version's.
 - **Extended progression tracking** keeps the count in a `parked_count` column, so a console can see it for a
-  daemon that isn't running.
+  daemon that isn't running. `AllProjectionProgress()` reads it back as `ShardState.ParkedCount`. It is counted
+  from the parked rows in the same transaction that parks or unparks, so it goes back to 0 after a replay or a
+  discard.
 - **There is no high-water skip tracking to think about.** SQLite has one writer, so the high-water mark never
   waits on a gap.
 
