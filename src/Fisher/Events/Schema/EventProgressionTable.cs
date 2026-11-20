@@ -32,6 +32,10 @@ internal class EventProgressionTable : Table
             AddColumn("failure_event_sequence", "INTEGER").AllowNulls();
             AddColumn("failure_event_type", "TEXT").AllowNulls();
             AddColumn("failure_event_tenant_id", "TEXT").AllowNulls();
+
+            // fisher#652 / marten#6003: how many identities the shard holds parked, for a monitor reading a node
+            // that is down
+            AddColumn("parked_count", "INTEGER").AllowNulls();
         }
     }
 }

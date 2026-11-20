@@ -103,6 +103,11 @@ internal sealed class FisherDocumentCleaner : IDocumentCleaner
         ordered.Add(events.ProgressionTableName);
         ordered.Add(events.DeadLetterTableName);
 
+        // fisher#652: parked identities and slice indexes point at events that are gone
+        ordered.Add(events.ParkedIdentitiesTableName);
+        ordered.AddRange(events.SliceIndexedProjections()
+            .Select(x => events.SliceIndexTableName(x.Name, x.Version)));
+
         // fisher#635. The tag versions go with the events; their counter, fi_dcb_tag_version_sequence, stays so
         // that no version is ever handed out twice.
         if (events.TagTypes.Count > 0)

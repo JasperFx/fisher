@@ -46,6 +46,13 @@ internal sealed class FisherProjectionBatch : ProjectionBatchBase<IDocumentSessi
     private readonly DocumentStore _store;
     private readonly EventGraph _events;
     private readonly ConcurrentQueue<Weasel.Storage.IStorageOperation> _progress = new();
+
+    // fisher#652 / marten#6003: parked rows, unparks and slice index rows that commit with this batch. Queues, not
+    // lists, for the same reason as _progress: copied rather than drained inside the transaction, so a retried
+    // SQLITE_BUSY writes them again.
+    private readonly ConcurrentQueue<ParkedIdentity> _parks = new();
+    private readonly ConcurrentQueue<ParkedIdentityKey> _unparks = new();
+    private readonly ConcurrentQueue<SliceIndexRows> _sliceIndex = new();
     private readonly Fisher.Storage.FisherDatabase _database;
 
     // Gathered before the resilience pipeline (fisher#12) and told about the commit after it.
@@ -88,6 +95,33 @@ internal sealed class FisherProjectionBatch : ProjectionBatchBase<IDocumentSessi
             _events.EnableExtendedProgressionTracking));
 
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    ///     marten#6003: write the parked row for an identity that failed in this batch, in this batch's transaction.
+    /// </summary>
+    public void ParkIdentity(ParkedIdentity parked)
+    {
+        ArgumentNullException.ThrowIfNull(parked);
+        _parks.Enqueue(parked);
+    }
+
+    /// <summary>
+    ///     marten#6003: delete the parked row of an identity a replay or per-identity rebuild re-folded in this batch.
+    /// </summary>
+    public void UnparkIdentity(ParkedIdentityKey key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        _unparks.Enqueue(key);
+    }
+
+    /// <summary>
+    ///     marten#6003: slice index rows for the events this batch applied, in this batch's transaction.
+    /// </summary>
+    public void AppendSliceIndex(SliceIndexRows rows)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        _sliceIndex.Enqueue(rows);
     }
 
     protected override async Task ExecuteOperationsInTransactionAsync(Func<CancellationToken, Task> beforeCommit,
@@ -164,6 +198,23 @@ internal sealed class FisherProjectionBatch : ProjectionBatchBase<IDocumentSessi
             {
                 await ExecuteProgressAsync(operation, connection, transaction, sessions.FirstOrDefault(), ct)
                     .ConfigureAwait(false);
+            }
+
+            // fisher#652: unparks before parks, so a batch that re-folded an identity and then parked it again on
+            // a later event in the same page ends with the new row
+            foreach (var key in _unparks)
+            {
+                await _database.DeleteParkedAsync(key, connection, transaction, ct).ConfigureAwait(false);
+            }
+
+            foreach (var parked in _parks)
+            {
+                await _database.WriteParkedAsync(parked, connection, transaction, ct).ConfigureAwait(false);
+            }
+
+            foreach (var rows in _sliceIndex)
+            {
+                await _database.WriteSliceIndexAsync(rows, connection, transaction, ct).ConfigureAwait(false);
             }
 
             // Anything a projection asked to write with us, on the batch's connection and in the batch's

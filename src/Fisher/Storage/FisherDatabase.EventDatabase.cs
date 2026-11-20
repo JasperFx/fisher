@@ -296,6 +296,9 @@ public partial class FisherDatabase : IEventDatabase
         {
             // Nothing to delete — see the remarks.
         }
+
+        // fisher#652: ejecting a retired projection version takes its parked rows and its slice index rows too
+        await DeleteParkedAndSliceIndexAboveAsync(shardIdentity, null, token).ConfigureAwait(false);
     }
 
     // ---- projection start floors (fisher#471, jasperfx#809) ----
@@ -584,6 +587,8 @@ public partial class FisherDatabase : IEventDatabase
             const string sequence = "case when @touch_failure = 1 then @failure_sequence else failure_event_sequence end";
             const string eventType = "case when @touch_failure = 1 then @failure_event_type else failure_event_type end";
             const string tenant = "case when @touch_failure = 1 then @failure_tenant_id else failure_event_tenant_id end";
+            // fisher#652: null means the shard doesn't park (or hasn't loaded its parked set), so the column is left alone
+            const string parked = "coalesce(@parked_count, parked_count)";
 
             command.CommandText = $"""
                                    update {_events.ProgressionTableName}
@@ -594,7 +599,8 @@ public partial class FisherDatabase : IEventDatabase
                                        failure_category = {category},
                                        failure_event_sequence = {sequence},
                                        failure_event_type = {eventType},
-                                       failure_event_tenant_id = {tenant}
+                                       failure_event_tenant_id = {tenant},
+                                       parked_count = {parked}
                                    where name = @name
                                      and (heartbeat is not @heartbeat
                                           or agent_status is not @status
@@ -603,7 +609,8 @@ public partial class FisherDatabase : IEventDatabase
                                           or failure_category is not {category}
                                           or failure_event_sequence is not {sequence}
                                           or failure_event_type is not {eventType}
-                                          or failure_event_tenant_id is not {tenant})
+                                          or failure_event_tenant_id is not {tenant}
+                                          or parked_count is not {parked})
                                    """;
 
             var name = command.Parameters.Add("@name", SqliteType.Text);
@@ -616,6 +623,7 @@ public partial class FisherDatabase : IEventDatabase
             var failureSequence = command.Parameters.Add("@failure_sequence", SqliteType.Integer);
             var failureEventType = command.Parameters.Add("@failure_event_type", SqliteType.Text);
             var failureTenantId = command.Parameters.Add("@failure_tenant_id", SqliteType.Text);
+            var parkedCount = command.Parameters.Add("@parked_count", SqliteType.Integer);
 
             foreach (var state in ordered)
             {
@@ -634,6 +642,7 @@ public partial class FisherDatabase : IEventDatabase
                 failureSequence.Value = (object?)failure?.Event?.Sequence ?? DBNull.Value;
                 failureEventType.Value = (object?)failure?.Event?.EventTypeName ?? DBNull.Value;
                 failureTenantId.Value = (object?)failure?.Event?.TenantId ?? DBNull.Value;
+                parkedCount.Value = (object?)state.ParkedCount ?? DBNull.Value;
 
                 await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }

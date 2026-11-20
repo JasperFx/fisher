@@ -57,6 +57,13 @@ internal sealed class FisherEventLoader : EventLoaderBase
     private readonly EventHydrationContext _context;
     private readonly MetadataSlots _slots;
     private readonly bool _isGuid;
+    private readonly bool _includeTags;
+
+    // fisher#652 / marten#6003: the unreadable events of the page being loaded, when its request parks them.
+    // EventLoaderBase asks ShouldSkip with the error options alone, so the request's flag travels in the async
+    // flow of LoadAsync rather than in a field the next page's load could see. A local workaround until
+    // weasel#901 teaches the base about EventRequest.ParksUnreadableEvents; remove it then.
+    private static readonly AsyncLocal<List<UnreadableEvent>?> _parking = new();
 
     internal FisherEventLoader(FisherDatabase database, StoreOptions options, EventFilterable? filtering = null)
         : base(new SqliteEventPagingDialect(options), new EventLoaderOptions
@@ -73,11 +80,41 @@ internal sealed class FisherEventLoader : EventLoaderBase
             JasperFx.StorageConstants.DefaultTenantId);
         _slots = MetadataSlots.For(_options.Events);
         _isGuid = _events.StreamIdentity == StreamIdentity.AsGuid;
+
+        // marten#6003: a projection that groups by DCB tag (IdentityFromTag) needs the events' tags, which the
+        // loader otherwise never reads
+        _includeTags = filtering?.IncludeEventTags == true && _events.TagTypes.Count > 0;
     }
 
     public override async Task<EventPage> LoadAsync(EventRequest request, CancellationToken token)
     {
-        var page = await base.LoadAsync(request, token).ConfigureAwait(false);
+        var unreadable = request.ParksUnreadableEvents ? new List<UnreadableEvent>() : null;
+        _parking.Value = unreadable;
+
+        EventPage page;
+        try
+        {
+            page = await base.LoadAsync(request, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            _parking.Value = null;
+        }
+
+        if (unreadable is { Count: > 0 })
+        {
+            foreach (var @event in unreadable)
+            {
+                page.AddUnreadable(@event);
+            }
+        }
+
+        if (_includeTags && page.Count > 0)
+        {
+            await using var connection = await _database.OpenConnectionAsync(token).ConfigureAwait(false);
+            await FisherEventTagHydrator.HydrateAsync(_events, connection, page, _options.CommandTimeout, token)
+                .ConfigureAwait(false);
+        }
 
         Diagnostics.DaemonTrace.Record("loader.page", request.Name.Identity,
             request.Floor, page.Ceiling, page.Count);
@@ -107,9 +144,25 @@ internal sealed class FisherEventLoader : EventLoaderBase
     // fisher#308. A body that is there and will not parse is governed by SkipSerializationErrors, which the
     // base classifies off the exception's own IEventFailureContext. Quarantined on its own connection,
     // outside anything this page is doing — the same rule the apply-error dead letter follows.
+    // marten#6003: when the request parks unreadable events, a body that won't deserialize is reported on the page
+    // (and counted as skipped for the ceiling) instead of being dead-lettered or thrown
+    protected override bool ShouldSkip(Exception ex, ErrorHandlingOptions options)
+        => (_parking.Value is not null && Classify(ex) == ShardFailureCategory.EventSerialization)
+           || base.ShouldSkip(ex, options);
+
     protected override async ValueTask RecordSkippedEventAsync(Exception ex, EventRequest request,
         CancellationToken token)
     {
+        if (request.ParksUnreadableEvents && _parking.Value is { } parking &&
+            FindDeserializationFailure(ex) is { } failure)
+        {
+            parking.Add(new UnreadableEvent(failure.Sequence, failure.StreamId, failure.StreamKey, failure.TenantId,
+                failure.EventTypeName, failure));
+
+            Diagnostics.DaemonTrace.Record("loader.unreadable", request.Name.Identity, failure.Sequence);
+            return;
+        }
+
         if (ex is JasperFx.Events.EventDeserializationFailureException e)
         {
             await _database.StoreDeadLetterEventAsync(null!, e.ToDeadLetterEvent(request.Name), token)
@@ -117,6 +170,17 @@ internal sealed class FisherEventLoader : EventLoaderBase
 
             Diagnostics.DaemonTrace.Record("loader.skipped_bad_body", request.Name.Identity, e.Sequence);
         }
+    }
+
+    private static JasperFx.Events.EventDeserializationFailureException? FindDeserializationFailure(Exception? ex)
+    {
+        while (ex is not null)
+        {
+            if (ex is JasperFx.Events.EventDeserializationFailureException failure) return failure;
+            ex = ex.InnerException;
+        }
+
+        return null;
     }
 
     protected override void ReportLastObservedSequence(EventPage page, long? lastObservedSequence)

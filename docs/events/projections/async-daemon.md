@@ -115,8 +115,11 @@ A body the serializer cannot read is a different problem from a type it cannot r
 serializer fix rather than a deployment one — and it has its own policy:
 
 ```cs
-opts.Projections.Errors.SkipSerializationErrors = true;   // the default
+opts.Projections.Errors.SkipSerializationErrors = true;
 ```
+
+Fisher 2 parks the stream of an unreadable event instead, for a single-stream projection (see
+[parking](#parking-a-failing-identity) below). Setting `SkipSerializationErrors` to `true` goes back to skipping.
 
 With it on, the row is quarantined into [`fi_dead_letters`](/events/storage#dead-letters) and the
 shard carries on. With it off the loader throws `JasperFx.Events.EventDeserializationFailureException`
@@ -138,7 +141,8 @@ opts.Projections.Errors.SkipApplyErrors = true;
 ```
 
 A skipped poison event is quarantined into [`fi_dead_letters`](/events/storage#dead-letters) rather
-than stopping the shard.
+than stopping the shard. Skipping is not the default in Fisher 2: it parks the failing identity (see
+[below](#parking-a-failing-identity)), and setting `SkipApplyErrors` to `true` is how you ask for skipping back.
 
 ::: tip
 The dead letter write goes on **its own connection, outside the failing batch's transaction** — that
@@ -162,6 +166,61 @@ column, a constraint the projection's own SQL violates — used to be dead-lette
 event the same way (jasperfx#1029). Transient errors (`SQLITE_BUSY`, `SQLITE_LOCKED`, timeouts) are
 retried as before, and a projection's own exceptions are still dead-lettered.
 :::
+
+## Parking a failing identity
+
+When an async projection fails on an event, Fisher 2 parks the identity that failed and keeps going with
+everything else. The batch drops that identity's events, writes a row to `fi_parked_identities` in the same
+transaction as the shard's progress, and holds back every later event for it. Its document stays at the last
+good state until you replay it or discard it. This is the default:
+
+```cs
+opts.Projections.Errors.ApplyErrors = ProjectionErrorAction.Park;          // the default in Fisher 2
+opts.Projections.Errors.SerializationErrors = ProjectionErrorAction.Park;  // the default in Fisher 2
+
+// Fisher 1's behaviour: skip the event and dead-letter it
+opts.RestoreV1Defaults();
+```
+
+A projection can only park when one identity's events can be found again on their own:
+
+- single-stream projections,
+- multi-stream projections grouped with `IdentityFromStream<TEvent>()` or `IdentityFromTag<TTag>()`,
+- any multi-stream projection that turns on the slice index with `Options.UseSliceIndex()`.
+
+Everything else **pauses** instead: event projections, flat tables, composite projections, and multi-stream
+projections grouped by an `Identity`/`Identities` delegate or custom grouping without the slice index. A
+composite doesn't park in Fisher 2, because a parked document upstream would feed stale data to the stages after
+it. The daemon logs which way each projection goes when it starts.
+
+Replay or discard from the node that runs the shard, or from anywhere with a durable request:
+
+```cs
+await daemon.ReplayParkedIdentityAsync("Trip", null, tripId, token);
+await daemon.DiscardParkedIdentityAsync("Trip", null, tripId, token);
+
+await store.Database.RequestParkedActionAsync(new ParkedActionRequest
+{
+    ProjectionName = "Trip",
+    Action = ParkedAction.Replay
+}, token);
+```
+
+The rest (the cap, the slice index and its retention, rebuilding one identity, the command line) is shared with
+Marten and Polecat and described in the
+[JasperFx documentation](https://shared-libs.jasperfx.net/events/parked-identities).
+
+What's Fisher's own:
+
+- **The slice index is a table per projection version**, `fi_slice_index_<projection>` (`_v2` and up for later
+  versions), keyed by tenant, identity and sequence. Its rows are written in the batch's transaction.
+- **Parked rows and slice index rows are cleaned up with the projection**: a rebuild clears them, a rewind deletes
+  the ones above the new floor, `DeleteAllTenantDataAsync` takes a tenant's, and ejecting a retired version's
+  progression takes that version's.
+- **Extended progression tracking** keeps the count in a `parked_count` column, so a console can see it for a
+  daemon that isn't running.
+- **There is no high-water skip tracking to think about.** SQLite has one writer, so the high-water mark never
+  waits on a gap.
 
 ## Projection start floors
 

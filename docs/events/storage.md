@@ -235,9 +235,23 @@ see. It throws instead, naming `StoreDeadLetterEventAsync` — which is what the
 ports back to either sibling unchanged.
 :::
 
+## Parked identities and slice indexes
+
+`fi_parked_identities` holds one row per projection identity the daemon parked (see
+[parking](/events/projections/async-daemon#parking-a-failing-identity)). It is keyed by projection name,
+version, shard key, tenant and the identity's text, and carries the failing event, the error and any replay
+request. It is always created, and it has no copy of the event: that is still in `fi_events`.
+
+A projection with `UseSliceIndex()` gets `fi_slice_index_<projection>` (`_v2` and up for later versions), with
+one row per (tenant, identity, sequence) the daemon applied. Neither table has a foreign key to `fi_events`;
+a slice index row whose event was compacted away is ignored.
+
+Both are written in the projection batch's transaction, and cleared by a rebuild, a rewind (above the new
+floor), `DeleteAllTenantDataAsync` and `DeleteAllEventDataAsync`.
+
 ## Deletion order
 
-`DeleteAllEventDataAsync` deletes in a fixed order — **tag tables first**, dead letters last.
+`DeleteAllEventDataAsync` deletes in a fixed order, **tag tables first**.
 `fi_event_tag_*` rows have a real foreign key to `fi_events(seq_id)` and Weasel's default profile
 turns enforcement on, so clearing events first fails with `FOREIGN KEY constraint failed`.
 

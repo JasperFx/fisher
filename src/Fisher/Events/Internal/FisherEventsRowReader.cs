@@ -125,7 +125,7 @@ internal static class FisherEventsRowReader
         }
         catch (Exception e) when (IsBodyFailure(e))
         {
-            throw new JasperFx.Events.EventDeserializationFailureException(seqId, typeName, e);
+            throw DeserializationFailure(ctx, seqId, typeName, streamId, tenantId, e);
         }
 
         return new EventRecord(
@@ -237,6 +237,23 @@ internal static class FisherEventsRowReader
         }
 
         return @event;
+    }
+
+    /// <summary>
+    ///     The failure for a row whose body won't read, with the row's stream and tenant on it (marten#6003), so the
+    ///     daemon can park the stream of a single-stream projection without an <see cref="IEvent" /> to look at.
+    /// </summary>
+    private static JasperFx.Events.EventDeserializationFailureException DeserializationFailure(
+        in EventHydrationContext ctx, long seqId, string typeName, string streamId, string tenantId, Exception e)
+    {
+        var isGuid = ctx.EventGraph.StreamIdentity == StreamIdentity.AsGuid;
+
+        return new JasperFx.Events.EventDeserializationFailureException(seqId, typeName, e)
+        {
+            StreamId = isGuid && Guid.TryParse(streamId, out var id) ? id : null,
+            StreamKey = isGuid ? null : streamId,
+            TenantId = tenantId
+        };
     }
 
     /// <summary>
@@ -396,7 +413,7 @@ internal static class FisherEventsRowReader
         }
         catch (Exception e) when (IsBodyFailure(e))
         {
-            throw new JasperFx.Events.EventDeserializationFailureException(seqId, typeName, e);
+            throw DeserializationFailure(ctx, seqId, typeName, reader.GetString(2), tenantId, e);
         }
 
         var resolvedType = upcast?.GetType() ?? ctx.EventGraph.ResolveEventType(dotNetTypeName);
@@ -444,7 +461,7 @@ internal static class FisherEventsRowReader
         }
         catch (Exception e) when (IsBodyFailure(e))
         {
-            throw new JasperFx.Events.EventDeserializationFailureException(seqId, typeName, e);
+            throw DeserializationFailure(ctx, seqId, typeName, reader.GetString(2), tenantId, e);
         }
 
         var @event = mapping.Wrap(data);

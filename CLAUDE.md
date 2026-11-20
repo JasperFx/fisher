@@ -1449,7 +1449,34 @@ Marten's. Three decisions in it:
 Ordering matters when clearing event data, and it is why `DeleteAllEventDataAsync` uses an ordered
 pass rather than the cleaner's unordered one: `fi_event_tag_*` rows have a real foreign key to
 `fi_events(seq_id)` and Weasel's default profile turns enforcement on, so clearing events first fails
-with `FOREIGN KEY constraint failed` (fisher#6). Tags go first, dead letters last.
+with `FOREIGN KEY constraint failed` (fisher#6). Tags go first.
+
+### Parked identities and slice indexes — fisher#652
+
+JasperFx 3.10 parks a failing async projection identity (marten#6003); the daemon does the work and Fisher
+supplies storage. **Park is the Fisher 2.0 default** (`Projections.Errors.ApplyErrors` and
+`SerializationErrors`, set in the `StoreOptions` constructor), and `RestoreV1Defaults()` puts skip back.
+Anything that can't park (event projections, flat tables, composites, delegate-grouped multi-stream projections
+without `UseSliceIndex()`) pauses, which JasperFx decides; the daemon logs each projection's `IdentityAccess` at
+start.
+
+- `fi_parked_identities` is always created, keyed (projection, version, shard key, tenant, identity text). Park and
+  unpark are queued on `FisherProjectionBatch` and run inside its `BEGIN IMMEDIATE`, after progression, from
+  queues that are copied not drained so a retried `SQLITE_BUSY` writes them again. The reads are in
+  `FisherDatabase.Parking.cs`.
+- `fi_slice_index_<projection>[_v<n>]` exists only for a projection with `UseSliceIndex()`, built from
+  `EventGraph.SliceIndexedProjections()`. Rows go in with the batch, `on conflict do nothing`.
+- `FisherIdentityRebuildLoader` reads one identity's events for every `IdentityEventSource` (stream, tag table,
+  slice index, scan) on the daemon page's own `where`. It uses the **request's** `SkipSerializationErrors`, never
+  the store's continuous options, so a replay doesn't skip the event it is meant to repair.
+- The daemon loader hydrates DCB tags only for `EventFilterable.IncludeEventTags` (`FisherEventTagHydrator`), and
+  reports unreadable bodies on `EventPage.Unreadable` when the request parks them. `EventLoaderBase.ShouldSkip`
+  sees only the error options, so the request's flag rides an `AsyncLocal` in `FisherEventLoader.LoadAsync`, until
+  [weasel#901](https://github.com/JasperFx/weasel/issues/901) moves this into the base. Remove the workaround then.
+- Cleanup: teardown clears both, a rewind deletes rows above the floor, `DeleteProjectionProgressByShardNameAsync`
+  (eject) takes the shard's, `DeleteAllEventDataAsync` clears both, and `TenantDataCleaner` finds both by their
+  `tenant_id` column with no special case.
+- No high-water skip tracking applies: SQLite has one writer, so the mark never waits on a gap.
 
 ### Document storage layout
 

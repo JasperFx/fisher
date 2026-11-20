@@ -111,6 +111,26 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
         FisherTableNaming.QuotedTableName(DatabaseSchemaName, Schema.DeadLetterTable.TableSuffix);
 
     /// <summary>
+    ///     <c>fi_parked_identities</c> (fisher#652). See <see cref="Schema.ParkedIdentitiesTable" />.
+    /// </summary>
+    internal string ParkedIdentitiesTableName =>
+        FisherTableNaming.QuotedTableName(DatabaseSchemaName, Schema.ParkedIdentitiesTable.TableSuffix);
+
+    /// <summary>
+    ///     The quoted table name of one projection version's slice index (fisher#652). See
+    ///     <see cref="Schema.SliceIndexTable" />.
+    /// </summary>
+    internal string SliceIndexTableName(string projectionName, uint version)
+        => FisherTableNaming.QuotedTableName(DatabaseSchemaName,
+            Schema.SliceIndexTable.SuffixFor(projectionName, version));
+
+    /// <summary>
+    ///     The unquoted prefix every slice index table name starts with, to find the ones in a file.
+    /// </summary>
+    internal string SliceIndexTablePrefix
+        => FisherTableNaming.TableName(DatabaseSchemaName, Schema.SliceIndexTable.TablePrefix);
+
+    /// <summary>
     ///     <c>fi_dcb_tag_version</c> (fisher#635). See <see cref="Schema.DcbTagVersionTable" />.
     /// </summary>
     internal string DcbTagVersionTableName =>
@@ -442,6 +462,35 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     internal ProjectionFloorsTable BuildProjectionFloorsTable() => new(this);
 
     internal EventRangeMarksTable BuildEventRangeMarksTable() => new(this);
+
+    internal ParkedIdentitiesTable BuildParkedIdentitiesTable() => new(this);
+
+    /// <summary>
+    ///     The registered async aggregation projections that keep a slice index (<c>UseSliceIndex()</c>), with the
+    ///     simple type of their identity (fisher#652).
+    /// </summary>
+    internal IEnumerable<(string Name, uint Version, Type IdentityType)> SliceIndexedProjections()
+    {
+        foreach (var projection in _options.Projections.All.OfType<JasperFx.Events.Projections.ProjectionBase>())
+        {
+            if (projection.Options.SliceIndex is null) continue;
+            if (projection is not JasperFx.Events.Aggregation.IAggregateProjection aggregate) continue;
+
+            yield return (projection.Name, projection.Version, SimpleIdentityType(aggregate.IdentityType));
+        }
+    }
+
+    /// <summary>One table per projection version with a slice index.</summary>
+    internal IEnumerable<SliceIndexTable> BuildSliceIndexTables()
+        => SliceIndexedProjections()
+            .Select(x => new SliceIndexTable(this, x.Name, x.Version, x.IdentityType));
+
+    // A strong-typed identity is stored as the value it wraps
+    internal static Type SimpleIdentityType(Type identityType)
+        => JasperFx.Core.Reflection.StrongTypedIdResolver.TryResolve(identityType, out var info,
+            JasperFx.Core.Reflection.StrongTypedIdStyle.AnyType)
+            ? info.SimpleType
+            : identityType;
 
     /// <summary>
     ///     One table per registered tag type.

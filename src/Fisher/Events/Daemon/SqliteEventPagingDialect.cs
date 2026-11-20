@@ -114,6 +114,35 @@ internal sealed class SqliteEventPagingDialect : IEventPagingDialect
         return new EventPageCommand(sql.ToString(), parameters);
     }
 
+    /// <summary>
+    ///     The daemon's page with one more predicate (fisher#652, marten#6003): one identity's events by tag or by
+    ///     slice index, or a plain scan when <paramref name="predicate" /> is null.
+    /// </summary>
+    /// <param name="query">The range, limit and filters. <see cref="EventPageQuery.BatchSize" /> is the limit.</param>
+    /// <param name="predicate">SQL over <c>fi_events</c>' columns, with its own parameters.</param>
+    /// <param name="extra">The predicate's parameters.</param>
+    internal EventPageCommand BuildFilteredPageCommand(EventPageQuery query, string? predicate,
+        params EventPageParameter[] extra)
+    {
+        var parameters = new List<EventPageParameter>();
+        var sql = new StringBuilder("select ")
+            .Append(FisherEventsRowReader.ComposeSelectColumns(_options.Events))
+            .Append(" from ").Append(_events.EventsTableName);
+
+        appendWhere(sql, parameters, query);
+
+        if (predicate is not null)
+        {
+            sql.Append(" and ").Append(predicate);
+            parameters.AddRange(extra);
+        }
+
+        sql.Append(" order by seq_id limit @batch_size");
+        parameters.Add(new EventPageParameter("@batch_size", query.BatchSize));
+
+        return new EventPageCommand(sql.ToString(), parameters);
+    }
+
     private void appendWhere(StringBuilder sql, List<EventPageParameter> parameters, EventPageQuery query)
     {
         sql.Append(" where seq_id > @floor and seq_id <= @ceiling");

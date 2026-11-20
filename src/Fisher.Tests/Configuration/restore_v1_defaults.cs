@@ -26,6 +26,28 @@ public class restore_v1_defaults
         return options;
     }
 
+    // ---- projection errors (fisher#652) ----
+
+    [Fact]
+    public void a_failing_projection_identity_parks_by_default()
+    {
+        var errors = new StoreOptions().Projections.Errors;
+
+        errors.ApplyErrors.ShouldBe(JasperFx.Events.Daemon.ProjectionErrorAction.Park);
+        errors.SerializationErrors.ShouldBe(JasperFx.Events.Daemon.ProjectionErrorAction.Park);
+    }
+
+    [Fact]
+    public void restore_skips_failing_events_again()
+    {
+        var errors = Restored().Projections.Errors;
+
+        errors.ApplyErrors.ShouldBe(JasperFx.Events.Daemon.ProjectionErrorAction.Skip);
+        errors.SerializationErrors.ShouldBe(JasperFx.Events.Daemon.ProjectionErrorAction.Skip);
+        errors.SkipApplyErrors.ShouldBeTrue();
+        errors.SkipSerializationErrors.ShouldBeTrue();
+    }
+
     // ---- event metadata ----
 
     [Fact]

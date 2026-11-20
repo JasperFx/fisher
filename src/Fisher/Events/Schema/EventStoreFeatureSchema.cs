@@ -42,6 +42,15 @@ internal class EventStoreFeatureSchema : FeatureSchemaBase
         // jasperfx#1215 / #1222. Kept like the floors: it outlives rebuild teardown and data cleaning.
         yield return _events.BuildEventRangeMarksTable();
 
+        // fisher#652 / marten#6003. Always created, like Marten's, and independent of the others.
+        yield return _events.BuildParkedIdentitiesTable();
+
+        // One per projection version that keeps a slice index (UseSliceIndex()). No foreign keys.
+        foreach (var table in _events.BuildSliceIndexTables())
+        {
+            yield return table;
+        }
+
         // Tag tables last: each carries a real foreign key to fi_events(seq_id), so the referenced
         // table has to exist first.
         foreach (var tagTable in _events.BuildTagTables())
