@@ -164,9 +164,14 @@ public partial class FisherDatabase : IEventDatabase
     {
         return await ReadWhenStorageExistsAsync(async ct =>
         {
+            // fisher#654: parked_count exists only under extended progression tracking, which is the only time the
+            // daemon writes it. Null is a shard that doesn't park, or a row no agent has written it to yet.
+            var extended = _events.EnableExtendedProgressionTracking;
+            var columns = extended ? "name, last_seq_id, last_updated, parked_count" : "name, last_seq_id, last_updated";
+
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
-            command.CommandText = $"select name, last_seq_id, last_updated from {_events.ProgressionTableName}";
+            command.CommandText = $"select {columns} from {_events.ProgressionTableName}";
 
             var states = new List<ShardState>();
             await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -179,7 +184,8 @@ public partial class FisherDatabase : IEventDatabase
                 // local; the column is NOT NULL with a default, so the null arm is only a guard.
                 states.Add(new ShardState(reader.GetString(0), reader.GetInt64(1))
                 {
-                    LastUpdated = reader.IsDBNull(2) ? null : SqliteTimestamp.FromDatabaseValue(reader.GetString(2))
+                    LastUpdated = reader.IsDBNull(2) ? null : SqliteTimestamp.FromDatabaseValue(reader.GetString(2)),
+                    ParkedCount = extended && !reader.IsDBNull(3) ? Convert.ToInt32(reader.GetValue(3)) : null
                 });
             }
 
@@ -587,8 +593,11 @@ public partial class FisherDatabase : IEventDatabase
             const string sequence = "case when @touch_failure = 1 then @failure_sequence else failure_event_sequence end";
             const string eventType = "case when @touch_failure = 1 then @failure_event_type else failure_event_type end";
             const string tenant = "case when @touch_failure = 1 then @failure_tenant_id else failure_event_tenant_id end";
-            // fisher#652: null means the shard doesn't park (or hasn't loaded its parked set), so the column is left alone
-            const string parked = "coalesce(@parked_count, parked_count)";
+            // fisher#652: null means the shard doesn't park (or hasn't loaded its parked set), so the column is left
+            // alone. fisher#654: the projection batch owns the count once it is set (RefreshParkedCountsAsync counts it
+            // from fi_parked_identities in the transaction that parks or unparks), so this only fills in a null: a
+            // state stamped before a batch committed must not put a stale count back over the batch's (jasperfx#1255).
+            const string parked = "coalesce(parked_count, @parked_count)";
 
             command.CommandText = $"""
                                    update {_events.ProgressionTableName}

@@ -1,9 +1,11 @@
 using System.Text;
 using System.Text.Json;
+using Fisher.Events.Daemon;
 using JasperFx.Descriptors;
 using JasperFx.Events;
 using JasperFx.Events.Aggregation;
 using JasperFx.Events.Projections;
+using JasperFx.Events.Tags;
 
 namespace Fisher;
 
@@ -137,6 +139,46 @@ public partial class DocumentStore
             wrapped.StreamKey = record.StreamId;
         }
 
+        copyTags(record, wrapped);
+
         return wrapped;
+    }
+
+    /// <summary>
+    ///     fisher#654: the record's DCB tags back onto the event, so a projection that groups by tag
+    ///     (<c>IdentityFromTag&lt;TTag&gt;()</c>) groups a stepped event the way the daemon does.
+    /// </summary>
+    /// <remarks>
+    ///     A record names a tag by its CLR type name or its table suffix (<c>FindByTagName</c>) and carries the tag's
+    ///     simple value as text. A name this store hasn't registered is left off: no projection here can group by it.
+    /// </remarks>
+    private void copyTags(EventRecord record, IEvent wrapped)
+    {
+        if (record.Tags is not { Count: > 0 } tags || EventGraph.TagTypes.Count == 0) return;
+
+        foreach (var (name, text) in tags)
+        {
+            if (EventGraph.TagTypes.FindByTagName(name) is not { } registration) continue;
+
+            object value;
+            try
+            {
+                value = FisherEventTagHydrator.TagInstance(registration, text);
+            }
+            catch (Exception e) when (e is FormatException or InvalidCastException or OverflowException)
+            {
+                throw new ArgumentException(
+                    $"Event {record.EventId} has tag {name} = '{text}', which isn't a {registration.SimpleType.Name}.",
+                    nameof(record), e);
+            }
+
+            if (wrapped.Tags is { } existing &&
+                existing.Any(x => x.TagType == registration.TagType && Equals(x.Value, value)))
+            {
+                continue;
+            }
+
+            wrapped.AddTag(new EventTag(registration.TagType, value));
+        }
     }
 }

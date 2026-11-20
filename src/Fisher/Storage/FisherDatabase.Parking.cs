@@ -570,6 +570,104 @@ public partial class FisherDatabase
 
             await executeIgnoringMissingTableAsync(command, token).ConfigureAwait(false);
         }
+
+        // fisher#654: the shard's parked_count follows its rows
+        await RefreshParkedCountsAsync(connection, transaction,
+            shard => shard.Name == projectionName && (version is null || shard.Version == version && shard.ShardKey == shardKey),
+            token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     fisher#654: set <c>parked_count</c> on the progression rows of the shards <paramref name="which" /> picks to
+    ///     the number of their rows in <c>fi_parked_identities</c>, on the caller's connection and transaction.
+    /// </summary>
+    /// <remarks>
+    ///     For the paths that delete parked rows without a projection batch: a rewind, an eject, a tenant wipe. Reads
+    ///     the progression rows' names first, because a shard name has to be parsed to find its rows.
+    /// </remarks>
+    internal async Task RefreshParkedCountsAsync(SqliteConnection connection, SqliteTransaction? transaction,
+        Func<ShardName, bool> which, CancellationToken token)
+    {
+        if (!_events.EnableExtendedProgressionTracking) return;
+
+        var names = new List<string>();
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = $"select name from {_events.ProgressionTableName}";
+
+            await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                var name = reader.GetString(0);
+                if (name.Contains(':') && ShardName.TryParse(name, out var shard) && shard is not null &&
+                    shard.Name != ShardState.HighWaterMark && which(shard))
+                {
+                    names.Add(name);
+                }
+            }
+        }
+        catch (Exception e) when (SqliteSchemaErrors.IsMissingStorage(e))
+        {
+            return;
+        }
+
+        await RefreshParkedCountsAsync(connection, transaction, names, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     fisher#654: set <c>parked_count</c> on the named progression rows to the number of their shard's rows in
+    ///     <c>fi_parked_identities</c>, on the caller's connection and transaction.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The parked table is the truth, so the count is counted from it in the same transaction that changed
+    ///         it, rather than taken from the daemon's in-memory count. JasperFx's <c>ExtendedProgressionWriter</c>
+    ///         drops the <c>Parked</c> and <c>Unparked</c> publications that carry the in-memory count while
+    ///         periodic heartbeats are off (jasperfx#1255), and even once it writes them, a state stamped before
+    ///         this commit can be written after it. So <see cref="WriteExtendedProgressionAsync(IReadOnlyList{ShardState},CancellationToken)" />
+    ///         only fills the column in while it is null and never overwrites a count written here.
+    ///     </para>
+    ///     <para>
+    ///         A row whose column is null and whose shard has nothing parked stays null: null is "doesn't park, or
+    ///         hasn't said yet", and the writer fills in 0 for a shard that parks. A row without a parsable shard
+    ///         name, or that no longer exists, is left alone.
+    ///     </para>
+    /// </remarks>
+    internal async Task RefreshParkedCountsAsync(SqliteConnection connection, SqliteTransaction? transaction,
+        IEnumerable<string> shardIdentities, CancellationToken token)
+    {
+        if (!_events.EnableExtendedProgressionTracking) return;
+
+        var progression = _events.ProgressionTableName;
+
+        foreach (var identity in shardIdentities.Distinct(StringComparer.Ordinal))
+        {
+            if (!ShardName.TryParse(identity, out var shard) || shard is null) continue;
+
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandTimeout = _options.CommandTimeout;
+
+            var tenant = shard.TenantId is null ? "" : " and tenant_id = @tenant";
+            command.CommandText = $"""
+                                   update {progression}
+                                   set parked_count = (select case when count(*) = 0 and {progression}.parked_count is null
+                                                                   then null else count(*) end
+                                                       from {_events.ParkedIdentitiesTableName}
+                                                       where projection_name = @name and projection_version = @version
+                                                         and shard_key = @key{tenant})
+                                   where name = @shard
+                                   """;
+            command.Parameters.AddWithValue("@shard", identity);
+            command.Parameters.AddWithValue("@name", shard.Name);
+            command.Parameters.AddWithValue("@version", (long)shard.Version);
+            command.Parameters.AddWithValue("@key", shard.ShardKey);
+            if (shard.TenantId is not null) command.Parameters.AddWithValue("@tenant", shard.TenantId);
+
+            await executeIgnoringMissingTableAsync(command, token).ConfigureAwait(false);
+        }
     }
 
     /// <summary>The same as the other overload, on a connection of its own.</summary>
