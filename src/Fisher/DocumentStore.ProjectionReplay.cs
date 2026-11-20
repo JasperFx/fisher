@@ -80,6 +80,22 @@ public partial class DocumentStore
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    ///     marten#6003: step one identity of a multi-stream projection through events read with
+    ///     <c>LoadIdentityEventsAsync</c>, from a starting state. Forwards to the shared step-through, which slices
+    ///     the events the way the daemon does and keeps the identity's slice.
+    /// </summary>
+    async Task<ProjectionTimelineRaw> IEventStore.RunMultiStreamProjectionForIdentityAsync(
+        string projectionName, object identity, IReadOnlyList<EventRecord> events, JsonElement? startingState,
+        CancellationToken ct)
+    {
+        await using var session = QuerySession();
+
+        return await StepThrough()
+            .RunMultiStreamProjectionForIdentityAsync(projectionName, identity, events, startingState, session, ct)
+            .ConfigureAwait(false);
+    }
+
     private JsonElement? ToElement(object? state)
     {
         if (state is null)

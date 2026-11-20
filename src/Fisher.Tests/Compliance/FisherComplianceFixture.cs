@@ -640,6 +640,36 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override bool SupportsSoftDeletedProjectionDocuments => true;
 
     /// <summary>
+    ///     fisher#652 / marten#6003: <c>fi_parked_identities</c>, written and deleted in the projection batch's
+    ///     transaction, the parked-identity reads on <c>FisherDatabase</c>, and every identity event source.
+    /// </summary>
+    public override bool SupportsParkedIdentities => true;
+
+    /// <summary>
+    ///     fisher#652: <see cref="MakeEventUnreadableAsync" /> overwrites the stored body with text that isn't JSON,
+    ///     which is what a real unreadable event looks like to the loaders.
+    /// </summary>
+    public override bool SupportsUnreadableEvents => true;
+
+    /// <inheritdoc cref="SupportsUnreadableEvents" />
+    public override async Task MakeEventUnreadableAsync(long sequence)
+    {
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(_database!.ConnectionString);
+        await connection.OpenAsync(Cancellation).ConfigureAwait(false);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            $"update {Store.Options.EventGraph.EventsTableName} set data = '{{not json', data_binary = null where seq_id = @seq";
+        command.Parameters.AddWithValue("@seq", sequence);
+
+        var updated = await command.ExecuteNonQueryAsync(Cancellation).ConfigureAwait(false);
+        if (updated != 1)
+        {
+            throw new InvalidOperationException($"No stored event has sequence {sequence}.");
+        }
+    }
+
+    /// <summary>
     ///     Forwards to Fisher's own documented entry point rather than re-implementing the three lines
     ///     behind it.
     /// </summary>

@@ -1,10 +1,12 @@
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using Fisher.Events.Internal;
+using Fisher.Events.Storage;
 using Fisher.Storage;
 using JasperFx;
 using JasperFx.Events;
 using JasperFx.Events.Daemon;
+using JasperFx.Events.Projections;
 using JasperFx.MultiTenancy;
 using Microsoft.Data.Sqlite;
 using Weasel.Storage;
@@ -60,9 +62,106 @@ internal sealed class FisherIdentityRebuildLoader
 
         var isGuid = _events.StreamIdentity == StreamIdentity.AsGuid;
         var streamId = StreamIdFor(request.StreamIdentity, isGuid);
-        var limit = Math.Max(request.Limit, 1);
-        var allowList = EventTypeAllowList.For(_events, request.EventTypes);
         var tenantId = _events.TenancyStyle == TenancyStyle.Conjoined ? request.TenantId : null;
+        var allowList = EventTypeAllowList.For(_events, request.EventTypes);
+
+        var events = await loadAsync(query => _dialect.BuildStreamPageCommand(query, streamId), allowList, tenantId,
+            request.AfterSequence, request.Ceiling, request.Limit, request.IncludeArchivedEvents,
+            request.SkipSerializationErrors, includeTags: false, token).ConfigureAwait(false);
+
+        Diagnostics.DaemonTrace.Record("identity_rebuild.load", streamId.ToString(),
+            request.AfterSequence, request.Ceiling, events.Count);
+
+        return events;
+    }
+
+    /// <summary>
+    ///     One identity's events from one source (fisher#652, marten#6003): the store side of
+    ///     <c>IEventStore.LoadEventsForIdentityAsync</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Every source is the daemon's page with one more predicate: the stream, a tag table subselect, a slice
+    ///         index subselect, or nothing for a scan. So archived events, the allow list and the tenant rule are the
+    ///         daemon's, as for a per-identity rebuild.
+    ///     </para>
+    ///     <para>
+    ///         The tenant is filtered under conjoined tenancy only, except for the slice index, which lists events for
+    ///         a slice group's tenant whatever tenant the event is in. The index rows are matched on the request's
+    ///         tenant instead.
+    ///     </para>
+    /// </remarks>
+    internal async Task<IReadOnlyList<IEvent>> LoadAsync(IdentityEventLoadRequest request, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var conjoined = _events.TenancyStyle == TenancyStyle.Conjoined;
+        var allowList = EventTypeAllowList.For(_events, request.EventTypes);
+        var includeTags = request.IncludeTags || request.Source == IdentityEventSource.Tag;
+
+        Func<EventPageQuery, Weasel.Storage.EventPageCommand> build;
+        string? tenantId;
+
+        switch (request.Source)
+        {
+            case IdentityEventSource.Stream:
+                var streamId = StreamIdFor(request.Identity
+                                           ?? throw new ArgumentException("A stream read needs an identity", nameof(request)),
+                    _events.StreamIdentity == StreamIdentity.AsGuid);
+                tenantId = conjoined ? request.TenantId : null;
+                build = query => _dialect.BuildStreamPageCommand(query, streamId);
+                break;
+
+            case IdentityEventSource.Tag:
+                var registration = (request.TagType is null ? null : _events.FindTagType(request.TagType))
+                                   ?? throw new ArgumentException(
+                                       $"Tag type {request.TagType?.Name ?? "(none)"} is not registered on this store", nameof(request));
+                var tagValue = EventTagWriter.ToDatabaseValue(request.IdentityValue
+                                                              ?? throw new ArgumentException("A tag read needs an identity", nameof(request)));
+                tenantId = conjoined ? request.TenantId : null;
+                build = query => _dialect.BuildFilteredPageCommand(query,
+                    $"seq_id in (select seq_id from {_events.TagTableName(registration)} where value = @identity)",
+                    new EventPageParameter("@identity", tagValue));
+                break;
+
+            case IdentityEventSource.SliceIndex:
+                var table = _events.SliceIndexTableName(
+                    request.ProjectionName ?? throw new ArgumentException("A slice index read needs a projection name", nameof(request)),
+                    request.ProjectionVersion);
+                var identity = FisherDatabase.SliceIndexIdentityValue(request.IdentityValue
+                                                                      ?? throw new ArgumentException("A slice index read needs an identity", nameof(request)));
+                var sliceTenant = request.TenantId ?? StorageConstants.DefaultTenantId;
+                tenantId = null;
+                build = query => _dialect.BuildFilteredPageCommand(query,
+                    $"seq_id in (select seq_id from {table} where tenant_id = @slice_tenant and identity = @identity)",
+                    new EventPageParameter("@slice_tenant", sliceTenant),
+                    new EventPageParameter("@identity", identity));
+                break;
+
+            case IdentityEventSource.Scan:
+                tenantId = conjoined ? request.TenantId : null;
+                build = query => _dialect.BuildFilteredPageCommand(query, null);
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(request), request.Source, "Unknown identity event source");
+        }
+
+        var events = await loadAsync(build, allowList, tenantId, request.AfterSequence, request.Ceiling, request.Limit,
+            request.IncludeArchivedEvents, request.SkipSerializationErrors, includeTags, token).ConfigureAwait(false);
+
+        Diagnostics.DaemonTrace.Record("identity_events.load", request.Source.ToString(),
+            request.AfterSequence, request.Ceiling, events.Count);
+
+        return events;
+    }
+
+    private async Task<List<IEvent>> loadAsync(Func<EventPageQuery, Weasel.Storage.EventPageCommand> build,
+        EventTypeAllowList allowList, string? tenantId, long afterSequence, long ceiling, int requestedLimit,
+        bool includeArchivedEvents, bool skipSerializationErrors, bool includeTags, CancellationToken token)
+    {
+        var isGuid = _events.StreamIdentity == StreamIdentity.AsGuid;
+        var limit = Math.Max(requestedLimit, 1);
         var errors = _options.Projections.Errors;
 
         var context = new EventHydrationContext(_events, _options.Serializer, string.Empty,
@@ -70,22 +169,22 @@ internal sealed class FisherIdentityRebuildLoader
         var slots = MetadataSlots.For(_options.Events);
 
         var events = new List<IEvent>();
-        var floor = request.AfterSequence;
+        var floor = afterSequence;
 
         await using var connection = await _database.OpenConnectionAsync(token).ConfigureAwait(false);
 
         while (events.Count < limit)
         {
             var wanted = limit - events.Count;
-            var page = _dialect.BuildStreamPageCommand(new EventPageQuery
+            var page = build(new EventPageQuery
             {
                 Floor = floor,
-                Ceiling = request.Ceiling,
+                Ceiling = ceiling,
                 BatchSize = wanted,
                 TenantId = tenantId,
                 EventTypes = allowList,
-                IncludeArchivedEvents = request.IncludeArchivedEvents
-            }, streamId);
+                IncludeArchivedEvents = includeArchivedEvents
+            });
 
             await using var command = connection.CreateCommand();
             command.CommandText = page.Sql;
@@ -109,8 +208,10 @@ internal sealed class FisherIdentityRebuildLoader
                         @event = await FisherEventsRowReader
                             .ReadEventAcrossStreams(reader, context, slots, isGuid, token).ConfigureAwait(false);
                     }
+                    // marten#6003 / decision 12: the request's own flag, never the store's continuous options, so a
+                    // replay doesn't skip the very event it's meant to repair
                     catch (Exception e) when (EventLoaderBase.Classify(e) == ShardFailureCategory.EventSerialization
-                                              && errors.SkipSerializationErrors)
+                                              && skipSerializationErrors)
                     {
                         continue;
                     }
@@ -127,12 +228,15 @@ internal sealed class FisherIdentityRebuildLoader
                 }
             }
 
-            // Fewer rows than asked for means the stream has nothing more in the range
+            // Fewer rows than asked for means the source has nothing more in the range
             if (rows < wanted) break;
         }
 
-        Diagnostics.DaemonTrace.Record("identity_rebuild.load", streamId.ToString(),
-            request.AfterSequence, request.Ceiling, events.Count);
+        if (includeTags)
+        {
+            await FisherEventTagHydrator.HydrateAsync(_events, connection, events, _options.CommandTimeout, token)
+                .ConfigureAwait(false);
+        }
 
         return events;
     }

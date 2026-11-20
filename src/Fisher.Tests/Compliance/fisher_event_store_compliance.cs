@@ -8,8 +8,8 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and sixty-nine are enrolled from
- * JasperFx.Events.ComplianceTests 3.8.0, which itself ships seventy concrete suites. The one left out,
+ * Suites were added one at a time as Fisher grew into them, and seventy-one are enrolled from
+ * JasperFx.Events.ComplianceTests 3.10.0, which itself ships seventy-two concrete suites. The one left out,
  * BackfillCompliance (3.7.0), is excused in compliance_suite_inventory until the backfill half of
  * fisher#643. MultiDatabaseExplorerCompliance is one file holding two arms.
  *
@@ -692,3 +692,16 @@ public class event_range_mark_compliance
 
 public class event_rewrite_compliance
     : EventRewriteCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * fisher#652 / marten#6003 (JasperFx 3.10.0) — park a failing projection identity instead of skipping its event or
+ * pausing the shard. Fisher keeps parked rows in fi_parked_identities, written and deleted in the projection batch's
+ * BEGIN IMMEDIATE transaction, reads one identity's events by stream, DCB tag, slice index or scan, and keeps a slice
+ * index table per projection version that asks for one.
+ */
+
+public class parked_identity_compliance
+    : ParkedIdentityCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class multi_stream_parked_identity_compliance
+    : MultiStreamParkedIdentityCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

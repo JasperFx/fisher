@@ -36,6 +36,13 @@ public class StoreOptions
         EventGraph = new EventGraph(this);
         Events.EventGraph = EventGraph;
         Projections = new Fisher.Projections.FisherProjectionOptions(EventGraph);
+
+        // fisher#652 / marten#6003, a Fisher 2.0 default: a failing async projection identity is parked and the
+        // shard goes on. A projection that can't park (event and flat-table projections, composites, multi-stream
+        // projections grouped by delegate without the slice index) pauses instead. RestoreV1Defaults() puts skip back.
+        Projections.Errors.ApplyErrors = ProjectionErrorAction.Park;
+        Projections.Errors.SerializationErrors = ProjectionErrorAction.Park;
+
         Schema = new DocumentSchema(this);
 
         // Before the pipeline: AddFisherDefaults closes its OnRetry over these options and reads
@@ -580,6 +587,10 @@ public class StoreOptions
     ///         overrides a value set in <see cref="ConfigureSerialization" />.
     ///       </item>
     ///       <item>
+    ///         <c>Projections.Errors.ApplyErrors</c> and <c>Projections.Errors.SerializationErrors</c> &rarr;
+    ///         <c>Skip</c> (Fisher 2.0 parks a failing identity, or pauses where it can't, fisher#652)
+    ///       </item>
+    ///       <item>
     ///         <c>GateSideEffectsBehindPriorVersion</c> &rarr; <c>false</c> on every registered
     ///         projection (JasperFx 3.0 turned it on, jasperfx#1075). JasperFx has no store-wide
     ///         switch, so this is applied when the store is built and overrides a projection's own
@@ -597,6 +608,8 @@ public class StoreOptions
         Events.EnableSideEffectsOnInlineProjections = false;
         EnableDocumentMetadataByDefault = false;
         OpenTelemetry.EventCountersByDefault = false;
+        Projections.Errors.ApplyErrors = ProjectionErrorAction.Skip;
+        Projections.Errors.SerializationErrors = ProjectionErrorAction.Skip;
         _restoreV1AtBuild = true;
     }
 

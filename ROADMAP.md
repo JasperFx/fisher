@@ -6,7 +6,9 @@ architecture and the SQLite-specific decisions.
 Status: **two open issues, one of them blocked upstream.** Since 2.0.0-alpha.4, main implements the stored-event
 rewrite seam over the event-range marks, so only the projection backfill half of
 [#643](https://github.com/JasperFx/fisher/issues/643) is left (deferred: Jeremy is holding projection backfill, and
-the first attempt, #648, was reverted), and fixes `FetchLatest` of an Inline immutable aggregate
+the first attempt, #648, was reverted). Parking a failing projection identity
+([#652](https://github.com/JasperFx/fisher/issues/652), JasperFx 3.10.0) is done, and is the 2.0 default. Main also
+fixes `FetchLatest` of an Inline immutable aggregate
 after a commit on an identity session ([#645](https://github.com/JasperFx/fisher/issues/645)). 2.0.0-alpha.4 moves to
 JasperFx 3.8.0 and Weasel 10.0.0-alpha.11 and implements 3.7.0's event-range marks. JasperFx 3.6.0's per-identity rebuild
 ([#629](https://github.com/JasperFx/fisher/issues/629)) is done. 2.0.0-alpha.3 moves to Weasel 10.0.0-alpha.10. Fisher 2.0's share of Marten 10's default changes
@@ -906,7 +908,7 @@ Test counts keep understating the suites that matter. `AsyncDaemonCompliance` is
 the whole daemon; `FlatTableProjectionCompliance` is eight that demand an upsert generator, a
 migration hook and rebuild teardown.
 
-Being green on all sixty-nine is not the same as being feature-complete against Marten. The suites
+Being green on all seventy-one is not the same as being feature-complete against Marten. The suites
 cover what is portable across stores; the deliberate gaps listed in HANDOFF.md are still gaps.
 
 ## Filed follow-ups

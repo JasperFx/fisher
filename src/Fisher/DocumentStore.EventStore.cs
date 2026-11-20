@@ -731,13 +731,9 @@ public partial class DocumentStore : IEventStore
         return usage;
     }
 
+    // marten#6003: the shared builder, which adds the Pause / Skip / Park actions and the parking cap
     private static ProjectionErrorHandlingDescriptor ErrorPolicyFor(ErrorHandlingOptions options)
-        => new()
-        {
-            SkipApplyErrors = options.SkipApplyErrors,
-            SkipUnknownEvents = options.SkipUnknownEvents,
-            SkipSerializationErrors = options.SkipSerializationErrors
-        };
+        => ProjectionErrorHandlingDescriptor.For(options);
 
     /// <summary>
     ///     The highest sequence physically present in <c>fi_events</c>, or null when it cannot be read.

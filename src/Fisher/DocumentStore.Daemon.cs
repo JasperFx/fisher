@@ -253,6 +253,35 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
             async ct => await loader.LoadAsync(request, ct).ConfigureAwait(false), token).AsTask();
     }
 
+    // ---- parked identities and identity event sources (fisher#652, marten#6003) ----
+
+    /// <summary>
+    ///     Fisher parks a failing projection identity: <c>fi_parked_identities</c>, written and deleted in the
+    ///     projection batch's transaction, and the reads on <see cref="Storage.FisherDatabase" />.
+    /// </summary>
+    bool IEventStore<IDocumentSession, IQuerySession>.SupportsParkedIdentities => true;
+
+    /// <summary>
+    ///     Every identity source: the stream, a DCB tag table, a projection's slice index, and a scan.
+    /// </summary>
+    bool IEventStore<IDocumentSession, IQuerySession>.SupportsIdentityEventSource(IdentityEventSource source)
+        => source is IdentityEventSource.Stream or IdentityEventSource.Tag or IdentityEventSource.SliceIndex
+            or IdentityEventSource.Scan;
+
+    /// <summary>
+    ///     One identity's events from one source, read with the daemon loader's rules. See
+    ///     <see cref="FisherIdentityRebuildLoader" />.
+    /// </summary>
+    Task<IReadOnlyList<IEvent>> IEventStore<IDocumentSession, IQuerySession>.LoadEventsForIdentityAsync(
+        IEventDatabase database, IdentityEventLoadRequest request, CancellationToken token)
+    {
+        var loader = new FisherIdentityRebuildLoader(DatabaseFrom(database), Options);
+
+        return Options.ResiliencePipeline.ExecuteAsync(
+            async ct => (IReadOnlyList<IEvent>)await loader.LoadAsync(request, ct).ConfigureAwait(false), token)
+            .AsTask();
+    }
+
     // ---- progression bookkeeping ----
 
     /// <summary>
@@ -274,15 +303,33 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     ///         table in the file.
     ///     </para>
     /// </remarks>
-    Task IEventStore<IDocumentSession, IQuerySession>.RewindSubscriptionProgressAsync(IEventDatabase database,
+    async Task IEventStore<IDocumentSession, IQuerySession>.RewindSubscriptionProgressAsync(IEventDatabase database,
         string subscriptionName, CancellationToken token, long? sequenceFloor)
-        => sequenceFloor is null or 0
-            ? DeleteProgressionRowsAsync(DatabaseFrom(database), subscriptionName, token)
-            : WriteProgressionRowAsync(DatabaseFrom(database), subscriptionName, sequenceFloor.Value, token);
+    {
+        var target = DatabaseFrom(database);
 
-    Task IEventStore<IDocumentSession, IQuerySession>.RewindAgentProgressAsync(IEventDatabase database,
+        if (sequenceFloor is null or 0)
+        {
+            await DeleteProgressionRowsAsync(target, subscriptionName, token).ConfigureAwait(false);
+        }
+        else
+        {
+            await WriteProgressionRowAsync(target, subscriptionName, sequenceFloor.Value, token).ConfigureAwait(false);
+        }
+
+        // fisher#652: parks above the floor go (the shard parks them again when it gets there), and so do the slice
+        // index rows above it, which the shard writes again
+        await target.DeleteParkedAndSliceIndexAboveAsync(subscriptionName, sequenceFloor ?? 0, token)
+            .ConfigureAwait(false);
+    }
+
+    async Task IEventStore<IDocumentSession, IQuerySession>.RewindAgentProgressAsync(IEventDatabase database,
         string shardName, CancellationToken token, long sequenceFloor)
-        => WriteProgressionRowAsync(DatabaseFrom(database), shardName, sequenceFloor, token);
+    {
+        var target = DatabaseFrom(database);
+        await WriteProgressionRowAsync(target, shardName, sequenceFloor, token).ConfigureAwait(false);
+        await target.DeleteParkedAndSliceIndexAboveAsync(shardName, sequenceFloor, token).ConfigureAwait(false);
+    }
 
     Task IEventStore<IDocumentSession, IQuerySession>.DeleteProjectionProgressAsync(IEventDatabase database,
         string subscriptionName, CancellationToken token)
@@ -349,6 +396,11 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
                 command.CommandText = $"delete from {Weasel.Sqlite.SchemaUtils.QuoteName(table)}";
                 await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
+
+            // fisher#652: a rebuild re-folds every identity, so nothing stays parked, and it writes the slice index
+            // again from its start
+            await target.DeleteParkedAndSliceIndexAboveAsync(connection, transaction, subscriptionName, null, ct)
+                .ConfigureAwait(false);
 
             Diagnostics.DaemonTrace.Record("teardown.commit", subscriptionName, tables.Count);
 
@@ -670,6 +722,7 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
         // configured without WAL is exactly the case the warning exists for, and warning once for the
         // store would miss it.
         WarnIfJournalModeIsNotWal(database, logger);
+        LogProjectionIdentityAccess(logger);
 
         await database.EnsureStorageExistsAsync(typeof(IEvent), CancellationToken.None).ConfigureAwait(false);
 
@@ -679,6 +732,36 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
 
     ValueTask<IProjectionDaemon> IEventStore.BuildProjectionDaemonAsync(DatabaseId id)
         => BuildProjectionDaemonAsync(id.Name);
+
+    /// <summary>
+    ///     fisher#652 / marten#6003: say once per daemon how each async projection treats a failing identity, so
+    ///     an operator can see why one pauses and what to change. The reason names the rule that keeps a
+    ///     multi-stream projection from parking.
+    /// </summary>
+    private void LogProjectionIdentityAccess(ILogger logger)
+    {
+        if (!logger.IsEnabled(LogLevel.Information)) return;
+
+        var parking = Options.Projections.Errors.ApplyErrors == ProjectionErrorAction.Park;
+
+        foreach (var projection in Options.Projections.All.OfType<ProjectionBase>()
+                     .Where(x => x.Lifecycle == ProjectionLifecycle.Async))
+        {
+            var access = projection is IHasIdentityAccess identified
+                ? identified.IdentityAccess
+                : IdentityAccess.NotSupported("Event projections, flat tables and subscriptions don't park.");
+
+            var behaviour = !parking
+                ? Options.Projections.Errors.ApplyErrors.ToString().ToLowerInvariant() + "s"
+                : access.CanPark
+                    ? "parks"
+                    : "pauses";
+
+            logger.LogInformation(
+                "Projection {Projection} {Behaviour} on an apply error (identity access {IdentityAccess}): {Reason}",
+                projection.Name, behaviour, access.Class, access.Reason);
+        }
+    }
 
     private void WarnIfJournalModeIsNotWal(FisherDatabase database, ILogger logger)
     {

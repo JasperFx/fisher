@@ -525,6 +525,13 @@ builder.Services.AddHealthChecks().AddFisherHighWaterHealthCheck();
 See [ASP.NET Core Integration](/documents/aspnetcore#health-check) — including why it exists, and why
 the extended progression `heartbeat` column cannot answer the question it answers.
 
+A second check reports **Degraded** while any projection identity is
+[parked](/events/projections/async-daemon#parking-a-failing-identity), and names the projections:
+
+```cs
+builder.Services.AddHealthChecks().AddFisherParkedIdentitiesHealthCheck();
+```
+
 ## Seeing the SQL
 
 ```cs
