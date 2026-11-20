@@ -12,11 +12,20 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3909 tests green on net10.0 and 3936 on net11.0** — 3837 (net10.0) / 3864 (net11.0) in `Fisher.Tests`, 40 in
-`Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 884 of
-them are shared cross-store compliance tests — 650 event sourcing and 234 document.
+**3995 tests green on net10.0 and 4022 on net11.0** — 3922 (net10.0) / 3949 (net11.0) in `Fisher.Tests`, 41 in
+`Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 959 of
+them are shared cross-store compliance tests — 725 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.8.0** / Weasel **10.0.0-alpha.11** (2.0.0-alpha.4).
+On JasperFx **3.10.0** / Weasel **10.0.0-alpha.11**.
+
+## JasperFx 3.10.0: parked identities (fisher#652)
+
+From JasperFx 3.9.0. 3.10.0 carries marten#6003's parking: a failing async projection identity is parked instead of
+skipping its event or pausing the shard. Fisher adds `fi_parked_identities`, the batch's park/unpark/slice-index
+writes inside its `BEGIN IMMEDIATE`, one identity's events by stream, tag, slice index or scan, a slice index table
+per projection version that asks for one, and parking as the 2.0 default (`RestoreV1Defaults()` restores skip).
+`ParkedIdentityCompliance` (31) and `MultiStreamParkedIdentityCompliance` (44) are enrolled, all green. The
+`EventLoaderBase` workaround for unreadable events is filed as weasel#901.
 
 ## JasperFx 3.8.0 and Weasel 10.0.0-alpha.11 (2.0.0-alpha.4)
 
@@ -1368,9 +1377,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 3.8.0 ships 70 suites; Fisher enrolls **69 of them, 884 tests**.
-Fisher passes **884 of them, across all
-69 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 3.10.0 ships 72 suites; Fisher enrolls **71 of them, 959 tests**.
+Fisher passes **959 of them, across all
+71 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -1525,9 +1534,9 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 69 suites, 884 tests
+### Green — 71 suites, 959 tests
 
-Event sourcing — 55 suites, 650 tests:
+Event sourcing — 57 suites, 725 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1536,6 +1545,8 @@ Event sourcing — 55 suites, 650 tests:
 | `DcbAppendConditionCompliance` | 24 |
 | `ProjectionScenarioCompliance` | 20 |
 | `IdentityRebuildCompliance` | 18 |
+| `MultiStreamParkedIdentityCompliance` | 44 |
+| `ParkedIdentityCompliance` | 31 |
 | `EventRangeMarkCompliance` | 12 |
 | `EventRewriteCompliance` | 8 |
 | `StringStreamIdentityCompliance` | 21 |
