@@ -1947,8 +1947,9 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         }
 
         var storage = (Weasel.Storage.IDocumentStorage<TDoc, TId>)StorageFor<TDoc>();
+        var reads = (Weasel.Storage.IDocumentStorage<TDoc, TId>)FisherDatabase.Providers.StorageFor<TDoc>().Lightweight;
 
-        return new Projections.FisherProjectionStorage<TDoc, TId>(this, storage, tenantId);
+        return new Projections.FisherProjectionStorage<TDoc, TId>(this, storage, reads, tenantId);
     }
 
     private Events.Messaging.IMessageBatch? _messageBatch;
