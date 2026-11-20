@@ -99,7 +99,7 @@ builder.Services.AddFisher(opts =>
 | `fisher.events.appended` | counter | `fisher.store`, `fisher.event.type`, `fisher.tenant` | Append volume, by event type |
 | `fisher.documents.written` | counter | `fisher.store`, `fisher.document.type`, `fisher.document.operation` | Commit shape — inserts, updates, deletions |
 
-`fisher.write_lock.holder` is `session`, `daemon` or `rebuild`. That distinction is what separates
+`fisher.write_lock.holder` is `session`, `daemon`, `rebuild` or `rewrite` (a page of a stored-event rewrite). That distinction is what separates
 "the application is contended" from "the daemon is starving the application", which look identical from
 a session's side alone.
 

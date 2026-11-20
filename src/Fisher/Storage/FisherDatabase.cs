@@ -23,7 +23,8 @@ namespace Fisher.Storage;
 ///         the last connection closes.
 ///     </para>
 /// </remarks>
-public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDatabase, IAsyncDisposable, IDisposable
+public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDatabase, IDatabase, IAsyncDisposable,
+    IDisposable
 {
     private readonly SqliteDataSource _dataSource;
     private readonly EventGraph _events;
@@ -404,6 +405,47 @@ public partial class FisherDatabase : SqliteDatabase, Weasel.Storage.IStorageDat
                 + "registration.");
         }
     }
+
+    /// <summary>
+    ///     Apply every configured schema change to this database, and then trust it: the first append and the
+    ///     first write of each configured document type skip their own check (polecat#1095).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <see cref="EnsureEventStorageAsync" /> and <see cref="EnsureDocumentTableAsync" /> keep flags of
+    ///         their own, and Weasel's apply sets neither, so after a startup apply the first save diffed the same
+    ///         tables against <c>sqlite_master</c> again. Polecat had the same gap. The apply creates exactly the
+    ///         objects those two would (the event store feature, and <c>DocumentFeatureSchema.ObjectsFor</c> for
+    ///         each mapping), so once it returns there is nothing left for them to check.
+    ///     </para>
+    ///     <para>
+    ///         Only the mappings that existed when the apply started are marked: a type registered while it ran was
+    ///         not in it. Hides Weasel's method and re-implements <see cref="IDatabase" />'s, so the store, the
+    ///         hosted startup, <c>resources setup</c> and <c>db-apply</c> all come through here. Without a global
+    ///         lock Weasel always applies, so a returned apply is a completed one.
+    ///     </para>
+    /// </remarks>
+    public new async Task<SchemaPatchDifference> ApplyAllConfiguredChangesToDatabaseAsync(
+        JasperFx.AutoCreate? @override = null, ReconnectionOptions? reconnectionOptions = null,
+        CancellationToken ct = default)
+    {
+        var documentTypes = _options.Schema.AllMappings().Select(x => x.DocumentType).ToArray();
+
+        var difference = await base.ApplyAllConfiguredChangesToDatabaseAsync(@override, reconnectionOptions, ct)
+            .ConfigureAwait(false);
+
+        _eventStorageEnsured = true;
+        foreach (var documentType in documentTypes)
+        {
+            _ensuredDocumentTables.TryAdd(documentType, Task.CompletedTask);
+        }
+
+        return difference;
+    }
+
+    Task<SchemaPatchDifference> IDatabase.ApplyAllConfiguredChangesToDatabaseAsync(JasperFx.AutoCreate? @override,
+        ReconnectionOptions? reconnectionOptions, CancellationToken ct)
+        => ApplyAllConfiguredChangesToDatabaseAsync(@override, reconnectionOptions, ct);
 
     /// <summary>
     ///     Forget which document tables are known to exist, so the next write re-checks.

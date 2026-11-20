@@ -28,12 +28,59 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
 {
     private readonly FisherSession _session;
     private readonly IDocumentStorage<TDoc, TId> _storage;
+    private readonly IDocumentStorage<TDoc, TId> _reads;
+    private readonly bool _sessionTracksDocuments;
 
-    public FisherProjectionStorage(FisherSession session, IDocumentStorage<TDoc, TId> storage, string tenantId)
+    /// <param name="session">The session whose unit of work the writes are queued on.</param>
+    /// <param name="storage">The session's own storage for <typeparamref name="TDoc" />, which follows its tracking mode.</param>
+    /// <param name="reads">
+    ///     The lightweight storage for <typeparamref name="TDoc" />, which the projection reads through. See
+    ///     <see cref="forgetInSession" /> for why the two differ (fisher#645).
+    /// </param>
+    /// <param name="tenantId">The tenant the projection writes for.</param>
+    public FisherProjectionStorage(FisherSession session, IDocumentStorage<TDoc, TId> storage,
+        IDocumentStorage<TDoc, TId> reads, string tenantId)
     {
         _session = session;
         _storage = storage;
+        _reads = reads;
+        _sessionTracksDocuments = !ReferenceEquals(storage, reads);
         TenantId = tenantId;
+    }
+
+    /// <summary>
+    ///     fisher#645: drop this identity from the session's identity map once the projection has queued a
+    ///     write for it, so the next read in the session goes to the database.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         An Inline <c>FetchLatest</c> is a document load, and on an <c>IdentitySession</c> or a
+    ///         <c>DirtyTrackedSession</c> a load answers from the identity map. The projection used to read
+    ///         the current snapshot through the session's storage, which put that snapshot in the map, and
+    ///         then queued an upsert of the new one that left the map alone. A mutable aggregate hid it,
+    ///         because the projection changed the cached instance itself. An immutable record did not, and
+    ///         every <c>FetchLatest</c> after the commit returned the record from before it. The same
+    ///         happened whenever the session had loaded the snapshot itself before appending.
+    ///     </para>
+    ///     <para>
+    ///         So the projection reads through the lightweight storage, which leaves the session's identity
+    ///         map and change trackers alone, and every write here ejects the identity. Ejecting rather than
+    ///         replacing the entry with the new snapshot means a commit that fails cannot leave the map
+    ///         holding a version that was never stored. Marten replaces the entry when
+    ///         <c>UseIdentityMapForAggregates</c> is on; Fisher keeps no aggregate identity map, so the
+    ///         option makes no difference here.
+    ///     </para>
+    ///     <para>
+    ///         Only when the session tracks documents at all: a lightweight session, which is what the async
+    ///         daemon uses, has no map to correct, and its slices run in parallel.
+    ///     </para>
+    /// </remarks>
+    private void forgetInSession(TId identity)
+    {
+        if (_sessionTracksDocuments)
+        {
+            _storage.EjectById(_session, identity);
+        }
     }
 
     public string TenantId { get; }
@@ -52,7 +99,10 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
     ///     <see cref="StoreProjection" /> for why it matters (fisher#369).
     /// </remarks>
     public void Store(TDoc snapshot, TId id, string tenantId)
-        => _session.QueueOperation(ProjectedWrites.For(_storage, snapshot, tenantId, ProjectedWrites.RevisionCarriedBy(snapshot)));
+    {
+        _session.QueueOperation(ProjectedWrites.For(_storage, snapshot, tenantId, ProjectedWrites.RevisionCarriedBy(snapshot)));
+        forgetInSession(id);
+    }
 
     /// <summary>
     ///     Applying a projection is storing its snapshot — and, for a numeric-revisioned document, stamping
@@ -83,14 +133,20 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
     ///     </para>
     /// </remarks>
     public void StoreProjection(TDoc aggregate, IEvent? lastEvent, AggregationScope scope)
-        => _session.QueueOperation(ProjectedWrites.For(_storage, aggregate, TenantId, lastEvent is null
+    {
+        _session.QueueOperation(ProjectedWrites.For(_storage, aggregate, TenantId, lastEvent is null
             ? ProjectedWrites.RevisionCarriedBy(aggregate)
             : scope == AggregationScope.SingleStream ? lastEvent.Version : lastEvent.Sequence));
+        forgetInSession((TId)_storage.IdentityFor(aggregate));
+    }
 
     public void Delete(TId identity) => Delete(identity, TenantId);
 
     public void Delete(TId identity, string tenantId)
-        => _session.QueueOperation(_storage.DeleteForId(identity, tenantId));
+    {
+        _session.QueueOperation(_storage.DeleteForId(identity, tenantId));
+        forgetInSession(identity);
+    }
 
     public void HardDelete(TDoc snapshot) => HardDelete(snapshot, TenantId);
 
@@ -104,10 +160,16 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
     ///     follows it.
     /// </remarks>
     public void HardDeleteById(TId identity)
-        => _session.QueueOperation(_storage.HardDeleteForId(identity, TenantId));
+    {
+        _session.QueueOperation(_storage.HardDeleteForId(identity, TenantId));
+        forgetInSession(identity);
+    }
 
     public void HardDelete(TDoc snapshot, string tenantId)
-        => _session.QueueOperation(_storage.HardDeleteForDocument(snapshot, tenantId));
+    {
+        _session.QueueOperation(_storage.HardDeleteForDocument(snapshot, tenantId));
+        forgetInSession((TId)_storage.IdentityFor(snapshot));
+    }
 
     public void UnDelete(TDoc snapshot) => UnDelete(snapshot, TenantId);
 
@@ -133,6 +195,7 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
         if (operation is not null)
         {
             _session.QueueOperation(operation);
+            forgetInSession((TId)_storage.IdentityFor(snapshot));
         }
     }
 
@@ -196,7 +259,7 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
     }
 
     public async Task<TDoc> LoadAsync(TId id, CancellationToken cancellation)
-        => (await _storage.LoadAsync(id, _session, cancellation).ConfigureAwait(false))!;
+        => (await _reads.LoadAsync(id, _session, cancellation).ConfigureAwait(false))!;
 
     public async Task<IReadOnlyDictionary<TId, TDoc>> LoadManyAsync(TId[] identities,
         CancellationToken cancellationToken)
@@ -211,7 +274,7 @@ internal class FisherProjectionStorage<TDoc, TId> : IProjectionStorage<TDoc, TId
             return new Dictionary<TId, TDoc>();
         }
 
-        var documents = await _storage.LoadManyAsync(identities, _session, cancellationToken)
+        var documents = await _reads.LoadManyAsync(identities, _session, cancellationToken)
             .ConfigureAwait(false);
 
         // Guarded here as well as inside Record: the interpolated detail and its string.Join are

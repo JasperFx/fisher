@@ -316,9 +316,11 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
     ///     next process to run <em>with</em> a serializer configured would read them correctly only
     ///     because the row, not the type, decides.
     /// </remarks>
-    internal byte[]? BinaryEncoderFor(IEvent @event)
+    internal byte[]? BinaryEncoderFor(IEvent @event) => BinaryBodyFor(@event.EventType, @event.Data);
+
+    /// <inheritdoc cref="BinaryEncoderFor" />
+    internal byte[]? BinaryBodyFor(Type eventType, object data)
     {
-        var eventType = @event.EventType;
         var mapping = EventMappingFor(eventType);
 
         if (mapping.BinarySerializer is { } serializer)
@@ -327,7 +329,7 @@ public partial class EventGraph : EventRegistry, IAggregationSourceFactory<IQuer
             // The BLOB parameter has to be an exact-length byte[] that lives until the command runs, so
             // writing into a pooled buffer still ends in a copy to a new array. For a serializer that
             // implements only the byte[] pair, the buffer-writer default adds a second copy on top.
-            return serializer.Serialize(eventType, @event.Data);
+            return serializer.Serialize(eventType, data);
         }
 
         if (mapping.IsMarkedBinary)

@@ -145,9 +145,17 @@ members for child documents, and a string's methods and `Length`), the `OrderBy`
 they are read. The terminals are `ToListAsync`, the `First`/`Single` family, `CountAsync`,
 `LongCountAsync`, `AnyAsync` and the aggregates over the element or one of its members.
 
+A `Where` after a result selector or a `Select` filters on what the row was built from, so
+`.SelectMany(x => x.Lines, (order, line) => new { order.Number, line.Sku }).Where(r => r.Number > 2)` filters
+on the order's `Number` in SQL. That works for a member set in an anonymous type or an object initializer.
+`Select(...).Distinct()` computes the projected value in SQL and compares that: members of the element, or
+integer `%`, `/` and negation over them, the same as over [documents](/documents/querying/linq/#distinct).
+
 **Refused rather than mis-translated:** a second `SelectMany`, a `Select` before the `SelectMany`,
-`Where` or ordering after `Take`/`Skip`, a result selector or a `Select`, `Distinct` over child documents
-or after a `Select`, and `LastAsync`, `ToAsyncEnumerable` and `ToPagedListAsync` over a flattened query.
+`Where` or ordering after `Take`/`Skip`, ordering after a result selector or a `Select`, a `Where` on a
+member a constructor set, `Distinct` over child documents, after a result selector, or after a `Select`
+whose value has no exact translation, and `LastAsync`, `ToAsyncEnumerable` and `ToPagedListAsync` over a
+flattened query.
 
 The SQL unrolls each document's array with `json_each` over a subquery of the documents:
 

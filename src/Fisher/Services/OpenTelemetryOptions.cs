@@ -56,6 +56,9 @@ public sealed class OpenTelemetryOptions: JasperFx.OpenTelemetry.OpenTelemetryOp
     /// <summary>A rebuild's teardown of existing projection state.</summary>
     internal const string RebuildHolder = "rebuild";
 
+    /// <summary>A page of a stored-event rewrite (jasperfx#1215).</summary>
+    internal const string RewriteHolder = "rewrite";
+
     /// <summary>
     ///     Which store a measurement came from.
     /// </summary>

@@ -42,15 +42,32 @@ internal sealed class FlattenedQuery
 
     private int _orderingGroupLength;
     private bool _paged;
+    private bool _readsParentColumns;
+    private readonly string _parentOrdering;
+    private readonly IMemberResolver _parentMembers;
 
-    public FlattenedQuery(Statement parent, CollectionMember collection, Type parentType,
-        LambdaExpression? resultSelector)
+    /// <param name="parent">The document statement whose rows are flattened.</param>
+    /// <param name="parentOrdering">Its <c>order by</c>, which numbers its rows, or empty.</param>
+    /// <param name="parentMembers">The documents' members, read from the parent subquery's columns.</param>
+    /// <param name="collection">The collection member being flattened.</param>
+    /// <param name="parentType">The document type.</param>
+    /// <param name="resultSelector">The result selector, or null.</param>
+    public FlattenedQuery(Statement parent, string parentOrdering, IMemberResolver parentMembers,
+        CollectionMember collection, Type parentType, LambdaExpression? resultSelector)
     {
         Parent = parent;
+        _parentOrdering = parentOrdering;
+        _parentMembers = parentMembers;
         Collection = collection;
         ParentType = parentType;
         ResultSelector = resultSelector;
     }
+
+    /// <summary>
+    ///     A <c>Select</c> followed by <c>Distinct()</c>, computed in SQL so the distinct values are the projected
+    ///     ones, or null. When set, the rows are this projection's columns rather than the element.
+    /// </summary>
+    public SelectProjection? DistinctProjection { get; private set; }
 
     /// <summary>The document statement whose rows are flattened, selecting <c>data</c> and the ordinal.</summary>
     public Statement Parent { get; }
@@ -86,8 +103,8 @@ internal sealed class FlattenedQuery
         switch (call.Method.Name)
         {
             case "Where":
-                RefuseAfter(call, "Where");
-                Wheres.Add(new WhereClauseParser(ResolverFor(Lambda(call))).Parse(Lambda(call).Body));
+                RefuseAfterPaging(call, "Where");
+                Wheres.Add(WhereFor(Lambda(call)));
                 break;
 
             case "OrderBy":
@@ -120,12 +137,22 @@ internal sealed class FlattenedQuery
                 break;
 
             case "Distinct" when call.Arguments.Count == 1:
-                if (Selector is not null || ResultSelector is not null || !Collection.HasScalarElements || _paged)
+                if (ResultSelector is not null || _paged || (Selector is null && !Collection.HasScalarElements))
                 {
                     throw new BadLinqExpressionException(
-                        "Fisher supports Distinct() straight after a SelectMany over a collection of values "
-                        + "(strings, numbers, enums, Guids), before any Select, Take or Skip. Distinct over child "
-                        + "documents or projected values is not translated.");
+                        "Fisher supports Distinct() after a SelectMany over a collection of values (strings, "
+                        + "numbers, enums, Guids), or after one Select over the elements, before any Take or Skip. "
+                        + "Distinct over child documents or after a result selector is not translated.");
+                }
+
+                if (Selector is not null)
+                {
+                    DistinctProjection = SelectProjection.For(Selector, ResolverFor(Selector)).ComputedInSql()
+                                         ?? throw new BadLinqExpressionException(
+                                             $"Fisher cannot translate Distinct() after Select({Selector}) over a "
+                                             + "SelectMany: the projected value has no exact translation to SQL, "
+                                             + "and Distinct has to compare the value the Select computes. Project "
+                                             + "members of the element, or integer arithmetic over them.");
                 }
 
                 IsDistinct = true;
@@ -153,15 +180,28 @@ internal sealed class FlattenedQuery
     /// <summary>The statement over the flattened rows, selecting the element (and the parent for a result selector).</summary>
     public Statement BuildStatement()
     {
+        // Every column of the documents when a filter reads a member of the parent, which may be a duplicated
+        // field's own column rather than a path into data.
+        Parent.SelectColumns = $"{(_readsParentColumns ? "*" : "data")}, row_number() over ({_parentOrdering}) as {OrdinalColumn}";
+
         var statement = new Statement
         {
             FromFragment = new FlattenedFrom(Parent, Collection),
-            SelectColumns = ResultSelector is null ? ElementJson : $"{ElementJson}, {ParentAlias}.data",
+            SelectColumns = DistinctProjection is { } projection
+                ? string.Join(", ", projection.Locators)
+                : ResultSelector is null ? ElementJson : $"{ElementJson}, {ParentAlias}.data",
             IsDistinct = IsDistinct,
             Limit = Limit,
             Offset = Offset,
             NonStaleTimeout = Parent.NonStaleTimeout
         };
+
+        // fisher#609, as for documents: a decimal column is deduplicated by its sort key
+        if (DistinctProjection is { } distinct && !distinct.DistinctKeys.SequenceEqual(distinct.Locators))
+        {
+            statement.IsDistinct = false;
+            statement.GroupBy = string.Join(", ", distinct.DistinctKeys);
+        }
 
         statement.DocumentTypes.AddRange(Parent.DocumentTypes);
 
@@ -209,6 +249,61 @@ internal sealed class FlattenedQuery
 
     private IMemberResolver ResolverFor(LambdaExpression lambda)
         => Collection.CreateElementResolver(lambda.Parameters[0]);
+
+    /// <summary>
+    ///     A <c>Where</c> after the <c>SelectMany</c>, over whatever its rows are by then.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Over the element it is translated as it stands. After a <c>Select</c> or a result selector the rows
+    ///         are computed once they are read, so the predicate is rewritten back onto what they are computed from:
+    ///         the row parameter is replaced by the <c>Select</c>'s body, and then by the result selector's, and a
+    ///         member of an anonymous type or an object initializer by the expression that set it. What is left reads
+    ///         the element and the parent document, as in
+    ///         <c>SelectMany(x =&gt; x.Lines, (x, l) =&gt; new { x.Number, l.Sku }).Where(r =&gt; r.Number &gt; 2)</c>,
+    ///         which filters on <c>x.Number &gt; 2</c>. A member set through a constructor's arguments cannot be
+    ///         traced back, and is refused by the resolver.
+    ///     </para>
+    ///     <para>
+    ///         Filtering before the projection is the same answer LINQ gives after it, because a <c>Where</c> keeps or
+    ///         drops whole rows. Paging is the exception, which is why a <c>Where</c> after <c>Take</c> or
+    ///         <c>Skip</c> stays refused.
+    ///     </para>
+    /// </remarks>
+    private ISqlFragment WhereFor(LambdaExpression predicate)
+    {
+        var body = predicate.Body;
+        var row = predicate.Parameters[0];
+
+        if (Selector is not null)
+        {
+            body = RowSubstitution.Replace(body, row, Selector.Body);
+            row = Selector.Parameters[0];
+        }
+
+        if (ResultSelector is null)
+        {
+            return new WhereClauseParser(Collection.CreateElementResolver(row)).Parse(body);
+        }
+
+        body = RowSubstitution.Replace(body, row, ResultSelector.Body);
+        _readsParentColumns = true;
+
+        var resolver = new RowMemberResolver(
+            ResultSelector.Parameters[0], _parentMembers,
+            ResultSelector.Parameters[1], Collection.CreateElementResolver(ResultSelector.Parameters[1]));
+
+        return new WhereClauseParser(resolver).Parse(body);
+    }
+
+    private void RefuseAfterPaging(MethodCallExpression call, string what)
+    {
+        if (_paged)
+        {
+            throw new BadLinqExpressionException(
+                $"Fisher cannot translate {what} after Take or Skip over a SelectMany. Write it before the paging.");
+        }
+    }
 
     private void RefuseAfter(MethodCallExpression call, string what)
     {
@@ -328,6 +423,89 @@ internal sealed class FlattenedQuery
             _found |= node == parameter;
             return node;
         }
+    }
+
+    /// <summary>
+    ///     Replaces a row parameter with the expression the row was computed by, and a member read off an anonymous
+    ///     type or an object initializer with the expression that set it.
+    /// </summary>
+    private sealed class RowSubstitution : ExpressionVisitor
+    {
+        private readonly ParameterExpression _row;
+        private readonly Expression _computedBy;
+
+        private RowSubstitution(ParameterExpression row, Expression computedBy)
+        {
+            _row = row;
+            _computedBy = computedBy;
+        }
+
+        public static Expression Replace(Expression body, ParameterExpression row, Expression computedBy)
+            => new RowSubstitution(row, computedBy).Visit(body)!;
+
+        protected override Expression VisitParameter(ParameterExpression node)
+            => node == _row ? _computedBy : node;
+
+        protected override Expression VisitMember(MemberExpression node)
+        {
+            var target = Visit(node.Expression);
+
+            switch (target)
+            {
+                case NewExpression { Members: { } members } created:
+                    for (var i = 0; i < members.Count; i++)
+                    {
+                        if (SameMember(members[i], node.Member)) return created.Arguments[i];
+                    }
+
+                    break;
+
+                case MemberInitExpression initialized:
+                    foreach (var binding in initialized.Bindings)
+                    {
+                        if (binding is MemberAssignment assignment && SameMember(assignment.Member, node.Member))
+                        {
+                            return assignment.Expression;
+                        }
+                    }
+
+                    break;
+            }
+
+            return node.Update(target);
+        }
+
+        // An anonymous type's constructor names its property getters rather than its properties
+        private static bool SameMember(System.Reflection.MemberInfo left, System.Reflection.MemberInfo right)
+            => left == right || (left.Name == right.Name && left.DeclaringType == right.DeclaringType)
+                             || (left is System.Reflection.MethodInfo getter && getter.Name == "get_" + right.Name
+                                 && getter.DeclaringType == right.DeclaringType);
+    }
+
+    /// <summary>
+    ///     Resolves a member of a result selector's two parameters: the document's from the parent subquery, the
+    ///     element's from <c>json_each</c>.
+    /// </summary>
+    private sealed class RowMemberResolver(
+        ParameterExpression parent, IMemberResolver parentMembers,
+        ParameterExpression element, IMemberResolver elementMembers) : IMemberResolver
+    {
+        public IQueryableMember ResolveMember(MemberExpression expression)
+        {
+            Expression? current = expression;
+            while (current is MemberExpression member) current = member.Expression;
+
+            if (current == parent) return parentMembers.ResolveMember(expression);
+            if (current == element) return elementMembers.ResolveMember(expression);
+
+            throw new BadLinqExpressionException(
+                $"Fisher cannot translate '{expression}' in a Where after a SelectMany's result selector. A member "
+                + "has to be traced back to the document or the element: one the result selector sets in an "
+                + "anonymous type or an object initializer, not through a constructor's arguments.");
+        }
+
+        public IQueryableMember? ResolveParameter(ParameterExpression parameter)
+            => parameter == element ? elementMembers.ResolveParameter(parameter) : null;
     }
 
     /// <summary>
