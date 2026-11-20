@@ -12,9 +12,9 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**3657 tests green on net10.0 and 3684 on net11.0** — 3585 (net10.0) / 3612 (net11.0) in `Fisher.Tests`, 40 in
-`Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 876 of
-them are shared cross-store compliance tests — 642 event sourcing and 234 document.
+**3909 tests green on net10.0 and 3936 on net11.0** — 3837 (net10.0) / 3864 (net11.0) in `Fisher.Tests`, 40 in
+`Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 884 of
+them are shared cross-store compliance tests — 650 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.8.0** / Weasel **10.0.0-alpha.11** (2.0.0-alpha.4).
 
@@ -1367,9 +1367,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 3.8.0 ships 70 suites; Fisher enrolls **68 of them, 876 tests**.
-Fisher passes **876 of them, across all
-68 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 3.8.0 ships 70 suites; Fisher enrolls **69 of them, 884 tests**.
+Fisher passes **884 of them, across all
+69 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -1524,9 +1524,9 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 68 suites, 876 tests
+### Green — 69 suites, 884 tests
 
-Event sourcing — 54 suites, 642 tests:
+Event sourcing — 55 suites, 650 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1536,6 +1536,7 @@ Event sourcing — 54 suites, 642 tests:
 | `ProjectionScenarioCompliance` | 20 |
 | `IdentityRebuildCompliance` | 18 |
 | `EventRangeMarkCompliance` | 12 |
+| `EventRewriteCompliance` | 8 |
 | `StringStreamIdentityCompliance` | 21 |
 | `EventStoreExplorerCompliance` | 18 |
 | `NaturalKeyCompliance` | 19 |
