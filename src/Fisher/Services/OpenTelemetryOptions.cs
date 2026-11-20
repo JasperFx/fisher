@@ -59,9 +59,6 @@ public sealed class OpenTelemetryOptions: JasperFx.OpenTelemetry.OpenTelemetryOp
     /// <summary>A page of a stored-event rewrite (jasperfx#1215).</summary>
     internal const string RewriteHolder = "rewrite";
 
-    /// <summary>A page of a projection backfill (jasperfx#1222).</summary>
-    internal const string BackfillHolder = "backfill";
-
     /// <summary>
     ///     Which store a measurement came from.
     /// </summary>

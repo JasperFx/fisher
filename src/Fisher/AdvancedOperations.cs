@@ -902,15 +902,6 @@ public class AdvancedOperations
         await using var session = _store.LightweightSession(tenantId);
         var fisherSession = (Internal.FisherSession)session;
 
-        // fisher#643: the stream is re-folded through the live version's Apply methods, so an unfinished backfill
-        // would patch this document a second time
-        if (AsyncSingleStreamProjectionFor(typeof(T)) is Projections.IFisherBackfillSource { Backfills.Count: > 0 } backfilled)
-        {
-            await using var connection = await fisherSession.FisherDatabase.OpenConnectionAsync(token).ConfigureAwait(false);
-            await Events.Backfills.BackfillGuards.AssertNoUnfinishedBackfillAsync(_store.Options, backfilled.Name,
-                "rebuild a stream of", connection, null, token).ConfigureAwait(false);
-        }
-
         if (AsyncSingleStreamProjectionFor(typeof(T)) is { } projection
             && await TryRebuildThroughDaemonAsync(projection, fisherSession, streamId, token).ConfigureAwait(false))
         {

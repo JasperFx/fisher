@@ -871,21 +871,6 @@ public class DocumentMapping
     internal SqliteObjectName TableName
         => FisherTableNaming.ObjectFor(StoreOptions.DatabaseSchemaName, TableSuffix);
 
-    /// <summary>
-    ///     fisher#643: the table this document would have under another version of its projection, by the
-    ///     fisher#638 rule. A backfill compares it with <see cref="TableName" /> to see whether the documents the
-    ///     prior version wrote are the ones the live version reads.
-    /// </summary>
-    internal SqliteObjectName TableNameForProjectionVersion(uint version)
-    {
-        var alias = _projectionVersionSuffix is not null && Alias.EndsWith(_projectionVersionSuffix, StringComparison.Ordinal)
-            ? Alias[..^_projectionVersionSuffix.Length]
-            : Alias;
-
-        return FisherTableNaming.ObjectFor(StoreOptions.DatabaseSchemaName,
-            version > 1 ? $"doc_{alias}_{version}" : $"doc_{alias}");
-    }
-
     internal string QuotedTableName
         => FisherTableNaming.QuotedTableName(StoreOptions.DatabaseSchemaName, TableSuffix);
 

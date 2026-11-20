@@ -448,13 +448,6 @@ public partial class FisherDatabase : IEventDatabase
 
         await EnsureEventStorageAsync(token).ConfigureAwait(false);
 
-        // fisher#643: a backfill's ceiling, captured by whichever of the live version's start and the backfill job
-        // gets here first, is where Fisher can tell whether the prior version's documents are reachable at all
-        if (Fisher.Events.Backfills.BackfillGuards.SourceForCeilingKey(_options, key) is { } backfillSource)
-        {
-            return await captureBackfillCeilingAsync(backfillSource, key, tenantId, mark, token).ConfigureAwait(false);
-        }
-
         return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
         {
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
@@ -469,50 +462,6 @@ public partial class FisherDatabase : IEventDatabase
             command.Parameters.AddWithValue("@mark", mark);
 
             return Convert.ToInt64(await command.ExecuteScalarAsync(ct).ConfigureAwait(false));
-        }, token).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    ///     <see cref="TrySetEventRangeMarkAsync" /> for a backfill's ceiling: in one <c>BEGIN IMMEDIATE</c>
-    ///     transaction, the stored mark if there is one, otherwise the fisher#643 check that the prior version's
-    ///     documents are in the table the live version writes, then the insert.
-    /// </summary>
-    private async Task<long> captureBackfillCeilingAsync(Fisher.Projections.IFisherBackfillSource source, string key,
-        string? tenantId, long mark, CancellationToken token)
-    {
-        return await _options.ResiliencePipeline.ExecuteAsync(async ct =>
-        {
-            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
-            await using var transaction = (SqliteTransaction)await connection
-                .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
-
-            await using (var read = connection.CreateCommand())
-            {
-                read.Transaction = transaction;
-                read.CommandText =
-                    $"select mark from {_events.EventRangeMarksTableName} where mark_key = @key and tenant_id = @tenant";
-                BindRangeMarkKey(read, key, tenantId);
-
-                if (await read.ExecuteScalarAsync(ct).ConfigureAwait(false) is long stored)
-                {
-                    await transaction.CommitAsync(ct).ConfigureAwait(false);
-                    return stored;
-                }
-            }
-
-            await Fisher.Events.Backfills.BackfillGuards
-                .AssertPriorVersionDocumentsAreReachableAsync(_options, source, connection, transaction, ct)
-                .ConfigureAwait(false);
-
-            await using (var insert = connection.CreateCommand())
-            {
-                insert.Transaction = transaction;
-                ConfigureSetEventRangeMark(insert, key, tenantId, mark);
-                await insert.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            }
-
-            await transaction.CommitAsync(ct).ConfigureAwait(false);
-            return mark;
         }, token).ConfigureAwait(false);
     }
 
