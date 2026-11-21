@@ -558,6 +558,20 @@ public class StoreOptions
     public bool LogSqlParameterValues { get; set; }
 
     /// <summary>
+    ///     The host's logger factory, which a projection daemon built without a logger of its own logs
+    ///     through (fisher#658). Mirrors Marten's <c>StoreOptions.LogFactory</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <c>AddFisher</c> sets it from the container. Wolverine-managed projection distribution builds
+    ///     each daemon through <c>IEventStore.BuildProjectionDaemonAsync(DatabaseId)</c>, which has no
+    ///     logger parameter, so without this the daemon and every agent on it logged into
+    ///     <c>NullLogger</c>: no identity access line at startup, no parked identity, no
+    ///     <c>ParkedLimitReachedException</c>. A store built with <c>DocumentStore.For(...)</c> has no
+    ///     container and leaves it null, and its daemons stay silent unless they are handed a logger.
+    /// </remarks>
+    internal Microsoft.Extensions.Logging.ILoggerFactory? LogFactory { get; set; }
+
+    /// <summary>
     ///     Put back every default that Fisher 2.0 changed from Fisher 1 (fisher#621, following Marten
     ///     10's <c>RestoreV9Defaults()</c>). The single opt-out for the 2.0 default changes: call it
     ///     first and add your own overrides afterward.
