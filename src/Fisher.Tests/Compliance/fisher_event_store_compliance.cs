@@ -9,7 +9,7 @@ namespace Fisher.Tests.Compliance;
  * these tests cannot drift between the products.
  *
  * Suites were added one at a time as Fisher grew into them, and seventy-one are enrolled from
- * JasperFx.Events.ComplianceTests 3.11.0, which itself ships seventy-two concrete suites. The one left out,
+ * JasperFx.Events.ComplianceTests 3.12.1, which itself ships seventy-two concrete suites. The one left out,
  * BackfillCompliance (3.7.0), is excused in compliance_suite_inventory until the backfill half of
  * fisher#643. MultiDatabaseExplorerCompliance is one file holding two arms.
  *
