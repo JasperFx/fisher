@@ -29,6 +29,7 @@ concurrency:
 jobs:
   directory-tenancy:
     runs-on: windows-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
