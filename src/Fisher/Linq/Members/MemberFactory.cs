@@ -514,7 +514,16 @@ internal class MemberFactory : IMemberResolver
                 when !UnionMemberAccess.TryMatchCaseConversion(owner, out _, out _):
                 return IndexedPathOf(owner) + "." + GetJsonPropertyName(member.Member);
 
+            // Only a value stored as a JSON array has elements to index: a byte[] is a base64 string and a
+            // string's ElementAt is a character, and either path would read as missing and match nothing.
             case var indexed when IndexedAccess.TryMatch(indexed, out var collection, out var index):
+                if (!CollectionMember.TryGetElementType(collection.Type, out _))
+                {
+                    throw new BadLinqExpressionException(
+                        $"Cannot translate '{indexed}': '{collection}' is a {collection.Type.Name}, which is not stored "
+                        + "as a JSON array, so there is no element to index into.");
+                }
+
                 return IndexedPathOf(collection) + "[" + IndexedAccess.ValueOf(index, indexed) + "]";
 
             default:

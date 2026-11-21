@@ -34,6 +34,7 @@ public class IndexedArrayDoc
     public IndexedChild[][] ChildGrid { get; set; } = [];
     public int?[] Maybes { get; set; } = [];
     public IndexedChild?[] Sparse { get; set; } = [];
+    public byte[] Blob { get; set; } = [1, 2];
 }
 
 public record IndexedChild
@@ -263,6 +264,23 @@ public class document_array_indexes : IAsyncLifetime
         (await Should.ThrowAsync<BadLinqExpressionException>(() =>
                 session.Query<IndexedArrayDoc>().Where(x => x.Values[x.Number] == 3).ToListAsync(Token)))
             .Message.ShouldContain("computed from the document");
+    }
+
+    /// <summary>
+    ///     A byte[] is stored as a base64 string and a string's ElementAt is a character, so neither has an
+    ///     element on a JSON path. Read as a path they would match nothing; refused instead.
+    /// </summary>
+    [Fact]
+    public async Task indexing_a_value_that_is_not_a_json_array_is_refused()
+    {
+        await using var session = _store.QuerySession();
+
+        (await Should.ThrowAsync<BadLinqExpressionException>(() =>
+                session.Query<IndexedArrayDoc>().Where(x => x.Blob[0] == 1).ToListAsync(Token)))
+            .Message.ShouldContain("not stored as a JSON array");
+
+        await Should.ThrowAsync<BadLinqExpressionException>(() =>
+            session.Query<IndexedArrayDoc>().Where(x => x.Category.ElementAt(0) == 'e').ToListAsync(Token));
     }
 
     // ---- OrderBy ----
