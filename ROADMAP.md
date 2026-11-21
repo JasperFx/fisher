@@ -6,7 +6,8 @@ architecture and the SQLite-specific decisions.
 Status: **two open issues, one of them blocked upstream.** Since 2.0.0-alpha.4, main implements the stored-event
 rewrite seam over the event-range marks, so only the projection backfill half of
 [#643](https://github.com/JasperFx/fisher/issues/643) is left (deferred: Jeremy is holding projection backfill, and
-the first attempt, #648, was reverted). Parking a failing projection identity
+the first attempt, #648, was reverted). 2.0.0-alpha.7 moves to JasperFx 3.11.0 and Weasel 10.0.0-alpha.13: a projection
+batch that fails transiently is built again through the store's Polly pipeline (jasperfx#1256). Parking a failing projection identity
 ([#652](https://github.com/JasperFx/fisher/issues/652), JasperFx 3.10.0) is done, and is the 2.0 default. Main also
 fixes `FetchLatest` of an Inline immutable aggregate
 after a commit on an identity session ([#645](https://github.com/JasperFx/fisher/issues/645)). 2.0.0-alpha.4 moves to

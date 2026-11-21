@@ -12,11 +12,28 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**4004 tests green on net10.0 and 4031 on net11.0** — 3931 (net10.0) / 3958 (net11.0) in `Fisher.Tests`, 41 in
+**4006 tests green on net10.0 and 4033 on net11.0** — 3933 (net10.0) / 3960 (net11.0) in `Fisher.Tests`, 41 in
 `Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 959 of
 them are shared cross-store compliance tests — 725 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.10.0** / Weasel **10.0.0-alpha.11**.
+On JasperFx **3.11.0** / Weasel **10.0.0-alpha.13**.
+
+## JasperFx 3.11.0 and Weasel 10.0.0-alpha.13 (2.0.0-alpha.7)
+
+From JasperFx 3.10.0 and Weasel 10.0.0-alpha.11. No compliance suite changed. Four things reach Fisher:
+
+- jasperfx#1256: the daemon builds a projection batch that failed transiently again through
+  `IEventStore.ResiliencePipeline`, which Fisher answers with `StoreOptions`' own Polly pipeline. Its retry already
+  handles `SQLITE_BUSY`, `SQLITE_LOCKED` and `SQLITE_PROTOCOL`, so a batch that lost a race for the write lock is
+  built again, and one that outlasts the five retries pauses the shard with `IsTransient` true
+  (`transient_batch_build_failures`).
+- jasperfx#1254 (PR #1259): `WithRecordMetadata(..., tagTypes)` puts a record's DCB tags back onto an event. The
+  step-through uses it, and Fisher's own tag copy from fisher#654 (PR #655) is gone.
+- weasel#901: `EventLoaderBase` reports a parking request's unreadable events on the page itself, so
+  `FisherEventLoader`'s `AsyncLocal` workaround is gone.
+- jasperfx#1255: the extended progression writer writes `Parked` and `Unparked` with heartbeats off. Fisher's
+  `parked_count`, counted in the batch's own transaction, stays as it is: a state stamped before the batch
+  committed can still be written after it, and the writer never overwrites the batch's count.
 
 ## JasperFx 3.10.0: parked identities (fisher#652)
 
@@ -1377,7 +1394,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 3.10.0 ships 72 suites; Fisher enrolls **71 of them, 959 tests**.
+`JasperFx.Events.ComplianceTests` 3.11.0 ships 72 suites; Fisher enrolls **71 of them, 959 tests**.
 Fisher passes **959 of them, across all
 71 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed

@@ -596,7 +596,9 @@ public partial class FisherDatabase : IEventDatabase
             // fisher#652: null means the shard doesn't park (or hasn't loaded its parked set), so the column is left
             // alone. fisher#654: the projection batch owns the count once it is set (RefreshParkedCountsAsync counts it
             // from fi_parked_identities in the transaction that parks or unparks), so this only fills in a null: a
-            // state stamped before a batch committed must not put a stale count back over the batch's (jasperfx#1255).
+            // state stamped before a batch committed must not put a stale count back over the batch's. (jasperfx#1255,
+            // the writer dropping Parked/Unparked with heartbeats off, is fixed upstream in JasperFx 3.11.0; the
+            // ordering race this guards against is not.)
             const string parked = "coalesce(parked_count, @parked_count)";
 
             command.CommandText = $"""

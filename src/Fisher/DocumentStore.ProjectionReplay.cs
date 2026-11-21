@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using Fisher.Events.Daemon;
 using JasperFx.Descriptors;
 using JasperFx.Events;
 using JasperFx.Events.Aggregation;
@@ -123,62 +122,11 @@ public partial class DocumentStore
 
         var wrapped = EventGraph.EventMappingFor(clrType).Wrap(body);
 
-        wrapped.Id = record.EventId;
-        wrapped.Sequence = record.Sequence;
-        wrapped.Version = record.StreamVersion;
-        wrapped.Timestamp = record.Timestamp;
-        wrapped.TenantId = record.TenantId ?? JasperFx.StorageConstants.DefaultTenantId;
-        wrapped.EventTypeName = record.EventTypeName;
-
-        if (EventGraph.StreamIdentity == StreamIdentity.AsGuid && Guid.TryParse(record.StreamId, out var streamId))
-        {
-            wrapped.StreamId = streamId;
-        }
-        else
-        {
-            wrapped.StreamKey = record.StreamId;
-        }
-
-        copyTags(record, wrapped);
+        // The record's metadata and its DCB tags back onto the event, so a projection that groups by tag
+        // (IdentityFromTag<TTag>()) groups a stepped event the way the daemon does. jasperfx#1254 (JasperFx 3.11.0)
+        // replaced Fisher's own tag copy from fisher#654.
+        wrapped.WithRecordMetadata(record, EventGraph.StreamIdentity, EventGraph.TagTypes);
 
         return wrapped;
-    }
-
-    /// <summary>
-    ///     fisher#654: the record's DCB tags back onto the event, so a projection that groups by tag
-    ///     (<c>IdentityFromTag&lt;TTag&gt;()</c>) groups a stepped event the way the daemon does.
-    /// </summary>
-    /// <remarks>
-    ///     A record names a tag by its CLR type name or its table suffix (<c>FindByTagName</c>) and carries the tag's
-    ///     simple value as text. A name this store hasn't registered is left off: no projection here can group by it.
-    /// </remarks>
-    private void copyTags(EventRecord record, IEvent wrapped)
-    {
-        if (record.Tags is not { Count: > 0 } tags || EventGraph.TagTypes.Count == 0) return;
-
-        foreach (var (name, text) in tags)
-        {
-            if (EventGraph.TagTypes.FindByTagName(name) is not { } registration) continue;
-
-            object value;
-            try
-            {
-                value = FisherEventTagHydrator.TagInstance(registration, text);
-            }
-            catch (Exception e) when (e is FormatException or InvalidCastException or OverflowException)
-            {
-                throw new ArgumentException(
-                    $"Event {record.EventId} has tag {name} = '{text}', which isn't a {registration.SimpleType.Name}.",
-                    nameof(record), e);
-            }
-
-            if (wrapped.Tags is { } existing &&
-                existing.Any(x => x.TagType == registration.TagType && Equals(x.Value, value)))
-            {
-                continue;
-            }
-
-            wrapped.AddTag(new EventTag(registration.TagType, value));
-        }
     }
 }
