@@ -638,6 +638,12 @@ internal partial class FisherSession
     {
         await EnsureDocumentTableForReadAsync(typeof(T), token).ConfigureAwait(false);
 
+        if (readsAcrossTenantScope<T>())
+        {
+            return await Linq.QueryableExtensions
+                .FirstOrDefaultAsync(Query<T>().Where(ByIdPredicate<T, TId>(id)), token).ConfigureAwait(false);
+        }
+
         return await ((Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>())
             .LoadAsync(id, this, token).ConfigureAwait(false);
     }
@@ -716,6 +722,12 @@ internal partial class FisherSession
             return Array.Empty<T>();
         }
 
+        if (readsAcrossTenantScope<T>())
+        {
+            return await Linq.QueryableExtensions
+                .ToListAsync(Query<T>().Where(ByIdsPredicate<T, TId>(ids)), token).ConfigureAwait(false);
+        }
+
         return await ((Weasel.Storage.IDocumentStorage<T, TId>)StorageFor<T>())
             .LoadManyAsync(ids, this, token).ConfigureAwait(false);
     }
@@ -744,6 +756,42 @@ internal partial class FisherSession
     private Task<bool> CheckExistsAsync<T, TId>(TId id, CancellationToken token)
         where T : notnull where TId : notnull
         => Linq.QueryableExtensions.AnyAsync(Query<T>().Where(ByIdPredicate<T, TId>(id)), token);
+
+    /// <summary>
+    ///     fisher#665: whether a load by id of <typeparamref name="T" /> reads across this session's tenant
+    ///     scope rather than its own tenant.
+    /// </summary>
+    /// <remarks>
+    ///     The closed-shape load SQL is fixed to one tenant, so such a load goes through LINQ with an id
+    ///     predicate instead. That gives it the same tenant, soft-delete and hierarchy filters a query gets,
+    ///     as <see cref="CheckExistsAsync{T,TId}" /> already does. If two tenants in one file share an id,
+    ///     <c>LoadAsync</c> returns one of them, as Marten's does.
+    /// </remarks>
+    private bool readsAcrossTenantScope<T>() where T : notnull
+        => TenantScope is not null && Options.Schema.MappingFor(typeof(T)).IsConjoined;
+
+    /// <summary>
+    ///     <c>x =&gt; ids.Contains(x.Id)</c>, for the identity member as <see cref="ByIdPredicate{T,TId}" />
+    ///     builds it. A large set binds as one JSON array (fisher#372), as <c>LoadManyAsync</c> does.
+    /// </summary>
+    private System.Linq.Expressions.Expression<Func<T, bool>> ByIdsPredicate<T, TId>(TId[] ids)
+        where T : notnull where TId : notnull
+    {
+        var mapping = Options.Schema.MappingFor(typeof(T));
+        var parameter = System.Linq.Expressions.Expression.Parameter(typeof(T), "x");
+        var idMember = System.Linq.Expressions.Expression.PropertyOrField(parameter, mapping.IdMember.Name);
+
+        // The closed method straight from the delegate, so nothing is made generic at runtime.
+        var contains = ((Func<IEnumerable<TId>, TId, bool>)Enumerable.Contains).Method;
+        System.Linq.Expressions.Expression member = idMember.Type == typeof(TId)
+            ? idMember
+            : System.Linq.Expressions.Expression.Convert(idMember, typeof(TId));
+
+        return System.Linq.Expressions.Expression.Lambda<Func<T, bool>>(
+            System.Linq.Expressions.Expression.Call(contains,
+                System.Linq.Expressions.Expression.Constant(ids, typeof(IEnumerable<TId>)), member),
+            parameter);
+    }
 
     /// <summary>
     ///     <c>x =&gt; x.Id == id</c>, built for whichever member the mapping calls the identity.

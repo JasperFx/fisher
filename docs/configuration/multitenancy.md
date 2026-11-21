@@ -360,6 +360,61 @@ row per shard.
 default would leave every other tenant's data behind while reporting success — and the caller most
 likely to hit that is a test fixture.
 
+### Querying every database
+
+There is no session that spans files, so a question about every tenant (a support screen, a report)
+needs a query per file. `Advanced.QueryAcrossAllDatabasesAsync` runs one query against every database
+the store has, a few at a time, and flattens the results:
+
+<!-- snippet: sample_query_across_all_databases -->
+<a id='snippet-sample_query_across_all_databases'></a>
+```cs
+// One query session per tenant file, at most four at once, and the results flattened
+var customers = await theStore.Advanced.QueryAcrossAllDatabasesAsync(
+    async (session, ct) => await session.Query<Customer>().ToListAsync(ct),
+    maxParallelism: 4,
+    token: Token);
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Configuration/query_across_all_databases.cs#L67-L73' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_query_across_all_databases' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+The query reads **every tenant**. With conjoined documents or events, which is what a shared file
+holds, each session reads every tenant's rows in its file wherever a session would otherwise read only
+its own tenant: LINQ queries, `LoadAsync`, `LoadManyAsync`, `LoadJsonAsync`, `CheckExistsAsync`, the raw
+event queries, `FetchStreamAsync` and `AggregateStreamAsync`. An `AnyTenant()` or `TenantIsOneOf(...)`
+in the query still applies as written. `FetchStreamStateAsync`, natural keys, DCB tag reads and a
+`ForTenant(...)` scope keep to one tenant. If two tenants in one file share a document id, `LoadAsync`
+returns one of them.
+
+Name tenants to limit it. Only the files holding them are visited, and each session reads only those
+tenants:
+
+<!-- snippet: sample_query_across_some_tenants -->
+<a id='snippet-sample_query_across_some_tenants'></a>
+```cs
+// Only the files holding green and blue are visited
+var customers = await theStore.Advanced.QueryAcrossAllDatabasesAsync(
+    async (session, ct) => await session.Query<Customer>().ToListAsync(ct),
+    8, Token, "green", "blue");
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Configuration/query_across_all_databases.cs#L122-L127' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_query_across_some_tenants' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+A few things to know:
+
+- Results come back grouped by database, in the order the tenancy lists its files.
+- An overload hands the query the `FisherDatabase` too, for work that sits beside the documents, like
+  the daemon's progression.
+- The first query that throws fails the whole call.
+- An unknown tenant id throws `UnknownTenantException` before any file is queried. It never creates a
+  tenant's file, even under the directory convention.
+- No tenant ids at all is an empty result, not every tenant. A tenant list you computed that came back
+  empty shouldn't turn into a read of everything.
+- A single-database store runs the query once, against its one file.
+
+This is Marten's and Polecat's method, with the same overloads, so store-agnostic code calls it the same
+way on all three.
+
 ## Why not ATTACH?
 
 `ATTACH DATABASE` would let one connection see several tenants. It is not used, because an attachment

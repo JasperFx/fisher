@@ -93,7 +93,12 @@ public partial class EventOperations
             builder.Append(" and is_archived = 0");
         }
 
-        if (IsConjoined)
+        if (ReadScope is { } scope)
+        {
+            // fisher#665: the scope's tenants, or every tenant, in place of the session's own.
+            scope.AppendFilter(builder);
+        }
+        else if (IsConjoined)
         {
             builder.Append(" and tenant_id = ");
             builder.AppendParameter(TenantId);
@@ -441,7 +446,16 @@ public partial class EventOperations
             // The query's tenant selects the partition when supplied (jasperfx#555 — the read-only
             // store reads through a default-tenant session, and this field is how the Event Explorer
             // scopes it); the session's own scope applies otherwise, as it does everywhere else.
-            Clause("tenant_id", " = ", query.TenantId ?? TenantId);
+            if (query.TenantId is null && ReadScope is { } scope)
+            {
+                // fisher#665: a session opened by QueryAcrossAllDatabasesAsync reads its scope's tenants,
+                // or every tenant. "is_archived = 0" always opens the where clause, so " and" follows it.
+                scope.AppendFilter(builder);
+            }
+            else
+            {
+                Clause("tenant_id", " = ", query.TenantId ?? TenantId);
+            }
         }
     }
 
@@ -655,7 +669,12 @@ public partial class EventOperations
 
         predicate.Apply(builder);
 
-        if (IsConjoined)
+        if (ReadScope is { } scope)
+        {
+            // fisher#665: the scope's tenants, or every tenant, in place of the session's own.
+            scope.AppendFilter(builder);
+        }
+        else if (IsConjoined)
         {
             builder.Append(" and tenant_id = ");
             builder.AppendParameter(TenantId);

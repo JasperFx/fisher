@@ -491,19 +491,29 @@ message or raises an event, and set `opts.Events.EnableSideEffectsOnInlineProjec
 
 | Setting | Fisher 1 | Fisher 2 | Effect on an existing file | Restored by `RestoreV1Defaults()` |
 | :--- | :--- | :--- | :--- | :--- |
-| `Events.EnableCorrelationId`, `EnableCausationId`, `EnableHeaders`, `EnableUserName` | off | **on** | Adds `correlation_id`, `causation_id`, `headers` and `user_name` to `fi_events`. Existing events read `null`. | yes |
+| `Events.EnableCorrelationId`, `EnableCausationId`, `EnableHeaders`, `EnableUserName` | off | **on** | Adds `correlation_id`, `causation_id`, `headers` and `user_name` to `fi_events` (they are now created whatever the flags say, see below). Existing events read `null`. | yes, the flags; the columns stay |
+| `Events.EnableExtendedProgressionTracking` (fisher#664, marten#5763) | off | **on** | Adds the extended columns to `fi_event_progression` (also created whatever the flag says, see below). The daemon writes `heartbeat`, `agent_status`, `pause_reason`, `running_on_node`, the `failure_*` columns and `parked_count`. | yes, the flag; the columns stay |
 | Document `correlation_id`, `causation_id`, `last_modified_by`, `headers` columns | off unless a type enabled them | **on for every document type** | Adds the four columns to every document table. Existing rows read `null`. Turn one off for one type with `Metadata(m => m.Headers.Enabled = false)`. `created_at` stays opt-in. | yes |
 | `Events.EnableSideEffectsOnInlineProjections` | off | **on** | None on the file. See the warning above. | yes |
 | The `fisher.events.appended` counter | after `OpenTelemetry.TrackEventCounters()` | **on** | None. With nothing listening it costs one check per commit. | yes |
 | System.Text.Json `AllowOutOfOrderMetadataProperties` on Fisher's `Serializer` | `false` | **`true`** | None. Reads accept `$type` anywhere in the object. | yes, applied when the store is built |
 | `GateSideEffectsBehindPriorVersion` (JasperFx 3.0, above) | off | **on** | None. | yes, on every registered projection, applied when the store is built |
-| `Projections.Errors.ApplyErrors` and `SerializationErrors` ([parking](/events/projections/async-daemon#parking-a-failing-identity), [JasperFx docs](https://shared-libs.jasperfx.net/events/parked-identities), fisher#652) | skip the event and dead-letter it | **park the failing identity, or pause the shard where the projection can't park** | Adds `fi_parked_identities`, and `parked_count` to the progression table under extended tracking. An event projection, a flat table, a composite or a multi-stream projection grouped by a delegate now **pauses** on a bad event instead of skipping it. | yes |
+| `Projections.Errors.ApplyErrors` and `SerializationErrors` ([parking](/events/projections/async-daemon#parking-a-failing-identity), [JasperFx docs](https://shared-libs.jasperfx.net/events/parked-identities), fisher#652) | skip the event and dead-letter it | **park the failing identity, or pause the shard where the projection can't park** | Adds `fi_parked_identities`, and `parked_count` to the progression table. An event projection, a flat table, a composite or a multi-stream projection grouped by a delegate now **pauses** on a bad event instead of skipping it. | yes |
 | A projection batch that fails transiently, such as `SQLITE_BUSY` ([JasperFx 3.11.0](https://shared-libs.jasperfx.net/migration-guide#key-changes-in-3-11-0), jasperfx#1256) | the shard pauses, or under skip goes round again without limit when several identities fail at once | **the daemon builds the batch again through the store's Polly pipeline (five retries by default), under every error policy; when the retries run out, the shard pauses with `ShardFailure.IsTransient` true** | None. A transient failure never parks or skips anything. | no. `ConfigurePolly` changes the retries, for every command Fisher runs |
 
 **The new columns are an ordinary migration.** Under `AutoCreate.All` or `CreateOrUpdate`, Fisher adds them
 to existing tables the first time the store touches them. Under `AutoCreate.None`, apply the migration
 first (`ApplyAllConfiguredChangesToDatabaseAsync`, `db-apply` or the generated DDL). Otherwise the first
 write fails with `table … has no column named correlation_id`. Adding a column does not rewrite the table.
+
+**The cheap event-store columns are created whatever the flags say** (fisher#664, following marten#5765).
+`fi_events` always gets `correlation_id`, `causation_id`, `headers` and `user_name`, and
+`fi_event_progression` always gets the extended tracking columns. The flags only decide whether Fisher writes
+and reads them. When the flags decided the schema, two stores over one file with different settings dropped
+each other's columns every time either one migrated. `RestoreV1Defaults()` puts the flags back, not the old
+table shape, so a Fisher 1 file gains these columns on its first migration either way. Every column is
+nullable, so it's a plain `ALTER TABLE ADD COLUMN`. Under `AutoCreate.None`, apply the migration before you
+deploy, as for the other new columns.
 
 What marten#5812 changed that has **no Fisher equivalent**, so nothing changes here:
 

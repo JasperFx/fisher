@@ -181,7 +181,8 @@ builder.Services.AddFisher(options => options.Connection("Data Source=app.db"));
 `EnableAdvancedTracking` is the switch a CritterWatch host throws, and it turns on
 `Events.EnableExtendedProgressionTracking` for **every** Fisher store the container builds — the
 primary and every `AddFisherStore<T>` alike — so extended per-shard state reaches a monitoring
-console without naming each store.
+console without naming each store. Extended tracking is on by default since Fisher 2.0, so this
+matters for a store that turned it off or called `RestoreV1Defaults()`.
 
 ::: tip
 It only ever **adds**. A host that leaves `EnableAdvancedTracking` at its default does not switch off

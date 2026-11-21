@@ -72,15 +72,48 @@ public class restore_v1_defaults
         events.EnableUserName.ShouldBeFalse();
     }
 
+    /// <summary>
+    ///     fisher#664: the columns are part of the schema whatever the flags say, so restoring the 1.x flags
+    ///     leaves them in place and only stops them being written.
+    /// </summary>
     [Fact]
-    public async Task the_events_table_has_the_metadata_columns_by_default_and_not_after_restore()
+    public async Task the_events_table_has_the_metadata_columns_by_default_and_after_restore()
     {
         var metadata = new[] { "correlation_id", "causation_id", "headers", "user_name" };
 
         (await columnsOf(o => { }, "fi_events")).Intersect(metadata).Count().ShouldBe(metadata.Length);
 
         var restored = await columnsOf(o => o.RestoreV1Defaults(), "fi_events");
-        restored.Intersect(metadata).ShouldBeEmpty();
+        restored.Intersect(metadata).Count().ShouldBe(metadata.Length);
+    }
+
+    [Fact]
+    public async Task restore_stops_writing_the_event_metadata()
+    {
+        using var database = TemporaryDatabase.Create("v1-defaults-eventmeta");
+        await using var store = DocumentStore.For(o =>
+        {
+            o.ConnectionString = database.ConnectionString;
+            o.AutoCreateSchemaObjects = AutoCreate.All;
+            o.RestoreV1Defaults();
+        });
+
+        var streamId = Guid.NewGuid();
+        await using (var session = store.LightweightSession())
+        {
+            session.CorrelationId = "corr-1";
+            session.CausationId = "cause-1";
+            session.CurrentUserName = "jane";
+            session.Events.StartStream(streamId, new LedgerOpened("a"));
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using var query = store.QuerySession();
+        var written = await query.AdvancedSql.QueryAsync<string>(
+            "select coalesce(correlation_id, '') || coalesce(causation_id, '') || coalesce(user_name, '') from fi_events",
+            Token);
+
+        written.ShouldBe([""]);
     }
 
     // ---- document metadata ----
@@ -235,6 +268,37 @@ public class restore_v1_defaults
         events.Count.ShouldBe(2);
         events[0].CorrelationId.ShouldBeNull();
         events[1].CorrelationId.ShouldBe("after");
+    }
+
+    // ---- extended progression tracking (fisher#664, marten#5763) ----
+
+    [Fact]
+    public void extended_progression_tracking_is_on_by_default()
+    {
+        var options = new StoreOptions();
+
+        options.Events.EnableExtendedProgressionTracking.ShouldBeTrue();
+        ((JasperFx.Events.IEventStoreInstrumentation)options.Events).ExtendedProgressionEnabled.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void restore_turns_extended_progression_tracking_off()
+    {
+        var events = Restored().Events;
+
+        events.EnableExtendedProgressionTracking.ShouldBeFalse();
+        ((JasperFx.Events.IEventStoreInstrumentation)events).ExtendedProgressionEnabled.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task the_progression_table_has_the_extended_columns_by_default_and_after_restore()
+    {
+        string[] extended = ["heartbeat", "agent_status", "pause_reason", "running_on_node", "failure_category", "parked_count"];
+
+        (await columnsOf(o => { }, "fi_event_progression")).Intersect(extended).Count().ShouldBe(extended.Length);
+
+        var restored = await columnsOf(o => o.RestoreV1Defaults(), "fi_event_progression");
+        restored.Intersect(extended).Count().ShouldBe(extended.Length);
     }
 
     // ---- side effects on inline projections ----

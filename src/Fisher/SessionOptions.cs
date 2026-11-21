@@ -256,4 +256,10 @@ public class SessionOptions
     ///     The connection this session runs on, or null when it should open its own.
     /// </summary>
     internal SqliteConnection? ExternalConnection => Transaction?.Connection ?? Connection;
+
+    /// <summary>
+    ///     fisher#665: the tenants a session opened by <c>QueryAcrossAllDatabasesAsync</c> reads in place of
+    ///     its own tenant. Null for every other session.
+    /// </summary>
+    internal Internal.SessionTenantScope? TenantScope { get; set; }
 }

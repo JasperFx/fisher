@@ -128,18 +128,19 @@ public class event_store_schema_creation : IAsyncLifetime
     }
 
     [Fact]
-    public async Task optional_metadata_columns_are_absent_with_fisher_1_defaults()
+    public async Task optional_metadata_columns_are_created_even_with_fisher_1_defaults()
     {
-        // On by default since fisher#621; restore_v1_defaults covers the 2.0 default.
+        // fisher#664: the columns are created whatever the flags say; the flags decide only whether they
+        // are written. always_create_event_store_objects covers why.
         await using var database = DatabaseFor(x => x.RestoreV1Defaults());
         await database.ApplyAllConfiguredChangesToDatabaseAsync(ct: TestContext.Current.CancellationToken);
 
         var names = (await ColumnsAsync("fi_events")).Select(x => x.Name).ToList();
 
-        names.ShouldNotContain("correlation_id");
-        names.ShouldNotContain("causation_id");
-        names.ShouldNotContain("headers");
-        names.ShouldNotContain("user_name");
+        names.ShouldContain("correlation_id");
+        names.ShouldContain("causation_id");
+        names.ShouldContain("headers");
+        names.ShouldContain("user_name");
     }
 
     [Fact]
