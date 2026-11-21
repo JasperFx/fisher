@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**4004 tests green on net10.0 and 4031 on net11.0** — 3931 (net10.0) / 3958 (net11.0) in `Fisher.Tests`, 41 in
+**4006 tests green on net10.0 and 4033 on net11.0** — 3933 (net10.0) / 3960 (net11.0) in `Fisher.Tests`, 41 in
 `Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 959 of
 them are shared cross-store compliance tests — 725 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
