@@ -532,6 +532,11 @@ A second check reports **Degraded** while any projection identity is
 builder.Services.AddHealthChecks().AddFisherParkedIdentitiesHealthCheck();
 ```
 
+It reports **Unhealthy** while a shard is paused at the parking cap
+(`Projections.Errors.MaxParkedIdentitiesPerShard`), and names the shard. A parked identity holds back one
+document; a shard at the cap has stopped altogether. The cap is read from the progression row, so it needs
+`Events.EnableExtendedProgressionTracking`. Without it the check only sees what is parked.
+
 ## Seeing the SQL
 
 ```cs

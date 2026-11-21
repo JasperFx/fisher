@@ -220,7 +220,9 @@ What's Fisher's own:
 - **Extended progression tracking** keeps the count in a `parked_count` column, so a console can see it for a
   daemon that isn't running. `AllProjectionProgress()` reads it back as `ShardState.ParkedCount`. It is counted
   from the parked rows in the same transaction that parks or unparks, so it goes back to 0 after a replay or a
-  discard.
+  discard. A shard paused at the cap comes back from `AllProjectionProgress()` with a `ShardState.Failure` whose
+  category is `ParkedLimitReached`, which is what the
+  [parked identities health check](/diagnostics#health-checks) reports as Unhealthy.
 - **There is no high-water skip tracking to think about.** SQLite has one writer, so the high-water mark never
   waits on a gap.
 

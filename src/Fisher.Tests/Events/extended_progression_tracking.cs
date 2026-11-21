@@ -204,6 +204,146 @@ public class extended_progression_tracking
 
         await ((IEventDatabase)store.Database).WriteExtendedProgressionAsync(
             new ShardState("PoisonTally:All", 5) { Action = ShardAction.Started, AgentStatus = "Running" }, Token);
+
+        // And the read leaves the status and failure alone, since there are no columns to read them from
+        var state = (await store.Database.AllProjectionProgress(Token)).Single(x => x.ShardName == "PoisonTally:All");
+        state.AgentStatus.ShouldBeNull();
+        state.Failure.ShouldBeNull();
+    }
+
+    // ---- the read ----
+
+    /// <remarks>
+    ///     fisher#661, the read Marten's <c>AllProjectionProgress</c> already did: the status and failure columns
+    ///     come back on the <see cref="ShardState" />, so a monitor polling the database (the parked identities health
+    ///     check, CritterWatch while the node running the shard is down) sees why a shard stopped. Exception types are
+    ///     not stored, so they read back as Marten's "Unknown"; the pause reason is the failure's message and detail,
+    ///     and the heartbeat is when it happened.
+    /// </remarks>
+    [Fact]
+    public async Task all_projection_progress_carries_the_status_and_the_failure()
+    {
+        using var database = TemporaryDatabase.Create("extended-progression-read");
+        await using var store = BuildStore(database);
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+        await SeedRowAsync(store, "PoisonTally:All", 5);
+
+        IEventDatabase target = store.Database;
+        var heartbeat = new DateTimeOffset(2026, 11, 20, 10, 30, 0, TimeSpan.Zero);
+
+        await target.WriteExtendedProgressionAsync(new ShardState("PoisonTally:All", 5)
+        {
+            Action = ShardAction.Paused,
+            AgentStatus = "Paused",
+            PauseReason = "boom, in full",
+            RunningOnNode = 3,
+            LastHeartbeat = heartbeat,
+            ParkedCount = 1,
+            Failure = new ShardFailure
+            {
+                Category = ShardFailureCategory.ParkedLimitReached,
+                ExceptionType = "X",
+                RootExceptionType = "X",
+                Message = "boom",
+                Detail = "boom, in full",
+                OccurredAt = heartbeat,
+                Event = new EventFailureDetails { Sequence = 6, EventTypeName = "counted", TenantId = "north" }
+            }
+        }, Token);
+
+        var state = (await target.AllProjectionProgress(Token)).Single(x => x.ShardName == "PoisonTally:All");
+
+        state.Sequence.ShouldBe(5);
+        state.AgentStatus.ShouldBe("Paused");
+        state.PauseReason.ShouldBe("boom, in full");
+        state.RunningOnNode.ShouldBe(3);
+        state.LastHeartbeat.ShouldBe(heartbeat);
+        state.ParkedCount.ShouldBe(1);
+
+        var failure = state.Failure.ShouldNotBeNull();
+        failure.Category.ShouldBe(ShardFailureCategory.ParkedLimitReached);
+        failure.ExceptionType.ShouldBe("Unknown");
+        failure.RootExceptionType.ShouldBe("Unknown");
+        failure.Message.ShouldBe("boom, in full");
+        failure.Detail.ShouldBe("boom, in full");
+        failure.OccurredAt.ShouldBe(heartbeat);
+
+        var failing = failure.Event.ShouldNotBeNull();
+        failing.Sequence.ShouldBe(6);
+        failing.EventTypeName.ShouldBe("counted");
+        failing.TenantId.ShouldBe("north");
+
+        // A restart clears the failure, and the read says so
+        await target.WriteExtendedProgressionAsync(new ShardState("PoisonTally:All", 5)
+        {
+            Action = ShardAction.Started,
+            AgentStatus = "Running"
+        }, Token);
+
+        var restarted = (await target.AllProjectionProgress(Token)).Single(x => x.ShardName == "PoisonTally:All");
+        restarted.AgentStatus.ShouldBe("Running");
+        restarted.PauseReason.ShouldBeNull();
+        restarted.Failure.ShouldBeNull();
+    }
+
+    /// <remarks>
+    ///     fisher#661 with fisher#660: a shard that hits the parking cap on its very first batch has a row with the
+    ///     failure in it, and <c>AllProjectionProgress</c> returns that failure.
+    /// </remarks>
+    [Fact]
+    public async Task all_projection_progress_carries_a_parking_cap_reached_on_the_first_batch()
+    {
+        using var database = TemporaryDatabase.Create("extended-progression-read-cap");
+        await using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = database.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Events.EnableExtendedProgressionTracking = true;
+            options.Projections.Snapshot<PoisonTally>(SnapshotLifecycle.Async);
+            options.Projections.Errors.ApplyErrors = ProjectionErrorAction.Park;
+            options.Projections.Errors.MaxParkedIdentitiesPerShard = 1;
+        });
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        await using (var session = store.LightweightSession())
+        {
+            session.Events.StartStream<PoisonTally>(Guid.NewGuid(), new Fisher.Tests.Daemon.Counted(PoisonTally.Poison));
+            session.Events.StartStream<PoisonTally>(Guid.NewGuid(), new Fisher.Tests.Daemon.Counted(PoisonTally.Poison));
+            await session.SaveChangesAsync(Token);
+        }
+
+        var daemon = await store.BuildProjectionDaemonAsync();
+        await daemon.StartAllAsync();
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(DaemonWait.Timeout);
+            ShardState? state;
+            while (true)
+            {
+                state = (await store.Database.AllProjectionProgress(Token))
+                    .SingleOrDefault(x => x.ShardName == "PoisonTally:All");
+                if (state?.Failure is not null || timeout.IsCancellationRequested) break;
+
+                await Task.Delay(50, Token);
+            }
+
+            state.ShouldNotBeNull();
+            state.Sequence.ShouldBe(0);
+            state.AgentStatus.ShouldBe("Paused");
+
+            var failure = state.Failure.ShouldNotBeNull();
+            failure.Category.ShouldBe(ShardFailureCategory.ParkedLimitReached);
+            failure.Detail.ShouldBe(state.PauseReason);
+            // The cap's failure carries one of the batch's failing events. Which one depends on the order the batch's
+            // slices ran in, which is not fixed.
+            failure.Event.ShouldNotBeNull().Sequence.ShouldBeOneOf(1L, 2L);
+        }
+        finally
+        {
+            await daemon.StopAllAsync();
+            daemon.Dispose();
+        }
     }
 
     private sealed record ProgressionRow(
