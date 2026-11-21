@@ -1484,7 +1484,7 @@ start.
   heartbeats were off, [jasperfx#1255](https://github.com/JasperFx/jasperfx/issues/1255), fixed upstream.) `AllProjectionProgress` reads it into
   `ShardState.ParkedCount`; null means the shard doesn't park or hasn't said yet.
 - The step-through's `EventRecord -> IEvent` conversion (`DocumentStore.ProjectionReplay.cs`) is JasperFx's
-  `WithRecordMetadata(record, streamIdentity, EventGraph.TagTypes)` (jasperfx#1254, fisher#655), which copies
+  `WithRecordMetadata(record, streamIdentity, EventGraph.TagTypes)` (jasperfx#1254, since 3.11.0), which copies
   `EventRecord.Tags` back onto the event, so `IdentityFromTag` groups a stepped event. A record names a tag by CLR
   name or table suffix (`FindByTagName`) with its simple value as text; an unregistered name is left off, an
   unparseable value is an `ArgumentException` naming the tag.

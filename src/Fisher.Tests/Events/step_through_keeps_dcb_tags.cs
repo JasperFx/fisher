@@ -33,7 +33,7 @@ public partial class StepTagTallyProjection : Fisher.Projections.MultiStreamProj
 
 /// <summary>
 ///     fisher#654: the step-through's <c>EventRecord -> IEvent</c> conversion copies <c>EventRecord.Tags</c> onto the
-///     event (through JasperFx's <c>WithRecordMetadata</c> tag overload since 3.11.0, fisher#655), so a projection
+///     event (through JasperFx's <c>WithRecordMetadata</c> tag overload since 3.11.0), so a projection
 ///     grouped by <c>IdentityFromTag</c> finds its identities when it is stepped from records.
 /// </summary>
 /// <remarks>
@@ -162,7 +162,7 @@ public class step_through_keeps_dcb_tags : IAsyncLifetime
             .RunMultiStreamProjectionForIdentityAsync(StepTagTallyProjection.ProjectionName, _red, events,
                 startingState: null, Token));
 
-        // The message is JasperFx's since the conversion moved into WithRecordMetadata (jasperfx#1254, fisher#655)
+        // The message is JasperFx's since the conversion moved into WithRecordMetadata (jasperfx#1254)
         e.Message.ShouldContain("tag 'StepTallyId' = 'not-a-guid'");
     }
 }

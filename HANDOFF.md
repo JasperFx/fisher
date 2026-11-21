@@ -28,7 +28,7 @@ From JasperFx 3.10.0 and Weasel 10.0.0-alpha.11. No compliance suite changed. Fo
   built again, and one that outlasts the five retries pauses the shard with `IsTransient` true
   (`transient_batch_build_failures`).
 - jasperfx#1254 (PR #1259): `WithRecordMetadata(..., tagTypes)` puts a record's DCB tags back onto an event. The
-  step-through uses it, and Fisher's own tag copy from fisher#654 is gone (fisher#655).
+  step-through uses it, and Fisher's own tag copy from fisher#654 (PR #655) is gone.
 - weasel#901: `EventLoaderBase` reports a parking request's unreadable events on the page itself, so
   `FisherEventLoader`'s `AsyncLocal` workaround is gone.
 - jasperfx#1255: the extended progression writer writes `Parked` and `Unparked` with heartbeats off. Fisher's

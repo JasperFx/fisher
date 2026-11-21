@@ -309,7 +309,7 @@
              so the daemon builds a batch that failed with SQLITE_BUSY/LOCKED/PROTOCOL again
              (transient_batch_build_failures).
              jasperfx#1254 (PR #1259) - WithRecordMetadata(..., tagTypes). The step-through uses it, and Fisher's own
-             tag copy (fisher#654) is gone (fisher#655).
+             tag copy (fisher#654, PR #655) is gone.
 
              INHERITED, no Fisher change needed:
              jasperfx#1255 - the extended progression writer writes Parked/Unparked with heartbeats off. Fisher's

@@ -122,8 +122,9 @@ public partial class DocumentStore
 
         var wrapped = EventGraph.EventMappingFor(clrType).Wrap(body);
 
-        // jasperfx#1259 (fisher#655): the record's metadata and its DCB tags back onto the event, so a projection
-        // that groups by tag (IdentityFromTag<TTag>()) groups a stepped event the way the daemon does
+        // The record's metadata and its DCB tags back onto the event, so a projection that groups by tag
+        // (IdentityFromTag<TTag>()) groups a stepped event the way the daemon does. jasperfx#1254 (JasperFx 3.11.0)
+        // replaced Fisher's own tag copy from fisher#654.
         wrapped.WithRecordMetadata(record, EventGraph.StreamIdentity, EventGraph.TagTypes);
 
         return wrapped;
