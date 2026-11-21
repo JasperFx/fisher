@@ -17,6 +17,19 @@ public partial class EventOperations
     private bool IsConjoined => Graph.TenancyStyle == TenancyStyle.Conjoined;
 
     /// <summary>
+    ///     fisher#665: the tenants a session opened by <c>QueryAcrossAllDatabasesAsync</c> reads in place of
+    ///     its own, for a conjoined event store. Null otherwise, and always null on a <c>ForTenant()</c>
+    ///     scope, which reads its own tenant.
+    /// </summary>
+    /// <remarks>
+    ///     Applies to <c>FetchStreamAsync</c>, <c>AggregateStreamAsync</c> and the raw event queries, as
+    ///     Marten's does. <c>FetchStreamStateAsync</c>, natural keys and DCB tag reads keep the session's
+    ///     own tenant.
+    /// </remarks>
+    private Fisher.Internal.SessionTenantScope? ReadScope
+        => IsConjoined && _tenantId is null ? _session.TenantScope : null;
+
+    /// <summary>
     ///     Every event in a stream, in version order.
     /// </summary>
     /// <remarks>
@@ -90,6 +103,9 @@ public partial class EventOperations
         DateTimeOffset? timestamp, long fromVersion, CancellationToken token, bool includeArchived = false)
     {
         var options = _session.Options.Events;
+        var connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+
         var sql = new StringBuilder("select ")
             .Append(FisherEventsRowReader.ComposeSelectColumns(options))
             .Append(" from ")
@@ -101,9 +117,18 @@ public partial class EventOperations
             sql.Append(" and is_archived = 0");
         }
 
-        if (IsConjoined)
+        if (ReadScope is { } scope)
+        {
+            // fisher#665: the scope's tenants, or every tenant, in place of the session's own.
+            sql.Append(scope.SqlFilter(command));
+        }
+        else if (IsConjoined)
         {
             sql.Append(" and tenant_id = @tenant_id");
+            command.Parameters.Add(new SqliteParameter("tenant_id", TenantId)
+            {
+                SqliteType = SqliteType.Text
+            });
         }
 
         if (version > 0)
@@ -125,20 +150,10 @@ public partial class EventOperations
 
         sql.Append(" order by version");
 
-        var connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
         command.CommandText = sql.ToString();
         command.CommandTimeout = _session.Options.CommandTimeout;
 
         BindStreamId(command, streamId);
-
-        if (IsConjoined)
-        {
-            command.Parameters.Add(new SqliteParameter("tenant_id", TenantId)
-            {
-                SqliteType = SqliteType.Text
-            });
-        }
 
         if (version > 0)
         {

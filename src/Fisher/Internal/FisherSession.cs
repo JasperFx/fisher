@@ -196,6 +196,9 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         SessionOptions = sessionOptions;
         TenantId = tenantId ?? sessionOptions.TenantId;
 
+        // Not copied to a ForTenant() scope, which reads its own tenant (fisher#665).
+        TenantScope = sessionOptions.TenantScope;
+
         _operations = [];
         _operationsLock = new System.Threading.Lock();
 
@@ -383,6 +386,13 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     internal StoreOptions Options { get; }
 
     internal SessionOptions SessionOptions { get; }
+
+    /// <summary>
+    ///     fisher#665: the tenants this session reads in place of <see cref="TenantId" /> for conjoined
+    ///     documents and events, or null to read its own tenant. Set only for the sessions
+    ///     <c>QueryAcrossAllDatabasesAsync</c> opens.
+    /// </summary>
+    internal SessionTenantScope? TenantScope { get; }
 
     /// <summary>
     ///     The caller's transaction this session is enlisted in, or null for an ordinary session.

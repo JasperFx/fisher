@@ -1770,6 +1770,18 @@ public partial class FisherQueryProvider : IQueryProvider
         switch (parser.TenantScope)
         {
             case TenantScope.Current:
+                // fisher#665: a session opened by QueryAcrossAllDatabasesAsync reads its scope's tenants, or
+                // every tenant, in place of its own.
+                if (_session.TenantScope is { } scope)
+                {
+                    if (scope.BuildFilter(qualifier + StorageConstants.TenantIdColumn) is { } filter)
+                    {
+                        wheres.Add(filter);
+                    }
+
+                    break;
+                }
+
                 wheres.Add(new TenantFilterFragment(_session.TenantId, qualifier));
                 break;
 

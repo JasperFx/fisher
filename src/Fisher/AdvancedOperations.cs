@@ -765,6 +765,175 @@ public class AdvancedOperations
     }
 
     /// <summary>
+    ///     Run one query against every database the store has and flatten the results. A database-per-tenant
+    ///     store has a SQLite file per tenant (or per shard of tenants) and no session that spans them, so this
+    ///     opens a query session per file with bounded parallelism. Mirrors Marten's and Polecat's method of the
+    ///     same name (fisher#665, marten#6011 and marten#6070).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The query reads every tenant. For conjoined documents and events, each session reads every
+    ///         tenant's rows in its file wherever an ordinary session would read only its own tenant: LINQ
+    ///         queries (includes and joins too), <c>LoadAsync()</c> / <c>LoadManyAsync()</c>,
+    ///         <c>LoadJsonAsync()</c>, <c>CheckExistsAsync()</c>, the raw event queries, <c>FetchStreamAsync()</c>
+    ///         and <c>AggregateStreamAsync()</c>. An <c>AnyTenant()</c> or <c>TenantIsOneOf(...)</c> in the
+    ///         query still applies as written. <c>FetchStreamStateAsync()</c>, natural keys and DCB tag reads
+    ///         keep the session's own tenant, and a <c>ForTenant()</c> scope reads its own tenant.
+    ///     </para>
+    ///     <para>
+    ///         Results are grouped per database, in the order the tenancy lists its databases. The first
+    ///         query to fail fails the call. A single-database store runs the query once, against its one file.
+    ///     </para>
+    /// </remarks>
+    /// <param name="query">The query to run in each database</param>
+    /// <param name="maxParallelism">
+    ///     How many databases are queried at once. Each slot holds one connection to a different file.
+    /// </param>
+    /// <param name="token"></param>
+    public Task<IReadOnlyList<T>> QueryAcrossAllDatabasesAsync<T>(
+        Func<IQuerySession, CancellationToken, Task<IReadOnlyList<T>>> query,
+        int maxParallelism = 8,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        return QueryAcrossAllDatabasesAsync<T>((session, _, ct) => query(session, ct), maxParallelism, token);
+    }
+
+    /// <summary>
+    ///     Like <see cref="QueryAcrossAllDatabasesAsync{T}(Func{IQuerySession,CancellationToken,Task{IReadOnlyList{T}}},int,CancellationToken)" />,
+    ///     but also hands the <see cref="FisherDatabase" /> to the query, for work that lives beside the
+    ///     documents rather than in them, such as the async daemon's progression. The same remarks about
+    ///     tenants and the order of the results apply.
+    /// </summary>
+    public async Task<IReadOnlyList<T>> QueryAcrossAllDatabasesAsync<T>(
+        Func<IQuerySession, FisherDatabase, CancellationToken, Task<IReadOnlyList<T>>> query,
+        int maxParallelism = 8,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxParallelism, 1);
+
+        await _store.RefreshTenantsAsync(token).ConfigureAwait(false);
+
+        var databases = _store.Tenancy.AllDatabases();
+        if (databases.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "The document store has no databases registered with its tenancy. Add a tenant, or query one "
+                + "tenant's database with a session for that tenant.");
+        }
+
+        return await queryDatabasesAsync(databases.Select(x => (x, Internal.SessionTenantScope.AllTenants)).ToArray(),
+            query, maxParallelism, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Run one query for the given tenants only. Only the databases that hold those tenants are visited,
+    ///     and each session reads only those tenants' rows of conjoined documents and events, as if the query
+    ///     said <c>TenantIsOneOf(tenantIds)</c>. Otherwise the same as
+    ///     <see cref="QueryAcrossAllDatabasesAsync{T}(Func{IQuerySession,CancellationToken,Task{IReadOnlyList{T}}},int,CancellationToken)" />.
+    /// </summary>
+    /// <remarks>
+    ///     The tenants are looked up without provisioning anything, so an id the store does not know throws
+    ///     <see cref="UnknownTenantException" /> before any database is queried, even under the directory
+    ///     convention, which would otherwise create the file. No tenant ids is an empty result rather than
+    ///     every tenant: a computed list that came back empty must not turn into a read of everything.
+    /// </remarks>
+    /// <param name="query">The query to run in each database</param>
+    /// <param name="maxParallelism">
+    ///     How many databases are queried at once. Each slot holds one connection to a different file.
+    /// </param>
+    /// <param name="token"></param>
+    /// <param name="tenantIds">The tenants to read. No tenant ids is an empty result.</param>
+    /// <exception cref="JasperFx.MultiTenancy.UnknownTenantIdException">A tenant id the store does not know</exception>
+    public Task<IReadOnlyList<T>> QueryAcrossAllDatabasesAsync<T>(
+        Func<IQuerySession, CancellationToken, Task<IReadOnlyList<T>>> query,
+        int maxParallelism,
+        CancellationToken token,
+        params string[] tenantIds)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        return QueryAcrossAllDatabasesAsync<T>((session, _, ct) => query(session, ct), maxParallelism, token,
+            tenantIds);
+    }
+
+    /// <summary>
+    ///     Like <see cref="QueryAcrossAllDatabasesAsync{T}(Func{IQuerySession,CancellationToken,Task{IReadOnlyList{T}}},int,CancellationToken,string[])" />,
+    ///     but also hands the <see cref="FisherDatabase" /> to the query.
+    /// </summary>
+    /// <exception cref="JasperFx.MultiTenancy.UnknownTenantIdException">A tenant id the store does not know</exception>
+    public async Task<IReadOnlyList<T>> QueryAcrossAllDatabasesAsync<T>(
+        Func<IQuerySession, FisherDatabase, CancellationToken, Task<IReadOnlyList<T>>> query,
+        int maxParallelism,
+        CancellationToken token,
+        params string[] tenantIds)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(tenantIds);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxParallelism, 1);
+
+        // ExistingDatabaseFor is the read-only lookup: it never registers a tenant or creates its file.
+        // Every id is resolved before anything is queried, so an unknown one fails the call up front.
+        // Grouped by database, because tenants sharing a file (sharding) share one FisherDatabase, and
+        // that file is read once.
+        var tenantsByDatabase = new List<(FisherDatabase Database, List<string> TenantIds)>();
+        foreach (var tenantId in tenantIds)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(tenantId, nameof(tenantIds));
+
+            var database = _store.Tenancy.ExistingDatabaseFor(tenantId);
+            var spelled = _store.Tenancy.TenantIdFor(tenantId);
+
+            var index = tenantsByDatabase.FindIndex(x => ReferenceEquals(x.Database, database));
+            if (index < 0)
+            {
+                tenantsByDatabase.Add((database, [spelled]));
+            }
+            else if (!tenantsByDatabase[index].TenantIds.Contains(spelled))
+            {
+                tenantsByDatabase[index].TenantIds.Add(spelled);
+            }
+        }
+
+        if (tenantsByDatabase.Count == 0) return [];
+
+        return await queryDatabasesAsync(
+            tenantsByDatabase.Select(x => (x.Database, Internal.SessionTenantScope.For(x.TenantIds.ToArray())))
+                .ToArray(), query, maxParallelism, token).ConfigureAwait(false);
+    }
+
+    private async Task<IReadOnlyList<T>> queryDatabasesAsync<T>(
+        (FisherDatabase Database, Internal.SessionTenantScope Scope)[] targets,
+        Func<IQuerySession, FisherDatabase, CancellationToken, Task<IReadOnlyList<T>>> query,
+        int maxParallelism,
+        CancellationToken token)
+    {
+        var perDatabase = new IReadOnlyList<T>[targets.Length];
+
+        await Parallel.ForEachAsync(
+                Enumerable.Range(0, targets.Length),
+                new ParallelOptions { MaxDegreeOfParallelism = maxParallelism, CancellationToken = token },
+                async (index, ct) =>
+                {
+                    var (database, scope) = targets[index];
+
+                    // A file with one tenant keeps that tenant as the session's own; a shared file has none,
+                    // and the scope decides what it reads.
+                    var options = new SessionOptions
+                    {
+                        TenantId = database.TenantId ?? JasperFx.StorageConstants.DefaultTenantId,
+                        TenantScope = scope
+                    };
+
+                    await using var session = new Internal.FisherSession(_store.Options, database, options);
+                    perDatabase[index] = await query(session, database, ct).ConfigureAwait(false);
+                })
+            .ConfigureAwait(false);
+
+        return perDatabase.SelectMany(x => x).ToList();
+    }
+
+    /// <summary>
     ///     Every shard name the store's asynchronous projections and subscriptions run under.
     /// </summary>
     /// <remarks>
