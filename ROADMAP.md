@@ -3,7 +3,16 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **two open issues, one of them blocked upstream.** Since 2.0.0-alpha.4, main implements the stored-event
+Status: **three open issues: the 2.0 docs review, and two for 2.1, one of them blocked upstream.** 2.0.0-rc.1 is
+the release candidate, on JasperFx 3.12.1, Weasel 10.0.0-rc.1 and the .NET 11 GA packages. The 2.0 milestone has only
+the docs review ([#657](https://github.com/JasperFx/fisher/issues/657)) left, and it gates the final 2.0.0, not the RC.
+Since 2.0.0-alpha.7, main turns extended progression tracking on by default
+([#664](https://github.com/JasperFx/fisher/issues/664)), adds `QueryAcrossAllDatabasesAsync`
+([#665](https://github.com/JasperFx/fisher/issues/665)), translates computed ordering keys, array indexes, `LeftJoin`
+and `RightJoin` ([#666](https://github.com/JasperFx/fisher/issues/666)), and finishes the parking follow-ups
+([#658](https://github.com/JasperFx/fisher/issues/658), [#660](https://github.com/JasperFx/fisher/issues/660),
+[#661](https://github.com/JasperFx/fisher/issues/661), [#667](https://github.com/JasperFx/fisher/issues/667),
+[#671](https://github.com/JasperFx/fisher/issues/671)). Since 2.0.0-alpha.4, main implements the stored-event
 rewrite seam over the event-range marks, so only the projection backfill half of
 [#643](https://github.com/JasperFx/fisher/issues/643) is left (deferred: Jeremy is holding projection backfill, and
 the first attempt, #648, was reverted). 2.0.0-alpha.7 moves to JasperFx 3.11.0 and Weasel 10.0.0-alpha.13: a projection
@@ -427,7 +436,10 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is two items.
+What is left is three items.
+
+[#657](https://github.com/JasperFx/fisher/issues/657): the docs review of the new and substantially changed pages,
+before the final 2.0.0. It does not gate the release candidate.
 
 [#643](https://github.com/JasperFx/fisher/issues/643): the projection backfill seam JasperFx 3.7.0 added to
 `IEventStore`. The event-range marks and the stored-event rewrite are done. The backfill itself is deferred: Jeremy is
