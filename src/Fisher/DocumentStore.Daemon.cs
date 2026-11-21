@@ -661,7 +661,7 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     public async ValueTask<IProjectionDaemon> BuildProjectionDaemonAsync(
         string? tenantIdOrDatabaseIdentifier = null, ILogger? logger = null)
     {
-        logger ??= NullLogger.Instance;
+        logger ??= DefaultDaemonLogger();
 
         var target = tenantIdOrDatabaseIdentifier is null
             ? Database
@@ -688,7 +688,7 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     /// </remarks>
     public async ValueTask<IReadOnlyList<IProjectionDaemon>> BuildProjectionDaemonsAsync(ILogger? logger = null)
     {
-        logger ??= NullLogger.Instance;
+        logger ??= DefaultDaemonLogger();
 
         // Tenants that appeared since the store was built are found here rather than assumed absent
         // (fisher#58); a no-op under every other tenancy.
@@ -741,8 +741,24 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
             new FisherHighWaterDetector(database, EventGraph));
     }
 
+    /// <summary>
+    ///     The daemon Wolverine-managed projection distribution builds, one per database it runs agents for.
+    /// </summary>
+    /// <remarks>
+    ///     JasperFx's seam has no logger parameter, so the daemon logs through
+    ///     <see cref="DefaultDaemonLogger" />, the host's logger when <c>AddFisher</c> registered the store
+    ///     (fisher#658).
+    /// </remarks>
     ValueTask<IProjectionDaemon> IEventStore.BuildProjectionDaemonAsync(DatabaseId id)
         => BuildProjectionDaemonAsync(id.Name);
+
+    /// <summary>
+    ///     The logger a daemon gets when its caller passes none: one from the host's
+    ///     <see cref="ILoggerFactory" /> when the store came from <c>AddFisher</c>, otherwise
+    ///     <see cref="NullLogger" />. Marten does the same from its <c>StoreOptions.LogFactory</c>.
+    /// </summary>
+    internal ILogger DefaultDaemonLogger()
+        => (ILogger?)Options.LogFactory?.CreateLogger<FisherProjectionDaemon>() ?? NullLogger.Instance;
 
     /// <summary>
     ///     fisher#652 / marten#6003: say once per daemon how each async projection treats a failing identity, so

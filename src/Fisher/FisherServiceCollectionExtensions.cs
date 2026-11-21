@@ -626,6 +626,10 @@ public static class FisherServiceCollectionExtensions
 
         AttachDefaultLogger(services, options);
 
+        // fisher#658: a daemon built with no logger (Wolverine-managed distribution builds every one that
+        // way) logs through the host instead of into NullLogger.
+        options.LogFactory ??= services.GetService<ILoggerFactory>();
+
         return options;
     }
 

@@ -549,6 +549,11 @@ the logger below.
 Fisher logs through `ILogger` where a host supplies one — the WAL warning at daemon startup, and
 every statement a session executes.
 
+A projection daemon logs through the host's `ILoggerFactory` when the store came from `AddFisher`,
+however the daemon was started: `AddAsyncDaemon`, Wolverine-managed projection distribution, or
+`BuildProjectionDaemonAsync()` without a logger. A store built with `DocumentStore.For(...)` has no
+host, so its daemons log nothing unless you pass them a logger.
+
 ### The session logger
 
 `AddFisher` attaches a `DefaultFisherLogger` over the container's `ILogger<IDocumentStore>`, so
