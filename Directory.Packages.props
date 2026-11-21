@@ -580,8 +580,12 @@
         <!-- Weasel 10.0.0-alpha.13 (from alpha.11, spanning alpha.12). weasel#901: EventLoaderBase reports a parking
              request's unreadable events on the page, so FisherEventLoader's AsyncLocal workaround is gone. INERT:
              weasel#900 (SQL Server), and alpha.12's managed list partitions (#897/#898, PostgreSQL). -->
-        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.13" />
-        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.13" />
+        <!-- Weasel 10.0.0-rc.1 (from alpha.13). fisher#674. Weasel.Sqlite now splits Microsoft.Data.Sqlite by
+             target framework the way Fisher has since fisher#670: 10.0.15 on net10.0, 11.0.0 on net11.0, both on
+             SQLitePCLRaw.bundle_e_sqlite3 3.0.5. Floors: JasperFx 3.12.1 (Weasel.Core) and JasperFx.Events 3.12.1
+             (Weasel.Storage), matching the pins above. -->
+        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-rc.1" />
+        <PackageVersion Include="Weasel.Storage" Version="10.0.0-rc.1" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.15" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
@@ -667,8 +671,8 @@
          Microsoft.Extensions.*: JasperFx 3.12.1's net11.0 build depends on Microsoft.Extensions.Hosting 11.0.0, so
          a 10.0.0 pin on net11.0 fails restore with NU1605.
          Microsoft.Data.Sqlite 11.0.0 depends on SQLitePCLRaw.bundle_e_sqlite3 3.0.5, the bundle pinned above, so
-         the bundle decision (fisher#462) is unchanged. Weasel.Sqlite 10.0.0-alpha.13 asks for Microsoft.Data.Sqlite
-         10.0.15 or later, which 11.0.0 satisfies.
+         the bundle decision (fisher#462) is unchanged. Weasel.Sqlite 10.0.0-rc.1's net11.0 build asks for
+         Microsoft.Data.Sqlite 11.0.0 (and its net10.0 build for 10.0.15), so these pins match Weasel's on both.
          EF Core: Microsoft.EntityFrameworkCore.Sqlite 10.0.0 holds Microsoft.Data.Sqlite.Core to the 10.x line, so
          the tests' provider has to move with Microsoft.Data.Sqlite, and Fisher.EntityFrameworkCore's net11.0 build
          takes EF Core 11 with it. net10.0 keeps the 10.x floors. -->

@@ -378,8 +378,10 @@ themselves.
 
 ### JasperFx 3.0 and Weasel 10
 
-Fisher 2 requires JasperFx 3.12.1 and Weasel.Sqlite / Weasel.Storage 10.0. An application referencing
-either directly has to move them together; mixing a 2.x JasperFx with Fisher 2 does not restore.
+Fisher 2 requires JasperFx 3.12.1 and Weasel.Sqlite / Weasel.Storage 10.0 (10.0.0-rc.1 at the moment). An
+application referencing either directly has to move them together; mixing a 2.x JasperFx with Fisher 2 does not
+restore. Weasel.Sqlite 10 depends on `Microsoft.Data.Sqlite` 10.0.15 on `net10.0` and 11.0.0 on `net11.0`, the same
+versions Fisher uses, so the two never pull different SQLite providers into one application.
 
 Two things in JasperFx 3.12 can show up in an application:
 

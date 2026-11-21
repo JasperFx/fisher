@@ -16,7 +16,13 @@ scoreboard and the things that are true right now but not obvious from either.
 `Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 959 of
 them are shared cross-store compliance tests — 725 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.12.1** / Weasel **10.0.0-alpha.13**, and the .NET 11 GA (11.0.0) Microsoft packages on net11.0.
+On JasperFx **3.12.1** / Weasel **10.0.0-rc.1**, and the .NET 11 GA (11.0.0) Microsoft packages on net11.0.
+
+## Weasel 10.0.0-rc.1 (fisher#674)
+
+From alpha.13, with no Fisher code change. Weasel.Sqlite now depends on Microsoft.Data.Sqlite 10.0.15 on net10.0 and
+11.0.0 on net11.0, the versions Fisher already pinned in #670, so both frameworks restore with no NU1605 and no
+.NET 11 prerelease.
 
 ## JasperFx 3.12.1 and the .NET 11 GA packages (fisher#670, #667, #671)
 
