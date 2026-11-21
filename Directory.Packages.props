@@ -301,6 +301,24 @@
              INERT:
              jasperfx#1099/#1103 fold an HTTP endpoint and a message handler in the Event Model, which
              Fisher contributes to but does not assert on. -->
+        <!-- JasperFx 3.12.1 (from 3.11.0, spanning 3.12.0), fisher#670. No compile break. The compliance package's
+             ParkedIdentityCompliance and MultiStreamParkedIdentityCompliance change, green with no Fisher change.
+
+             ADOPTED:
+             jasperfx#1270 - JasperFx's net11.0 build depends on the .NET 11 GA (11.0.0) Microsoft packages, and so
+             does Fisher's: see the net11.0 group at the bottom of this file.
+             jasperfx#1273 - ParkedIdentity.NaturalKey. FetchParkedIdentitiesAsync fills it from fi_natural_key_*
+             and the parked identities health check lists it (fisher#667, port of marten#6132).
+
+             INHERITED, no Fisher code:
+             jasperfx#1272 - a natural key of any type but int, long or string (or a strong-typed id over one) is
+             refused at registration. Fisher 1 took a Guid key as TEXT; no Fisher test or doc relied on it, and
+             natural_keys.a_guid_natural_key_is_refused_when_the_store_is_built pins the refusal.
+             jasperfx#1277 - a composite rebuild that pauses or stops its shard throws. No Fisher test moved.
+
+             The two workarounds the plan named were already gone with 3.11.0 / Weasel alpha.13 (see below): the
+             step-through's EventRecord.Tags copy (jasperfx#1259) and FisherEventLoader's unreadable-event
+             parking (weasel#901). -->
         <!-- JasperFx 3.11.0 (from 3.10.0), for 2.0.0-alpha.7. No compile break; the new IEventStore member has a
              default. The compliance package is unchanged.
 
@@ -354,16 +372,16 @@
         <!-- JasperFx 3.3.0 (from 3.0.1, spanning 3.1.0 and 3.2.0). Bumped here because 3.2.0 is the first
              release with DcbAppendConditionCompliance (jasperfx#1183), which this branch enrolls. No compile
              break. The rest of the span is adopted in fisher#554. -->
-        <PackageVersion Include="JasperFx" Version="3.11.0" />
-        <PackageVersion Include="JasperFx.Events" Version="3.11.0" />
+        <PackageVersion Include="JasperFx" Version="3.12.1" />
+        <PackageVersion Include="JasperFx.Events" Version="3.12.1" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="3.11.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="3.11.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="3.12.1" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="3.12.1" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="3.11.0" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="3.12.1" />
 
         <!-- Weasel 9.46.0 (from 9.42.0, spanning 9.43.0, 9.44.0, 9.45.0 and 9.45.1). JasperFx floor
              2.90.2, which Fisher already pins. Reaching Fisher:
@@ -579,14 +597,7 @@
         <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
         <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
         <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
-        <!-- net11.0: JasperFx 3.0.0's net11.0 build depends on Microsoft.Extensions.Hosting
-             11.0.0-rc.3.26522.148, so a 10.0.0 pin on net11.0 fails restore with NU1605. -->
-    </ItemGroup>
-    <ItemGroup Condition="'$(TargetFramework)' == 'net11.0'">
-        <PackageVersion Update="Microsoft.Extensions.DependencyInjection" Version="11.0.0-rc.3.26522.148" />
-        <PackageVersion Update="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.0-rc.3.26522.148" />
-        <PackageVersion Update="Microsoft.Extensions.Hosting" Version="11.0.0-rc.3.26522.148" />
-        <PackageVersion Update="Microsoft.Extensions.Hosting.Abstractions" Version="11.0.0-rc.3.26522.148" />
+        <!-- net11.0 takes the 11.0.0 GA builds: see the net11.0 group at the bottom of this file. -->
     </ItemGroup>
     <ItemGroup>
         <PackageVersion Include="Polly.Core" Version="8.6.5" />
@@ -649,5 +660,25 @@
         <PackageVersion Include="NuGet.Packaging" Version="6.14.3" />
         <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
         <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.13" />
+    </ItemGroup>
+
+    <!-- net11.0: the .NET 11 GA (11.0.0) build of every Microsoft package pinned above that has one (fisher#670).
+         Last in the file because an Update only reaches an item that is already included.
+         Microsoft.Extensions.*: JasperFx 3.12.1's net11.0 build depends on Microsoft.Extensions.Hosting 11.0.0, so
+         a 10.0.0 pin on net11.0 fails restore with NU1605.
+         Microsoft.Data.Sqlite 11.0.0 depends on SQLitePCLRaw.bundle_e_sqlite3 3.0.5, the bundle pinned above, so
+         the bundle decision (fisher#462) is unchanged. Weasel.Sqlite 10.0.0-alpha.13 asks for Microsoft.Data.Sqlite
+         10.0.15 or later, which 11.0.0 satisfies.
+         EF Core: Microsoft.EntityFrameworkCore.Sqlite 10.0.0 holds Microsoft.Data.Sqlite.Core to the 10.x line, so
+         the tests' provider has to move with Microsoft.Data.Sqlite, and Fisher.EntityFrameworkCore's net11.0 build
+         takes EF Core 11 with it. net10.0 keeps the 10.x floors. -->
+    <ItemGroup Condition="'$(TargetFramework)' == 'net11.0'">
+        <PackageVersion Update="Microsoft.Data.Sqlite" Version="11.0.0" />
+        <PackageVersion Update="Microsoft.Extensions.DependencyInjection" Version="11.0.0" />
+        <PackageVersion Update="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.0" />
+        <PackageVersion Update="Microsoft.Extensions.Hosting" Version="11.0.0" />
+        <PackageVersion Update="Microsoft.Extensions.Hosting.Abstractions" Version="11.0.0" />
+        <PackageVersion Update="Microsoft.EntityFrameworkCore.Relational" Version="11.0.0" />
+        <PackageVersion Update="Microsoft.EntityFrameworkCore.Sqlite" Version="11.0.0" />
     </ItemGroup>
 </Project>
