@@ -4,6 +4,36 @@ Fisher's API mirrors [Marten](https://martendb.io)'s and
 [Polecat](https://polecat.jasperfx.net)'s, so most code ports by changing a registration line and a
 connection string. This page is about the parts that do not.
 
+## What's new in Fisher 2.0
+
+Fisher 2.0 is Fisher's part of the Critter Stack's .NET 11 release, beside JasperFx 3, Weasel 10, Marten 10,
+Polecat 6 and Wolverine 7.
+
+- **Targets `net10.0` and `net11.0`.** `net9.0` is dropped. The `net11.0` build is compiled with runtime-async and
+  uses the .NET 11 GA packages.
+- **Dependencies:** JasperFx 3.12.1, Weasel.Sqlite and Weasel.Storage 10, and on `net11.0`
+  `Microsoft.Data.Sqlite` 11.0.0. The new `Fisher.Aspire.Hosting` package is the AppHost side of
+  [Aspire](/configuration/aspire).
+- **A failing async projection identity is parked** instead of skipping its event, with a health check that names
+  what is parked and goes Unhealthy at the cap. See [parking](/events/projections/async-daemon#parking-a-failing-identity).
+- **Defaults follow Marten 10**: event metadata, document metadata, extended progression tracking and inline
+  projection side effects are on. `RestoreV1Defaults()` puts Fisher 1's defaults back.
+- **Reading your own writes**: `session.LastAppendedPosition` and `store.WaitForProjectionsAsync(...)`. See
+  [reading your own writes](/events/projections/async-daemon#reading-your-own-writes).
+- **Rewriting stored events in bulk** with `RewriteStoredEventsAsync` and `AddRewriteTransform<T>()`. See
+  [rewriting](/events/rewriting#rewriting-stored-events-in-bulk).
+- **`Advanced.QueryAcrossAllDatabasesAsync`** runs one query against every tenant database. See
+  [querying every database](/configuration/multitenancy#querying-every-database).
+- **LINQ:** `SelectMany` over a document's own collections, `Any`/`All` over primitives, computed ordering keys,
+  indexes into arrays and lists, `LeftJoin` and `RightJoin`, and C# union-typed members on `net11.0`. A wave of
+  fixes makes ordering, paging, `Distinct`, nulls, decimals and floats answer what LINQ to Objects answers.
+- **Projections:** a new projection version gets its own table, `RebuildSingleStreamAsync` goes through a running
+  daemon, and DCB boundaries see tombstones, archiving and `AssignTagWhere`.
+- **Waiting for the write lock** goes through a 1 ms busy handler.
+
+Some of this changes behaviour in an existing application. [Upgrading from Fisher 1 to Fisher 2](#upgrading-from-fisher-1-to-fisher-2)
+says what, what it does to an existing database file, and how to opt out.
+
 ## Registration
 
 ```cs
