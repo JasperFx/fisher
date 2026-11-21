@@ -59,6 +59,17 @@ public partial class DocumentStore : IEventStore<IDocumentSession, IQuerySession
     ErrorHandlingOptions IEventStore<IDocumentSession, IQuerySession>.ErrorHandlingOptions(ShardExecutionMode mode)
         => mode == ShardExecutionMode.Rebuild ? Options.Projections.RebuildErrors : Options.Projections.Errors;
 
+    /// <summary>
+    ///     jasperfx#1256: the daemon builds a projection batch that failed transiently again through this, the same
+    ///     pipeline every other Fisher command runs in. Its retry already handles a <c>SQLITE_BUSY</c>,
+    ///     <c>SQLITE_LOCKED</c> or <c>SQLITE_PROTOCOL</c> <see cref="Microsoft.Data.Sqlite.SqliteException" />, so a
+    ///     batch that lost a race for the write lock is built again instead of pausing the shard. When the retries
+    ///     run out, the shard pauses with <c>ShardFailure.IsTransient</c> true. <c>ConfigurePolly</c> and
+    ///     <c>ExtendPolly</c> change it here too.
+    /// </summary>
+    Polly.ResiliencePipeline IEventStore<IDocumentSession, IQuerySession>.ResiliencePipeline
+        => Options.ResiliencePipeline;
+
     IReadOnlyList<AsyncShard<IDocumentSession, IQuerySession>>
         IEventStore<IDocumentSession, IQuerySession>.AllShards() => Options.Projections.AllShards();
 

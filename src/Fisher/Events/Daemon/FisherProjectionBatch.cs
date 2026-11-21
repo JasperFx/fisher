@@ -217,8 +217,9 @@ internal sealed class FisherProjectionBatch : ProjectionBatchBase<IDocumentSessi
             }
 
             // fisher#654: parked_count counted from the rows just written, in this transaction. The daemon's own
-            // Parked/Unparked publications don't reach the progression row while periodic heartbeats are off
-            // (jasperfx#1255), and the writer never overwrites a count written here.
+            // Parked/Unparked publications used to miss the progression row while periodic heartbeats were off
+            // (jasperfx#1255, fixed upstream in JasperFx 3.11.0). They reach it now, but can land after this commit
+            // with an older count, so the writer never overwrites a count written here.
             if (!_parks.IsEmpty || !_unparks.IsEmpty)
             {
                 await _database.RefreshParkedCountsAsync(connection, transaction, parkedShards(), ct)

@@ -477,8 +477,8 @@ public class parked_identities : IAsyncLifetime
 
     /// <summary>
     ///     fisher#654: the count is set by the projection batch, in the transaction that parks or unparks, so it is
-    ///     right with periodic heartbeats off, which is when JasperFx's writer drops the Parked and Unparked
-    ///     publications (jasperfx#1255).
+    ///     right with periodic heartbeats off, which is when JasperFx's writer dropped the Parked and Unparked
+    ///     publications before 3.11.0 (jasperfx#1255, fixed upstream).
     /// </summary>
     [Fact]
     public async Task all_projection_progress_reads_the_parked_count_back_into_shard_state()

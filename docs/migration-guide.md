@@ -371,7 +371,7 @@ themselves.
 
 ### JasperFx 3.0 and Weasel 10
 
-Fisher 2 requires JasperFx 3.10.0 and Weasel.Sqlite / Weasel.Storage 10.0. An application referencing
+Fisher 2 requires JasperFx 3.11.0 and Weasel.Sqlite / Weasel.Storage 10.0. An application referencing
 either directly has to move them together; mixing a 2.x JasperFx with Fisher 2 does not restore.
 
 ### JasperFx 3.9.0: culture-independent names, and bare `case` labels in `Evolve()`
@@ -498,6 +498,7 @@ message or raises an event, and set `opts.Events.EnableSideEffectsOnInlineProjec
 | System.Text.Json `AllowOutOfOrderMetadataProperties` on Fisher's `Serializer` | `false` | **`true`** | None. Reads accept `$type` anywhere in the object. | yes, applied when the store is built |
 | `GateSideEffectsBehindPriorVersion` (JasperFx 3.0, above) | off | **on** | None. | yes, on every registered projection, applied when the store is built |
 | `Projections.Errors.ApplyErrors` and `SerializationErrors` ([parking](/events/projections/async-daemon#parking-a-failing-identity), [JasperFx docs](https://shared-libs.jasperfx.net/events/parked-identities), fisher#652) | skip the event and dead-letter it | **park the failing identity, or pause the shard where the projection can't park** | Adds `fi_parked_identities`, and `parked_count` to the progression table under extended tracking. An event projection, a flat table, a composite or a multi-stream projection grouped by a delegate now **pauses** on a bad event instead of skipping it. | yes |
+| A projection batch that fails transiently, such as `SQLITE_BUSY` ([JasperFx 3.11.0](https://shared-libs.jasperfx.net/migration-guide#key-changes-in-3-11-0), jasperfx#1256) | the shard pauses, or under skip goes round again without limit when several identities fail at once | **the daemon builds the batch again through the store's Polly pipeline (five retries by default), under every error policy; when the retries run out, the shard pauses with `ShardFailure.IsTransient` true** | None. A transient failure never parks or skips anything. | no. `ConfigurePolly` changes the retries, for every command Fisher runs |
 
 **The new columns are an ordinary migration.** Under `AutoCreate.All` or `CreateOrUpdate`, Fisher adds them
 to existing tables the first time the store touches them. Under `AutoCreate.None`, apply the migration

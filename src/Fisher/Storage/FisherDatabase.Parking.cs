@@ -623,10 +623,10 @@ public partial class FisherDatabase
     /// <remarks>
     ///     <para>
     ///         The parked table is the truth, so the count is counted from it in the same transaction that changed
-    ///         it, rather than taken from the daemon's in-memory count. JasperFx's <c>ExtendedProgressionWriter</c>
-    ///         drops the <c>Parked</c> and <c>Unparked</c> publications that carry the in-memory count while
-    ///         periodic heartbeats are off (jasperfx#1255), and even once it writes them, a state stamped before
-    ///         this commit can be written after it. So <see cref="WriteExtendedProgressionAsync(IReadOnlyList{ShardState},CancellationToken)" />
+    ///         it, rather than taken from the daemon's in-memory count. Before JasperFx 3.11.0,
+    ///         <c>ExtendedProgressionWriter</c> dropped the <c>Parked</c> and <c>Unparked</c> publications that carry
+    ///         the in-memory count while periodic heartbeats were off (jasperfx#1255, fixed upstream in 3.11.0). It
+    ///         writes them now, but a state stamped before this commit can still be written after it. So <see cref="WriteExtendedProgressionAsync(IReadOnlyList{ShardState},CancellationToken)" />
     ///         only fills the column in while it is null and never overwrites a count written here.
     ///     </para>
     ///     <para>

@@ -301,6 +301,19 @@
              INERT:
              jasperfx#1099/#1103 fold an HTTP endpoint and a message handler in the Event Model, which
              Fisher contributes to but does not assert on. -->
+        <!-- JasperFx 3.11.0 (from 3.10.0), for 2.0.0-alpha.7. No compile break; the new IEventStore member has a
+             default. The compliance package is unchanged.
+
+             ADOPTED:
+             jasperfx#1256 - IEventStore.ResiliencePipeline. DocumentStore returns StoreOptions.ResiliencePipeline,
+             so the daemon builds a batch that failed with SQLITE_BUSY/LOCKED/PROTOCOL again
+             (transient_batch_build_failures).
+             jasperfx#1254 (PR #1259) - WithRecordMetadata(..., tagTypes). The step-through uses it, and Fisher's own
+             tag copy (fisher#654) is gone (fisher#655).
+
+             INHERITED, no Fisher change needed:
+             jasperfx#1255 - the extended progression writer writes Parked/Unparked with heartbeats off. Fisher's
+             batch-owned parked_count stays. jasperfx#1258 - a replay or discard right after a park. -->
         <!-- JasperFx 3.9.0 (from 3.8.0). No compile break.
              jasperfx#1247 (#1243) - the bundled source generator picks up bare `case Foo:` labels, `Foo =>` arms
              and or/and patterns in Evolve(). The packed Fisher carries the 3.9.0 generator.
@@ -341,16 +354,16 @@
         <!-- JasperFx 3.3.0 (from 3.0.1, spanning 3.1.0 and 3.2.0). Bumped here because 3.2.0 is the first
              release with DcbAppendConditionCompliance (jasperfx#1183), which this branch enrolls. No compile
              break. The rest of the span is adopted in fisher#554. -->
-        <PackageVersion Include="JasperFx" Version="3.10.0" />
-        <PackageVersion Include="JasperFx.Events" Version="3.10.0" />
+        <PackageVersion Include="JasperFx" Version="3.11.0" />
+        <PackageVersion Include="JasperFx.Events" Version="3.11.0" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="3.10.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="3.10.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="3.11.0" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="3.11.0" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="3.10.0" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="3.11.0" />
 
         <!-- Weasel 9.46.0 (from 9.42.0, spanning 9.43.0, 9.44.0, 9.45.0 and 9.45.1). JasperFx floor
              2.90.2, which Fisher already pins. Reaching Fisher:
@@ -546,8 +559,11 @@
              INERT: weasel#882/#884 (alpha.10), a PostgreSQL partitioning rebuild locks the table first. -->
         <!-- Weasel 10.0.0-alpha.11 (from alpha.10). Builds with no Fisher change; floors JasperFx 3.6.0 and
              Microsoft.Data.Sqlite 10.0.15, satisfied by the pins. -->
-        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.11" />
-        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.11" />
+        <!-- Weasel 10.0.0-alpha.13 (from alpha.11, spanning alpha.12). weasel#901: EventLoaderBase reports a parking
+             request's unreadable events on the page, so FisherEventLoader's AsyncLocal workaround is gone. INERT:
+             weasel#900 (SQL Server), and alpha.12's managed list partitions (#897/#898, PostgreSQL). -->
+        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-alpha.13" />
+        <PackageVersion Include="Weasel.Storage" Version="10.0.0-alpha.13" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.15" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,
