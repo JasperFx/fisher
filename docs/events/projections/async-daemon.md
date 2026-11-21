@@ -223,6 +223,12 @@ What's Fisher's own:
   discard. A shard paused at the cap comes back from `AllProjectionProgress()` with a `ShardState.Failure` whose
   category is `ParkedLimitReached`, which is what the
   [parked identities health check](/diagnostics#health-checks) reports as Unhealthy.
+- **The parked list shows a natural key.** When the aggregate of a single-stream projection has a
+  [natural key](/events/natural-keys), `FetchParkedIdentitiesAsync` reads it from `fi_natural_key_<aggregate>`
+  and sets `ParkedIdentity.NaturalKey`, matched on the stream id and, under conjoined tenancy, the tenant. So
+  `projections parked` shows `ORD-1001` in its Natural Key column next to the stream id. It stays empty for an
+  aggregate without a natural key, or a stream that never got one. `--identity` for a replay or a discard still
+  takes the stream id.
 - **There is no high-water skip tracking to think about.** SQLite has one writer, so the high-water mark never
   waits on a gap.
 

@@ -521,6 +521,23 @@ public partial class natural_keys : IAsyncLifetime
         sql.ShouldNotContain("select");
     }
 
+    /// <summary>
+    ///     fisher#670 (jasperfx#1272, JasperFx 3.12): a natural key that isn't an int, long or string is refused when
+    ///     the projection is registered. Fisher 1 took a Guid key and stored it as text.
+    /// </summary>
+    [Fact]
+    public void a_guid_natural_key_is_refused_when_the_store_is_built()
+    {
+        var ex = Should.Throw<InvalidProjectionException>(() => DocumentStore.For(o =>
+        {
+            o.ConnectionString = _database.ConnectionString;
+            o.Projections.Add(new GuidKeyedOrderProjection(), ProjectionLifecycle.Inline);
+        }));
+
+        ex.Message.ShouldContain(nameof(GuidKeyedOrder));
+        ex.Message.ShouldContain(nameof(GuidKeyedOrder.Token));
+    }
+
     // ---- helpers for the replay tests ----
 
     /// <summary>
@@ -577,6 +594,21 @@ public partial class natural_keys : IAsyncLifetime
         [NaturalKey] public string Reference { get; set; } = "";
 
         public bool Shipped { get; set; }
+    }
+
+    public record GuidKeyedOrderPlaced(Guid Token);
+
+    public class GuidKeyedOrder
+    {
+        public Guid Id { get; set; }
+
+        [NaturalKey] public Guid Token { get; set; }
+    }
+
+    public partial class GuidKeyedOrderProjection : SingleStreamProjection<GuidKeyedOrder, Guid>
+    {
+        [NaturalKeySource]
+        public static GuidKeyedOrder Create(GuidKeyedOrderPlaced placed) => new() { Token = placed.Token };
     }
 
     public class Untracked

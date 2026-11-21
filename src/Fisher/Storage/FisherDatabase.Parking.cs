@@ -1,7 +1,13 @@
 using System.Globalization;
 using System.Text;
+using Fisher.Events.Schema;
+using Fisher.Events.Storage;
+using JasperFx;
+using JasperFx.Events;
+using JasperFx.Events.Aggregation;
 using JasperFx.Events.Daemon;
 using JasperFx.Events.Projections;
+using JasperFx.MultiTenancy;
 using Microsoft.Data.Sqlite;
 
 namespace Fisher.Storage;
@@ -70,8 +76,99 @@ public partial class FisherDatabase
                 + "order by parked_at, first_failing_seq limit @limit";
             command.Parameters.AddWithValue("@limit", Math.Max(query.Limit, 0));
 
-            return await readParkedAsync(command, ct).ConfigureAwait(false);
+            var parked = await readParkedAsync(command, ct).ConfigureAwait(false);
+            return await withNaturalKeysAsync(parked, connection, ct).ConfigureAwait(false);
         }, (IReadOnlyList<ParkedIdentity>)[], token).ConfigureAwait(false);
+    }
+
+    // At most this many stream identities go into one natural key lookup, well under SQLite's 32,766 variables
+    private const int NaturalKeyLookupChunk = 500;
+
+    /// <summary>
+    ///     fisher#667 (jasperfx#1273, port of marten#6132): fill <see cref="ParkedIdentity.NaturalKey" /> for every
+    ///     parked slice whose single-stream aggregate declares a natural key, with one lookup per projection against
+    ///     that aggregate's <c>fi_natural_key_*</c> table. A row matches on the stream identity, and on the tenant too
+    ///     under conjoined tenancy, where the same key can exist once per tenant. No natural key, or no row for the
+    ///     stream, leaves it null. The key is only read here, never stored on the parked row.
+    /// </summary>
+    private async Task<IReadOnlyList<ParkedIdentity>> withNaturalKeysAsync(IReadOnlyList<ParkedIdentity> parked,
+        SqliteConnection connection, CancellationToken token)
+    {
+        if (parked.Count == 0) return parked;
+
+        List<ParkedIdentity>? filled = null;
+
+        foreach (var byProjection in parked.Select((row, index) => (row, index)).GroupBy(x => x.row.ProjectionName))
+        {
+            if (naturalKeyForProjection(byProjection.Key) is not { } naturalKey) continue;
+
+            var keys = await readNaturalKeysAsync(naturalKey,
+                    byProjection.Select(x => x.row.IdentityText).Distinct().ToList(), connection, token)
+                .ConfigureAwait(false);
+
+            foreach (var (row, index) in byProjection)
+            {
+                if (!keys.TryGetValue((tenantForNaturalKey(row.TenantId), row.IdentityText), out var key)) continue;
+
+                filled ??= [..parked];
+                filled[index] = row with { NaturalKey = key };
+            }
+        }
+
+        return filled ?? parked;
+    }
+
+    // Only a single-stream aggregate's identity is a stream identity, which is what fi_natural_key_* maps a key to
+    private NaturalKeyDefinition? naturalKeyForProjection(string projectionName)
+        => _options.Projections.All
+            .Where(x => x.Name == projectionName)
+            .OfType<IAggregateProjection>()
+            .FirstOrDefault(x => x.Scope == AggregationScope.SingleStream && x.NaturalKeyDefinition is not null)
+            ?.NaturalKeyDefinition;
+
+    // Without conjoined tenancy the lookup table has no tenant column: one database, one key per stream
+    private string tenantForNaturalKey(string tenantId)
+        => _events.TenancyStyle == TenancyStyle.Conjoined ? tenantId : "";
+
+    private async Task<Dictionary<(string Tenant, string Stream), string>> readNaturalKeysAsync(
+        NaturalKeyDefinition naturalKey, IReadOnlyList<string> streams, SqliteConnection connection,
+        CancellationToken token)
+    {
+        var keys = new Dictionary<(string Tenant, string Stream), string>();
+        var streamColumn = NaturalKeySql.StreamColumn(_events);
+        var tenantColumn = _events.TenancyStyle == TenancyStyle.Conjoined ? StorageConstants.TenantIdColumn : "''";
+        var table = _events.QuotedNaturalKeyTableName(naturalKey.AggregateType);
+
+        try
+        {
+            foreach (var chunk in streams.Chunk(NaturalKeyLookupChunk))
+            {
+                await using var command = connection.CreateCommand();
+                var parameters = new string[chunk.Length];
+                for (var i = 0; i < chunk.Length; i++)
+                {
+                    parameters[i] = $"@s{i}";
+                    command.Parameters.AddWithValue(parameters[i], chunk[i]);
+                }
+
+                command.CommandText = $"select {tenantColumn}, {streamColumn}, {NaturalKeyTable.KeyColumn} from {table} "
+                                      + $"where {streamColumn} in ({string.Join(", ", parameters)})";
+
+                await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+                while (await reader.ReadAsync(token).ConfigureAwait(false))
+                {
+                    keys[(reader.GetString(0), reader.GetString(1))] =
+                        Convert.ToString(reader.GetValue(2), CultureInfo.InvariantCulture)!;
+                }
+            }
+        }
+        catch (SqliteException e) when (SqliteSchemaErrors.IsMissingStorage(e))
+        {
+            // No lookup table yet: the parked list still answers, without natural keys
+            return [];
+        }
+
+        return keys;
     }
 
     /// <inheritdoc />

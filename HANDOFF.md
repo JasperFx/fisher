@@ -12,11 +12,25 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**4242 tests green on net10.0 and 4269 on net11.0** — 4165 (net10.0) / 4192 (net11.0) in `Fisher.Tests`, 45 in
+**4248 tests green on net10.0 and 4275 on net11.0** — 4169 (net10.0) / 4196 (net11.0) in `Fisher.Tests`, 47 in
 `Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 959 of
 them are shared cross-store compliance tests — 725 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.11.0** / Weasel **10.0.0-alpha.13**.
+On JasperFx **3.12.1** / Weasel **10.0.0-alpha.13**, and the .NET 11 GA (11.0.0) Microsoft packages on net11.0.
+
+## JasperFx 3.12.1 and the .NET 11 GA packages (fisher#670, #667, #671)
+
+From JasperFx 3.11.0. On net11.0, Microsoft.Data.Sqlite, the Microsoft.Extensions hosting/DI packages and EF Core
+are on 11.0.0; net10.0 keeps the 10.x floors. No .NET 11 prerelease is left in any restore graph. The two
+compliance suites that changed (parked identities) are green with no Fisher change.
+
+- jasperfx#1273: `FetchParkedIdentitiesAsync` fills `ParkedIdentity.NaturalKey` from `fi_natural_key_*`, one lookup
+  per projection whose single-stream aggregate has a natural key, matched on stream and (conjoined) tenant. The
+  parked identities health check lists the identities, ten per projection, as `id (natural key)` (fisher#667).
+- fisher#671: `EventStoreUsage.SubjectUri` was the database uri, so the JasperFx `projections parked` and floor
+  commands found no Fisher store. It is the store's uri now, as in Marten and Polecat.
+- jasperfx#1272 refuses a Guid natural key at registration (`natural_keys`); jasperfx#1277's throwing composite
+  rebuild moved no Fisher test.
 
 ## JasperFx 3.11.0 and Weasel 10.0.0-alpha.13 (2.0.0-alpha.7)
 
@@ -1394,7 +1408,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 3.11.0 ships 72 suites; Fisher enrolls **71 of them, 959 tests**.
+`JasperFx.Events.ComplianceTests` 3.12.1 ships 72 suites; Fisher enrolls **71 of them, 959 tests**.
 Fisher passes **959 of them, across all
 71 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed

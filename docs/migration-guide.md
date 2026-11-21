@@ -349,9 +349,16 @@ Fisher, `Fisher.AspNetCore`, `Fisher.EntityFrameworkCore` and the new `Fisher.As
 dropped**, so an application still on .NET 9 stays on Fisher 1.x. Nothing about the on-disk format depends
 on the target framework.
 
-JasperFx 3.0's `net11.0` build depends on the .NET 11 `Microsoft.Extensions.*` packages, so an application
+JasperFx 3's `net11.0` build depends on the .NET 11 `Microsoft.Extensions.*` packages, so an application
 targeting `net11.0` has to reference the matching 11.x hosting and dependency-injection packages, or
 restore fails with `NU1605`.
+
+Fisher's `net11.0` build uses the .NET 11 GA packages (11.0.0): `Microsoft.Data.Sqlite`, the
+`Microsoft.Extensions.*` hosting and dependency-injection packages, and for `Fisher.EntityFrameworkCore`,
+`Microsoft.EntityFrameworkCore.Relational`. The `net10.0` build keeps the 10.x versions
+(`Microsoft.Data.Sqlite` 10.0.15, EF Core 10.0.0). No .NET 11 preview or release candidate is left in
+Fisher's dependencies. An application on `net11.0` that references EF Core itself moves to EF Core 11 with
+`Fisher.EntityFrameworkCore`.
 
 Test projects move with the stack: xunit.v3 4.x on Microsoft Testing Platform 2 (Fisher's own suite did,
 which is why the old "stay on MTP 1.x" note is gone).
@@ -371,8 +378,17 @@ themselves.
 
 ### JasperFx 3.0 and Weasel 10
 
-Fisher 2 requires JasperFx 3.11.0 and Weasel.Sqlite / Weasel.Storage 10.0. An application referencing
+Fisher 2 requires JasperFx 3.12.1 and Weasel.Sqlite / Weasel.Storage 10.0. An application referencing
 either directly has to move them together; mixing a 2.x JasperFx with Fisher 2 does not restore.
+
+Two things in JasperFx 3.12 can show up in an application:
+
+- **A natural key has to be an `int`, `long` or `string`**, or a strong-typed identifier wrapping one. Anything
+  else, a `Guid` included, is now refused when the projection is registered, with an
+  `InvalidProjectionException` naming the aggregate and the member. Fisher 1 accepted a `Guid` key and stored it
+  as text. Use the key's string form, or wrap it in a strong-typed identifier over a `string`.
+- **A failed rebuild of a composite projection throws.** It used to return normally with the composite's shard
+  paused or stopped.
 
 ### JasperFx 3.9.0: culture-independent names, and bare `case` labels in `Evolve()`
 

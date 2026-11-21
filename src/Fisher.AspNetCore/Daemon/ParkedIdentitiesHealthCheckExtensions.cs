@@ -16,6 +16,8 @@ namespace Fisher.AspNetCore.Daemon;
 ///     that is Unhealthy. The cap is read from the extended progression columns
 ///     (<c>Events.EnableExtendedProgressionTracking</c>), so it works from any process, whichever one runs the shard.
 ///     Without extended tracking the check can only see what is parked.
+///     While Degraded, the description lists the parked identities, at most ten per projection, with the stream's
+///     natural key beside its id when the aggregate has one (fisher#667).
 /// </remarks>
 public static class ParkedIdentitiesHealthCheckExtensions
 {
@@ -66,6 +68,10 @@ public static class ParkedIdentitiesHealthCheckExtensions
                 var parked = new List<string>();
                 var total = 0;
 
+                // Projection name -> how many identities are parked, and which databases have any
+                var byProjection = new Dictionary<string, int>();
+                var parkedIn = new List<(IEventDatabase Database, string[] Projections)>();
+
                 foreach (var database in _store.Tenancy.AllDatabases())
                 {
                     var progress = await database.AllProjectionProgress(cancellationToken).ConfigureAwait(false);
@@ -73,11 +79,21 @@ public static class ParkedIdentitiesHealthCheckExtensions
                         .Where(x => x.Failure?.Category == ShardFailureCategory.ParkedLimitReached)
                         .Select(x => x.ShardName));
 
-                    foreach (var count in await ((IEventDatabase)database)
-                                 .FetchParkedCountsAsync(null, cancellationToken).ConfigureAwait(false))
+                    var counts = await ((IEventDatabase)database)
+                        .FetchParkedCountsAsync(null, cancellationToken).ConfigureAwait(false);
+
+                    foreach (var count in counts)
                     {
                         total += count.Count;
                         parked.Add($"{count.ProjectionName} (tenant {count.TenantId}): {count.Count}");
+                        byProjection[count.ProjectionName] =
+                            byProjection.GetValueOrDefault(count.ProjectionName) + count.Count;
+                    }
+
+                    if (counts.Count > 0)
+                    {
+                        parkedIn.Add(((IEventDatabase)database,
+                            counts.Select(x => x.ProjectionName).Distinct().ToArray()));
                     }
                 }
 
@@ -87,15 +103,57 @@ public static class ParkedIdentitiesHealthCheckExtensions
                         $"Paused at the parking cap: {string.Join(", ", atCap)}. Fix the projection, replay or discard what's parked, then restart the shard.");
                 }
 
-                return total == 0
-                    ? HealthCheckResult.Healthy("No projection identities are parked.")
-                    : HealthCheckResult.Degraded(
-                        $"{total} projection {(total == 1 ? "identity is" : "identities are")} parked: {string.Join(", ", parked)}");
+                if (total == 0)
+                {
+                    return HealthCheckResult.Healthy("No projection identities are parked.");
+                }
+
+                var identities = await describeIdentitiesAsync(byProjection, parkedIn, cancellationToken)
+                    .ConfigureAwait(false);
+
+                return HealthCheckResult.Degraded(
+                    $"{total} projection {(total == 1 ? "identity is" : "identities are")} parked: {string.Join(", ", parked)}. {identities}");
             }
             catch (Exception e)
             {
                 return HealthCheckResult.Unhealthy($"Unhealthy: {e.Message}", e);
             }
         }
+
+        /// <summary>
+        ///     fisher#667 (marten#6132): which identities are parked, at most <see cref="MaxIdentitiesPerProjection" />
+        ///     per projection, each as <c>id (natural key)</c> when its aggregate has a natural key, e.g.
+        ///     <c>Parked: Order: 3f1c... (ORD-1001), 9a2e..., and 4 more</c>.
+        /// </summary>
+        private static async Task<string> describeIdentitiesAsync(Dictionary<string, int> byProjection,
+            List<(IEventDatabase Database, string[] Projections)> parkedIn, CancellationToken token)
+        {
+            var shown = byProjection.Keys.ToDictionary(x => x, _ => new List<string>());
+
+            foreach (var (database, projections) in parkedIn)
+            {
+                foreach (var projection in projections)
+                {
+                    var room = MaxIdentitiesPerProjection - shown[projection].Count;
+                    if (room <= 0) continue;
+
+                    var identities = await database.FetchParkedIdentitiesAsync(
+                        new ParkedIdentityQuery { ProjectionName = projection, Limit = room }, token).ConfigureAwait(false);
+
+                    shown[projection].AddRange(identities.Select(x =>
+                        x.NaturalKey is null ? x.IdentityText : $"{x.IdentityText} ({x.NaturalKey})"));
+                }
+            }
+
+            return "Parked: " + string.Join("; ", byProjection.Select(pair =>
+            {
+                var list = shown[pair.Key];
+                var more = pair.Value - list.Count;
+                return $"{pair.Key}: {string.Join(", ", list)}{(more > 0 ? $", and {more} more" : "")}";
+            }));
+        }
+
+        /// <summary>The most parked identities the check's description lists for one projection.</summary>
+        public const int MaxIdentitiesPerProjection = 10;
     }
 }
