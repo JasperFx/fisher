@@ -332,7 +332,7 @@ public class failure_before_the_first_commit : IAsyncLifetime
         await session.SaveChangesAsync(Token);
     }
 
-    // AllProjectionProgress does not carry the failure columns, so the row is read as it is stored
+    // The row as it is stored, so these tests check what was written rather than how AllProjectionProgress reads it
     private sealed record ProgressionRow(
         long LastSequence,
         string? AgentStatus,

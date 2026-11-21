@@ -160,14 +160,23 @@ public partial class FisherDatabase : IEventDatabase
     /// <summary>
     ///     Every shard's progress, including the high-water row.
     /// </summary>
+    /// <remarks>
+    ///     Under extended progression tracking each state also carries the agent status, pause reason, heartbeat,
+    ///     node, parked count and the shard's failure, as Marten's does (fisher#661, marten#6122). That is what lets
+    ///     a monitor reading the database, rather than a live daemon, see that a shard is paused and why.
+    /// </remarks>
     public async Task<IReadOnlyList<ShardState>> AllProjectionProgress(CancellationToken token = default)
     {
         return await ReadWhenStorageExistsAsync(async ct =>
         {
             // fisher#654: parked_count exists only under extended progression tracking, which is the only time the
             // daemon writes it. Null is a shard that doesn't park, or a row no agent has written it to yet.
+            // fisher#661: the same for the status and failure columns.
             var extended = _events.EnableExtendedProgressionTracking;
-            var columns = extended ? "name, last_seq_id, last_updated, parked_count" : "name, last_seq_id, last_updated";
+            var columns = extended
+                ? "name, last_seq_id, last_updated, parked_count, heartbeat, agent_status, pause_reason, " +
+                  "running_on_node, failure_category, failure_event_sequence, failure_event_type, failure_event_tenant_id"
+                : "name, last_seq_id, last_updated";
 
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
@@ -182,15 +191,71 @@ public partial class FisherDatabase : IEventDatabase
                 // monitor can tell "caught up, nothing new" from "no longer maintained". Parsed through
                 // SqliteTimestamp, whose AssumeUniversal is what keeps the zone-less text UTC rather than
                 // local; the column is NOT NULL with a default, so the null arm is only a guard.
-                states.Add(new ShardState(reader.GetString(0), reader.GetInt64(1))
+                var state = new ShardState(reader.GetString(0), reader.GetInt64(1))
                 {
-                    LastUpdated = reader.IsDBNull(2) ? null : SqliteTimestamp.FromDatabaseValue(reader.GetString(2)),
-                    ParkedCount = extended && !reader.IsDBNull(3) ? Convert.ToInt32(reader.GetValue(3)) : null
-                });
+                    LastUpdated = reader.IsDBNull(2) ? null : SqliteTimestamp.FromDatabaseValue(reader.GetString(2))
+                };
+
+                if (extended)
+                {
+                    readExtendedProgression(reader, state);
+                }
+
+                states.Add(state);
             }
 
             return (IReadOnlyList<ShardState>)states;
         }, (IReadOnlyList<ShardState>)Array.Empty<ShardState>(), token).ConfigureAwait(false);
+    }
+
+    // fisher#661: the extended progression columns of AllProjectionProgress, from ordinal 3 on
+    private static void readExtendedProgression(SqliteDataReader reader, ShardState state)
+    {
+        state.ParkedCount = reader.IsDBNull(3) ? null : Convert.ToInt32(reader.GetValue(3));
+        state.LastHeartbeat = reader.IsDBNull(4) ? null : SqliteTimestamp.FromDatabaseValue(reader.GetString(4));
+        state.AgentStatus = reader.IsDBNull(5) ? null : reader.GetString(5);
+        state.PauseReason = reader.IsDBNull(6) ? null : reader.GetString(6);
+        state.RunningOnNode = reader.IsDBNull(7) ? null : Convert.ToInt32(reader.GetValue(7));
+
+        state.Failure = buildFailure(
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.IsDBNull(9) ? null : reader.GetInt64(9),
+            reader.IsDBNull(10) ? null : reader.GetString(10),
+            reader.IsDBNull(11) ? null : reader.GetString(11),
+            state);
+    }
+
+    /// <summary>
+    ///     The exception type of a failure read back from the progression row, where exception types are not stored.
+    ///     The same sentinel Marten uses.
+    /// </summary>
+    internal const string UnknownExceptionType = "Unknown";
+
+    // fisher#661, as Marten's ShardStateSelector does it: the row holds less than a ShardFailure, by design.
+    // failure_category says whether there is a failure at all, and is stored by enum name. PauseReason is the
+    // failure's detail, and the heartbeat is stamped when the failure is classified, so it stands in for OccurredAt.
+    private static ShardFailure? buildFailure(string? category, long? sequence, string? eventTypeName,
+        string? tenantId, ShardState state)
+    {
+        if (string.IsNullOrEmpty(category) || !Enum.TryParse<ShardFailureCategory>(category, out var parsed))
+        {
+            return null;
+        }
+
+        var detail = state.PauseReason ?? string.Empty;
+
+        return new ShardFailure
+        {
+            Category = parsed,
+            ExceptionType = UnknownExceptionType,
+            RootExceptionType = UnknownExceptionType,
+            Message = detail,
+            Detail = detail,
+            OccurredAt = state.LastHeartbeat ?? default,
+            Event = sequence.HasValue
+                ? new EventFailureDetails { Sequence = sequence.Value, EventTypeName = eventTypeName, TenantId = tenantId }
+                : null
+        };
     }
 
     /// <summary>
