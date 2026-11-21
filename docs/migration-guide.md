@@ -339,9 +339,11 @@ See [Integration Testing](/testing/integration).
 
 ## Upgrading from Fisher 1 to Fisher 2
 
-Fisher 2.0 is the Fisher half of the Critter Stack's .NET 11 release train: JasperFx 3.0, Weasel 10.0,
+Fisher 2.0 is the Fisher half of the Critter Stack's .NET 11 release train: JasperFx 3, Weasel 10.0,
 Marten 10.0, Polecat 6.0, Fisher 2.0 and Wolverine 7.0 move together. Each entry below says what changes,
 what it does to an existing database file, and how to opt out.
+[The last entry](#what-a-fisher-1-file-gains-on-its-first-migration) lists every table and column a Fisher 1 file
+gains.
 
 ### Target frameworks: `net10.0` and `net11.0`
 
@@ -376,7 +378,7 @@ source without it, pass `-p:FisherRuntimeAsync=false` and clean `bin/` and `obj/
 does not trigger a recompile. The setting governs only the assemblies it compiles; your own projects decide for
 themselves.
 
-### JasperFx 3.0 and Weasel 10
+### JasperFx 3 and Weasel 10
 
 Fisher 2 requires JasperFx 3.12.1 and Weasel.Sqlite / Weasel.Storage 10.0 (10.0.0-rc.1 at the moment). An
 application referencing either directly has to move them together; mixing a 2.x JasperFx with Fisher 2 does not
@@ -551,14 +553,60 @@ Landed in 2.0.0-alpha.1 (fisher#465 via #538, fisher#530 via #544), and `StreamL
 
 | Fisher 1 | Fisher 2 |
 | :--- | :--- |
-| `Fisher.BulkInsertMode` | the shared `Weasel.Core.BulkInsertMode` |
-| `Fisher.Patching.IPatchExpression<T>` | the shared JasperFx patch-expression contract |
-| `Fisher.Exceptions.*` types that derived from a `JasperFx.Events` exception | the `JasperFx.Events` type itself, thrown directly |
+| `Fisher.BulkInsertMode` | the shared `Weasel.Core.BulkInsertMode`. Its new `OverwriteIfVersionMatches` value is refused with `NotSupportedException` |
+| `Fisher.Patching.IPatchExpression<T>` | `JasperFx.Events.IPatchExpression<T>` (three defaults change, see [patching](#patching-follows-the-shared-contract)) |
+| `Fisher.Pagination.IPagedList<T>`, what `ToPagedListAsync` returns | `JasperFx.Pagination.IPagedList<T>` |
+| `Fisher.Linq.BadLinqExpressionException` | `JasperFx.BadLinqExpressionException`, thrown directly |
+| `Fisher.Exceptions.*` types that derived from a `JasperFx.Events` exception: `ExistingStreamIdCollisionException`, `NonExistentStreamException`, `UnknownEventTypeException`, `EventDeserializationFailureException`, `ArchivedStreamException`, `DuplicateNaturalKeyException`, `StreamLockedException` | the `JasperFx.Events` type itself, thrown directly |
 
 That includes `StreamLockedException`: `Fisher.Exceptions.StreamLockedException` is gone and Fisher throws
 `JasperFx.Events.StreamLockedException`, whose `StreamIds` lists every stream in the unit of work (jasperfx#1172).
-Its message is now the shared one. The mechanical change is a `using` and, for the exceptions, a `catch` of the
-`JasperFx.Events` type; members are unchanged. No table or column is involved.
+The mechanical change is a `using` and, for the exceptions, a `catch` of the JasperFx type; members are unchanged.
+No table or column is involved.
+
+The messages are JasperFx's now, so a test or a log query that matches Fisher 1's wording needs updating. For
+example, the archived-stream message ends "or start a new stream", and the unknown event type message starts
+"Unknown event type name alias".
+
+`DisabledTenantException` and `InvalidValueTypeException` stay Fisher's. Two tag-type registration errors change
+with the shared tag registry (fisher#574): a tag type Fisher cannot infer throws JasperFx's
+`InvalidOperationException` instead of `InvalidValueTypeException`, and registering a tag type a second time with a
+different inner type is refused, where Fisher 1 kept the first registration.
+
+### Patching follows the shared contract
+
+Landed in 2.0.0-alpha.1 (fisher#465 via #538). `Patch<T>()` returns the shared `IPatchExpression<T>`, which adds
+dictionary operations, element-predicate `Remove`/`AppendIfNotExists`/`InsertIfNotExists`, `Set` and `Delete`
+relative to a parent member, and `float` `Increment`. Three calls that compile either way do something different:
+
+- `Insert` with no index **appends**. Fisher 1 inserted at the front. Pass `index: 0` for the old behaviour.
+- `Remove` takes the **first** match. Fisher 1 removed every match. Pass `RemoveAction.RemoveAll`.
+- `Duplicate` copies the source member's stored value and takes no value of its own. Fisher 1's
+  `Duplicate(source, value, destinations)` is `Set(source, value).Duplicate(source, destinations)`.
+
+The nullable `Increment` overloads are extension methods in `Fisher.Patching`. See
+[the operations](/documents/partial-updates-patching#the-operations). No table or column is involved.
+
+### Appending: the expected version is the version after the append
+
+Landed in 2.0.0-alpha.1 (fisher#464 via #537), with the shared `EventOperationsBase`.
+
+::: warning
+`Append(streamId, expectedVersion, events)` now reads `expectedVersion` as the version of the stream **after** the
+append, as Marten and Polecat do. Fisher 1 read it as the version **before**. Add the number of events you append
+to the value you were passing. A value smaller than the number of events throws `ArgumentOutOfRangeException` at
+the call, so `Append(id, 0, e)` on a new stream is now `Append(id, 1, e)`. `FetchForWriting` and
+`AppendOptimistic` are unaffected.
+:::
+
+The same change makes every append and start-stream overload check its arguments the same way:
+
+- `Guid.Empty` and an empty string key are refused as a stream identity.
+- `StartStream` with no events is refused, and so is `StartStream` with a non-zero expected version.
+- Under conjoined tenancy, appending to a stream that holds another tenant's events is refused.
+- A session header no longer overwrites an event's own header of the same name.
+
+See [optimistic concurrency](/events/appending#optimistic-concurrency). No table or column is involved.
 
 ### Union-typed properties and events (`net11.0` only)
 
@@ -627,3 +675,99 @@ Two shapes that Fisher 1 answered without complaint are refused now, because the
 - A cast around an ordering key that changes the value, such as `OrderBy(x => (byte)x.Number)` or
   `ThenBy(x => (int)x.Price)`. Fisher 1 ordered by the member underneath the cast.
 - A key comparer on `Join` or `GroupJoin`. Fisher 1 ignored it and compared the stored keys.
+
+### LINQ answers that were wrong in Fisher 1
+
+Landed in 2.0.0-alpha.3 (fisher#588 to #615, from a sweep of Marten's LINQ fixes for anything that also bites
+Fisher). Each of these compiled on Fisher 1 and returned a different answer from LINQ to Objects, with nothing to
+signal it. Fisher 2 matches LINQ to Objects or refuses the shape by name with a `BadLinqExpressionException`. None of
+them changes a table, but a query in this list can return different rows after the upgrade:
+
+- **A second `OrderBy` re-sorts.** `OrderBy(a).OrderBy(b)` orders by `b`, then `a`. Fisher 1 rendered `order by a, b`.
+- **An operator after `Take` or `Skip` applies to the page**, for documents and for `QueryRawEvents()`,
+  `QueryStreamStates()` and `QueryEventData<T>()`. Fisher 1 ran a later `Where` or `OrderBy` before the `LIMIT`.
+- **`Distinct()` and an identity `OrderBy` after a computed `Select`** act on the computed value.
+  `Select(x => x.Number % 3).Distinct()` returns three rows, not one per document.
+- **A static member or a captured local is a value.** Fisher 1 read it as a JSON path when its name matched a
+  document member. On a join, an ordering key that is a constant is dropped rather than refused.
+- **Comparing two document members** (`x.A < x.B`) translates. Fisher 1 failed with an internal
+  `InvalidOperationException`.
+- **A null member compares the way C# compares it.** `x.N != 3` and `!(x.N > 3)` are true when `x.N` is null. A
+  string method on a null member still follows SQL null semantics, see
+  [child collections](#child-collections-what-ships-and-what-does-not).
+- **Decimals are exact.** Comparisons, ordering, `Distinct`, `GroupBy`, join keys and the aggregates read a
+  `decimal` as the text System.Text.Json wrote and compare or compute it as a `decimal`, not as SQLite's REAL.
+  Two decimals that differ past the fifteenth digit are two values. An `OrderBy` over a `decimal` sorts by an exact
+  key now, so an index on the member no longer serves it. `Where` comparisons still use the index.
+- **Arithmetic on a `decimal` or `float` member** in a predicate: a member plus or minus constants is folded in
+  .NET in `decimal`, and every other shape is refused. Fisher 1 computed it in SQLite's `double`.
+- **A `float` comparison** binds the `double` its stored text reads back as. `x.Weight == 0.3f` matched nothing on
+  Fisher 1 and matches the row that stored `0.3f` now.
+- **A `[DuplicateField]` collection member** works with `Contains()`, `Any()` and `Count()` again.
+
+See [Decimals](/documents/querying/linq/operators#decimals) and
+[`decimal` is a JSON number](/configuration/sqlite#decimal-is-a-json-number-and-it-compares-as-one).
+
+### Parking, health checks and the `projections` CLI
+
+Parking a failing identity is the 2.0 default (the [defaults table](#store-defaults-that-follow-marten-10-and-restorev1defaults)
+has the row). Around it (fisher#652, #655, #658, #660, #661, #667, #671):
+
+- **`AddFisherParkedIdentitiesHealthCheck()`** in `Fisher.AspNetCore` is new. It is Degraded while anything is
+  parked and lists the parked identities, ten per projection, with the natural key when the aggregate has one. It
+  is Unhealthy while a shard is paused at the parking cap, which it can only see with extended progression
+  tracking on, the 2.0 default. See [health checks](/diagnostics#health-checks).
+- **`ShardState` carries more under extended tracking.** `AllProjectionProgress` fills `ParkedCount`,
+  `LastHeartbeat`, `AgentStatus`, `PauseReason`, `RunningOnNode` and `Failure`. Fisher 1 filled only the name,
+  sequence and last update.
+- **A shard that fails before its first commit gets a progression row.** A pause, or the parking cap on the first
+  batch, writes a row at the shard's start position with the failure. Fisher 1 wrote nothing, so code that reads
+  `fi_event_progression` directly can now see a row for a shard that has never committed.
+- **A daemon built without a logger logs through the host's `ILoggerFactory`.** That covers
+  `BuildProjectionDaemonAsync()` and Wolverine-managed distribution. Fisher 1 used `NullLogger` there, so parking
+  and the parking cap were not logged. A store built with `DocumentStore.For(...)` still has no logger factory.
+- **`EventStoreUsage.SubjectUri` is the store's uri**, as on Marten and Polecat. Fisher 1 put the database uri
+  there, so the JasperFx `projections parked` and floor commands found no Fisher store. `FetchParkedIdentitiesAsync`
+  fills `ParkedIdentity.NaturalKey`, so `projections parked` shows it.
+
+### Smaller behaviour changes
+
+- **The order of the commit hooks.** `SaveChangesAsync` runs the message outbox's `BeforeCommitAsync` after every
+  transaction participant, Fisher's own and the shared ones, as the projection batch already did. Fisher 1 ran it
+  first (fisher#581). The session also implements the shared contract's `StoreObjects`,
+  `AddTransactionParticipant(IDbTransactionParticipant)` and `AddSaveListener`, which threw
+  `NotSupportedException` in Fisher 1 when Wolverine called them.
+- **`AdvancedSql` with an `object` result** returns the provider's own value: `long`, `double`, `string`, `byte[]`
+  or null. Fisher 1 deserialized it as JSON, which gave a `JsonElement` for a number and threw for plain text
+  (fisher#613).
+- **Waiting for the write lock** goes through a busy handler that retries every 1 ms until
+  `PragmaSettings.BusyTimeout`, in place of SQLite's default back-off, when the provider is the bundled `e_sqlite3`.
+  The deadline and the `SQLITE_BUSY` at the end of it are unchanged (fisher#547). See [the busy handler](/configuration/sqlite#the-busy-handler).
+- **Startup.** One store activator replaces the three startup hosted services. `SeedInitialDataOnStartup()` no
+  longer has to come after `ApplyAllDatabaseChangesOnStartup()`: seeding always runs after the schema step.
+- **One `ActivitySource` and one `Meter` per store.** Fisher 1 built a second of each for the event store, so a
+  listener on `Fisher` heard both.
+- **Generated Guid ids** come from JasperFx's `SequentialGuid` in PostgreSQL `uuid` order, not from
+  `Guid.CreateVersion7()`. Both are time-ordered, and existing ids are untouched.
+- **Batched queries.** `EventsExist` and `FetchForWritingByTags` in a batch fault their own item when the read
+  throws, and a cancelled `Execute` throws one `OperationCanceledException` instead of an aggregate (fisher#633).
+- **`AssignTagWhere` under conjoined tenancy** only tags the session's tenant's events (fisher#632).
+- **`FetchLatest` of an Inline immutable aggregate after a commit** on an identity or dirty-tracked session returns
+  the new snapshot. Fisher 1 returned the one from before the commit (fisher#645).
+
+### What a Fisher 1 file gains on its first migration
+
+All of it is additive: new tables, and nullable columns added with `ALTER TABLE ADD COLUMN`. Under `AutoCreate.All`
+or `CreateOrUpdate` Fisher applies it the first time the store touches the tables. Under `AutoCreate.None`, apply
+the migration before you deploy.
+
+| Table or column | When |
+| :--- | :--- |
+| `correlation_id`, `causation_id`, `headers`, `user_name` on `fi_events` | always |
+| The extended tracking columns and `parked_count` on `fi_event_progression` | always |
+| `correlation_id`, `causation_id`, `last_modified_by`, `headers` on every document table | unless `RestoreV1Defaults()` or the type turns them off |
+| `fi_parked_identities` | always, with the event tables |
+| `fi_event_range_marks` | always, with the event tables |
+| `fi_dcb_tag_version`, `fi_dcb_tag_version_sequence` | when a tag type is registered |
+| `fi_slice_index_<projection>` | for a projection with `UseSliceIndex()` |
+| `fi_doc_<type>_<version>` | for an aggregation projection with `Version` above 1 (rebuild it once, see [above](#a-new-projection-version-gets-its-own-table)) |
