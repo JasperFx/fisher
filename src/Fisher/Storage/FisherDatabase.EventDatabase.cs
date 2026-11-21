@@ -169,9 +169,10 @@ public partial class FisherDatabase : IEventDatabase
     {
         return await ReadWhenStorageExistsAsync(async ct =>
         {
-            // fisher#654: parked_count exists only under extended progression tracking, which is the only time the
-            // daemon writes it. Null is a shard that doesn't park, or a row no agent has written it to yet.
-            // fisher#661: the same for the status and failure columns.
+            // fisher#654: parked_count is written only under extended progression tracking, so it is read only
+            // then. Null is a shard that doesn't park, or a row no agent has written it to yet.
+            // fisher#661: the same for the status and failure columns. The columns themselves are always
+            // created (fisher#664), but a file shaped by Fisher 1 under AutoCreate.None may not have them yet.
             var extended = _events.EnableExtendedProgressionTracking;
             var columns = extended
                 ? "name, last_seq_id, last_updated, parked_count, heartbeat, agent_status, pause_reason, " +
@@ -642,9 +643,10 @@ public partial class FisherDatabase : IEventDatabase
     ///         unchanged telemetry a zero-row write, using <c>IS NOT</c> so NULLs compare as equal.
     ///     </para>
     ///     <para>
-    ///         A store without extended tracking has none of these columns, so the call returns without
-    ///         touching the database rather than failing on <c>no such column</c>. The writer never calls
-    ///         it in that case; a direct caller might.
+    ///         A store without extended tracking doesn't write these columns, so the call returns without
+    ///         touching the database. The columns are always created (fisher#664), but a file shaped by
+    ///         Fisher 1 under <c>AutoCreate.None</c> may still lack them. The writer never calls it in that
+    ///         case; a direct caller might.
     ///     </para>
     /// </remarks>
     public async Task WriteExtendedProgressionAsync(IReadOnlyList<ShardState> states,
@@ -934,10 +936,12 @@ public partial class FisherDatabase : IEventDatabase
     }
 
     /// <remarks>
-    ///     <c>agent_status</c> and <c>heartbeat</c> exist only under extended progression tracking, so
-    ///     they are selected only then — naming one the table lacks is <c>no such column</c>, which the
-    ///     missing-storage guard would turn into a silent null for every cell. Off, both stay null, which
-    ///     is the "this store does not persist it" answer the record documents.
+    ///     <c>agent_status</c> and <c>heartbeat</c> are written only under extended progression tracking,
+    ///     so they are selected only then. The columns are always created (fisher#664), but a file shaped
+    ///     by Fisher 1 under <c>AutoCreate.None</c> may lack them, and naming one the table lacks is
+    ///     <c>no such column</c>, which the missing-storage guard would turn into a silent null for every
+    ///     cell. Off, both stay null, which is the "this store does not persist it" answer the record
+    ///     documents.
     /// </remarks>
     private string ProgressRowColumns => _events.EnableExtendedProgressionTracking
         ? "last_seq_id, last_updated, agent_status, heartbeat"

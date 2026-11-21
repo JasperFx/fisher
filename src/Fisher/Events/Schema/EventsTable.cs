@@ -91,25 +91,16 @@ internal class EventsTable : Table
         // Fully qualified .NET type name for deserialization.
         AddColumn("dotnet_type", "TEXT").AllowNulls();
 
-        if (events.EventOptions.EnableCorrelationId)
-        {
-            AddColumn("correlation_id", "TEXT").AllowNulls();
-        }
-
-        if (events.EventOptions.EnableCausationId)
-        {
-            AddColumn("causation_id", "TEXT").AllowNulls();
-        }
-
-        if (events.EventOptions.EnableHeaders)
-        {
-            AddColumn("headers", "TEXT").AllowNulls();
-        }
-
-        if (events.EventOptions.EnableUserName)
-        {
-            AddColumn("user_name", "TEXT").AllowNulls();
-        }
+        // fisher#664 / marten#5765: the metadata columns are created whatever EnableCorrelationId,
+        // EnableCausationId, EnableHeaders and EnableUserName say. The flags decide only whether a
+        // session writes and reads them. When the flags decided the shape, two stores over one file
+        // with different settings each dropped the other's columns on their next migration (the
+        // fisher#353 case), and the store that wanted them then failed every append. Nullable, so a
+        // store that doesn't use them pays nothing.
+        AddColumn("correlation_id", "TEXT").AllowNulls();
+        AddColumn("causation_id", "TEXT").AllowNulls();
+        AddColumn("headers", "TEXT").AllowNulls();
+        AddColumn("user_name", "TEXT").AllowNulls();
 
         // SQLite has no BOOLEAN; 0/1 in an INTEGER column is the convention.
         AddColumn("is_archived", "INTEGER").NotNull().DefaultValue(0);

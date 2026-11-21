@@ -45,13 +45,20 @@ public class host_level_jasperfx_options : IAsyncLifetime
     private Task<IHost> HostWith(Action<IServiceCollection> configure)
         => Host.CreateDefaultBuilder().ConfigureServices(configure).StartAsync(Token);
 
+    // The store opts out first in the next two, because tracking is on by default since Fisher 2.0
+    // (fisher#664) and a store left at its default would pass without the host's switch reaching it.
+
     [Fact]
     public async Task advanced_tracking_reaches_the_primary_store()
     {
         using var host = await HostWith(services =>
         {
             services.AddJasperFx(o => o.EnableAdvancedTracking = true);
-            services.AddFisher(options => options.ConnectionString = _primary.ConnectionString);
+            services.AddFisher(options =>
+            {
+                options.ConnectionString = _primary.ConnectionString;
+                options.Events.EnableExtendedProgressionTracking = false;
+            });
         });
 
         host.Services.GetRequiredService<IDocumentStore>()
@@ -71,9 +78,16 @@ public class host_level_jasperfx_options : IAsyncLifetime
         using var host = await HostWith(services =>
         {
             services.AddJasperFx(o => o.EnableAdvancedTracking = true);
-            services.AddFisher(options => options.ConnectionString = _primary.ConnectionString);
+            services.AddFisher(options =>
+            {
+                options.ConnectionString = _primary.ConnectionString;
+                options.Events.EnableExtendedProgressionTracking = false;
+            });
             services.AddFisherStore<IAdvancedTrackingStore>(options =>
-                options.ConnectionString = _secondary.ConnectionString);
+            {
+                options.ConnectionString = _secondary.ConnectionString;
+                options.Events.EnableExtendedProgressionTracking = false;
+            });
         });
 
         host.Services.GetRequiredService<IDocumentStore>()
@@ -85,6 +99,9 @@ public class host_level_jasperfx_options : IAsyncLifetime
         await host.StopAsync(Token);
     }
 
+    /// <summary>
+    ///     The store's own default is on since Fisher 2.0 (fisher#664), so a quiet host leaves it on.
+    /// </summary>
     [Fact]
     public async Task advanced_tracking_off_leaves_the_store_at_its_own_default()
     {
@@ -92,6 +109,29 @@ public class host_level_jasperfx_options : IAsyncLifetime
         {
             services.AddJasperFx();
             services.AddFisher(options => options.ConnectionString = _primary.ConnectionString);
+        });
+
+        host.Services.GetRequiredService<IDocumentStore>()
+            .Options.Events.EnableExtendedProgressionTracking.ShouldBeTrue();
+
+        await host.StopAsync(Token);
+    }
+
+    /// <summary>
+    ///     A quiet host doesn't turn tracking back on for a store that opted out either: it changes
+    ///     nothing at all.
+    /// </summary>
+    [Fact]
+    public async Task advanced_tracking_off_leaves_a_store_that_opted_out_alone()
+    {
+        using var host = await HostWith(services =>
+        {
+            services.AddJasperFx();
+            services.AddFisher(options =>
+            {
+                options.ConnectionString = _primary.ConnectionString;
+                options.RestoreV1Defaults();
+            });
         });
 
         host.Services.GetRequiredService<IDocumentStore>()
@@ -154,8 +194,13 @@ public class host_level_jasperfx_options : IAsyncLifetime
     public async Task a_host_with_no_jasperfx_options_registered_still_builds_a_store()
     {
         using var host = await HostWith(services =>
-            services.AddFisher(options => options.ConnectionString = _primary.ConnectionString));
+            services.AddFisher(options =>
+            {
+                options.ConnectionString = _primary.ConnectionString;
+                options.Events.EnableExtendedProgressionTracking = false;
+            }));
 
+        // Nothing to read, so the store keeps its own setting.
         host.Services.GetRequiredService<IDocumentStore>()
             .Options.Events.EnableExtendedProgressionTracking.ShouldBeFalse();
 

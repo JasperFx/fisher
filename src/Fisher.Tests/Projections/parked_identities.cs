@@ -602,7 +602,8 @@ public class parked_identities : IAsyncLifetime
     [Fact]
     public async Task without_extended_progression_shard_state_has_no_parked_count()
     {
-        await using var store = guidStore();
+        // Extended tracking is on by default since fisher#664, so this store turns it off itself.
+        await using var store = guidStore(options => options.Events.EnableExtendedProgressionTracking = false);
         await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
 
         var stream = Guid.NewGuid();
@@ -616,7 +617,7 @@ public class parked_identities : IAsyncLifetime
             await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
             (await parkedAsync(store)).ShouldHaveSingleItem();
 
-            // No parked_count column, so the read leaves it out instead of failing into an empty answer
+            // parked_count is neither written nor read without extended tracking, so it stays null
             var shard = store.Advanced.AllAsyncProjectionShardNames().Single();
             var state = (await store.Advanced.AllProjectionProgress(token: Token))
                 .Single(x => x.ShardName == shard.Identity);

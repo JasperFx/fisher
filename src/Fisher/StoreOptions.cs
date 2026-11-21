@@ -605,6 +605,11 @@ public class StoreOptions
     ///         <c>Skip</c> (Fisher 2.0 parks a failing identity, or pauses where it can't, fisher#652)
     ///       </item>
     ///       <item>
+    ///         <see cref="EventStoreOptions.EnableExtendedProgressionTracking" /> &rarr; <c>false</c>
+    ///         (fisher#664, following marten#5763). The progression columns stay in the schema either
+    ///         way; this only stops the daemon writing them.
+    ///       </item>
+    ///       <item>
     ///         <c>GateSideEffectsBehindPriorVersion</c> &rarr; <c>false</c> on every registered
     ///         projection (JasperFx 3.0 turned it on, jasperfx#1075). JasperFx has no store-wide
     ///         switch, so this is applied when the store is built and overrides a projection's own
@@ -620,6 +625,7 @@ public class StoreOptions
         Events.EnableHeaders = false;
         Events.EnableUserName = false;
         Events.EnableSideEffectsOnInlineProjections = false;
+        Events.EnableExtendedProgressionTracking = false;
         EnableDocumentMetadataByDefault = false;
         OpenTelemetry.EventCountersByDefault = false;
         Projections.Errors.ApplyErrors = ProjectionErrorAction.Skip;
@@ -1011,9 +1017,17 @@ public class EventStoreOptions : IEventStoreInstrumentation
     public bool EnableSideEffectsOnInlineProjections { get; set; } = true;
 
     /// <summary>
-    ///     Opt into extended columns on the event progression table for monitoring tools.
+    ///     Have the async daemon write the extended columns of the event progression table (heartbeat,
+    ///     agent status, pause reason, node, the shard's failure and parked count) for monitoring tools.
+    ///     On by default since Fisher 2.0 (fisher#664, following marten#5763);
+    ///     <see cref="StoreOptions.RestoreV1Defaults" /> turns it off.
     /// </summary>
-    public bool EnableExtendedProgressionTracking { get; set; }
+    /// <remarks>
+    ///     The columns are created whatever this says. Only whether the daemon writes and reads them
+    ///     follows the flag, so two stores over one file with different settings don't drop each other's
+    ///     columns.
+    /// </remarks>
+    public bool EnableExtendedProgressionTracking { get; set; } = true;
 
     /// <summary>
     ///     How often an idle high-water agent re-stamps <c>last_updated</c> on its progression row to

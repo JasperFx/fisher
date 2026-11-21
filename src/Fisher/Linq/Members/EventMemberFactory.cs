@@ -46,8 +46,9 @@ internal class EventMemberFactory : IMemberResolver
             nameof(IEvent.IsArchived) => new EventQueryableMember("is_archived", typeof(bool), isBoolean: true),
             nameof(IEvent.Timestamp) => Timestamp(),
 
-            // Opt-in columns: they exist only when the matching Enable* option created them, so naming one
-            // otherwise is refused by name rather than left to fail as "no such column" or match nothing.
+            // Opt-in metadata: the columns are always there (fisher#664), but they are written only when the
+            // matching Enable* option is on. Naming one otherwise is refused by name rather than left to match
+            // nothing, which is what a column of nulls would do.
             nameof(IEvent.CorrelationId) => Optional("correlation_id", _graph.EventOptions.EnableCorrelationId,
                 name, "EnableCorrelationId"),
             nameof(IEvent.CausationId) => Optional("causation_id", _graph.EventOptions.EnableCausationId,
@@ -68,7 +69,7 @@ internal class EventMemberFactory : IMemberResolver
         => enabled
             ? Column(column, typeof(string))
             : throw new BadLinqExpressionException(
-                $"'IEvent.{member}' cannot be queried: {_graph.EventsTableName} has no {column} column "
+                $"'IEvent.{member}' cannot be queried: {_graph.EventsTableName}.{column} is not recorded "
                 + $"because StoreOptions.Events.{option} is off.");
 
     private static EventQueryableMember Column(string column, Type memberType) => new(column, memberType);
