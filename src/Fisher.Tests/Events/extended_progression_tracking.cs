@@ -56,9 +56,9 @@ public class extended_progression_tracking
     ///     its progression row, where a console polling the database can see them.
     /// </summary>
     /// <remarks>
-    ///     A good event is processed first, deliberately. The write only updates an existing row, and a
-    ///     shard that fails on its very first event never commits one, so there would be nothing to
-    ///     decorate. That is the contract (best-effort, missing row is a no-op), not a gap.
+    ///     A good event is processed first, so the shard reads as running before it pauses. A shard that
+    ///     fails on its very first event, before it has committed a row, is covered by
+    ///     <c>failure_before_the_first_commit</c> (fisher#660).
     /// </remarks>
     [Fact]
     public async Task a_paused_shard_records_its_status_reason_and_failure()
@@ -174,8 +174,8 @@ public class extended_progression_tracking
     }
 
     /// <remarks>
-    ///     Update-only: a shard with no row is a no-op, never an insert. Inserting here would race the
-    ///     projection batch's own upsert of that row.
+    ///     A state without a failure is update-only: a shard with no row is a no-op, never an insert. Only a
+    ///     failure creates the row (fisher#660, <c>failure_before_the_first_commit</c>).
     /// </remarks>
     [Fact]
     public async Task a_shard_with_no_row_gets_none()
