@@ -597,3 +597,15 @@ the offline path runs straight away.
 A projection whose documents live in storage registered through `Projections.StorageProviders` (EF Core) cannot
 be rebuilt one identity at a time. The daemon refuses with `IdentityRebuildRefusal.NotSupportedByStore`. Use
 `RebuildProjectionAsync`.
+
+### LINQ: computed ordering keys, indexes, `LeftJoin` and `RightJoin`
+
+Landed in fisher#666, the port of marten#5957, #5968, #5949 and #5910. Fisher 1 refused all of these by name;
+Fisher 2 translates them. See [ordering by a computed key](/documents/querying/linq/operators#ordering-by-a-computed-key),
+[indexing](/documents/querying/linq/operators#indexing-into-arrays-and-lists) and [joins](/documents/querying/linq/joins).
+
+Two shapes that Fisher 1 answered without complaint are refused now, because the answer was wrong:
+
+- A cast around an ordering key that changes the value, such as `OrderBy(x => (byte)x.Number)` or
+  `ThenBy(x => (int)x.Price)`. Fisher 1 ordered by the member underneath the cast.
+- A key comparer on `Join` or `GroupJoin`. Fisher 1 ignored it and compared the stored keys.

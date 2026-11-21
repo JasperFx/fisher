@@ -2064,6 +2064,38 @@ stitch.
   families, the scalar aggregates, `CountAsync`, `AnyAsync`, `ToPagedListAsync` and `ToSql` all work,
   over a chain as well as over one join.
 
+### Computed ordering keys, indexes, `LeftJoin` / `RightJoin` — fisher#666
+
+The port of marten#5957, #5968, #5949 and #5910. All four were refused by name before; Polecat ported them in
+polecat#1031.
+
+- **Indexes are one more step of the JSON path** (`Members/IndexedAccess.cs`): `x.Values[1]`, a list's int
+  indexer and `ElementAt(n)` become `$.values[1]`, resolved by `MemberFactory` and typed by the element's CLR
+  type. `IMemberResolver.ResolveIndexed` is the entry point for a bare index; a member reached through one
+  (`x.Items[0].Name`) comes through `ResolveMember`, which builds the path with `IndexedPathOf`. Never a duplicated
+  column. The index must be a non-negative value (refused when negative or read from the row). Past the end is
+  NULL: no match, sorts first. A `Select` still indexes in .NET, so it throws as LINQ to Objects does.
+  ⚠️ Every "is this rooted at the parameter" walk had to learn to step through an index — `IsRootedAtParameter`,
+  the where parser's `IsDocumentMember`, and the join, element and row resolvers' root walks all use
+  `IndexedAccess.RootOf` now. A walk that stops at the index reads `x.Items[0].Name` as `$.name`.
+- **Computed ordering keys go through `Parsing/OrderingKeys.cs`**, only where SQLite computes what unchecked
+  .NET does: `ComputedColumns`' `%`, `/` and negation, `int` `+ - *` computed in 64 bits and wrapped back to 32
+  (`((v + 2^31) & 0xFFFFFFFF) - 2^31`), a double's negation, string concatenation with null read as empty,
+  `upper`/`lower`, `length`, and `ToString()` of an integer or a Guid. `long`/`decimal`/floating arithmetic,
+  `checked`, a conditional, `??` and method calls are refused, never ordered by the member underneath. The same
+  translator serves the document path (`LinqQueryParser.LocatorFor(ordering: true)`), the `SelectMany` path
+  (`FlattenedQuery`) and the join path (`ApplyJoinOrdering`, from each side's alias). A computed key has no
+  member, so keyset paging refuses it. A plain member key's SQL is byte-identical.
+- **A cast around an ordering key must keep order** (`OrderingKeys.AssertConversionsKeepOrder`): Fisher 1
+  stripped every `Convert`, so `(byte)x.Number` ordered by `Number`. Checked after the member resolves, so a
+  member's own refusal (a bare union `Value`) still comes first.
+- **`LeftJoin` is a plain `Join` with `IsLeftJoin`**, so its SQL is the `GroupJoin`/`DefaultIfEmpty` SQL.
+  **`RightJoin` is rewritten in `CreateQuery`** (`Joins/RightJoinRewriter.cs`) into a `LeftJoin` with the sources
+  and key selectors swapped. It has to happen there, because it changes the chain's root document type. Only
+  `Where` may come before it on either source.
+- **A join key comparer is refused** on every join operator. `ApplyGroupJoin` used to read only the first five
+  arguments, so a comparer was silently ignored.
+
 ### Vector search — fisher#241
 
 `VectorSearchAsync` / `VectorSearchWithScoresAsync` on `IQuerySession`, over a member declared with

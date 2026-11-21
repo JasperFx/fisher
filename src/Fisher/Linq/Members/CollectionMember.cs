@@ -222,14 +222,28 @@ internal sealed class ElementMemberResolver : IMemberResolver
         return _inner.ResolveMember(expression);
     }
 
-    private static ParameterExpression? RootParameterOf(MemberExpression expression)
+    /// <inheritdoc />
+    public IQueryableMember ResolveIndexed(Expression expression)
     {
-        Expression? current = expression;
-        while (current is MemberExpression member)
+        if (!ReferenceEquals(IndexedAccess.RootOf(expression), _parameter))
         {
-            current = member.Expression;
+            throw new BadLinqExpressionException(
+                $"The predicate index '{expression}' does not belong to the collection element "
+                + $"'{_parameter.Name}'. Inside Any/All/Count over a child collection, only the "
+                + "element's own members can be translated to SQL.");
         }
 
-        return current as ParameterExpression;
+        if (CollectionMember.IsScalarType(_elementType) || _element is ValueTypeMember)
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot translate the index '{expression}' inside a collection predicate: the elements are "
+                + $"stored as plain {_elementType.Name} values with nothing to index into.");
+        }
+
+        return _inner.ResolveIndexed(expression);
     }
+
+    /// <summary>The parameter a chain of members and indexes (fisher#666) starts at.</summary>
+    private static ParameterExpression? RootParameterOf(MemberExpression expression)
+        => IndexedAccess.RootOf(expression);
 }

@@ -31,21 +31,24 @@ internal sealed class JoinMemberResolver : IMemberResolver
     }
 
     public IQueryableMember ResolveMember(MemberExpression expression)
+        => SideOf(expression).ResolveMember(expression);
+
+    /// <inheritdoc />
+    public IQueryableMember ResolveIndexed(Expression expression)
+        => SideOf(expression).ResolveIndexed(expression);
+
+    /// <summary>
+    ///     The side a chain of members and indexes (fisher#666) is rooted at, by parameter reference.
+    /// </summary>
+    private IMemberResolver SideOf(Expression expression)
     {
-        Expression? current = expression;
-
-        while (current is MemberExpression member)
-        {
-            current = member.Expression;
-        }
-
-        if (current is not ParameterExpression parameter || !_sides.TryGetValue(parameter, out var side))
+        if (IndexedAccess.RootOf(expression) is not { } parameter || !_sides.TryGetValue(parameter, out var side))
         {
             throw new BadLinqExpressionException(
                 $"Fisher cannot resolve '{expression}' against any side of the join. A member has to "
                 + "belong to one of the joined documents.");
         }
 
-        return side.ResolveMember(expression);
+        return side;
     }
 }

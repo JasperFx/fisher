@@ -39,7 +39,22 @@ var rows = await (from angler in session.Query<Angler>()
 
 ## Left join
 
-`GroupJoin` followed by `SelectMany` with `DefaultIfEmpty`:
+.NET 10's `LeftJoin`:
+
+<!-- snippet: sample_left_join -->
+<a id='snippet-sample_left_join'></a>
+```cs
+var rows = await session.Query<JoinShopper>()
+    .LeftJoin(session.Query<JoinPurchase>(),
+        shopper => shopper.Id,
+        purchase => purchase.ShopperId,
+        (shopper, purchase) => new { shopper.Name, Item = purchase == null ? "none" : purchase.Item })
+    .ToListAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Linq/left_and_right_joins.cs#L106-L113' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_left_join' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+It is the same join as `GroupJoin` followed by `SelectMany` with `DefaultIfEmpty`, and renders the same SQL:
 
 ```cs
 var rows = await session.Query<Angler>()
@@ -51,6 +66,28 @@ var rows = await session.Query<Angler>()
                 (x, c) => new { x.angler.Name, Species = c == null ? null : c.Species })
     .ToListAsync();
 ```
+
+## Right join
+
+.NET 10's `RightJoin` keeps every row of the inner query:
+
+<!-- snippet: sample_right_join -->
+<a id='snippet-sample_right_join'></a>
+```cs
+var rows = await session.Query<JoinShopper>()
+    .RightJoin(session.Query<JoinPurchase>(),
+        shopper => shopper.Id,
+        purchase => purchase.ShopperId,
+        (shopper, purchase) => new { Name = shopper == null ? "nobody" : shopper.Name, purchase.Item })
+    .ToListAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Linq/left_and_right_joins.cs#L216-L223' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_right_join' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+Fisher writes it as a left join with the two queries swapped, so `outer.RightJoin(inner, ...)` is
+`inner.LeftJoin(outer, ...)` and renders that SQL. The outer query's `Where` goes in the `ON` clause, since it says
+which outer rows may match, and the inner query's `Where` goes in the `WHERE`. Only `Where` may come before a
+`RightJoin` on either query; anything else is refused by name.
 
 ## Filtering the inner side
 
@@ -119,8 +156,13 @@ without knowing it is one.
 - Keyset paging (`ToCursorPageAsync`)
 - The [JSON reads](/documents/querying/query-json)
 - `Select` / `GroupBy` / `Distinct` / `DistinctBy` **after** the join
-- A predicate or ordering key naming a member the projection **computed**, since its value exists only
-  after the row is read
+- A predicate naming a member the projection **computed**, since its value exists only after the row is
+  read. An ordering key over one works when the computation is one Fisher translates — see
+  [Ordering by a computed key](/documents/querying/linq/operators#ordering-by-a-computed-key)
+- A key comparer on `Join`, `GroupJoin`, `LeftJoin` or `RightJoin`. The keys are compared as stored, in SQL,
+  so the comparer would be ignored
+- An operator other than `Where` before a `RightJoin`, and a join to an in-memory sequence
+- `FullJoin` is not a `Queryable` operator, so there is nothing to translate
 - A `GroupJoin`'s **group** — `x.catches.Count()` asks about rows the join has flattened
 
 ::: tip

@@ -54,6 +54,9 @@ internal class WhereClauseParser
     public ISqlFragment Parse(Expression expression)
         => expression switch
         {
+            // fisher#666: x.Flags[1], a bool element of an array or list on the document. First, because an
+            // array's index is a BinaryExpression and a list's a MethodCallExpression.
+            _ when expression.Type == typeof(bool) && IsDocumentIndex(expression) => ParseBooleanIndex(expression),
             BinaryExpression binary => ParseBinary(binary),
             UnaryExpression { NodeType: ExpressionType.Not } unary => ParseNot(unary),
             UnaryExpression { NodeType: ExpressionType.Convert } unary => Parse(unary.Operand),
@@ -639,7 +642,7 @@ internal class WhereClauseParser
         {
             operandSql = string.Empty;
 
-            if (StripConvert(operand) is MemberExpression member && IsDocumentMember(member))
+            if (IsDocumentValue(operand) && StripConvert(operand) is var member)
             {
                 // The numeric check runs on the expression's own type BEFORE resolving: string
                 // concatenation is also ExpressionType.Add, and asking the member factory to resolve
@@ -660,7 +663,8 @@ internal class WhereClauseParser
                         + "C# widens it to");
                 }
 
-                operandSql = _memberFactory.ResolveMember(member).TypedLocator;
+                TryResolveDocumentValue(member, out var resolvedOperand);
+                operandSql = resolvedOperand.TypedLocator;
                 renderedMember = true;
                 anyNullable |= Nullable.GetUnderlyingType(member.Type) != null;
                 return true;
@@ -801,7 +805,7 @@ internal class WhereClauseParser
         fragment = null;
 
         if (binary.Left is BinaryExpression { NodeType: ExpressionType.Modulo } modulo
-            && StripConvert(modulo.Left) is MemberExpression left && IsDocumentMember(left))
+            && IsDocumentValue(modulo.Left))
         {
             AssertModuloIsIntegral(modulo);
 
@@ -810,13 +814,13 @@ internal class WhereClauseParser
                 return false;
             }
 
-            var member = _memberFactory.ResolveMember(left);
+            TryResolveDocumentValue(modulo.Left, out var member);
             fragment = new ModuloFilter(member.TypedLocator, divisor, op, operand);
             return true;
         }
 
         if (binary.Right is BinaryExpression { NodeType: ExpressionType.Modulo } moduloRight
-            && StripConvert(moduloRight.Left) is MemberExpression right && IsDocumentMember(right))
+            && IsDocumentValue(moduloRight.Left))
         {
             AssertModuloIsIntegral(moduloRight);
 
@@ -825,7 +829,7 @@ internal class WhereClauseParser
                 return false;
             }
 
-            var member = _memberFactory.ResolveMember(right);
+            TryResolveDocumentValue(moduloRight.Left, out var member);
             fragment = new ModuloFilter(member.TypedLocator, divisor, ReverseOperator(op), operand);
             return true;
         }
@@ -1088,6 +1092,12 @@ internal class WhereClauseParser
         return new ComparisonFilter(member.TypedLocator, "=", member.ConvertValue(expectedValue)!);
     }
 
+    private ISqlFragment ParseBooleanIndex(Expression expression)
+    {
+        var member = _memberFactory.ResolveIndexed(expression);
+        return new ComparisonFilter(member.TypedLocator, "=", member.ConvertValue(true)!);
+    }
+
     private bool TryResolveMemberAndValue(Expression memberExpr, Expression valueExpr,
         out IQueryableMember? member, out object? value)
     {
@@ -1131,12 +1141,12 @@ internal class WhereClauseParser
             return true;
         }
 
-        if (StripConvert(memberExpr) is not MemberExpression me || !IsDocumentMember(me))
+        if (!TryResolveDocumentValue(memberExpr, out var resolved))
         {
             return false;
         }
 
-        member = _memberFactory.ResolveMember(me);
+        member = resolved;
         return true;
     }
 
@@ -1230,21 +1240,42 @@ internal class WhereClauseParser
     private static object? CompileAndInvoke(Expression expression)
         => Expression.Lambda(expression).Compile().DynamicInvoke();
 
+    /// <remarks>
+    ///     A member of a union case is read through a cast of the union's Value (fisher#466), and a member of
+    ///     an element through its index (fisher#666).
+    /// </remarks>
     private static bool IsDocumentMember(MemberExpression expression)
+        => Members.IndexedAccess.RootOf(expression) is not null;
+
+    /// <summary>
+    ///     <c>x.Values[1]</c>, <c>x.Grid[1][0]</c>: an index into an array or list of the document, which is
+    ///     one more step of the member's JSON path (fisher#666).
+    /// </summary>
+    private static bool IsDocumentIndex(Expression expression)
+        => Members.IndexedAccess.IsIndex(expression) && Members.IndexedAccess.RootOf(expression) is not null;
+
+    /// <summary>Whether <paramref name="expression" />, through conversions, is a document member or an index.</summary>
+    private static bool IsDocumentValue(Expression expression)
+        => StripConvert(expression) is var stripped
+           && ((stripped is MemberExpression member && IsDocumentMember(member)) || IsDocumentIndex(stripped));
+
+    /// <summary>A document member or an index into one: something with a locator of its own.</summary>
+    private bool TryResolveDocumentValue(Expression expression, out IQueryableMember member)
     {
-        var current = expression;
-        while (current != null)
+        switch (StripConvert(expression))
         {
-            if (current.Expression is ParameterExpression)
-            {
+            case MemberExpression me when IsDocumentMember(me):
+                member = _memberFactory.ResolveMember(me);
                 return true;
-            }
 
-            // A member of a union case is read through a cast of the union's Value (fisher#466).
-            current = Members.UnionMemberAccess.ParentOf(current) as MemberExpression;
+            case var indexed when IsDocumentIndex(indexed):
+                member = _memberFactory.ResolveIndexed(indexed);
+                return true;
+
+            default:
+                member = null!;
+                return false;
         }
-
-        return false;
     }
 
     private static bool IsBooleanMember(MemberExpression expression)

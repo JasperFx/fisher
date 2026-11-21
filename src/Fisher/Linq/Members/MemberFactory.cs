@@ -195,10 +195,39 @@ internal class MemberFactory : IMemberResolver
             }
         }
 
+        // fisher#666: a member of an element, x.Items[0].Name or x.Names[0].Length. The same three rules as
+        // a member's member above, with the element as the owner.
+        if (expression.Expression is { } element && IndexedAccess.IsIndex(element))
+        {
+            if (expression.Member.Name == nameof(Nullable<int>.Value)
+                && Nullable.GetUnderlyingType(element.Type) is not null)
+            {
+                return ResolveIndexed(element);
+            }
+
+            if (_valueTypes.TryGetValue(Nullable.GetUnderlyingType(element.Type) ?? element.Type, out var elementWrapper)
+                && expression.Member.Name == elementWrapper.ValueProperty.Name)
+            {
+                var wrappedElement = ResolveIndexed(element);
+                return wrappedElement is ValueTypeMember elementValue ? elementValue.Inner : wrappedElement;
+            }
+
+            if (ScalarMemberAccess.IsScalar(element.Type))
+            {
+                return ScalarMemberAccess.Resolve(expression, ResolveIndexed(element));
+            }
+        }
+
         // fisher#466: ((Card)x.Payment.Value).Last4, read through a cast to one of a union's cases.
         if (TryResolveCaseMember(expression, out var caseMember))
         {
             return caseMember;
+        }
+
+        // fisher#666: anything else reached through an index is a path with the index in it.
+        if (IndexedAccess.ContainsIndex(expression))
+        {
+            return CreateIndexedMember(expression);
         }
 
         return ResolveMember(ChainOf(expression));
@@ -422,9 +451,77 @@ internal class MemberFactory : IMemberResolver
                     current = unary.Operand;
                     break;
 
+                // fisher#666: an index into an array or a list on the document is a step of the path.
+                case var indexed when IndexedAccess.TryMatch(indexed, out var collection, out _):
+                    current = collection;
+                    break;
+
                 default:
                     return false;
             }
+        }
+    }
+
+    /// <inheritdoc />
+    public IQueryableMember ResolveIndexed(Expression expression)
+    {
+        if (!IndexedAccess.IsIndex(expression))
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot translate '{expression}' as an index into a document's array or list.");
+        }
+
+        if (!IsRootedAtParameter(expression))
+        {
+            throw new BadLinqExpressionException(RefuseUnrooted(expression));
+        }
+
+        return CreateIndexedMember(expression);
+    }
+
+    /// <summary>
+    ///     A member or an element reached through an index (fisher#666): one JSON path with the index in
+    ///     it, typed by the CLR type of what it reaches. Never a duplicated column, since a duplicated field
+    ///     is declared over a member chain and has no index in it.
+    /// </summary>
+    private IQueryableMember CreateIndexedMember(Expression expression)
+    {
+        if (UnionMemberAccess.IsUnionTyped(expression.Type))
+        {
+            throw new BadLinqExpressionException(
+                $"Cannot translate '{expression}': it is a union ({expression.Type.Name}), which is stored as its "
+                + "bare active case and has no single SQL type. Indexing into a collection of unions is not "
+                + "supported.");
+        }
+
+        return CreateMember(IndexedPathOf(expression), expression.Type);
+    }
+
+    /// <summary>The JSON path of a chain of members and indexes, <c>$.items[0].name</c>.</summary>
+    private string IndexedPathOf(Expression node)
+    {
+        switch (node)
+        {
+            case ParameterExpression:
+                return "$";
+
+            // Nullable<T>.Value is the member itself.
+            case MemberExpression { Member.Name: nameof(Nullable<int>.Value), Expression: { } nullable }
+                when Nullable.GetUnderlyingType(nullable.Type) is not null:
+                return IndexedPathOf(nullable);
+
+            case MemberExpression { Expression: { } owner } member
+                when !UnionMemberAccess.TryMatchCaseConversion(owner, out _, out _):
+                return IndexedPathOf(owner) + "." + GetJsonPropertyName(member.Member);
+
+            case var indexed when IndexedAccess.TryMatch(indexed, out var collection, out var index):
+                return IndexedPathOf(collection) + "[" + IndexedAccess.ValueOf(index, indexed) + "]";
+
+            default:
+                throw new BadLinqExpressionException(
+                    $"Cannot translate '{node}' as part of a path through an index. A path into an element has to "
+                    + "be made of members and indexes; a union case, a conversion or a method call inside it is "
+                    + "not supported.");
         }
     }
 

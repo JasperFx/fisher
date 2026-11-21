@@ -82,7 +82,7 @@ public partial class FisherQueryProvider
 
         while (current is MethodCallExpression call)
         {
-            if (call.Method.Name is "GroupJoin" or "Join")
+            if (call.Method.Name is "GroupJoin" or "Join" or "LeftJoin")
             {
                 return true;
             }
@@ -422,15 +422,37 @@ public partial class FisherQueryProvider
     {
         foreach (var (key, descending) in join.OrderBys)
         {
+            var subject = $"Fisher cannot order a join by '{key.Body}'";
             var member = JoinedMember(key, sides, shape, intermediate);
 
             if (member is null)
             {
-                throw new BadLinqExpressionException(
-                    $"Fisher cannot order a join by '{key.Body}'. An ordering key has to be a member of "
-                    + "one of the joined documents, reached either directly or through a member of the "
-                    + "result that came straight from one.");
+                var body = OntoDocuments(key, shape, intermediate)
+                           ?? throw new BadLinqExpressionException(
+                               $"{subject}. An ordering key has to be a member of one of the joined documents, "
+                               + "reached either directly or through a member of the result that came straight "
+                               + "from one.");
+
+                var resolver = new JoinMemberResolver(sides);
+
+                // fisher#666: a nested member or an index into one of the documents, x.Items[0].Name.
+                if ((body is MemberExpression && IndexedAccess.RootOf(body) is not null)
+                    || (IndexedAccess.IsIndex(body) && IndexedAccess.RootOf(body) is not null))
+                {
+                    member = body is MemberExpression nested
+                        ? resolver.ResolveMember(nested)
+                        : resolver.ResolveIndexed(body);
+                }
+                else
+                {
+                    // fisher#666 (marten#5968): a computed key over either side, -r.Amount or r.Name.ToUpper(),
+                    // read from that side's alias, or refused by name. Never ordered by the member underneath.
+                    statement.OrderBys.Add((OrderingKeys.Translate(body, key, resolver, subject), descending));
+                    continue;
+                }
             }
+
+            OrderingKeys.AssertConversionsKeepOrder(key, subject);
 
             if (!member.AllowsRangeComparison)
             {
