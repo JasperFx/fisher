@@ -398,6 +398,16 @@ public class multi_store_registration : IAsyncLifetime
         var eventSubjects = host.Services.GetServices<IEventStore>().Select(x => x.Subject).ToList();
         eventSubjects.OrderBy(x => x.ToString()).ShouldBe(subjects.OrderBy(x => x.ToString()));
 
+        // fisher#671: and the event usage descriptor names the store, not the file, which is what the projections
+        // command line matches IEventStore.Subject against
+        foreach (var store in host.Services.GetServices<IEventStore>())
+        {
+            var usage = await store.TryCreateUsage(Token);
+            usage.ShouldNotBeNull();
+            usage.SubjectUri.ShouldBe(store.Subject);
+            usage.Subject.ShouldBe("Fisher.DocumentStore");
+        }
+
         await host.StopAsync(Token);
     }
 

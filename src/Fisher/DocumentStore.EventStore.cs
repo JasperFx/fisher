@@ -63,8 +63,8 @@ public partial class DocumentStore : IEventStore
     //
     // This is polecat#320 one repository over, and Polecat's spelling is adopted verbatim so the three
     // stores answer the same shape: marten://main, polecat://{storename}, fisher://{storename}.
-    // The DATABASE keeps its own surfaces -- Database.Describe().DatabaseUri(), IEventDatabase.Identifier
-    // and the usage descriptors' SubjectUri -- exactly as Polecat left them.
+    // The DATABASE keeps its own surfaces -- Database.Describe().DatabaseUri() and IEventDatabase.Identifier.
+    // The usage descriptors' SubjectUri is the store's uri too (fisher#353 for documents, fisher#671 for events).
     Uri IEventStore.Subject => Internal.StoreSubject.For(Options.StoreName);
 
     /// <summary>
@@ -626,11 +626,13 @@ public partial class DocumentStore : IEventStore
     /// </remarks>
     async Task<EventStoreUsage?> IEventStore.TryCreateUsage(CancellationToken token)
     {
-        var usage = new EventStoreUsage
+        // fisher#671 (polecat#649): SubjectUri is the STORE's uri, the same value IEventStore.Subject answers and the
+        // daemon stamps on every ShardState.StoreUri. The JasperFx command line finds the store for a selection by
+        // that match, so with the database uri here `projections parked` and the floor commands found no Fisher
+        // store at all. The two-argument constructor is what Marten and Polecat call; it also derives DisplayName
+        // from the store uri's host.
+        var usage = new EventStoreUsage(((IEventStore)this).Subject, this)
         {
-            Subject = "Fisher.DocumentStore",
-            SubjectUri = Database.Describe().DatabaseUri(),
-            Version = GetType().Assembly.GetName().Version?.ToString()!,
             Database = DescribeDatabases()
         };
 
