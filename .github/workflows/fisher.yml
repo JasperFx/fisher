@@ -32,6 +32,9 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # A signal, not a budget to grow: a leg that needs longer than this gets split, never a bigger
+    # number here. Both legs took about three minutes on the 2026-11-17 main run.
+    timeout-minutes: 20
     # Explicit because the ledger download below reads another run's artifacts (actions: read), and
     # declaring any permission drops the rest: checks: write is what dorny/test-reporter needs.
     permissions:
@@ -176,6 +179,7 @@ jobs:
   # packed nupkg here.
   package:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
