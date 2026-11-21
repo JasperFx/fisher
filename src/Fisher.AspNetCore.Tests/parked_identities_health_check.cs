@@ -1,6 +1,8 @@
 using Fisher.AspNetCore.Daemon;
+using Fisher.Projections;
 using JasperFx;
 using JasperFx.Events;
+using JasperFx.Events.Aggregation;
 using JasperFx.Events.Daemon;
 using JasperFx.Events.Projections;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -21,10 +23,37 @@ public class WeighIn
     }
 }
 
+public record BadgeIssued(string Badge);
+
+public record BadgeWeighed(bool Poison);
+
+public class BadgeWeighIn
+{
+    public Guid Id { get; set; }
+
+    [NaturalKey] public string Badge { get; set; } = "";
+
+    public int Count { get; set; }
+}
+
+/// <summary>fisher#667: an aggregate with a natural key, so a parked slice of it shows the key.</summary>
+public partial class BadgeWeighInProjection : SingleStreamProjection<BadgeWeighIn, Guid>
+{
+    [NaturalKeySource]
+    public static BadgeWeighIn Create(BadgeIssued issued) => new() { Badge = issued.Badge };
+
+    public static void Apply(BadgeWeighed e, BadgeWeighIn weighIn)
+    {
+        if (e.Poison) throw new InvalidOperationException("Can't weigh this badge");
+        weighIn.Count++;
+    }
+}
+
 /// <summary>
 ///     fisher#652: the parked identities health check is Degraded while anything is parked, and Healthy again once the
 ///     identity is discarded. fisher#661: it is Unhealthy while a shard is paused at the parking cap, which it reads from
-///     the extended progression row.
+///     the extended progression row. fisher#667: while Degraded, the description lists the parked identities, ten per
+///     projection at most, with the natural key beside the id when the aggregate has one.
 /// </summary>
 public class parked_identities_health_check
 {
@@ -235,6 +264,102 @@ public class parked_identities_health_check
                 .ShouldBe(ParkedReplayOutcome.Discarded);
 
             (await check.CheckHealthAsync(new HealthCheckContext(), Token)).Status.ShouldBe(HealthStatus.Healthy);
+        }
+        finally
+        {
+            await daemon.StopAllAsync();
+        }
+    }
+
+    [Fact]
+    public async Task degraded_lists_the_parked_identities_with_their_natural_keys()
+    {
+        using var database = TemporaryDatabase.Create("parked-health-natural-keys");
+        await using var store = DocumentStore.For(options =>
+        {
+            options.ConnectionString = database.ConnectionString;
+            options.AutoCreateSchemaObjects = AutoCreate.All;
+            options.Projections.Snapshot<WeighIn>(SnapshotLifecycle.Async);
+            options.Projections.Add(new BadgeWeighInProjection(), ProjectionLifecycle.Async);
+        });
+        await store.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        var keyless = Guid.NewGuid();
+        var keyed = Guid.NewGuid();
+        var keyedWithoutKey = Guid.NewGuid();
+        await using (var session = store.LightweightSession())
+        {
+            session.Events.StartStream<WeighIn>(keyless, new Weighed(true));
+            session.Events.StartStream<BadgeWeighIn>(keyed, new BadgeIssued("BADGE-7"), new BadgeWeighed(true));
+            session.Events.StartStream<BadgeWeighIn>(keyedWithoutKey, new BadgeWeighed(true));
+            await session.SaveChangesAsync(Token);
+        }
+
+        using var daemon = await store.BuildProjectionDaemonAsync();
+        await daemon.StartAllAsync();
+
+        try
+        {
+            await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
+
+            var result = await new ParkedIdentitiesHealthCheckExtensions.ParkedIdentitiesHealthCheck(store)
+                .CheckHealthAsync(new HealthCheckContext(), Token);
+
+            result.Status.ShouldBe(HealthStatus.Degraded);
+            var description = result.Description.ShouldNotBeNull();
+
+            // The counts are unchanged
+            description.ShouldStartWith("3 projection identities are parked: ");
+            description.ShouldContain("WeighIn (tenant *DEFAULT*): 1");
+            description.ShouldContain("BadgeWeighIn (tenant *DEFAULT*): 2");
+
+            // Then the identities, keyed where the stream has a natural key
+            description.ShouldContain($"WeighIn: {keyless:D}");
+            description.ShouldNotContain($"{keyless:D} (");
+            description.ShouldContain($"{keyed:D} (BADGE-7)");
+            description.ShouldContain($"{keyedWithoutKey:D}");
+            description.ShouldNotContain($"{keyedWithoutKey:D} (");
+        }
+        finally
+        {
+            await daemon.StopAllAsync();
+        }
+    }
+
+    [Fact]
+    public async Task degraded_lists_at_most_ten_identities_per_projection()
+    {
+        using var database = TemporaryDatabase.Create("parked-health-ten");
+        await using var store = await buildStoreAsync(database, maxParked: 100);
+
+        var streams = Enumerable.Range(0, 12).Select(_ => Guid.NewGuid()).ToList();
+        await using (var session = store.LightweightSession())
+        {
+            foreach (var stream in streams)
+            {
+                session.Events.StartStream<WeighIn>(stream, new Weighed(true));
+            }
+
+            await session.SaveChangesAsync(Token);
+        }
+
+        using var daemon = await store.BuildProjectionDaemonAsync();
+        await daemon.StartAllAsync();
+
+        try
+        {
+            await store.Database.WaitForNonStaleProjectionDataAsync(DaemonWait.Timeout);
+
+            var result = await new ParkedIdentitiesHealthCheckExtensions.ParkedIdentitiesHealthCheck(store)
+                .CheckHealthAsync(new HealthCheckContext(), Token);
+
+            result.Status.ShouldBe(HealthStatus.Degraded);
+            var description = result.Description.ShouldNotBeNull();
+            description.ShouldStartWith("12 projection identities are parked: WeighIn (tenant *DEFAULT*): 12. ");
+
+            streams.Count(x => description.Contains(x.ToString("D")))
+                .ShouldBe(ParkedIdentitiesHealthCheckExtensions.ParkedIdentitiesHealthCheck.MaxIdentitiesPerProjection);
+            description.ShouldEndWith(", and 2 more");
         }
         finally
         {

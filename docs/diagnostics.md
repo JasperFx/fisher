@@ -532,6 +532,14 @@ A second check reports **Degraded** while any projection identity is
 builder.Services.AddHealthChecks().AddFisherParkedIdentitiesHealthCheck();
 ```
 
+While Degraded, the description lists the parked identities too, at most ten per projection, with the stream's
+[natural key](/events/natural-keys) in brackets when the aggregate has one:
+
+```
+3 projection identities are parked: WeighIn (tenant *DEFAULT*): 1, Order (tenant *DEFAULT*): 2. Parked:
+WeighIn: 0b0e5c1e-...; Order: 5d2f9a10-... (ORD-1001), 8c41e7b2-...
+```
+
 It reports **Unhealthy** while a shard is paused at the parking cap
 (`Projections.Errors.MaxParkedIdentitiesPerShard`), and names the shard. A parked identity holds back one
 document; a shard at the cap has stopped altogether. The cap is read from the progression row, so it needs
