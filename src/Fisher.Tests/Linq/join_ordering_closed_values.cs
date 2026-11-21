@@ -227,15 +227,30 @@ public class join_ordering_closed_values : IAsyncLifetime
 
     /// <summary>
     ///     A key that reads the row and also something the query closes over is not a constant and not a
-    ///     member: it is refused by name rather than dropped or approximated.
+    ///     member. Since fisher#666 an <c>int</c> sum like this one is computed in SQL, with the static read as a
+    ///     value, and orders as LINQ to Objects does.
     /// </summary>
     [Fact]
-    public async Task join_a_key_computed_from_a_member_and_a_static_is_refused_by_name()
+    public async Task join_a_key_computed_from_a_member_and_a_static_is_translated()
+    {
+        await using var session = _store.LightweightSession();
+
+        var actual = await Joined(session).OrderBy(x => x.Quantity + ClosedKeyStatics.Quantity).ToListAsync(Token);
+
+        actual.ShouldBe(JoinedInMemory().OrderBy(x => x.Quantity + ClosedKeyStatics.Quantity).ToList());
+    }
+
+    /// <summary>
+    ///     A key computed from a member and a static that has no exact translation is refused by name rather
+    ///     than dropped or approximated.
+    /// </summary>
+    [Fact]
+    public async Task join_a_key_computed_from_a_member_and_a_static_without_a_translation_is_refused_by_name()
     {
         await using var session = _store.LightweightSession();
 
         var ex = await Should.ThrowAsync<BadLinqExpressionException>(() =>
-            Joined(session).OrderBy(x => x.Quantity + ClosedKeyStatics.Quantity).ToListAsync(Token));
+            Joined(session).OrderBy(x => Math.Max(x.Quantity, ClosedKeyStatics.Quantity)).ToListAsync(Token));
 
         ex.Message.ShouldContain("Fisher cannot order a join by");
     }

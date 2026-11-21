@@ -36,7 +36,7 @@ public partial class FisherQueryProvider
         var index = -1;
         for (var i = calls.Count - 1; i >= 0; i--)
         {
-            if (calls[i].Method.Name is "GroupJoin" or "Join") return null;
+            if (calls[i].Method.Name is "GroupJoin" or "Join" or "LeftJoin") return null;
 
             if (calls[i].Method.Name == "SelectMany" && calls[i].Method.DeclaringType == typeof(Queryable))
             {

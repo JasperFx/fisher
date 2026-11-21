@@ -20,6 +20,19 @@ internal interface IMemberResolver
     IQueryableMember? ResolveParameter(ParameterExpression parameter) => null;
 
     /// <summary>
+    ///     An index into an array or a list, as in <c>x.Values[1]</c> or <c>x.Grid[1][0]</c> — fisher#666.
+    ///     A member reached through an index (<c>x.Items[0].Name</c>) comes through
+    ///     <see cref="ResolveMember" /> instead.
+    /// </summary>
+    /// <remarks>
+    ///     Only document JSON has arrays to index into, so every other resolver refuses it by name.
+    /// </remarks>
+    IQueryableMember ResolveIndexed(Expression expression)
+        => throw new BadLinqExpressionException(
+            $"Cannot translate the index '{expression}' here. Indexing into an array or a list is supported over "
+            + "a document's own members.");
+
+    /// <summary>
     ///     The document mapping the members belong to, or null where they belong to something that is
     ///     not a document — an event body or a stream-state row.
     /// </summary>

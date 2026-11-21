@@ -368,11 +368,20 @@ internal sealed class FlattenedQuery
         var resolved = body switch
         {
             ParameterExpression parameter => resolver.ResolveParameter(parameter),
-            MemberExpression member => resolver.ResolveMember(member),
+            MemberExpression member when IndexedAccess.RootOf(member) is not null => resolver.ResolveMember(member),
+            _ when IndexedAccess.IsIndex(body) && IndexedAccess.RootOf(body) is not null => resolver.ResolveIndexed(body),
             _ => null
-        } ?? throw new BadLinqExpressionException(
-            $"Fisher cannot translate {method}({lambda}) after a SelectMany. Order by the element, one of its "
-            + "members, or a string's Length.");
+        };
+
+        // fisher#666 (marten#5968): a computed key over the element, -c.Number or c.Name.ToUpper(), translated
+        // over the element's own locators or refused by name.
+        if (resolved is null)
+        {
+            return OrderingKeys.Translate(lambda.Body, lambda, resolver,
+                $"Fisher cannot translate {method}({lambda}) after a SelectMany");
+        }
+
+        OrderingKeys.AssertConversionsKeepOrder(lambda, $"Fisher cannot translate {method}({lambda}) after a SelectMany");
 
         if (!resolved.AllowsRangeComparison)
         {
@@ -491,12 +500,18 @@ internal sealed class FlattenedQuery
         ParameterExpression element, IMemberResolver elementMembers) : IMemberResolver
     {
         public IQueryableMember ResolveMember(MemberExpression expression)
-        {
-            Expression? current = expression;
-            while (current is MemberExpression member) current = member.Expression;
+            => SideOf(expression).ResolveMember(expression);
 
-            if (current == parent) return parentMembers.ResolveMember(expression);
-            if (current == element) return elementMembers.ResolveMember(expression);
+        // fisher#666: an index into an array of the document or of the element.
+        public IQueryableMember ResolveIndexed(Expression expression)
+            => SideOf(expression).ResolveIndexed(expression);
+
+        private IMemberResolver SideOf(Expression expression)
+        {
+            var current = IndexedAccess.RootOf(expression);
+
+            if (current == parent) return parentMembers;
+            if (current == element) return elementMembers;
 
             throw new BadLinqExpressionException(
                 $"Fisher cannot translate '{expression}' in a Where after a SelectMany's result selector. A member "

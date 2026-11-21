@@ -757,17 +757,37 @@ public class joined_queries : IAsyncLifetime
         exception.Message.ShouldContain("only filter");
     }
 
+    /// <summary>
+    ///     A member the projection computed is traced back to its computation, and since fisher#666 a
+    ///     concatenation is computed in SQL over both sides.
+    /// </summary>
     [Fact]
-    public async Task ordering_by_a_computed_member_of_the_result_is_refused()
+    public async Task ordering_by_a_concatenated_member_of_the_result()
+    {
+        await using var session = Session();
+
+        var rows = await session.Query<Angler>()
+            .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
+            .SelectMany(x => x.catches, (x, c) => new { Label = x.a.Name + "/" + c.Name })
+            .OrderByDescending(x => x.Label)
+            .ToListAsync(Token);
+
+        rows.Select(x => x.Label).ShouldBe(["Sam/Chub", "Frodo/Trout", "Frodo/Pike"]);
+    }
+
+    /// <summary>A computed member with no exact translation in SQL is still refused rather than sorted on.</summary>
+    [Fact]
+    public async Task ordering_by_a_computed_member_of_the_result_with_no_translation_is_refused()
     {
         await using var session = Session();
 
         var query = session.Query<Angler>()
             .GroupJoin(session.Query<Catch>(), a => a.Id, c => c.AnglerId, (a, catches) => new { a, catches })
-            .SelectMany(x => x.catches, (x, c) => new { Label = x.a.Name + "/" + c.Name })
-            .OrderBy(x => x.Label);
+            .SelectMany(x => x.catches, (x, c) => new { Heavy = c.Weight > 5 ? "yes" : "no" })
+            .OrderBy(x => x.Heavy);
 
-        await Should.ThrowAsync<BadLinqExpressionException>(() => query.ToListAsync(Token));
+        var ex = await Should.ThrowAsync<BadLinqExpressionException>(() => query.ToListAsync(Token));
+        ex.Message.ShouldContain("Fisher cannot order a join by");
     }
 
     [Fact]

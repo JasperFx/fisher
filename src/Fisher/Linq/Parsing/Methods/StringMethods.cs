@@ -55,6 +55,12 @@ internal static class StringMethods
             return element;
         }
 
+        // fisher#666: x.Names[0].StartsWith("a"), on an element of an array or list.
+        if (expression.Object is { } indexed && IndexedAccess.IsIndex(indexed))
+        {
+            return memberFactory.ResolveIndexed(indexed);
+        }
+
         if (expression.Object is not MemberExpression member)
         {
             throw new BadLinqExpressionException(

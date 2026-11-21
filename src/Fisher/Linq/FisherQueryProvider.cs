@@ -43,6 +43,10 @@ public partial class FisherQueryProvider : IQueryProvider
 
     public IQueryable CreateQuery(Expression expression)
     {
+        // fisher#666: a RightJoin is a LeftJoin with its sources swapped, done here because the swap changes the
+        // document type the chain starts from.
+        expression = Joins.RightJoinRewriter.Rewrite(expression);
+
         var elementType = expression.Type.GetGenericArguments().FirstOrDefault()
                           ?? throw new BadLinqExpressionException(
                               $"Cannot determine the element type of '{expression.Type.Name}'.");
@@ -56,7 +60,7 @@ public partial class FisherQueryProvider : IQueryProvider
     }
 
     public IQueryable<TElement> CreateQuery<TElement>(Expression expression)
-        => new FisherQueryable<TElement>(this, expression);
+        => new FisherQueryable<TElement>(this, Joins.RightJoinRewriter.Rewrite(expression));
 
     /// <summary>
     ///     Synchronous execution is not supported; see <see cref="FisherQueryable{T}.GetEnumerator" />.

@@ -272,6 +272,22 @@ internal class LinqQueryParser
                 ApplyGroupJoin(call, grouped: false);
                 break;
 
+            // fisher#666 (marten#5910): .NET 10's LeftJoin is a plain Join that keeps an outer row with no
+            // match — the same join the GroupJoin/SelectMany/DefaultIfEmpty spelling produces, with the result
+            // selector already over the two documents.
+            case "LeftJoin" when call.Method.DeclaringType == typeof(Queryable):
+                ApplyGroupJoin(call, grouped: false);
+                CurrentJoin!.IsLeftJoin = true;
+                break;
+
+            // The provider rewrites a RightJoin into a LeftJoin as the query is built (RightJoinRewriter), so
+            // reaching here means the expression did not come through it.
+            case "RightJoin" when call.Method.DeclaringType == typeof(Queryable):
+                throw new BadLinqExpressionException(
+                    "Fisher translates RightJoin by swapping it into a LeftJoin when the query is built, and this "
+                    + "expression did not come through Fisher's query provider. Write it as a LeftJoin with the "
+                    + "two sources swapped.");
+
             case "SelectMany" when CurrentJoin is { IsGrouped: true, FinalSelector: null }:
                 ApplySelectMany(call);
                 break;
@@ -491,7 +507,7 @@ internal class LinqQueryParser
             default:
                 throw new BadLinqExpressionException(
                     $"Fisher cannot translate '{call.Method.Name}' to SQL. Supported operators are "
-                    + "Where, Select, Distinct, DistinctBy, GroupBy, Join, GroupJoin followed by SelectMany, "
+                    + "Where, Select, Distinct, DistinctBy, GroupBy, Join, LeftJoin, RightJoin, GroupJoin followed by SelectMany, "
                     + "OrderBy, OrderByDescending, ThenBy, ThenByDescending, the OrderByRelevance family, "
                     + "Take and Skip, plus Fisher's own query operators (MaybeDeleted, IsDeleted, "
                     + "DeletedSince/DeletedBefore, ModifiedSince/ModifiedBefore, AnyTenant, TenantIsOneOf, "
@@ -712,6 +728,16 @@ internal class LinqQueryParser
                 $"A GroupJoin must be followed by SelectMany before a second '{call.Method.Name}'. "
                 + "Without it the first join still yields a grouping per outer row, and there is no "
                 + "one-row-per-match shape for the second to join onto.");
+        }
+
+        // A comparer is the sixth argument of every join operator. The join compares the keys' stored values
+        // in SQL, so it would be silently ignored, which is a wrong answer for a case-insensitive comparer.
+        if (call.Arguments.Count > 5)
+        {
+            throw new BadLinqExpressionException(
+                $"Fisher cannot translate a {call.Method.Name} with a key comparer. The join compares the keys' "
+                + "stored values in SQL, so the comparer would be ignored. Normalize the keys on write, or join in "
+                + "memory.");
         }
 
         var arguments = call.Method.GetGenericArguments();
@@ -1047,7 +1073,7 @@ internal class LinqQueryParser
 
         if (GroupProjection is null && Projection is null)
         {
-            return LocatorFor(call);
+            return LocatorFor(call, ordering: true);
         }
 
         var body = lambda.Body;
@@ -1118,7 +1144,7 @@ internal class LinqQueryParser
     ///     Resolves an ordering key, refusing one whose stored form does not sort — the same guard the
     ///     where parser applies to a range comparison, for the same reason.
     /// </summary>
-    private string LocatorFor(MethodCallExpression call)
+    private string LocatorFor(MethodCallExpression call, bool ordering = false)
     {
         // fisher#591: an ordering key like this is dropped before it gets here. A GroupBy or a
         // DistinctBy over one would collapse every row into a single group or a single document, which
@@ -1131,21 +1157,44 @@ internal class LinqQueryParser
                 + "Key on a document member, or compute the result in memory.");
         }
 
-        var body = UnwrapLambda(call).Body;
+        var lambda = UnwrapLambda(call);
+        var body = lambda.Body;
 
         while (body is UnaryExpression { NodeType: ExpressionType.Convert } unary)
         {
             body = unary.Operand;
         }
 
-        if (body is not MemberExpression memberExpression)
+        IQueryableMember member;
+
+        // fisher#666: x.Values[1] or x.Grid[1][0], an index into the document, is a member like any other.
+        if (IndexedAccess.IsIndex(body) && IndexedAccess.RootOf(body) is not null)
+        {
+            member = _memberFactory.ResolveIndexed(body);
+        }
+        else if (body is MemberExpression memberExpression
+                 && (!ordering || IndexedAccess.RootOf(memberExpression) is not null))
+        {
+            member = _memberFactory.ResolveMember(memberExpression);
+        }
+        else if (ordering)
+        {
+            // fisher#666: a computed key, -x.Number or x.Name.ToUpper(), translated or refused by name. It
+            // has no member behind it, so keyset paging refuses it as it does a relevance rank.
+            return OrderingKeys.Translate(lambda.Body, lambda, _memberFactory);
+        }
+        else
         {
             throw new BadLinqExpressionException(
                 $"'{call.Method.Name}' is only supported over a document member.");
         }
 
-        var member = _memberFactory.ResolveMember(memberExpression);
         _lastOrderingMember = member;
+
+        if (ordering)
+        {
+            OrderingKeys.AssertConversionsKeepOrder(lambda);
+        }
 
         if (!member.AllowsRangeComparison)
         {

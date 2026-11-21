@@ -5,12 +5,12 @@
 | Operator | Supported |
 | :--- | :--- |
 | `Where` | yes |
-| `OrderBy` / `OrderByDescending` / `ThenBy` / `ThenByDescending` | yes |
+| `OrderBy` / `OrderByDescending` / `ThenBy` / `ThenByDescending` | yes — by a member, an index or a [computed key](#ordering-by-a-computed-key) |
 | `Take` / `Skip` | yes — `limit m offset n` |
 | `Select` | yes — see [projections](/documents/querying/linq/#projections) |
 | `Distinct` / `DistinctBy` | yes, with restrictions |
 | `GroupBy` + `Select` | yes — see [grouping](/documents/querying/linq/grouping) |
-| `Join` / `GroupJoin` + `SelectMany` | yes — see [joins](/documents/querying/linq/joins) |
+| `Join` / `LeftJoin` / `RightJoin` / `GroupJoin` + `SelectMany` | yes — see [joins](/documents/querying/linq/joins) |
 | `SelectMany` over a document's own collection | yes — see [below](#selectmany-over-a-collection) |
 | `Count` / `Any` / `First` / `Single` / `Last` | yes, with predicate overloads |
 | `Sum` / `Min` / `Max` / `Average` | yes — see [aggregates](/documents/querying/linq/grouping#aggregates) |
@@ -27,6 +27,79 @@
 .Where(x => x.Internal)
 .Where(x => !x.Internal)
 ```
+
+## Indexing into arrays and lists
+
+An index into an array or a list on the document works in `Where` and `OrderBy`, including jagged arrays and
+members of an indexed element:
+
+<!-- snippet: sample_array_index_in_where_and_order_by -->
+<a id='snippet-sample_array_index_in_where_and_order_by'></a>
+```cs
+var numbers = await session.Query<IndexedArrayDoc>()
+    .Where(x => x.Values[1] > 5 && x.Children[0].Score >= 4)
+    .OrderBy(x => x.Grid[1][0])
+    .Select(x => x.Number)
+    .ToListAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Linq/document_array_indexes.cs#L201-L207' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_array_index_in_where_and_order_by' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+The index is one more step of the JSON path, so `x.Grid[1][0]` is `json_extract(data, '$.grid[1][0]')` and
+`x.Children[0].Score` is `json_extract(data, '$.children[0].score')`. The element is typed by its own CLR type,
+so an enum, a timestamp or a decimal element compares and orders like a member of that type. `ElementAt(n)` is
+the same as `[n]`.
+
+**An index past the end reads as missing**, the same as any other path that is not there. It matches no
+comparison and sorts first in ascending order, where LINQ to Objects would throw. A missing or null array reads
+the same way.
+
+The index has to be a value: a literal, a captured local or a static. A negative index is refused, since C#
+throws on it, and so is one computed from the document, because the index is part of the SQL text.
+
+A `Select` that indexes (`Select(x => x.Values[1])`) reads the array and indexes it in .NET, as before, so
+it answers exactly as LINQ to Objects does.
+
+## Ordering by a computed key
+
+An ordering key does not have to be a member:
+
+<!-- snippet: sample_computed_ordering_key -->
+<a id='snippet-sample_computed_ordering_key'></a>
+```cs
+var numbers = await session.Query<KeyedDoc>()
+    .OrderBy(x => -x.Number)
+    .Select(x => x.Number)
+    .ToListAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Linq/computed_ordering_keys.cs#L217-L222' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_computed_ordering_key' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+Fisher translates a computed key only where SQLite computes exactly what .NET does:
+
+| Key | SQL |
+| :--- | :--- |
+| `-x.Number` | `(case when n = -2147483648 then n else -(n) end)`, which keeps .NET's wrap at the minimum |
+| `x.Number % 3`, `x.Number / 3` | `(n % 3)`; integer `%` and `/` by a constant other than 0 and -1 |
+| `x.A + x.B`, `x.A - x.B`, `x.A * 2` over `int` | computed in 64 bits, then wrapped back into 32 bits as unchecked .NET does |
+| `-x.Amount` over a `double` | `(-amount)` |
+| `x.Name.ToUpper()`, `ToLower()` | `upper(...)`, `lower(...)`. ASCII only, as in a `Where` |
+| `x.Name.Length` | `length(...)` |
+| `x.First + "-" + x.Last`, `x.Code + x.Number` | `\|\|`, with a null string read as empty |
+| `x.Number.ToString()`, `x.Id.ToString()` | the integer as text, the Guid's stored lowercase form |
+| `(long)x.Number` | the member; any widening cast that keeps every value and its order |
+
+An absent `int` member reads as 0, as it does when the document is loaded. These work the same way after a
+`SelectMany` over child documents or values, and after a join, where each member is read from its own side.
+`ThenBy`, `Take`/`Skip`, `First` and `Last` all work over a computed key. Keyset paging
+(`ToCursorPageAsync`) does not, because a cursor has to carry the key's value.
+
+Anything else is refused with a `BadLinqExpressionException` that names the key, rather than ordered by the
+member underneath it. That covers `long`, `decimal` and floating-point arithmetic other than a `double`'s
+negation (SQLite turns an overflowing `long` into a REAL where .NET wraps, and has no decimal), `checked`
+arithmetic, a narrowing cast like `(byte)x.Number` or `(int)x.Price`, a conditional, `??`, `Math` calls,
+`Substring`, and `ToString()` of anything but an integer or a Guid. Order by a member, or sort in memory after
+the query.
 
 ## Collections
 
@@ -419,6 +492,10 @@ rather than through a slow query:
 - `GroupBy` with no `Select`, and the element/result-selector overloads
 - `Distinct()` over whole documents; `DistinctBy` after a `Select`
 - Ordering by a member of a shaped projection
+- An ordering key with no exact SQL translation — see [Ordering by a computed key](#ordering-by-a-computed-key)
+- A negative index, or one computed from the document — see [Indexing](#indexing-into-arrays-and-lists)
+- A join key comparer, and any operator but `Where` before a `RightJoin` — see
+  [joins](/documents/querying/linq/joins#what-is-refused-by-name)
 - A second `Select`
 - After a join: keyset paging, JSON reads, and `Select` / `GroupBy` / `Distinct` / `DistinctBy`
 - Ordering or range-comparing a string-stored enum
