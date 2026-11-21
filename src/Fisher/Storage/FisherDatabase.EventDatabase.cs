@@ -544,12 +544,21 @@ public partial class FisherDatabase : IEventDatabase
     ///         <c>mt_mark_event_progression_extended</c> in a different dialect.
     ///     </para>
     ///     <para>
-    ///         <b>Telemetry only: an UPDATE of an existing row, never an INSERT, and never
-    ///         <c>last_seq_id</c> or <c>last_updated</c>.</b> The row belongs to the projection batch's
-    ///         commit; inserting one here would race that commit's own upsert, and touching the sequence
-    ///         from a throttled heartbeat could move committed progress backwards. A shard with no row
-    ///         yet matches nothing, which is the "missing row is a no-op" the contract asks for — and
-    ///         JasperFx replays a transition that landed before the first commit.
+    ///         <b>Telemetry only: never <c>last_seq_id</c> or <c>last_updated</c> on an existing row.</b>
+    ///         The row's position belongs to the projection batch's commit, and touching the sequence from a
+    ///         throttled heartbeat could move committed progress backwards. A state without a failure is an
+    ///         UPDATE of an existing row, so a shard with no row yet matches nothing, and JasperFx replays a
+    ///         transition that landed before the first commit.
+    ///     </para>
+    ///     <para>
+    ///         <b>A state that carries a <see cref="ShardFailure" /> creates the row when there isn't one</b>
+    ///         (fisher#660, marten#6127). A shard that pauses on its first batch, a <c>ParkedLimitReached</c>
+    ///         pause included, has never committed, so its failure was written nowhere and nothing reading
+    ///         the database could see it. The row goes in at <c>max(state.Sequence, 0)</c>, which for a shard
+    ///         that never committed is the floor it started from, so it does not change where the shard
+    ///         starts next time. An existing row only gets the telemetry and failure columns, never a new
+    ///         <c>last_seq_id</c>. The shard's first commit replaces the failure on a row at 0
+    ///         (<c>ShardProgressionOperation</c>).
     ///     </para>
     ///     <para>
     ///         <b>The four <c>failure_*</c> columns follow a different rule</b> (jasperfx#565): written
@@ -565,7 +574,7 @@ public partial class FisherDatabase : IEventDatabase
     ///         write takes the file's — so the hazard here is smaller and different. Folding the batch
     ///         into one transaction would hold the write lock across every row; one statement each holds
     ///         it for one row and lets a projection batch in between. The guard makes replaying
-    ///         unchanged telemetry a zero-row UPDATE, using <c>IS NOT</c> so NULLs compare as equal.
+    ///         unchanged telemetry a zero-row write, using <c>IS NOT</c> so NULLs compare as equal.
     ///     </para>
     ///     <para>
     ///         A store without extended tracking has none of these columns, so the call returns without
@@ -587,77 +596,191 @@ public partial class FisherDatabase : IEventDatabase
         await _options.ResiliencePipeline.ExecuteAsync(async ct =>
         {
             await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
-            await using var command = connection.CreateCommand();
+            await using var update = connection.CreateCommand();
+            update.CommandText = ExtendedProgressionUpdateSql();
+            var updateParameters = new ExtendedProgressionParameters(update, withStartPosition: false);
 
-            const string category = "case when @touch_failure = 1 then @failure_category else failure_category end";
-            const string sequence = "case when @touch_failure = 1 then @failure_sequence else failure_event_sequence end";
-            const string eventType = "case when @touch_failure = 1 then @failure_event_type else failure_event_type end";
-            const string tenant = "case when @touch_failure = 1 then @failure_tenant_id else failure_event_tenant_id end";
-            // fisher#652: null means the shard doesn't park (or hasn't loaded its parked set), so the column is left
-            // alone. fisher#654: the projection batch owns the count once it is set (RefreshParkedCountsAsync counts it
-            // from fi_parked_identities in the transaction that parks or unparks), so this only fills in a null: a
-            // state stamped before a batch committed must not put a stale count back over the batch's. (jasperfx#1255,
-            // the writer dropping Parked/Unparked with heartbeats off, is fixed upstream in JasperFx 3.11.0; the
-            // ordering race this guards against is not.)
-            const string parked = "coalesce(parked_count, @parked_count)";
+            // fisher#660: only built when a batch carries a failure, which is rare
+            SqliteCommand? upsert = null;
+            ExtendedProgressionParameters? upsertParameters = null;
 
-            command.CommandText = $"""
-                                   update {_events.ProgressionTableName}
-                                   set heartbeat = @heartbeat,
-                                       agent_status = @status,
-                                       pause_reason = @reason,
-                                       running_on_node = @node,
-                                       failure_category = {category},
-                                       failure_event_sequence = {sequence},
-                                       failure_event_type = {eventType},
-                                       failure_event_tenant_id = {tenant},
-                                       parked_count = {parked}
-                                   where name = @name
-                                     and (heartbeat is not @heartbeat
-                                          or agent_status is not @status
-                                          or pause_reason is not @reason
-                                          or running_on_node is not @node
-                                          or failure_category is not {category}
-                                          or failure_event_sequence is not {sequence}
-                                          or failure_event_type is not {eventType}
-                                          or failure_event_tenant_id is not {tenant}
-                                          or parked_count is not {parked})
-                                   """;
-
-            var name = command.Parameters.Add("@name", SqliteType.Text);
-            var heartbeat = command.Parameters.Add("@heartbeat", SqliteType.Text);
-            var status = command.Parameters.Add("@status", SqliteType.Text);
-            var reason = command.Parameters.Add("@reason", SqliteType.Text);
-            var node = command.Parameters.Add("@node", SqliteType.Integer);
-            var touchFailure = command.Parameters.Add("@touch_failure", SqliteType.Integer);
-            var failureCategory = command.Parameters.Add("@failure_category", SqliteType.Text);
-            var failureSequence = command.Parameters.Add("@failure_sequence", SqliteType.Integer);
-            var failureEventType = command.Parameters.Add("@failure_event_type", SqliteType.Text);
-            var failureTenantId = command.Parameters.Add("@failure_tenant_id", SqliteType.Text);
-            var parkedCount = command.Parameters.Add("@parked_count", SqliteType.Integer);
-
-            foreach (var state in ordered)
+            try
             {
-                var failure = state.Failure;
+                foreach (var state in ordered)
+                {
+                    if (state.Failure is null)
+                    {
+                        updateParameters.Apply(state);
+                        await update.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                        continue;
+                    }
 
-                name.Value = state.ShardName;
-                heartbeat.Value = state.LastHeartbeat is { } beat
-                    ? SqliteTimestamp.ToDatabaseValue(beat)
-                    : DBNull.Value;
-                status.Value = (object?)state.AgentStatus ?? DBNull.Value;
-                reason.Value = (object?)state.PauseReason ?? DBNull.Value;
-                node.Value = (object?)state.RunningOnNode ?? DBNull.Value;
+                    // fisher#660: a failure must land even when the shard has never committed, so it creates the
+                    // row at the position the shard started from if there isn't one. Still one row, one statement.
+                    if (upsert is null)
+                    {
+                        upsert = connection.CreateCommand();
+                        upsert.CommandText = ExtendedProgressionUpsertSql();
+                        upsertParameters = new ExtendedProgressionParameters(upsert, withStartPosition: true);
+                    }
 
-                touchFailure.Value = failure is not null || state.Action == ShardAction.Started ? 1 : 0;
-                failureCategory.Value = (object?)failure?.Category.ToString() ?? DBNull.Value;
-                failureSequence.Value = (object?)failure?.Event?.Sequence ?? DBNull.Value;
-                failureEventType.Value = (object?)failure?.Event?.EventTypeName ?? DBNull.Value;
-                failureTenantId.Value = (object?)failure?.Event?.TenantId ?? DBNull.Value;
-                parkedCount.Value = (object?)state.ParkedCount ?? DBNull.Value;
-
-                await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                    upsertParameters!.Apply(state);
+                    await upsert.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                if (upsert is not null)
+                {
+                    await upsert.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }, token).ConfigureAwait(false);
+    }
+
+    // fisher#652: null means the shard doesn't park (or hasn't loaded its parked set), so the column is left alone.
+    // fisher#654: the projection batch owns the count once it is set (RefreshParkedCountsAsync counts it from
+    // fi_parked_identities in the transaction that parks or unparks), so this only fills in a null: a state stamped
+    // before a batch committed must not put a stale count back over the batch's. (jasperfx#1255, the writer dropping
+    // Parked/Unparked with heartbeats off, is fixed upstream in JasperFx 3.11.0; the ordering race this guards against
+    // is not.)
+    private const string ParkedCountFillIn = "coalesce(parked_count, @parked_count)";
+
+    private string ExtendedProgressionUpdateSql()
+    {
+        const string category = "case when @touch_failure = 1 then @failure_category else failure_category end";
+        const string sequence = "case when @touch_failure = 1 then @failure_sequence else failure_event_sequence end";
+        const string eventType = "case when @touch_failure = 1 then @failure_event_type else failure_event_type end";
+        const string tenant = "case when @touch_failure = 1 then @failure_tenant_id else failure_event_tenant_id end";
+
+        return $"""
+                update {_events.ProgressionTableName}
+                set heartbeat = @heartbeat,
+                    agent_status = @status,
+                    pause_reason = @reason,
+                    running_on_node = @node,
+                    failure_category = {category},
+                    failure_event_sequence = {sequence},
+                    failure_event_type = {eventType},
+                    failure_event_tenant_id = {tenant},
+                    parked_count = {ParkedCountFillIn}
+                where name = @name
+                  and (heartbeat is not @heartbeat
+                       or agent_status is not @status
+                       or pause_reason is not @reason
+                       or running_on_node is not @node
+                       or failure_category is not {category}
+                       or failure_event_sequence is not {sequence}
+                       or failure_event_type is not {eventType}
+                       or failure_event_tenant_id is not {tenant}
+                       or parked_count is not {ParkedCountFillIn})
+                """;
+    }
+
+    // fisher#660 / marten#6127: the write for a state that carries a failure. The update branch is the statement
+    // above with the failure always written; the insert branch creates the row of a shard that has not committed yet,
+    // at its start position. last_seq_id is only ever set by the insert, never by the update, so a committed position
+    // is never moved. Unqualified columns in the update branch are the existing row's.
+    private string ExtendedProgressionUpsertSql()
+    {
+        return $"""
+                insert into {_events.ProgressionTableName}
+                    (name, last_seq_id, heartbeat, agent_status, pause_reason, running_on_node, failure_category,
+                     failure_event_sequence, failure_event_type, failure_event_tenant_id, parked_count)
+                values (@name, @start_position, @heartbeat, @status, @reason, @node, @failure_category,
+                        @failure_sequence, @failure_event_type, @failure_tenant_id, @parked_count)
+                on conflict(name) do update
+                set heartbeat = @heartbeat,
+                    agent_status = @status,
+                    pause_reason = @reason,
+                    running_on_node = @node,
+                    failure_category = @failure_category,
+                    failure_event_sequence = @failure_sequence,
+                    failure_event_type = @failure_event_type,
+                    failure_event_tenant_id = @failure_tenant_id,
+                    parked_count = {ParkedCountFillIn}
+                where heartbeat is not @heartbeat
+                   or agent_status is not @status
+                   or pause_reason is not @reason
+                   or running_on_node is not @node
+                   or failure_category is not @failure_category
+                   or failure_event_sequence is not @failure_sequence
+                   or failure_event_type is not @failure_event_type
+                   or failure_event_tenant_id is not @failure_tenant_id
+                   or parked_count is not {ParkedCountFillIn}
+                """;
+    }
+
+    // The parameters both extended progression statements bind, by name
+    private sealed class ExtendedProgressionParameters
+    {
+        private readonly SqliteParameter _name;
+        private readonly SqliteParameter _heartbeat;
+        private readonly SqliteParameter _status;
+        private readonly SqliteParameter _reason;
+        private readonly SqliteParameter _node;
+        private readonly SqliteParameter? _touchFailure;
+        private readonly SqliteParameter _failureCategory;
+        private readonly SqliteParameter _failureSequence;
+        private readonly SqliteParameter _failureEventType;
+        private readonly SqliteParameter _failureTenantId;
+        private readonly SqliteParameter _parkedCount;
+        private readonly SqliteParameter? _startPosition;
+
+        public ExtendedProgressionParameters(SqliteCommand command, bool withStartPosition)
+        {
+            _name = command.Parameters.Add("@name", SqliteType.Text);
+            _heartbeat = command.Parameters.Add("@heartbeat", SqliteType.Text);
+            _status = command.Parameters.Add("@status", SqliteType.Text);
+            _reason = command.Parameters.Add("@reason", SqliteType.Text);
+            _node = command.Parameters.Add("@node", SqliteType.Integer);
+            _failureCategory = command.Parameters.Add("@failure_category", SqliteType.Text);
+            _failureSequence = command.Parameters.Add("@failure_sequence", SqliteType.Integer);
+            _failureEventType = command.Parameters.Add("@failure_event_type", SqliteType.Text);
+            _failureTenantId = command.Parameters.Add("@failure_tenant_id", SqliteType.Text);
+            _parkedCount = command.Parameters.Add("@parked_count", SqliteType.Integer);
+
+            // The upsert always writes the failure it was handed, so it has no use for touch_failure
+            if (withStartPosition)
+            {
+                _startPosition = command.Parameters.Add("@start_position", SqliteType.Integer);
+            }
+            else
+            {
+                _touchFailure = command.Parameters.Add("@touch_failure", SqliteType.Integer);
+            }
+        }
+
+        public void Apply(ShardState state)
+        {
+            var failure = state.Failure;
+
+            _name.Value = state.ShardName;
+            _heartbeat.Value = state.LastHeartbeat is { } beat
+                ? SqliteTimestamp.ToDatabaseValue(beat)
+                : DBNull.Value;
+            _status.Value = (object?)state.AgentStatus ?? DBNull.Value;
+            _reason.Value = (object?)state.PauseReason ?? DBNull.Value;
+            _node.Value = (object?)state.RunningOnNode ?? DBNull.Value;
+
+            if (_touchFailure is not null)
+            {
+                _touchFailure.Value = failure is not null || state.Action == ShardAction.Started ? 1 : 0;
+            }
+
+            _failureCategory.Value = (object?)failure?.Category.ToString() ?? DBNull.Value;
+            _failureSequence.Value = (object?)failure?.Event?.Sequence ?? DBNull.Value;
+            _failureEventType.Value = (object?)failure?.Event?.EventTypeName ?? DBNull.Value;
+            _failureTenantId.Value = (object?)failure?.Event?.TenantId ?? DBNull.Value;
+            _parkedCount.Value = (object?)state.ParkedCount ?? DBNull.Value;
+
+            if (_startPosition is not null)
+            {
+                // fisher#660: a shard that never committed publishes the floor it started from as its sequence, so
+                // this is where it starts again
+                _startPosition.Value = Math.Max(state.Sequence, 0);
+            }
+        }
     }
 
     /// <summary>

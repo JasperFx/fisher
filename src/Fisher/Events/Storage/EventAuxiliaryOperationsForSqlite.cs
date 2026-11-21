@@ -285,6 +285,16 @@ internal sealed class ShardProgressionOperation : Weasel.Storage.IStorageOperati
             ? $"last_seq_id = @seq, last_updated = {now}, heartbeat = {now}"
             : $"last_seq_id = @seq, last_updated = {now}";
 
+        // fisher#660 / marten#6127: a shard that failed before its first commit has a row at 0 that only carries the
+        // failure (FisherDatabase.WriteExtendedProgressionAsync). The first commit takes that row over through the
+        // update branch below, since its last_seq_id is the floor, and clears the failure it carried, which this
+        // commit has moved past. Marten deletes the row and inserts; the outcome is the same.
+        if (_extendedTracking && _floor == 0)
+        {
+            set += ", pause_reason = null, failure_category = null, failure_event_sequence = null, " +
+                   "failure_event_type = null, failure_event_tenant_id = null";
+        }
+
         builder.Append($"""
                         insert into {_progressionTableName} ({columns})
                         values ({values})
