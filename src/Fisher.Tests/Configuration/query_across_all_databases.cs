@@ -80,7 +80,8 @@ public class query_across_all_databases : IAsyncLifetime
     public async Task an_empty_database_adds_nothing_and_fails_nothing()
     {
         var counts = await theStore.Advanced.QueryAcrossAllDatabasesAsync<(string, int)>(
-            async (session, database, ct) => [(database.Identifier, await session.Query<Customer>().CountAsync(ct))]);
+            async (session, database, ct) => [(database.Identifier, await session.Query<Customer>().CountAsync(ct))],
+            token: Token);
 
         counts.ShouldContain(("empty", 0));
         counts.Sum(x => x.Item2).ShouldBe(6);
@@ -90,7 +91,7 @@ public class query_across_all_databases : IAsyncLifetime
     public async Task keeps_each_databases_results_together()
     {
         var customers = await theStore.Advanced.QueryAcrossAllDatabasesAsync(
-            async (session, ct) => await session.Query<Customer>().ToListAsync(ct), 3);
+            async (session, ct) => await session.Query<Customer>().ToListAsync(ct), 3, Token);
 
         // The names are "<tenant>-<n>": once a tenant's run ends, it must not come back
         var tenants = customers.Select(x => x.Name[..x.Name.LastIndexOf('-')]).ToList();
@@ -103,7 +104,7 @@ public class query_across_all_databases : IAsyncLifetime
     public async Task hands_each_database_to_the_query_once()
     {
         var seen = await theStore.Advanced.QueryAcrossAllDatabasesAsync<string>(
-            (_, database, _) => Task.FromResult<IReadOnlyList<string>>([database.Identifier]));
+            (_, database, _) => Task.FromResult<IReadOnlyList<string>>([database.Identifier]), token: Token);
 
         seen.ShouldBe(theStore.Tenancy.AllDatabases().Select(x => x.Identifier), ignoreOrder: true);
         seen.Count.ShouldBe(4);

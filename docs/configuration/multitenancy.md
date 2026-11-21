@@ -397,7 +397,7 @@ var customers = await theStore.Advanced.QueryAcrossAllDatabasesAsync(
     async (session, ct) => await session.Query<Customer>().ToListAsync(ct),
     8, Token, "green", "blue");
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Configuration/query_across_all_databases.cs#L121-L126' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_query_across_some_tenants' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Configuration/query_across_all_databases.cs#L122-L127' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_query_across_some_tenants' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 A few things to know:
