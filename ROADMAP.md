@@ -453,9 +453,6 @@ not gate the release candidate.
 [#679](https://github.com/JasperFx/fisher/issues/679): recreate Marten 10's natural key work, after the usage
 review. Mapped natural keys are part of it, so `MappedNaturalKeyCompliance` skips on Fisher until then.
 
-[#685](https://github.com/JasperFx/fisher/issues/685): `ProjectLatestForCommit` (marten#6149), deferred from #684 as
-a new API rather than a fix.
-
 [#643](https://github.com/JasperFx/fisher/issues/643): the projection backfill seam JasperFx 3.7.0 added to
 `IEventStore`. The event-range marks and the stored-event rewrite are done. The backfill itself is deferred: Jeremy is
 holding projection backfill, so #648 was reverted, and `BackfillCompliance` is excused until it lands, as it is on

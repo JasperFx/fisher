@@ -41,8 +41,12 @@ facts green, including the archived, conjoined and string-key ones the in-memory
   forwarder on the derived class (Wolverine's `Saga.Version`). `inherited_metadata_members` takes its bases from
   `Fisher.TestUtils` for that reason, and fails 5 of 7 without the fallback.
 - **fisher#683 needed no fix**: `fetch_plan_folds` ports marten#6147/#6148/#6145 and is green.
-- **Left for later**: `ProjectLatestForCommit` is fisher#685 (2.1); the docs review and sample conversion from
-  fisher#684's item 4 are fisher#657.
+- **`ProjectLatestForCommit`** (fisher#685, marten#6149) landed with the Weasel 10.0.0 pins: the pending events
+  are numbered and stamped through JasperFx's `ClientSideAppendPlanner.NumberAhead` from the version the commit
+  starts at, and the commit keeps them. `SaveChangesAsync` refuses a stream whose expected version moved after
+  the call. `project_latest_for_commit` fails 8 of 12 without the stamping.
+- **`AggregateStreamToLastKnownAsync`** folds once (fisher#687, marten#6194).
+- **Left for later**: the docs review and sample conversion from fisher#684's item 4 are fisher#657.
 
 ## Weasel 10.0.0-rc.1 (fisher#674)
 

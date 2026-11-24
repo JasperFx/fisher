@@ -792,6 +792,14 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             return;
         }
 
+        // fisher#685: a stream whose expected version moved after ProjectLatestForCommit is refused before
+        // anything runs, listeners included, so a refused commit writes nothing.
+        Events.AssertVersionsPinnedForCommitAreUnchanged();
+        foreach (var scope in TenantScopes)
+        {
+            scope.Events.AssertVersionsPinnedForCommitAreUnchanged();
+        }
+
         using var activity = FisherTracing.StartOperation(FisherTracing.SaveChanges, Options);
 
         foreach (var listener in Listeners)

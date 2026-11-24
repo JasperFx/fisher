@@ -86,7 +86,11 @@ public partial class EventOperations : EventOperationsBase, IEventStoreOperation
     /// </remarks>
     public IReadOnlyCollection<StreamAction> PendingStreams => _streams.Values;
 
-    internal void ClearPendingStreams() => _streams.Clear();
+    internal void ClearPendingStreams()
+    {
+        _streams.Clear();
+        _versionsPinnedForCommit.Clear();
+    }
 
     /// <summary>
     ///     Wrap raw event data in an <see cref="IEvent" /> envelope carrying its type metadata,

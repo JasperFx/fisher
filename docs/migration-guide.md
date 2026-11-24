@@ -19,6 +19,8 @@ Polecat 6 and Wolverine 7.
 - **Defaults follow Marten 10**: extended progression tracking, parking and inline projection side effects are on.
   Event metadata and the document metadata columns stay opt-in, as Marten 10 decided in marten#6144.
   `RestoreV1Defaults()` puts Fisher 1's defaults back.
+- **`ProjectLatestForCommit`**: the aggregate as `SaveChangesAsync()` will write it, versions, timestamps and
+  metadata included. See [ProjectLatestForCommit](/events/projections/project-latest#project-latest-for-commit).
 - **Reading your own writes**: `session.LastAppendedPosition` and `store.WaitForProjectionsAsync(...)`. See
   [reading your own writes](/events/projections/async-daemon#reading-your-own-writes).
 - **Rewriting stored events in bulk** with `RewriteStoredEventsAsync` and `AddRewriteTransform<T>()`. See
@@ -807,6 +809,8 @@ has the row). Around it (fisher#652, #655, #658, #660, #661, #667, #671):
 - **`AssignTagWhere` under conjoined tenancy** only tags the session's tenant's events (fisher#632).
 - **`FetchLatest` of an Inline immutable aggregate after a commit** on an identity or dirty-tracked session returns
   the new snapshot. Fisher 1 returned the one from before the commit (fisher#645).
+- **`AggregateStreamToLastKnownAsync`** folds the stream once instead of rebuilding from the first event for every
+  event it walks back, and a version past the end of the stream answers null (fisher#687).
 - **A null from an explicit natural key source removes the key** (fisher#684, jasperfx#1287). A
   `[NaturalKeySource]` static method returning the key type, or a `NaturalKeyFor()` registration, that returns
   `null` now deletes the stream's lookup row, so the old key stops resolving and is free for another stream.
