@@ -197,6 +197,12 @@ impossible — and it would be silent. If your tenant ids come from somewhere th
 (a subdomain, a header, a customer-supplied name), map them to safe ids yourself and keep the mapping.
 :::
 
+**Keep to one spelling of each tenant id.** The file name is the id as given, so on a case-sensitive file
+system `Acme` and `acme` are two files. Within one process the tenancy matches ids ignoring case and stamps
+rows with the spelling it first resolved, but a `tenant_id` comparison in SQL is exact. The JasperFx
+documentation's [Tenant Id Casing](https://shared-libs.jasperfx.net/configuration/tenant-id-case) explains
+where each part of the stack matches case and where it doesn't.
+
 This matters most where it is easiest to miss: **any tenant id resolves** under this convention, so
 there is no registration step acting as a gate, and framework tenant-id detection commonly forwards a
 header, route value or subdomain straight into `ForTenant(...)`. `MultiTenantedDatabases(...)`'s

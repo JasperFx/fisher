@@ -116,6 +116,15 @@ public partial class DocumentStore : IEventStore
            || Options.Projections.IsActive();
 
     /// <summary>
+    ///     The aggregate types this store's projections know (jasperfx#1282, fisher#678), from the projection
+    ///     graph. A stream started with an unregistered aggregate type is still counted by
+    ///     <see cref="IEventDatabase.FetchAggregateStreamStatsAsync" />, which reports the types found on stored
+    ///     streams.
+    /// </summary>
+    IReadOnlyList<Type> IEventStore.RegisteredAggregateTypes()
+        => Options.Projections.AllAggregateTypes().Distinct().ToList();
+
+    /// <summary>
     ///     Whether the daemon should persist agent status, pause reasons and failures onto
     ///     <c>fi_event_progression</c> — the store's own opt-in (fisher#395).
     /// </summary>

@@ -8,7 +8,8 @@ namespace Fisher.Tests.Configuration;
 
 /// <summary>
 ///     fisher#621 — the defaults Fisher 2.0 changed, following Marten 10 (marten#5812), and
-///     <see cref="StoreOptions.RestoreV1Defaults" />, which puts every one of them back.
+///     <see cref="StoreOptions.RestoreV1Defaults" />, which puts every one of them back. fisher#682 (marten#6144)
+///     put event metadata and the document metadata columns back to opt-in before release.
 /// </summary>
 /// <remarks>
 ///     Every default changed in 2.0 has a pair here: one fact for the new default and one for what
@@ -48,23 +49,12 @@ public class restore_v1_defaults
         errors.SkipSerializationErrors.ShouldBeTrue();
     }
 
-    // ---- event metadata ----
+    // ---- event metadata (fisher#682: kept opt-in, as in Fisher 1, following marten#6144) ----
 
     [Fact]
-    public void every_event_metadata_column_is_on_by_default()
+    public void every_event_metadata_flag_is_off_by_default()
     {
         var events = new StoreOptions().Events;
-
-        events.EnableCorrelationId.ShouldBeTrue();
-        events.EnableCausationId.ShouldBeTrue();
-        events.EnableHeaders.ShouldBeTrue();
-        events.EnableUserName.ShouldBeTrue();
-    }
-
-    [Fact]
-    public void restore_turns_the_event_metadata_columns_off()
-    {
-        var events = Restored().Events;
 
         events.EnableCorrelationId.ShouldBeFalse();
         events.EnableCausationId.ShouldBeFalse();
@@ -72,30 +62,42 @@ public class restore_v1_defaults
         events.EnableUserName.ShouldBeFalse();
     }
 
+    /// <summary>Nothing to restore, so a flag turned on before <c>RestoreV1Defaults()</c> stays on.</summary>
+    [Fact]
+    public void restore_leaves_event_metadata_turned_on_before_it_alone()
+    {
+        var options = new StoreOptions();
+        options.Events.EnableAllEventMetadata();
+        options.RestoreV1Defaults();
+
+        options.Events.EnableCorrelationId.ShouldBeTrue();
+        options.Events.EnableCausationId.ShouldBeTrue();
+        options.Events.EnableHeaders.ShouldBeTrue();
+        options.Events.EnableUserName.ShouldBeTrue();
+    }
+
     /// <summary>
-    ///     fisher#664: the columns are part of the schema whatever the flags say, so restoring the 1.x flags
-    ///     leaves them in place and only stops them being written.
+    ///     fisher#664: the columns are part of the schema whatever the flags say, so the flags only decide
+    ///     whether they are written.
     /// </summary>
     [Fact]
-    public async Task the_events_table_has_the_metadata_columns_by_default_and_after_restore()
+    public async Task the_events_table_has_the_metadata_columns_whatever_the_flags()
     {
         var metadata = new[] { "correlation_id", "causation_id", "headers", "user_name" };
 
         (await columnsOf(o => { }, "fi_events")).Intersect(metadata).Count().ShouldBe(metadata.Length);
-
-        var restored = await columnsOf(o => o.RestoreV1Defaults(), "fi_events");
-        restored.Intersect(metadata).Count().ShouldBe(metadata.Length);
+        (await columnsOf(o => o.Events.EnableAllEventMetadata(), "fi_events")).Intersect(metadata).Count()
+            .ShouldBe(metadata.Length);
     }
 
     [Fact]
-    public async Task restore_stops_writing_the_event_metadata()
+    public async Task event_metadata_is_not_written_by_default()
     {
-        using var database = TemporaryDatabase.Create("v1-defaults-eventmeta");
+        using var database = TemporaryDatabase.Create("v2-defaults-eventmeta");
         await using var store = DocumentStore.For(o =>
         {
             o.ConnectionString = database.ConnectionString;
             o.AutoCreateSchemaObjects = AutoCreate.All;
-            o.RestoreV1Defaults();
         });
 
         var streamId = Guid.NewGuid();
@@ -116,34 +118,18 @@ public class restore_v1_defaults
         written.ShouldBe([""]);
     }
 
-    // ---- document metadata ----
+    // ---- document metadata (fisher#682: kept opt-in) ----
 
     [Fact]
-    public void the_four_session_metadata_columns_are_on_for_every_document_by_default()
+    public void the_four_session_metadata_columns_are_off_by_default()
     {
         var metadata = new StoreOptions().Schema.For<Ledger>().Mapping.Metadata;
-
-        metadata.CorrelationId.Enabled.ShouldBeTrue();
-        metadata.CausationId.Enabled.ShouldBeTrue();
-        metadata.LastModifiedBy.Enabled.ShouldBeTrue();
-        metadata.Headers.Enabled.ShouldBeTrue();
-
-        // Not part of the change: created_at stays opt-in, as it is in Marten.
-        metadata.CreatedAt.Enabled.ShouldBeFalse();
-    }
-
-    [Fact]
-    public void restore_turns_the_document_metadata_columns_off_even_for_a_type_mapped_before_it()
-    {
-        var options = new StoreOptions();
-        var metadata = options.Schema.For<Ledger>().Mapping.Metadata;
-
-        options.RestoreV1Defaults();
 
         metadata.CorrelationId.Enabled.ShouldBeFalse();
         metadata.CausationId.Enabled.ShouldBeFalse();
         metadata.LastModifiedBy.Enabled.ShouldBeFalse();
         metadata.Headers.Enabled.ShouldBeFalse();
+        metadata.CreatedAt.Enabled.ShouldBeFalse();
     }
 
     [Fact]
@@ -159,15 +145,6 @@ public class restore_v1_defaults
     }
 
     [Fact]
-    public void one_type_can_keep_a_default_column_off()
-    {
-        var metadata = new StoreOptions().Schema.For<Ledger>().Metadata(m => m.Headers.Enabled = false).Mapping.Metadata;
-
-        metadata.Headers.Enabled.ShouldBeFalse();
-        metadata.CorrelationId.Enabled.ShouldBeTrue();
-    }
-
-    [Fact]
     public void a_column_this_configuration_turned_on_still_cannot_be_turned_off()
     {
         Should.Throw<InvalidOperationException>(() => new StoreOptions().Schema.For<Ledger>().Metadata(m =>
@@ -178,30 +155,27 @@ public class restore_v1_defaults
     }
 
     [Fact]
-    public async Task a_document_table_has_the_metadata_columns_by_default_and_not_after_restore()
+    public async Task a_document_table_has_no_session_metadata_columns_by_default()
     {
-        var metadata = new[] { "correlation_id", "causation_id", "last_modified_by", "headers" };
+        var metadata = new[] { "correlation_id", "causation_id", "last_modified_by", "headers", "created_at" };
 
-        var columns = await columnsOf(o => o.Schema.For<Ledger>(), "fi_doc_ledger");
-        columns.Intersect(metadata).Count().ShouldBe(metadata.Length);
-        columns.ShouldNotContain("created_at");
-
-        var restored = await columnsOf(o =>
-        {
-            o.Schema.For<Ledger>();
-            o.RestoreV1Defaults();
-        }, "fi_doc_ledger");
-        restored.Intersect(metadata).ShouldBeEmpty();
+        (await columnsOf(o => o.Schema.For<Ledger>(), "fi_doc_ledger")).Intersect(metadata).ShouldBeEmpty();
     }
 
     [Fact]
-    public async Task a_document_carries_the_session_metadata_by_default()
+    public async Task a_document_carries_the_session_metadata_once_its_type_asks()
     {
-        using var database = TemporaryDatabase.Create("v1-defaults-docmeta");
+        using var database = TemporaryDatabase.Create("v2-defaults-docmeta");
         await using var store = DocumentStore.For(o =>
         {
             o.ConnectionString = database.ConnectionString;
             o.AutoCreateSchemaObjects = AutoCreate.All;
+            o.Schema.For<Ledger>().Metadata(m =>
+            {
+                m.CorrelationId.Enabled = true;
+                m.CausationId.Enabled = true;
+                m.LastModifiedBy.Enabled = true;
+            });
         });
 
         var ledger = new Ledger { Id = Guid.NewGuid() };
@@ -220,54 +194,6 @@ public class restore_v1_defaults
         metadata.CorrelationId.ShouldBe("corr-1");
         metadata.CausationId.ShouldBe("cause-1");
         metadata.LastModifiedBy.ShouldBe("jane");
-    }
-
-    [Fact]
-    public async Task a_fisher_1_file_gains_the_metadata_columns_when_a_2_0_store_migrates_it()
-    {
-        using var database = TemporaryDatabase.Create("v1-defaults-upgrade");
-        var ledger = new Ledger { Id = Guid.NewGuid() };
-        var streamId = Guid.NewGuid();
-
-        await using (var v1 = DocumentStore.For(o =>
-        {
-            o.ConnectionString = database.ConnectionString;
-            o.AutoCreateSchemaObjects = AutoCreate.All;
-            o.RestoreV1Defaults();
-            o.Schema.For<Ledger>();
-        }))
-        {
-            await v1.ApplyAllConfiguredChangesToDatabaseAsync(Token);
-
-            await using var session = v1.LightweightSession();
-            session.Store(ledger);
-            session.Events.StartStream(streamId, new LedgerOpened("before"));
-            await session.SaveChangesAsync(Token);
-        }
-
-        await using var v2 = DocumentStore.For(o =>
-        {
-            o.ConnectionString = database.ConnectionString;
-            o.AutoCreateSchemaObjects = AutoCreate.CreateOrUpdate;
-            o.Schema.For<Ledger>();
-        });
-
-        await v2.ApplyAllConfiguredChangesToDatabaseAsync(Token);
-
-        await using (var session = v2.LightweightSession())
-        {
-            session.CorrelationId = "after";
-            session.Events.Append(streamId, new LedgerOpened("after"));
-            await session.SaveChangesAsync(Token);
-        }
-
-        await using var query = v2.QuerySession();
-        (await query.LoadAsync<Ledger>(ledger.Id, Token)).ShouldNotBeNull();
-
-        var events = await query.Events.FetchStreamAsync(streamId, token: Token);
-        events.Count.ShouldBe(2);
-        events[0].CorrelationId.ShouldBeNull();
-        events[1].CorrelationId.ShouldBe("after");
     }
 
     // ---- extended progression tracking (fisher#664, marten#5763) ----
@@ -313,6 +239,37 @@ public class restore_v1_defaults
     public void restore_turns_side_effects_on_inline_projections_off()
     {
         Restored().Events.EnableSideEffectsOnInlineProjections.ShouldBeFalse();
+    }
+
+    /// <summary>
+    ///     fisher#682 (marten#6144): kept on, with a startup warning naming each Inline projection that overrides
+    ///     <c>RaiseSideEffects()</c>, because in Fisher 1 that override never ran inline.
+    /// </summary>
+    [Fact]
+    public void the_startup_warning_names_an_inline_projection_that_raises_side_effects()
+    {
+        var options = new StoreOptions();
+        options.Projections.Add(new Fisher.Tests.Projections.AnnouncingProjection(), ProjectionLifecycle.Inline);
+
+        DocumentStore.InlineProjectionsThatRaiseSideEffects(options)
+            .ShouldBe([new Fisher.Tests.Projections.AnnouncingProjection().Name]);
+    }
+
+    [Fact]
+    public void no_startup_warning_for_an_async_projection_or_after_restore()
+    {
+        var asynchronous = new StoreOptions();
+        asynchronous.Projections.Add(new Fisher.Tests.Projections.AnnouncingProjection(), ProjectionLifecycle.Async);
+        DocumentStore.InlineProjectionsThatRaiseSideEffects(asynchronous).ShouldBeEmpty();
+
+        var restored = new StoreOptions();
+        restored.Projections.Add(new Fisher.Tests.Projections.AnnouncingProjection(), ProjectionLifecycle.Inline);
+        restored.RestoreV1Defaults();
+        DocumentStore.InlineProjectionsThatRaiseSideEffects(restored).ShouldBeEmpty();
+
+        var plain = new StoreOptions();
+        plain.Projections.Snapshot<LedgerTotal>(SnapshotLifecycle.Inline);
+        DocumentStore.InlineProjectionsThatRaiseSideEffects(plain).ShouldBeEmpty();
     }
 
     // ---- the event counter ----

@@ -123,9 +123,9 @@ Fisher 2 parks the stream of an unreadable event instead, for a single-stream pr
 
 With it on, the row is quarantined into [`fi_dead_letters`](/events/storage#dead-letters) and the
 shard carries on. With it off the loader throws `JasperFx.Events.EventDeserializationFailureException`
-— which derives from `JasperFx.Events.EventDeserializationFailureException` and carries the sequence,
-the stored event type alias and the serializer's own exception — and the shard pauses classified
-`EventSerialization` rather than `Other`.
+— the shared JasperFx type itself, with no Fisher subclass — carrying the sequence, the stored event
+type alias and the serializer's own exception, and the shard pauses classified `EventSerialization`
+rather than `Other`.
 
 ::: warning
 A **missing `IEventBinarySerializer`** is deliberately not covered by this policy. That is a
@@ -143,6 +143,9 @@ opts.Projections.Errors.SkipApplyErrors = true;
 A skipped poison event is quarantined into [`fi_dead_letters`](/events/storage#dead-letters) rather
 than stopping the shard. Skipping is not the default in Fisher 2: it parks the failing identity (see
 [below](#parking-a-failing-identity)), and setting `SkipApplyErrors` to `true` is how you ask for skipping back.
+Setting it to `false` means Pause, not Park: the shard stops at the failing event. Skip, pause or park: see
+[Turning it on](https://shared-libs.jasperfx.net/events/parked-identities#turning-it-on) in the JasperFx
+documentation.
 
 ::: tip
 The dead letter write goes on **its own connection, outside the failing batch's transaction** — that
@@ -228,7 +231,8 @@ What's Fisher's own:
   and sets `ParkedIdentity.NaturalKey`, matched on the stream id and, under conjoined tenancy, the tenant. So
   `projections parked` shows `ORD-1001` in its Natural Key column next to the stream id. It stays empty for an
   aggregate without a natural key, or a stream that never got one. `--identity` for a replay or a discard still
-  takes the stream id.
+  takes the stream id. The command's flags are described under
+  [Command line](https://shared-libs.jasperfx.net/events/parked-identities#command-line).
 - **There is no high-water skip tracking to think about.** SQLite has one writer, so the high-water mark never
   waits on a gap.
 
@@ -274,6 +278,33 @@ one without the other replays a projection on top of rows it already wrote.
 Test a rebuild with a row the replay **cannot** recreate. A replay rewrites every row it can still
 produce, so a broken teardown is invisible against live data.
 :::
+
+A full rebuild **never parks**. It runs under `opts.Projections.RebuildErrors` rather than
+`Projections.Errors`, and those options pause on a failing event, so a rebuild stops where the problem is.
+Its teardown also clears the projection's parked rows, because the rebuild re-folds every identity anyway.
+See [What fails and what parks](https://shared-libs.jasperfx.net/events/parked-identities#what-fails-and-what-parks).
+
+### Rebuilding one identity
+
+When one document is wrong, rebuild just that identity instead of the whole projection:
+
+```cs
+var result = await daemon.RebuildIdentityAsync("Trip", tenantId: null, tripId, token);
+```
+
+The rebuild runs inside the shard that already runs the projection on this node, without stopping it. It is
+bound to the next batch the shard builds, which re-folds the identity from nothing, with side effects
+suppressed, and commits it with the shard's progression. It works for a single-stream projection and for a
+multi-stream projection whose identities can be found exactly (see the list under
+[Parking a failing identity](#parking-a-failing-identity)); `RebuildIdentityByScanAsync` covers the rest by
+reading every event of the projection's types.
+
+A rebuild that cannot run is refused before anything is written, with an `IdentityRebuildRefusedException`
+naming the reason. Fisher adds one refusal of its own: a projection whose documents live in storage registered
+through `Projections.StorageProviders` (an [EF Core](/events/projections/efcore) entity, say) is refused with
+`NotSupportedByStore`, because Fisher cannot clear that storage inside the shard's batch. Rebuild those with
+`RebuildProjectionAsync`. The JasperFx documentation covers the rest under
+[Rebuilding one identity](https://shared-libs.jasperfx.net/events/parked-identities#rebuilding-one-identity).
 
 ### Two projections publishing one document type
 
@@ -499,4 +530,5 @@ others.
 The daemon itself is JasperFx's — coordinator, subscription agents, shard tracker, throttled and
 resilient loaders, roughly 10,500 lines. What Fisher supplies is the storage seam: progress reads and
 writes, the high-water detector, the event loader, the projection batch, and the session and shard
-plumbing. That is why a projection ports between the three stores unchanged.
+plumbing. That is why a projection ports between the three stores unchanged. JasperFx's
+[Event Store Abstractions](https://shared-libs.jasperfx.net/events/) page describes the shared side.

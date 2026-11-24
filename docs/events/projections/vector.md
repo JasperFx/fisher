@@ -255,7 +255,10 @@ To skip an event on purpose, return **null**, which means "this event carries no
 Fisher never calls a model. The projection takes an `IEmbeddingProvider` from
 `JasperFx.Events.Vectors` — a `Dimensions` count and one batch method, `GenerateEmbeddingsAsync`,
 returning one vector per text in input order — and a provider that returns a different number of
-vectors than it was given texts is refused rather than paired up wrongly.
+vectors than it was given texts is refused rather than paired up wrongly. The interface and what a
+provider must promise are described under
+[Embedding providers](https://shared-libs.jasperfx.net/search/#embedding-providers) in the JasperFx
+documentation.
 
 Write one for whatever model you run, or adapt a Microsoft.Extensions.AI generator with the
 `JasperFx.Events.MicrosoftExtensionsAI` package:
@@ -295,6 +298,9 @@ query vector for [`VectorSearchAsync`](/documents/querying/vector-search) and
 
 - [Vector Search](/documents/querying/vector-search) — searching what this writes.
 - [Hybrid Search](/documents/querying/hybrid-search) — fusing it with the full-text leg.
+- [Vector projections](https://shared-libs.jasperfx.net/search/#vector-projections) and
+  [Embedding providers](https://shared-libs.jasperfx.net/search/#embedding-providers) — the shared
+  projection contract and `IEmbeddingProvider` in the JasperFx documentation.
 - [Marten's pgvector support](https://martendb.io/documents/pgvector) — the PostgreSQL sibling, and
   the template this projection was ported from.
 - [Polecat's Vector Search](https://polecat.jasperfx.net/documents/querying/vector-search) — the SQL

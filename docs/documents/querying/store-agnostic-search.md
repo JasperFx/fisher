@@ -110,3 +110,5 @@ for a capability check to fail in.
   declared.
 - [Hybrid Search](/documents/querying/hybrid-search) — the fused form.
 - [Vector Projections](/events/projections/vector) — producing the embedding from an event stream.
+- [The search contract](https://shared-libs.jasperfx.net/search/#the-search-contract) — where
+  `IDocumentSearchOperations` is defined, in the JasperFx documentation.

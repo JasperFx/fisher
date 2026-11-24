@@ -217,6 +217,10 @@ public class no_data_returned_operations : IAsyncLifetime
                 _store.Options.EventGraph, typeof(natural_keys.Order), "AUDIT",
                 Guid.NewGuid().ToString("D"), "*DEFAULT*"));
 
+            // An explicit key source's null removes the stream's key (jasperfx#1287, fisher#684)
+            session.QueueOperation(new Fisher.Events.Storage.NaturalKeyRemovalOperation(
+                _store.Options.EventGraph, typeof(natural_keys.Order), Guid.NewGuid().ToString("D"), "*DEFAULT*"));
+
             return session.TakePendingOperations();
         }
         finally

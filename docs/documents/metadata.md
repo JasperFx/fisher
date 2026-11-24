@@ -1,7 +1,7 @@
 # Fisher Metadata
 
-Fisher records metadata alongside every document. Some columns are always there, four are on by default,
-and `created_at` is opt-in. All of them can be projected back onto members of the document.
+Fisher records metadata alongside every document. Some columns are always there, and the session
+metadata columns and `created_at` are opt-in. All of them can be projected back onto members of the document.
 
 ## The columns
 
@@ -14,24 +14,18 @@ and `created_at` is opt-in. All of them can be projected back onto members of th
 | `revision` | concurrency | The numeric revision |
 | `is_deleted`, `deleted_at` | soft delete | |
 | `created_at` | opt-in | When the row was first written |
-| `correlation_id` | by default | The session's correlation id |
-| `causation_id` | by default | The session's causation id |
-| `last_modified_by` | by default | The session's `CurrentUserName` (also exposed as `LastModifiedBy`) |
-| `headers` | by default | The session's headers, as JSON |
+| `correlation_id` | opt-in | The session's correlation id |
+| `causation_id` | opt-in | The session's causation id |
+| `last_modified_by` | opt-in | The session's `CurrentUserName` (also exposed as `LastModifiedBy`) |
+| `headers` | opt-in | The session's headers, as JSON |
 | `tenant_id` | tenancy | |
 
 ## Enabling and disabling the optional columns
 
-`correlation_id`, `causation_id`, `last_modified_by` and `headers` are on for every document type since
-Fisher 2.0, as in Marten 10. `StoreOptions.RestoreV1Defaults()` turns them off for the whole store, and
-`Enabled = false` turns one off for one type:
-
-```cs
-opts.Schema.For<AuditedOrder>().Metadata(m => m.Headers.Enabled = false);
-```
-
-Each one can also be turned on by name, which is how `created_at` is enabled, and how a type gets a
-column back after `RestoreV1Defaults()`:
+`correlation_id`, `causation_id`, `last_modified_by` and `headers` are off unless a type asks for them
+(fisher#682, as Marten 10 decided in marten#6144). They cost every document write and every projection
+rebuild. Turn them on for CritterWatch's document explorer filters and saved filter watches, by name, which
+is also how `created_at` is enabled:
 
 <!-- snippet: sample_documents_enable_metadata_columns -->
 <a id='snippet-sample_documents_enable_metadata_columns'></a>

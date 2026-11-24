@@ -582,17 +582,6 @@ public class StoreOptions
     ///     Fisher 2" section of the migration guide; <c>restore_v1_defaults</c> pins each one.
     ///     Restored settings:
     ///     <list type="bullet">
-    ///       <item>
-    ///         <see cref="EventStoreOptions.EnableCorrelationId" />,
-    ///         <see cref="EventStoreOptions.EnableCausationId" />,
-    ///         <see cref="EventStoreOptions.EnableHeaders" /> and
-    ///         <see cref="EventStoreOptions.EnableUserName" /> &rarr; <c>false</c>
-    ///       </item>
-    ///       <item>
-    ///         The <c>correlation_id</c>, <c>causation_id</c>, <c>last_modified_by</c> and
-    ///         <c>headers</c> document metadata columns &rarr; off unless a document type turns them on
-    ///         itself
-    ///       </item>
     ///       <item><see cref="EventStoreOptions.EnableSideEffectsOnInlineProjections" /> &rarr; <c>false</c></item>
     ///       <item>The <c>fisher.events.appended</c> counter &rarr; off until <c>OpenTelemetry.TrackEventCounters()</c></item>
     ///       <item>
@@ -617,16 +606,16 @@ public class StoreOptions
     ///       </item>
     ///     </list>
     ///     </para>
+    ///     <para>
+    ///     Event metadata and the document metadata columns are not listed because Fisher 2.0 kept their
+    ///     Fisher 1 defaults (fisher#682, following marten#6144): all off, so there is nothing to restore, and a
+    ///     setting turned on before this call stays on.
+    ///     </para>
     /// </remarks>
     public void RestoreV1Defaults()
     {
-        Events.EnableCorrelationId = false;
-        Events.EnableCausationId = false;
-        Events.EnableHeaders = false;
-        Events.EnableUserName = false;
         Events.EnableSideEffectsOnInlineProjections = false;
         Events.EnableExtendedProgressionTracking = false;
-        EnableDocumentMetadataByDefault = false;
         OpenTelemetry.EventCountersByDefault = false;
         Projections.Errors.ApplyErrors = ProjectionErrorAction.Skip;
         Projections.Errors.SerializationErrors = ProjectionErrorAction.Skip;
@@ -636,10 +625,13 @@ public class StoreOptions
     /// <summary>
     ///     Whether every document table gets the <c>correlation_id</c>, <c>causation_id</c>,
     ///     <c>last_modified_by</c> and <c>headers</c> metadata columns without being asked (fisher#621).
-    ///     On in Fisher 2.0; <see cref="RestoreV1Defaults" /> turns it off. Read when a document's table
-    ///     is built, not when its mapping is created, so the order of configuration does not matter.
+    ///     Off: Fisher 2.0 turned it on for a while and went back to opt-in before release (fisher#682,
+    ///     following marten#6144), because the four columns cost every document write and every projection
+    ///     rebuild. A type turns them on through <c>Schema.For&lt;T&gt;().Metadata(...)</c>, an attribute,
+    ///     <c>ITracked</c> or a policy. Read when a document's table is built, not when its mapping is
+    ///     created, so the order of configuration does not matter.
     /// </summary>
-    internal bool EnableDocumentMetadataByDefault { get; set; } = true;
+    internal bool EnableDocumentMetadataByDefault { get; set; }
 
     private bool _restoreV1AtBuild;
 
@@ -850,29 +842,28 @@ public class EventStoreOptions : IEventStoreInstrumentation
     public string? DatabaseSchemaName { get; set; }
 
     /// <summary>
-    ///     Enable tracking of correlation id metadata on events. On by default since Fisher 2.0
-    ///     (fisher#621); <see cref="StoreOptions.RestoreV1Defaults" /> turns it off.
+    ///     Enable tracking of correlation id metadata on events. Off by default (fisher#682): each flag adds a
+    ///     column to <c>fi_events</c> and a value to every append. See <see cref="EnableAllEventMetadata" />.
     /// </summary>
-    public bool EnableCorrelationId { get; set; } = true;
+    public bool EnableCorrelationId { get; set; }
 
     /// <summary>
-    ///     Enable tracking of causation id metadata on events. On by default since Fisher 2.0
-    ///     (fisher#621); <see cref="StoreOptions.RestoreV1Defaults" /> turns it off.
+    ///     Enable tracking of causation id metadata on events. Off by default (fisher#682): each flag adds a
+    ///     column to <c>fi_events</c> and a value to every append. See <see cref="EnableAllEventMetadata" />.
     /// </summary>
-    public bool EnableCausationId { get; set; } = true;
+    public bool EnableCausationId { get; set; }
 
     /// <summary>
-    ///     Enable tracking of custom headers metadata on events. On by default since Fisher 2.0
-    ///     (fisher#621); <see cref="StoreOptions.RestoreV1Defaults" /> turns it off.
+    ///     Enable tracking of custom headers metadata on events. Off by default (fisher#682): each flag adds a
+    ///     column to <c>fi_events</c> and a value to every append. See <see cref="EnableAllEventMetadata" />.
     /// </summary>
-    public bool EnableHeaders { get; set; } = true;
+    public bool EnableHeaders { get; set; }
 
     /// <summary>
     ///     Enable tracking of the user / last-modified-by metadata on events, persisted to the
-    ///     <c>user_name</c> column. On by default since Fisher 2.0 (fisher#621);
-    ///     <see cref="StoreOptions.RestoreV1Defaults" /> turns it off.
+    ///     <c>user_name</c> column. Off by default (fisher#682). See <see cref="EnableAllEventMetadata" />.
     /// </summary>
-    public bool EnableUserName { get; set; } = true;
+    public bool EnableUserName { get; set; }
 
     /// <summary>
     ///     Enable all optional event metadata: <see cref="EnableCorrelationId" />,
@@ -880,8 +871,10 @@ public class EventStoreOptions : IEventStoreInstrumentation
     ///     <see cref="EnableUserName" />. That includes the user name, so the session's
     ///     <c>LastModifiedBy</c> is stored on every appended event. The same set as Marten's
     ///     <c>Events.MetadataConfig.EnableAll()</c>. Each flag adds a column to <c>fi_events</c>,
-    ///     so call this before the tables are created. All four are on by default since Fisher 2.0, so
-    ///     this matters after <see cref="StoreOptions.RestoreV1Defaults" />.
+    ///     so call this before the tables are created. All four are off by default (fisher#682, following
+    ///     marten#6144): they cost every append. Turn them on for CritterWatch, whose event query filters on
+    ///     correlation id, causation id and user name, and for tracing a Wolverine conversation to the
+    ///     events it appended.
     /// </summary>
     public void EnableAllEventMetadata()
     {
@@ -1011,8 +1004,10 @@ public class EventStoreOptions : IEventStoreInstrumentation
     /// <summary>
     ///     Run inline projections' side effects when an inline projection is applied during
     ///     <c>SaveChangesAsync</c>. On by default since Fisher 2.0 (fisher#621), so an application
-    ///     whose inline projections raise events or publish messages now runs them;
-    ///     <see cref="StoreOptions.RestoreV1Defaults" /> turns it off.
+    ///     whose inline projections raise events or publish messages now runs them, inside every
+    ///     <c>SaveChangesAsync</c> that touches the projection and in its transaction. The store logs a
+    ///     warning at startup naming each inline projection that overrides <c>RaiseSideEffects()</c>
+    ///     (fisher#682). <see cref="StoreOptions.RestoreV1Defaults" /> turns it off.
     /// </summary>
     public bool EnableSideEffectsOnInlineProjections { get; set; } = true;
 

@@ -45,7 +45,7 @@ set stays well inside SQLite's parameter limit.
 
 ## The two directions
 
-### The parent holds the related document's id
+### The parent holds the related document's id {#parent-holds-the-id}
 
 The common case: `Angler.BoatId` holds a `Boat.Id`.
 
@@ -67,7 +67,7 @@ A **collection** member fans out, so one `Include` can pull in every element:
 .Include(x => x.FavouriteBoatIds, boats)
 ```
 
-### The related documents point back at the parent
+### The related documents point back at the parent {#related-documents-point-back}
 
 Pass an `idMapping` naming the member of the related document to match. Unlike the id source, this
 one becomes SQL, so it has to be a member Fisher can resolve to a column.

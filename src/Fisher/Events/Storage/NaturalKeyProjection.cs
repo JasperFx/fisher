@@ -78,14 +78,20 @@ internal sealed class NaturalKeyProjection : IInlineProjection<IDocumentSession>
             {
                 foreach (var @event in stream.Events)
                 {
-                    if (!TryExtract(definition, @event, out var key))
+                    switch (Extract(definition, @event, out var key))
                     {
-                        continue;
-                    }
+                        case KeyOutcome.Key:
+                            session.QueueOperation(new NaturalKeyClaimOperation(_graph, definition.AggregateType,
+                                key, NaturalKeySql.StreamValue(_graph, stream.Id, stream.Key),
+                                NaturalKeySql.Tenant(_graph, stream.TenantId)));
+                            break;
 
-                    session.QueueOperation(new NaturalKeyClaimOperation(_graph, definition.AggregateType, key,
-                        NaturalKeySql.StreamValue(_graph, stream.Id, stream.Key),
-                        NaturalKeySql.Tenant(_graph, stream.TenantId)));
+                        case KeyOutcome.Removed:
+                            session.QueueOperation(new NaturalKeyRemovalOperation(_graph, definition.AggregateType,
+                                NaturalKeySql.StreamValue(_graph, stream.Id, stream.Key),
+                                NaturalKeySql.Tenant(_graph, stream.TenantId)));
+                            break;
+                    }
                 }
             }
         }
@@ -124,43 +130,72 @@ internal sealed class NaturalKeyProjection : IInlineProjection<IDocumentSession>
         {
             foreach (var definition in _definitions)
             {
-                if (!TryExtract(definition, @event, out var key))
+                switch (Extract(definition, @event, out var key))
                 {
-                    continue;
-                }
+                    case KeyOutcome.Key:
+                        session.QueueOperation(new NaturalKeyReplayOperation(_graph, definition.AggregateType, key,
+                            NaturalKeySql.StreamValue(_graph, @event.StreamId, @event.StreamKey),
+                            NaturalKeySql.Tenant(_graph, @event.TenantId)));
+                        break;
 
-                session.QueueOperation(new NaturalKeyReplayOperation(_graph, definition.AggregateType, key,
-                    NaturalKeySql.StreamValue(_graph, @event.StreamId, @event.StreamKey),
-                    NaturalKeySql.Tenant(_graph, @event.TenantId)));
+                    case KeyOutcome.Removed:
+                        session.QueueOperation(new NaturalKeyRemovalOperation(_graph, definition.AggregateType,
+                            NaturalKeySql.StreamValue(_graph, @event.StreamId, @event.StreamKey),
+                            NaturalKeySql.Tenant(_graph, @event.TenantId)));
+                        break;
+                }
             }
         }
     }
 
+    private enum KeyOutcome
+    {
+        /// <summary>The event says nothing about this key: no mapping, or a null that does not retire.</summary>
+        None,
+
+        /// <summary>The event sets the key.</summary>
+        Key,
+
+        /// <summary>An explicit source returned null, which removes the stream's key (jasperfx#1287).</summary>
+        Removed
+    }
+
     /// <summary>
-    ///     Whether this event carries a value for this definition's key, and what it unwraps to.
+    ///     What this event says about this definition's key, and what it unwraps to.
     /// </summary>
     /// <remarks>
-    ///     The extractor takes the whole <see cref="IEvent" /> rather than its body, so a key can be
-    ///     derived from metadata as well as from the event's own members — jasperfx#569.
+    ///     <para>
+    ///         The extractor takes the whole <see cref="IEvent" /> rather than its body, so a key can be
+    ///         derived from metadata as well as from the event's own members — jasperfx#569.
+    ///     </para>
+    ///     <para>
+    ///         <b>A null removes the key only when <see cref="NaturalKeyEventMapping.RetiresKeyOnNull" /> says so</b>
+    ///         (jasperfx#1287, fisher#684). For an inferred source, as in
+    ///         <c>Apply(CodeChanged e) { if (e.NewCode != null) Code = e.NewCode; }</c>, a null means the event
+    ///         carried no key and the stream keeps its own.
+    ///     </para>
     /// </remarks>
-    private static bool TryExtract(NaturalKeyDefinition definition, IEvent @event, out object key)
+    private static KeyOutcome Extract(NaturalKeyDefinition definition, IEvent @event, out object key)
     {
         key = null!;
 
         var mapping = definition.EventMappings
             .FirstOrDefault(x => x.EventType.IsAssignableFrom(@event.Data.GetType()));
 
-        if (mapping?.Extractor(@event) is not { } value)
+        if (mapping is null)
         {
-            return false;
+            return KeyOutcome.None;
         }
 
-        if (definition.Unwrap(value) is not { } unwrapped)
+        var value = mapping.Extractor(@event);
+        var unwrapped = value is null ? null : definition.Unwrap(value);
+
+        if (unwrapped is null)
         {
-            return false;
+            return mapping.RetiresKeyOnNull ? KeyOutcome.Removed : KeyOutcome.None;
         }
 
         key = unwrapped;
-        return true;
+        return KeyOutcome.Key;
     }
 }

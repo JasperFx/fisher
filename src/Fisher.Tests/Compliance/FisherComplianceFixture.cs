@@ -627,6 +627,12 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override bool SupportsProjectionScenario => true;
 
     /// <summary>
+    ///     fisher#678 / jasperfx#1282 — <c>RegisteredAggregateTypes</c> and <c>FetchAggregateStreamStatsAsync</c>,
+    ///     read from <c>fi_streams</c> alone in one command.
+    /// </summary>
+    public override bool SupportsAggregateStreamStats => true;
+
+    /// <summary>
     ///     fisher#629 / jasperfx#1201 — the per-identity rebuild seams: the store's re-fold loader,
     ///     <c>FisherProjectionStorage.HardDeleteById</c>, and a projection batch that records progression for
     ///     an empty range <c>(C, C]</c>.

@@ -53,10 +53,35 @@ page.TotalItemCount;                // the whole result set
 ```
 
 Deliberately different questions. `CountAsync` counts the page when the query is paged; the count
-behind `TotalItemCount` discards `Take`/`Skip`, because a total that counted the page would say
-nothing. Both are right for their caller, and conflating them would make one silently wrong.
+behind `TotalItemCount` leaves out the pager's own page, because a total that counted the page would
+say nothing. Both are right for their caller, and conflating them would make one silently wrong.
 
-## Keyset (cursor) paging
+A `Take` or `Skip` you wrote **before** the pager is part of the query it pages, so it limits the
+total too. `Take(4).ToPagedListAsync(2, 3)` returns the fourth row and reports a total of 4.
+
+## Operators after Take and Skip {#operators-after-paging}
+
+An operator after `Take` or `Skip` applies to the page, as it does in LINQ to Objects:
+
+```cs
+// the open orders among the first ten
+await session.Query<Order>().OrderBy(x => x.PlacedAt).Take(10)
+    .Where(x => x.Open)
+    .ToListAsync();
+
+// the first ten, re-sorted by total
+await session.Query<Order>().OrderBy(x => x.PlacedAt).Take(10)
+    .OrderByDescending(x => x.Total)
+    .ToListAsync();
+```
+
+Consecutive paging composes into one `limit`/`offset`: `Take(5).Take(3)` is three rows and
+`Take(3).Skip(2)` is the third. A `Where`, the `OrderBy` family, `Distinct()` after a `Select`, a
+terminal's predicate and one more `Take`/`Skip` can follow the page. Fisher wraps the paged statement
+in a subquery to apply them. `GroupBy`, `DistinctBy`, operators over a page of an already filtered
+page, and any operator after a join's paging are refused by name.
+
+## Keyset (cursor) paging {#keyset-cursor-paging}
 
 ```cs
 var page = await session.Query<Catch>()

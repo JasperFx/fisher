@@ -3,9 +3,16 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **three open issues: the 2.0 docs review, and two for 2.1, one of them blocked upstream.** 2.0.0-rc.1 is
-the release candidate, on JasperFx 3.12.1, Weasel 10.0.0-rc.1 and the .NET 11 GA packages. The 2.0 milestone has only
-the docs review ([#657](https://github.com/JasperFx/fisher/issues/657)) left, and it gates the final 2.0.0, not the RC.
+Status: **five open issues: the 2.0 docs review, and four for 2.1, one of them blocked upstream.** 2.0.0-rc.2 is
+the release candidate, on JasperFx 3.14.0, Weasel 10.0.0-rc.1 and the .NET 11 GA packages. It carries the port of
+Marten 10.0's burn-down: event and document metadata back to opt-in ([#682](https://github.com/JasperFx/fisher/issues/682)),
+aggregate stream stats ([#678](https://github.com/JasperFx/fisher/issues/678)), the null natural key rule and the
+LINQ support summary ([#684](https://github.com/JasperFx/fisher/issues/684)), tests clearing the fetch-plan bug
+shapes ([#683](https://github.com/JasperFx/fisher/issues/683)), interface conventions over a base class in another
+assembly ([#677](https://github.com/JasperFx/fisher/issues/677)), and two docs sweeps
+([#680](https://github.com/JasperFx/fisher/issues/680), [#681](https://github.com/JasperFx/fisher/issues/681)).
+The 2.0 milestone has only the docs review ([#657](https://github.com/JasperFx/fisher/issues/657)) left, and it gates
+the final 2.0.0, not the RC.
 Since 2.0.0-alpha.7, main turns extended progression tracking on by default
 ([#664](https://github.com/JasperFx/fisher/issues/664)), adds `QueryAcrossAllDatabasesAsync`
 ([#665](https://github.com/JasperFx/fisher/issues/665)), translates computed ordering keys, array indexes, `LeftJoin`
@@ -436,10 +443,17 @@ application's to maintain on every write path.
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is three items.
+What is left is five items.
 
 [#657](https://github.com/JasperFx/fisher/issues/657): the docs review of the new and substantially changed pages,
-before the final 2.0.0. It does not gate the release candidate.
+before the final 2.0.0, including turning hand-written samples into compiled ones (#684's docs review item). It does
+not gate the release candidate.
+
+[#679](https://github.com/JasperFx/fisher/issues/679): recreate Marten 10's natural key work, after the usage
+review. Mapped natural keys are part of it, so `MappedNaturalKeyCompliance` skips on Fisher until then.
+
+[#685](https://github.com/JasperFx/fisher/issues/685): `ProjectLatestForCommit` (marten#6149), deferred from #684 as
+a new API rather than a fix.
 
 [#643](https://github.com/JasperFx/fisher/issues/643): the projection backfill seam JasperFx 3.7.0 added to
 `IEventStore`. The event-range marks and the stored-event rewrite are done. The backfill itself is deferred: Jeremy is
@@ -921,7 +935,7 @@ Test counts keep understating the suites that matter. `AsyncDaemonCompliance` is
 the whole daemon; `FlatTableProjectionCompliance` is eight that demand an upsert generator, a
 migration hook and rebuild teardown.
 
-Being green on all seventy-one is not the same as being feature-complete against Marten. The suites
+Being green on all seventy-four is not the same as being feature-complete against Marten. The suites
 cover what is portable across stores; the deliberate gaps listed in HANDOFF.md are still gaps.
 
 ## Filed follow-ups

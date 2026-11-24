@@ -8,8 +8,8 @@ namespace Fisher.Tests.Compliance;
  * Fisher's session pair through FisherComplianceFixture. Marten and Polecat enroll the same way, so
  * these tests cannot drift between the products.
  *
- * Suites were added one at a time as Fisher grew into them, and seventy-one are enrolled from
- * JasperFx.Events.ComplianceTests 3.12.1, which itself ships seventy-two concrete suites. The one left out,
+ * Suites were added one at a time as Fisher grew into them, and seventy-four are enrolled from
+ * JasperFx.Events.ComplianceTests 3.14.0, which itself ships seventy-five concrete suites. The one left out,
  * BackfillCompliance (3.7.0), is excused in compliance_suite_inventory until the backfill half of
  * fisher#643. MultiDatabaseExplorerCompliance is one file holding two arms.
  *
@@ -214,6 +214,19 @@ public class composite_projection_compliance
 
 public class natural_key_compliance
     : NaturalKeyCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * JasperFx 3.13.0 / 3.14.0. NaturalKeyRegistrationCompliance pins the registration-time refusals and the
+ * nullable-key fetches; MappedNaturalKeyCompliance is the mapped-key half (a key a non-owning aggregate resolves
+ * through its owner), which Fisher does not have, so SupportsMappedNaturalKeys stays false and that suite's
+ * facts, and the mapped facts of the registration suite, skip.
+ */
+
+public class natural_key_registration_compliance
+    : NaturalKeyRegistrationCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class mapped_natural_key_compliance
+    : MappedNaturalKeyCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
 /*
  * jasperfx#762 — IEventStream.AlwaysEnforceConsistency: an empty unit of work still asserts the
@@ -705,3 +718,12 @@ public class parked_identity_compliance
 
 public class multi_stream_parked_identity_compliance
     : MultiStreamParkedIdentityCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * fisher#678 / jasperfx#1282 (JasperFx 3.14.0) — IEventStore.RegisteredAggregateTypes and
+ * IEventDatabase.FetchAggregateStreamStatsAsync, for CritterWatch's aggregate health view. One command over
+ * fi_streams: the grouped count with a conditional count per threshold, and a row_number() ranking per type.
+ */
+
+public class aggregate_stream_stats_compliance
+    : AggregateStreamStatsCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

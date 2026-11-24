@@ -154,14 +154,19 @@ internal static class NaturalKeySql
     ///     </para>
     /// </remarks>
     internal static void AppendRetire(ICommandBuilder builder, EventGraph graph, Type aggregateType,
-        object key, object streamValue, string tenantId)
+        object? key, object streamValue, string tenantId)
     {
         var table = graph.QuotedNaturalKeyTableName(aggregateType);
 
         builder.Append($"delete from {table} where {StreamColumn(graph)} = ");
         builder.AppendParameter(streamValue);
-        builder.Append($" and {Schema.NaturalKeyTable.KeyColumn} <> ");
-        builder.AppendParameter(key);
+
+        // A null key retires every key the stream has: an explicit source said null (jasperfx#1287)
+        if (key is not null)
+        {
+            builder.Append($" and {Schema.NaturalKeyTable.KeyColumn} <> ");
+            builder.AppendParameter(key);
+        }
 
         if (graph.TenancyStyle == TenancyStyle.Conjoined)
         {
@@ -267,6 +272,52 @@ internal sealed class NaturalKeyReplayOperation : Weasel.Storage.IStorageOperati
         builder.Append("; ");
         NaturalKeySql.AppendRetire(builder, _graph, _aggregateType, _key, _streamValue, _tenantId);
     }
+
+    public Task PostprocessAsync(DbDataReader reader, IList<Exception> exceptions, CancellationToken token)
+        => Task.CompletedTask;
+}
+
+/// <summary>
+///     An explicit key source returned null for this stream's event, which removes the stream's key
+///     (jasperfx#1287, fisher#684).
+/// </summary>
+/// <remarks>
+///     <para>
+///         Only for a mapping whose <see cref="NaturalKeyEventMapping.RetiresKeyOnNull" /> is true: a
+///         <c>[NaturalKeySource]</c> static method returning the key type, or a <c>NaturalKeyFor()</c>
+///         registration. A null from a source discovery inferred (a key-typed member read off the event, or
+///         an <c>Apply</c> run against a blank aggregate) only means the event carried no key, so the
+///         stream keeps the one it has. Retiring there would free the key for another stream and let
+///         <c>FetchForWriting</c> by it start a duplicate.
+///     </para>
+///     <para>
+///         The same statement serves the append path and the replay, since removing a row adjudicates
+///         nothing. Queued in event order, so a later event in the same unit of work that sets a new key
+///         claims it after the removal.
+///     </para>
+/// </remarks>
+internal sealed class NaturalKeyRemovalOperation : Weasel.Storage.IStorageOperation,
+    Fisher.Events.Storage.IEventStorageOperation, NoDataReturnedCall
+{
+    private readonly EventGraph _graph;
+    private readonly Type _aggregateType;
+    private readonly object _streamValue;
+    private readonly string _tenantId;
+
+    internal NaturalKeyRemovalOperation(EventGraph graph, Type aggregateType, object streamValue, string tenantId)
+    {
+        _graph = graph;
+        _aggregateType = aggregateType;
+        _streamValue = streamValue;
+        _tenantId = tenantId;
+    }
+
+    public Type DocumentType => _aggregateType;
+
+    public OperationRole Role() => OperationRole.Other;
+
+    public void ConfigureCommand(ICommandBuilder builder, IStorageSession session)
+        => NaturalKeySql.AppendRetire(builder, _graph, _aggregateType, null, _streamValue, _tenantId);
 
     public Task PostprocessAsync(DbDataReader reader, IList<Exception> exceptions, CancellationToken token)
         => Task.CompletedTask;

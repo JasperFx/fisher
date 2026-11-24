@@ -93,7 +93,11 @@ re-flushing the first one's messages.
 
 ## Inline projections
 
-On by default since Fisher 2.0, as in Marten 10. To turn them off:
+On by default since Fisher 2.0, as in Marten 10. They run inside every `SaveChangesAsync()` that touches the
+projection, in its transaction, which is their cost; their value for CritterWatch is that a side-effect message
+carries the triggering event's correlation id. When the store is built, Fisher logs a warning naming each
+inline projection that overrides `RaiseSideEffects()`, because in Fisher 1 that override never ran inline.
+To turn them off:
 
 ```cs
 opts.Events.EnableSideEffectsOnInlineProjections = false;

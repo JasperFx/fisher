@@ -111,7 +111,9 @@ public partial class ShowSeating
 Keep the type `partial`: the marker is what makes JasperFx's source generator emit a dispatcher for
 it, and the generator attaches that to the type. The attribute must sit on the aggregate **in its own
 defining assembly** — that is the compilation the evolver is emitted into, and the assembly the
-runtime scans when resolving it.
+runtime scans when resolving it. A `[BoundaryAggregate]` type with no `Evolve`, `Apply` or `Create` method
+to fold events with fails the build with `JFXEVT007`; see JasperFx's
+[Build Diagnostics](https://shared-libs.jasperfx.net/codegen/diagnostics).
 
 ::: warning
 The marker is the whole opt-in, and an identity-less aggregate **without** it is still refused. A bare

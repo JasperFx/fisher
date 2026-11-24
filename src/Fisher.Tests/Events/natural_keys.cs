@@ -401,6 +401,37 @@ public partial class natural_keys : IAsyncLifetime
     }
 
     /// <summary>
+    ///     fisher#684 / jasperfx#1287: an explicit source's null removes the key on the replay path too, so a
+    ///     rebuild of an emptied lookup does not bring a withdrawn key back.
+    /// </summary>
+    [Fact]
+    public async Task a_replay_does_not_restore_a_key_an_explicit_source_removed()
+    {
+        await using var asyncStore = StoreForAsyncProjection();
+        await asyncStore.ApplyAllConfiguredChangesToDatabaseAsync(Token);
+
+        var streamId = await StartOrder("ORD-WITHDRAWN", asyncStore);
+
+        await using (var session = asyncStore.LightweightSession())
+        {
+            session.Events.Append(streamId, new OrderReferenceWithdrawn());
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using (var wipe = asyncStore.LightweightSession())
+        {
+            wipe.QueueSqlCommand("delete from fi_natural_key_order");
+            await wipe.SaveChangesAsync(Token);
+        }
+
+        await RunDaemonToHeadAsync(asyncStore);
+
+        await using var check = asyncStore.LightweightSession();
+        await Should.ThrowAsync<UnknownNaturalKeyException>(() =>
+            check.Events.FetchForWritingByNaturalKey<Order, string>("ORD-WITHDRAWN", Token));
+    }
+
+    /// <summary>
     ///     A replay is last-writer-wins and re-adjudicates nothing.
     /// </summary>
     /// <remarks>
@@ -587,6 +618,9 @@ public partial class natural_keys : IAsyncLifetime
 
     public record OrderShipped;
 
+    /// <summary>An explicit key source returns null for it, which removes the stream's key (jasperfx#1287).</summary>
+    public record OrderReferenceWithdrawn;
+
     public class Order
     {
         public Guid Id { get; set; }
@@ -626,5 +660,10 @@ public partial class natural_keys : IAsyncLifetime
         public static Order Create(OrderPlaced placed) => new() { Reference = placed.Reference };
 
         public static void Apply(OrderShipped _, Order order) => order.Shipped = true;
+
+        [NaturalKeySource]
+        public static string? KeyFor(OrderReferenceWithdrawn _) => null;
+
+        public static void Apply(OrderReferenceWithdrawn _, Order order) => order.Reference = "";
     }
 }

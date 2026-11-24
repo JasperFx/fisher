@@ -16,7 +16,9 @@ stream.EventsAppended.ShouldBe([new AccountDebited(30m)]);
 `StubEventStream<T>` is `JasperFx.Events.StubEventStream<T>` — not a Fisher type. Fisher's
 `IEventStream<T>` *is* the JasperFx interface, so the stub satisfies it as-is, and a handler's
 decision tests are **the same code on Marten, Polecat and Fisher**. That is worth more than it
-sounds if you are prototyping on Fisher and deploying on one of the others.
+sounds if you are prototyping on Fisher and deploying on one of the others. JasperFx's
+[Unit Testing Handlers](https://shared-libs.jasperfx.net/events/unit-testing-handlers) is the shared page
+for it.
 :::
 
 ## The honest case for it on Fisher
@@ -290,3 +292,5 @@ public void two_streams_are_two_stubs()
   about persistence belongs.
 - [Event Sourcing Quickstart](/events/quickstart#_5-read-it-back) — `FetchForWriting`, which is how a
   handler gets an `IEventStream<T>` in production.
+- [Unit Testing Handlers](https://shared-libs.jasperfx.net/events/unit-testing-handlers) — the JasperFx
+  page on `StubEventStream<T>`, shared by Marten, Polecat and Fisher.

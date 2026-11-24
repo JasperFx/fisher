@@ -81,9 +81,9 @@ public sealed class OptionalMetadataColumnExpression<T, TValue> : MetadataColumn
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         <c>false</c> keeps a column that is on by default (fisher#621: <c>correlation_id</c>,
-    ///         <c>causation_id</c>, <c>last_modified_by</c> and <c>headers</c> in Fisher 2.0) off for this
-    ///         one type. Like any other change to a table's columns, it takes effect when the schema is
+    ///         <c>false</c> keeps a column off for this one type, which matters only if the store-wide default
+    ///         for <c>correlation_id</c>, <c>causation_id</c>, <c>last_modified_by</c> and <c>headers</c> is on
+    ///         (fisher#621; off since fisher#682). Like any other change to a table's columns, it takes effect when the schema is
     ///         migrated, and Fisher's migrations do not drop a column that is already there.
     ///     </para>
     ///     <para>

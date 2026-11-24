@@ -12,11 +12,30 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**4248 tests green on net10.0 and 4275 on net11.0** — 4169 (net10.0) / 4196 (net11.0) in `Fisher.Tests`, 47 in
-`Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 959 of
-them are shared cross-store compliance tests — 725 event sourcing and 234 document.
+**4300 tests green on net10.0 and 4327 on net11.0** — 4221 (net10.0) / 4248 (net11.0) in `Fisher.Tests`, 47 in
+`Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 994 of
+them are shared cross-store compliance tests — 760 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.12.1** / Weasel **10.0.0-rc.1**, and the .NET 11 GA (11.0.0) Microsoft packages on net11.0.
+On JasperFx **3.14.0** / Weasel **10.0.0-rc.1**, and the .NET 11 GA (11.0.0) Microsoft packages on net11.0.
+
+## JasperFx 3.14.0 and the Marten 10.0 burn-down (2.0.0-rc.2: fisher#677, #678, #680–#684)
+
+From JasperFx 3.12.1, spanning 3.13.0. Three suites arrive: `AggregateStreamStatsCompliance` (fisher#678, all
+facts green, including the archived, conjoined and string-key ones the in-memory store never runs),
+`NaturalKeyRegistrationCompliance` and `MappedNaturalKeyCompliance`. Mapped natural keys are fisher#679 (2.1), so
+`SupportsMappedNaturalKeys` stays false and the mapped facts skip.
+
+- **Event metadata and the document metadata columns are opt-in again** (fisher#682, marten#6144). See CLAUDE.md,
+  "Fisher 2.0's default changes".
+- **A null from an explicit natural key source removes the key; from an inferred one it does not** (jasperfx#1287).
+  Fisher 1 and rc.1 ignored every null, so the inferred fact passed before the change and the explicit one failed.
+- **fisher#677's cause was not the one the issue named.** A base class in the same assembly was always mapped. What
+  failed was a non-virtual base property in ANOTHER assembly, which the compiler reaches through a hidden private
+  forwarder on the derived class (Wolverine's `Saga.Version`). `inherited_metadata_members` takes its bases from
+  `Fisher.TestUtils` for that reason, and fails 5 of 7 without the fallback.
+- **fisher#683 needed no fix**: `fetch_plan_folds` ports marten#6147/#6148/#6145 and is green.
+- **Left for later**: `ProjectLatestForCommit` is fisher#685 (2.1); the docs review and sample conversion from
+  fisher#684's item 4 are fisher#657.
 
 ## Weasel 10.0.0-rc.1 (fisher#674)
 
@@ -1414,9 +1433,9 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 3.12.1 ships 72 suites; Fisher enrolls **71 of them, 959 tests**.
-Fisher passes **959 of them, across all
-71 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
+`JasperFx.Events.ComplianceTests` 3.14.0 ships 75 suites; Fisher enrolls **74 of them, 994 tests**.
+Fisher passes **994 of them, across all
+74 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
 all five.
 
@@ -1571,9 +1590,9 @@ naming.
 **Green on all fifty-nine is not the same as feature-complete.** The suites cover what is portable
 across stores; "Deliberate gaps" below is still the honest list of what Fisher does not do.
 
-### Green — 71 suites, 959 tests
+### Green — 74 suites, 994 tests
 
-Event sourcing — 57 suites, 725 tests:
+Event sourcing — 60 suites, 760 tests:
 
 | Suite | Tests |
 |---|---|
@@ -1588,7 +1607,10 @@ Event sourcing — 57 suites, 725 tests:
 | `EventRewriteCompliance` | 8 |
 | `StringStreamIdentityCompliance` | 21 |
 | `EventStoreExplorerCompliance` | 18 |
-| `NaturalKeyCompliance` | 19 |
+| `NaturalKeyCompliance` | 21 |
+| `NaturalKeyRegistrationCompliance` | 13 |
+| `MappedNaturalKeyCompliance` | 7 |
+| `AggregateStreamStatsCompliance` | 13 |
 | `StreamArchivingCompliance` | 35 |
 | `StreamTombstoningCompliance` | 9 |
 | `ProjectionFloorCompliance` | 9 |

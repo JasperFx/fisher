@@ -316,7 +316,9 @@ the container for the main store and for each ancillary store. What the contract
   `AllTenants` (tenant first, then the ordering), soft deletes, the hierarchy, `IdEquals` and the metadata
   filters — still applies. Text that does not parse, a member the type does not have, and a shape the
   store cannot translate are refused with `DocumentCriteriaNotSupportedException`, never ignored. Under
-  Native AOT criteria are refused, since they need runtime code generation.
+  Native AOT criteria are refused, since they need runtime code generation. The dialect itself, what it
+  locks down and its shape rules are described in JasperFx's
+  [Dynamic LINQ Queries](https://shared-libs.jasperfx.net/linq/dynamic-query).
 - **`<>`, and `not` over a comparison, answer as C# does on a member that can be null**: `Note <> "x"`
   keeps the documents with no note. Reading a part of a date or time that Fisher cannot translate
   (`DueDate.Date`, `Window.TotalHours`) is refused; compare the whole value against a range instead.
@@ -406,6 +408,11 @@ a spec-declared slice of the same name into one slice carrying both a `Derived` 
 claim — rather than two stickies that say the same thing. A bare subscription gets no slice: it has no
 read model behind it, so a sticky for one is something a reader cannot click through to.
 :::
+
+This is only the store's half of the model. JasperFx's [Event Modeling](https://shared-libs.jasperfx.net/event-modeling/)
+documentation covers the rest: how declared and derived slices are merged in
+[the overlay](https://shared-libs.jasperfx.net/event-modeling/overlay), and the
+[descriptors](https://shared-libs.jasperfx.net/event-modeling/descriptors) a tool reads.
 
 ### Naming the model
 

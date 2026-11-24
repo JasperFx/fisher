@@ -51,8 +51,8 @@ public class DocumentMapping
         DocumentType = documentType;
         StoreOptions = options;
 
-        // fisher#621: on by default in Fisher 2.0, as in Marten 10. A function rather than a value so a
-        // RestoreV1Defaults() call after Schema.For<T>() still reaches this mapping.
+        // fisher#621's store-wide default, off since fisher#682 (marten#6144). A function rather than a value so
+        // the setting is read when the table is built, whatever order the configuration ran in.
         Func<bool> metadataByDefault = () => options.EnableDocumentMetadataByDefault;
         Metadata.CorrelationId.Default = metadataByDefault;
         Metadata.CausationId.Default = metadataByDefault;
