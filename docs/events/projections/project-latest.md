@@ -56,6 +56,20 @@ the commit writes: the inline snapshot, a later `FetchLatest`, and the daemon's 
 with it, versions, timestamps and correlation id included. It stores nothing.
 
 <!-- snippet: sample_project_latest_for_commit -->
+<a id='snippet-sample_project_latest_for_commit'></a>
+```cs
+var stream = await session.Events.FetchForWriting<CommitTrace>(traceId, token);
+stream.AppendOne(new TraceScanned("dock"));
+
+// The pending event gets its version, timestamp and metadata now, and the commit keeps them
+var trace = await session.Events.ProjectLatestForCommit<CommitTrace>(traceId, token);
+
+// Store the response beside the work, in the same transaction
+session.Store(new TraceReceipt { Id = traceId, Version = trace!.LastVersion, At = trace.LastTimestamp });
+
+await session.SaveChangesAsync(token);
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/project_latest_samples.cs#L15-L26' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_project_latest_for_commit' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 It is for an endpoint that stores its response in the same transaction as its work (wolverine#5721), and it
