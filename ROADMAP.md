@@ -3,7 +3,7 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **five open issues: the 2.0 docs review, and four for 2.1.** 2.0.0-rc.2 is
+Status: **two open issues, both for 2.1.** 2.0.0-rc.2 is
 the release candidate, on JasperFx 3.15.1, Weasel 10.0.0 and the .NET 11 GA packages, bundling the 3.15.1 source
 generator so applications get the natural key analyzers ([#690](https://github.com/JasperFx/fisher/issues/690)). It carries the port of
 Marten 10.0's burn-down: event and document metadata back to opt-in ([#682](https://github.com/JasperFx/fisher/issues/682)),
@@ -12,8 +12,12 @@ LINQ support summary ([#684](https://github.com/JasperFx/fisher/issues/684)), te
 shapes ([#683](https://github.com/JasperFx/fisher/issues/683)), interface conventions over a base class in another
 assembly ([#677](https://github.com/JasperFx/fisher/issues/677)), and two docs sweeps
 ([#680](https://github.com/JasperFx/fisher/issues/680), [#681](https://github.com/JasperFx/fisher/issues/681)).
-The 2.0 milestone has only the docs review ([#657](https://github.com/JasperFx/fisher/issues/657)) left, and it gates
-the final 2.0.0, not the RC.
+It also closes the rest of the 2.0 milestone: natural keys at parity with Marten 10 and exclusive writes that lock
+([#679](https://github.com/JasperFx/fisher/issues/679), [#688](https://github.com/JasperFx/fisher/issues/688),
+[#689](https://github.com/JasperFx/fisher/issues/689)), `ProjectLatestForCommit`
+([#685](https://github.com/JasperFx/fisher/issues/685)), and a linear `AggregateStreamToLastKnownAsync`
+([#687](https://github.com/JasperFx/fisher/issues/687)). The docs review
+([#657](https://github.com/JasperFx/fisher/issues/657)) is done.
 Since 2.0.0-alpha.7, main turns extended progression tracking on by default
 ([#664](https://github.com/JasperFx/fisher/issues/664)), adds `QueryAcrossAllDatabasesAsync`
 ([#665](https://github.com/JasperFx/fisher/issues/665)), translates computed ordering keys, array indexes, `LeftJoin`
@@ -448,11 +452,7 @@ lock until the commit (#689).
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is three items.
-
-[#657](https://github.com/JasperFx/fisher/issues/657): the docs review of the new and substantially changed pages,
-before the final 2.0.0, including turning hand-written samples into compiled ones (#684's docs review item). It does
-not gate the release candidate.
+What is left is two items, both for 2.1.
 
 [#643](https://github.com/JasperFx/fisher/issues/643): the projection backfill seam JasperFx 3.7.0 added to
 `IEventStore`. The event-range marks and the stored-event rewrite are done. The backfill itself is deferred: Jeremy is
