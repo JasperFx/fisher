@@ -36,6 +36,8 @@ Polecat 6 and Wolverine 7.
 - **Natural keys at parity with Marten 10:** mapped keys (`[MappedNaturalKey<T>]`), so an async read model is
   reachable by key; `FetchForWriting(key, expectedVersion)`; `FetchManyForWriting` by key; natural key fetches on a
   batch's `Events`; and `TKey?` keys. See [natural keys](/events/natural-keys).
+- **An unknown natural key starts a new stream** when you fetch it for writing, as in Marten 10 and Polecat 6. See
+  [a key no stream has yet](/events/natural-keys#unknown-key).
 - **The exclusive methods lock.** `FetchForExclusiveWriting`, `AppendExclusive` and `WriteExclusivelyToAggregate`
   hold the database's write lock until the commit, so a competing writer waits instead of failing. See
   [exclusive writes](/events/appending#exclusive-writes).
@@ -851,6 +853,17 @@ or started a new stream named after the key. Wrap the key in a strong-typed iden
 `public readonly record struct OrderNumber(string Value);`. The lookup table stores the inner value either way, so
 existing rows keep resolving. A bare `string` key on a Guid-identity store is unaffected. See
 [natural keys and stream identity](/events/natural-keys#stream-identity).
+:::
+
+::: warning An unknown natural key starts a new stream
+**`FetchForWriting` by a natural key that no live stream has now starts a new stream at version 0** (fisher#694), the
+same as a fetch by a stream id that doesn't exist, and the same as Marten 10 and Polecat 6. Fisher 1 and Fisher 2.0's
+release candidates threw `UnknownNaturalKeyException`. It covers `FetchForWriting` with or without an expected
+version, `FetchForExclusiveWriting`, `FetchManyForWriting`, the batch forms and mapped keys. An expected version other
+than 0 on an unknown key throws `EventStreamUnexpectedMaxEventIdException`. If you caught `UnknownNaturalKeyException`
+to return a 404 or to start the stream yourself, check `FetchLatest(...) is null` first, or let the fetch start the
+stream. The exception type is still there, so the `catch` compiles, but nothing throws it any more. See
+[a key no stream has yet](/events/natural-keys#unknown-key).
 :::
 
 No table or column is involved: a mapped key reads its source's existing `fi_natural_key_*` table.

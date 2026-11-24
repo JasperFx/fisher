@@ -67,10 +67,10 @@ public partial class EventOperations
     ///         statement, then the streams are fetched in the two the by-stream-id overload uses.
     ///     </para>
     ///     <para>
-    ///         <b>A key naming no live stream throws <see cref="Exceptions.UnknownNaturalKeyException" /></b>,
-    ///         as a single <c>FetchForWriting</c> by that key does here. Nothing is enlisted in the session
-    ///         first. The contract's rule is that a missing id answers as a single fetch by it would, and on
-    ///         Fisher that is a refusal rather than a new stream the key does not name.
+    ///         <b>A key naming no live stream gets a new stream at version 0 in its place</b> (fisher#694), as a
+    ///         single <c>FetchForWriting</c> by that key does, and as on Marten 10 and Polecat 6. The contract's
+    ///         rule is that a missing id answers as a single fetch by it would. The handles come back in the
+    ///         order of the keys.
     ///     </para>
     ///     <para>
     ///         Refuses a <c>Nullable&lt;T&gt;</c> type argument, a null id and a repeated id, through the
@@ -119,7 +119,7 @@ public partial class EventOperations
         {
             streamIds.Add(resolved.TryGetValue(Storage.NaturalKeyLookup.KeyText(raw), out var streamId)
                 ? streamId
-                : throw new Exceptions.UnknownNaturalKeyException(typeof(T), raw));
+                : NewStreamForUnknownKey<T>(raw, null));
         }
 
         return Graph.StreamIdentity == StreamIdentity.AsGuid
