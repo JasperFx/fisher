@@ -372,16 +372,16 @@
         <!-- JasperFx 3.3.0 (from 3.0.1, spanning 3.1.0 and 3.2.0). Bumped here because 3.2.0 is the first
              release with DcbAppendConditionCompliance (jasperfx#1183), which this branch enrolls. No compile
              break. The rest of the span is adopted in fisher#554. -->
-        <PackageVersion Include="JasperFx" Version="3.12.1" />
-        <PackageVersion Include="JasperFx.Events" Version="3.12.1" />
+        <PackageVersion Include="JasperFx" Version="3.14.0" />
+        <PackageVersion Include="JasperFx.Events" Version="3.14.0" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="3.12.1" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="3.12.1" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="3.14.0" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="3.14.0" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="3.12.1" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="3.14.0" />
 
         <!-- Weasel 9.46.0 (from 9.42.0, spanning 9.43.0, 9.44.0, 9.45.0 and 9.45.1). JasperFx floor
              2.90.2, which Fisher already pins. Reaching Fisher:

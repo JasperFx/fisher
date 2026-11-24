@@ -1085,6 +1085,136 @@ public partial class FisherDatabase : IEventDatabase
     }
 
     /// <summary>
+    ///     jasperfx#1282 (fisher#678): this database's streams counted by aggregate type, read from
+    ///     <c>fi_streams</c> alone in one round trip. One command carries the grouped count (with a conditional
+    ///     count per length threshold) and, unless <see cref="AggregateStreamStatsRequest.LongestStreams" /> is
+    ///     zero, a per-type ranking of the longest streams. The events table is never read.
+    /// </summary>
+    /// <remarks>
+    ///     A monitoring read, so it answers "no streams" on a file with no event tables yet rather than
+    ///     creating them (fisher#332). A tenant narrows the read only under conjoined tenancy, the rule
+    ///     <see cref="FetchFirstEventTimestampsAfterAsync" /> follows: anywhere else every stream in the file is
+    ///     the file's.
+    /// </remarks>
+    public async Task<IReadOnlyList<AggregateStreamStats>> FetchAggregateStreamStatsAsync(
+        AggregateStreamStatsRequest request, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var conjoined = _events.TenancyStyle == JasperFx.MultiTenancy.TenancyStyle.Conjoined;
+        var tenantId = conjoined ? request.TenantId : null;
+        var thresholds = request.LengthThresholds;
+        var sql = AggregateStreamStatsSql(request, tenantId != null);
+
+        // A dictionary key can't be null, so the untagged streams get a key no alias can be
+        const string untagged = "\0";
+
+        var (stats, longest) = await ReadWhenStorageExistsAsync(async ct =>
+        {
+            var grouped = new Dictionary<string, (long Count, long Total, long Max, long[] Buckets)>();
+            var ranked = new Dictionary<string, List<AggregateStreamLength>>();
+
+            await using var connection = await OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            if (tenantId != null) command.Parameters.AddWithValue("@tenant_id", tenantId);
+            for (var i = 0; i < thresholds.Count; i++)
+            {
+                command.Parameters.AddWithValue($"@t{i}", thresholds[i]);
+            }
+
+            if (request.LongestStreams > 0)
+            {
+                command.Parameters.AddWithValue("@longest", (long)request.LongestStreams);
+            }
+
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                var counts = new long[thresholds.Count];
+                for (var i = 0; i < counts.Length; i++)
+                {
+                    counts[i] = reader.GetInt64(4 + i);
+                }
+
+                grouped[reader.IsDBNull(0) ? untagged : reader.GetString(0)] =
+                    (reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3), counts);
+            }
+
+            if (request.LongestStreams > 0 && await reader.NextResultAsync(ct).ConfigureAwait(false))
+            {
+                var guidIdentity = _events.StreamIdentity == StreamIdentity.AsGuid;
+                while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                {
+                    var alias = reader.IsDBNull(0) ? untagged : reader.GetString(0);
+                    var id = reader.GetString(1);
+                    var rowTenant = reader.IsDBNull(2) ? null : reader.GetString(2);
+
+                    var stream = new AggregateStreamLength(
+                        guidIdentity ? Guid.Parse(id) : Guid.Empty,
+                        guidIdentity ? null : id,
+                        conjoined ? rowTenant : TenantId ?? rowTenant,
+                        reader.GetInt64(3));
+
+                    if (!ranked.TryGetValue(alias, out var list))
+                    {
+                        ranked[alias] = list = [];
+                    }
+
+                    list.Add(stream);
+                }
+            }
+
+            return (grouped, ranked);
+        }, (new Dictionary<string, (long, long, long, long[])>(), new Dictionary<string, List<AggregateStreamLength>>()),
+            token).ConfigureAwait(false);
+
+        return stats
+            .Select(pair =>
+            {
+                var alias = pair.Key == untagged ? null : pair.Key;
+                var (count, total, max, counts) = pair.Value;
+
+                return new AggregateStreamStats(
+                    alias,
+                    alias == null ? null : _events.TryResolveAggregateType(alias),
+                    count,
+                    total,
+                    max,
+                    thresholds.Select((threshold, i) => new StreamLengthBucket(threshold, counts[i])).ToList(),
+                    longest.TryGetValue(pair.Key, out var streams) ? streams : []);
+            })
+            .ToList();
+    }
+
+    /// <summary>
+    ///     The statements behind <see cref="FetchAggregateStreamStatsAsync" />: the grouped count, then the
+    ///     ranking when one is asked for. Window functions need SQLite 3.25, which the bundled engine is past.
+    /// </summary>
+    internal string AggregateStreamStatsSql(AggregateStreamStatsRequest request, bool filterByTenant)
+    {
+        var conditions = new List<string>();
+        if (!request.IncludeArchived) conditions.Add("is_archived = 0");
+        if (filterByTenant) conditions.Add("tenant_id = @tenant_id");
+        var where = conditions.Count == 0 ? "" : " where " + string.Join(" and ", conditions);
+
+        var buckets = string.Concat(request.LengthThresholds.Select((_, i) =>
+            $", coalesce(sum(coalesce(version, 0) >= @t{i}), 0)"));
+
+        var sql = "select type, count(*), coalesce(sum(coalesce(version, 0)), 0), coalesce(max(version), 0)"
+                  + $"{buckets} from {_events.StreamsTableName}{where} group by type;";
+
+        if (request.LongestStreams > 0)
+        {
+            sql += "\nselect type, id, tenant_id, version from (select type, id, tenant_id, coalesce(version, 0) as version, "
+                   + "row_number() over (partition by type order by coalesce(version, 0) desc, id) as rank "
+                   + $"from {_events.StreamsTableName}{where}) ranked where rank <= @longest order by type, version desc, id;";
+        }
+
+        return sql;
+    }
+
+    /// <summary>
     ///     The statement behind <see cref="FetchFirstEventTimestampsAfterAsync" />. Each row is a
     ///     position's index in the list and the timestamp of its first event, or null.
     /// </summary>

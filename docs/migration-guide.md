@@ -11,13 +11,14 @@ Polecat 6 and Wolverine 7.
 
 - **Targets `net10.0` and `net11.0`.** `net9.0` is dropped. The `net11.0` build is compiled with runtime-async and
   uses the .NET 11 GA packages.
-- **Dependencies:** JasperFx 3.12.1, Weasel.Sqlite and Weasel.Storage 10, and on `net11.0`
+- **Dependencies:** JasperFx 3.14.0, Weasel.Sqlite and Weasel.Storage 10, and on `net11.0`
   `Microsoft.Data.Sqlite` 11.0.0. The new `Fisher.Aspire.Hosting` package is the AppHost side of
   [Aspire](/configuration/aspire).
 - **A failing async projection identity is parked** instead of skipping its event, with a health check that names
   what is parked and goes Unhealthy at the cap. See [parking](/events/projections/async-daemon#parking-a-failing-identity).
-- **Defaults follow Marten 10**: event metadata, document metadata, extended progression tracking and inline
-  projection side effects are on. `RestoreV1Defaults()` puts Fisher 1's defaults back.
+- **Defaults follow Marten 10**: extended progression tracking, parking and inline projection side effects are on.
+  Event metadata and the document metadata columns stay opt-in, as Marten 10 decided in marten#6144.
+  `RestoreV1Defaults()` puts Fisher 1's defaults back.
 - **Reading your own writes**: `session.LastAppendedPosition` and `store.WaitForProjectionsAsync(...)`. See
   [reading your own writes](/events/projections/async-daemon#reading-your-own-writes).
 - **Rewriting stored events in bulk** with `RewriteStoredEventsAsync` and `AddRewriteTransform<T>()`. See
@@ -410,10 +411,11 @@ themselves.
 
 ### JasperFx 3 and Weasel 10
 
-Fisher 2 requires JasperFx 3.12.1 and Weasel.Sqlite / Weasel.Storage 10.0 (10.0.0-rc.1 at the moment). An
+Fisher 2 requires JasperFx 3.14.0 and Weasel.Sqlite / Weasel.Storage 10.0 (10.0.0-rc.1 at the moment). An
 application referencing either directly has to move them together; mixing a 2.x JasperFx with Fisher 2 does not
 restore. Weasel.Sqlite 10 depends on `Microsoft.Data.Sqlite` 10.0.15 on `net10.0` and 11.0.0 on `net11.0`, the same
-versions Fisher uses, so the two never pull different SQLite providers into one application.
+versions Fisher uses, so the two never pull different SQLite providers into one application. JasperFx's own
+[migration guide](https://shared-libs.jasperfx.net/migration-guide) lists every 3.x change.
 
 Two things in JasperFx 3.12 can show up in an application:
 
@@ -516,8 +518,10 @@ their tables.
 ### Store defaults that follow Marten 10, and `RestoreV1Defaults()`
 
 Fisher 2.0 takes the default changes Marten 10 made in marten#5812 wherever Fisher has the same option
-(fisher#621). `StoreOptions.RestoreV1Defaults()` puts every one of them back, so call it first if you
-want Fisher 1's behaviour and add your own settings after it:
+(fisher#621), and the review Marten 10 made of them before release in marten#6144 (fisher#682). That review put
+event metadata and the document metadata columns back to opt-in, so they are not in the table below.
+`StoreOptions.RestoreV1Defaults()` puts every change back, so call it first if you want Fisher 1's behaviour
+and add your own settings after it:
 
 ```cs
 var store = DocumentStore.For(opts =>
@@ -525,8 +529,8 @@ var store = DocumentStore.For(opts =>
     opts.ConnectionString = connectionString;
     opts.RestoreV1Defaults();
 
-    // then anything you want on again, for example
-    opts.Events.EnableCorrelationId = true;
+    // then anything you want on, for example
+    opts.Events.EnableExtendedProgressionTracking = true;
 });
 ```
 
@@ -536,14 +540,16 @@ publish messages or raise events starts doing so on upgrade, inside `SaveChanges
 those side effects were dropped for inline projections. Messages go to `Events.MessageOutbox`, which drops
 them unless you configured one. Before you upgrade, check every inline projection that publishes a
 message or raises an event, and set `opts.Events.EnableSideEffectsOnInlineProjections = false` (or call
-`RestoreV1Defaults()`) to keep Fisher 1's behaviour.
+`RestoreV1Defaults()`) to keep Fisher 1's behaviour. When the store is built, Fisher logs a warning naming
+each inline projection that overrides `RaiseSideEffects()` (fisher#682), so the projections this affects show
+up in your own log. Side effects run inside every `SaveChangesAsync()` that touches the projection, in its
+transaction, which is their cost. Their value for CritterWatch is that a side-effect message carries the
+triggering event's correlation id.
 :::
 
 | Setting | Fisher 1 | Fisher 2 | Effect on an existing file | Restored by `RestoreV1Defaults()` |
 | :--- | :--- | :--- | :--- | :--- |
-| `Events.EnableCorrelationId`, `EnableCausationId`, `EnableHeaders`, `EnableUserName` | off | **on** | Adds `correlation_id`, `causation_id`, `headers` and `user_name` to `fi_events` (they are now created whatever the flags say, see below). Existing events read `null`. | yes, the flags; the columns stay |
 | `Events.EnableExtendedProgressionTracking` (fisher#664, marten#5763) | off | **on** | Adds the extended columns to `fi_event_progression` (also created whatever the flag says, see below). The daemon writes `heartbeat`, `agent_status`, `pause_reason`, `running_on_node`, the `failure_*` columns and `parked_count`. | yes, the flag; the columns stay |
-| Document `correlation_id`, `causation_id`, `last_modified_by`, `headers` columns | off unless a type enabled them | **on for every document type** | Adds the four columns to every document table. Existing rows read `null`. Turn one off for one type with `Metadata(m => m.Headers.Enabled = false)`. `created_at` stays opt-in. | yes |
 | `Events.EnableSideEffectsOnInlineProjections` | off | **on** | None on the file. See the warning above. | yes |
 | The `fisher.events.appended` counter | after `OpenTelemetry.TrackEventCounters()` | **on** | None. With nothing listening it costs one check per commit. | yes |
 | System.Text.Json `AllowOutOfOrderMetadataProperties` on Fisher's `Serializer` | `false` | **`true`** | None. Reads accept `$type` anywhere in the object. | yes, applied when the store is built |
@@ -564,6 +570,23 @@ each other's columns every time either one migrated. `RestoreV1Defaults()` puts 
 table shape, so a Fisher 1 file gains these columns on its first migration either way. Every column is
 nullable, so it's a plain `ALTER TABLE ADD COLUMN`. Under `AutoCreate.None`, apply the migration before you
 deploy, as for the other new columns.
+
+#### Event and document metadata stay opt-in {#metadata-stays-opt-in}
+
+Fisher 2.0 previews turned event metadata and the four document metadata columns on by default. Marten 10's
+review (marten#6144) measured what they cost and put them back to opt-in, and Fisher follows (fisher#682):
+
+- **Event metadata** (`Events.EnableCorrelationId`, `EnableCausationId`, `EnableHeaders`, `EnableUserName`, or
+  all four with `Events.EnableAllEventMetadata()`) is **off**. Each flag adds a value to every append. Turn it on
+  for CritterWatch, whose event query filters on correlation id, causation id and user name, and to link a
+  Wolverine conversation to the events it appended. The `fi_events` columns exist either way (below).
+- **Document metadata columns** (`correlation_id`, `causation_id`, `last_modified_by`, `headers`) are **off**
+  unless a type asks for them, with `Schema.For<T>().Metadata(m => m.CorrelationId.Enabled = true)`, a
+  metadata attribute, `ITracked`, or a policy. They cost every document write and every projection rebuild.
+  Turn them on for CritterWatch's document explorer filters and saved filter watches.
+
+If you ran a 2.0 preview with the defaults, a store's metadata stops being written on upgrade. Set the flags
+above to keep writing it. Columns a preview added stay in the file.
 
 What marten#5812 changed that has **no Fisher equivalent**, so nothing changes here:
 
@@ -784,6 +807,15 @@ has the row). Around it (fisher#652, #655, #658, #660, #661, #667, #671):
 - **`AssignTagWhere` under conjoined tenancy** only tags the session's tenant's events (fisher#632).
 - **`FetchLatest` of an Inline immutable aggregate after a commit** on an identity or dirty-tracked session returns
   the new snapshot. Fisher 1 returned the one from before the commit (fisher#645).
+- **A null from an explicit natural key source removes the key** (fisher#684, jasperfx#1287). A
+  `[NaturalKeySource]` static method returning the key type, or a `NaturalKeyFor()` registration, that returns
+  `null` now deletes the stream's lookup row, so the old key stops resolving and is free for another stream.
+  Fisher 1 ignored every null. A null from a source discovery inferred (a key read off the event, or an `Apply`
+  run against a blank aggregate) still leaves the key alone. See
+  [a null from a key source](/events/natural-keys#null-keys).
+- **An `IRevisioned`, `IVersioned`, `ISoftDeleted` or `ITracked` member inherited from a base class in another
+  assembly is mapped** (fisher#677). Fisher 1 missed it when the base property was not virtual, so a Wolverine
+  saga implementing `IRevisioned` over `Saga.Version` always loaded at revision 0.
 
 ### What a Fisher 1 file gains on its first migration
 
@@ -795,7 +827,7 @@ the migration before you deploy.
 | :--- | :--- |
 | `correlation_id`, `causation_id`, `headers`, `user_name` on `fi_events` | always |
 | The extended tracking columns and `parked_count` on `fi_event_progression` | always |
-| `correlation_id`, `causation_id`, `last_modified_by`, `headers` on every document table | unless `RestoreV1Defaults()` or the type turns them off |
+| `correlation_id`, `causation_id`, `last_modified_by`, `headers` on a document table | when the type turns them on |
 | `fi_parked_identities` | always, with the event tables |
 | `fi_event_range_marks` | always, with the event tables |
 | `fi_dcb_tag_version`, `fi_dcb_tag_version_sequence` | when a tag type is registered |

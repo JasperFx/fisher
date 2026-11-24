@@ -73,7 +73,7 @@ never lose a schema object, use `CreateOnly`. It refuses the migration instead o
 and of the event tables on first append. Under `None` those check, and throw naming what is missing.
 
 It does **not** stop an **explicit** apply. `ApplyAllConfiguredChangesToDatabaseAsync()`, [`db-apply`](https://weasel.jasperfx.net/cli/db-apply.html) and
-[`resources setup`](https://shared-libs.jasperfx.net/cli/resources.html) treat `None` as `CreateOrUpdate`, because calling them *is* the instruction to change
+[`resources setup`](https://shared-libs.jasperfx.net/cli/resources) treat `None` as `CreateOrUpdate`, because calling them *is* the instruction to change
 the schema. The one exception is `ApplyAllDatabaseChangesOnStartup()`, a registration rather than a
 call, which `None` switches off.
 :::
@@ -96,7 +96,7 @@ since that registration is what maps the snapshot's document type.
 opts.Events.StreamIdentity = StreamIdentity.AsGuid;   // or AsString
 opts.Events.TenancyStyle = TenancyStyle.Conjoined;    // or Single
 
-// All four are on by default since Fisher 2.0; RestoreV1Defaults() turns them off
+// All four are off by default; each adds a value to every append
 opts.Events.EnableCorrelationId = true;
 opts.Events.EnableCausationId = true;
 opts.Events.EnableUserName = true;
@@ -109,8 +109,9 @@ opts.Events.DatabaseSchemaName = "events";            // events in their own pre
 opts.Events.AddEventType<OrderPlaced>();
 ```
 
-The four `Enable*` flags each add a column to `fi_events`, so they are schema decisions — set them
-before the tables are created. They are on by default since Fisher 2.0. They also gate the matching filters on
+The four `Enable*` flags decide whether the matching `fi_events` columns are written and read; the columns
+themselves are created either way. They are off by default (fisher#682, as in Marten 10): turn them on for
+CritterWatch's event query filters and to link a Wolverine conversation to its events. They also gate the matching filters on
 [event queries](/events/querying): a filter on a column that does not exist would be
 `no such column` rather than an empty result, so an ungated one is ignored.
 

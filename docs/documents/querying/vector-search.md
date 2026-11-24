@@ -222,3 +222,5 @@ put on the document — with content-hash skipping, so unchanged text costs no e
   `VectorIndex<T>` declares an HNSW index — one per metric — that Fisher deliberately does without.
 - [Polecat's Vector Search](https://polecat.jasperfx.net/documents/querying/vector-search) — the SQL
   Server 2025 sibling.
+- [Vector & Hybrid Search](https://shared-libs.jasperfx.net/search/) — the shared types in the JasperFx
+  documentation, and how the stores differ on cosine and L2 distance.

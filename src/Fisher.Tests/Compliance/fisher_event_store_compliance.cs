@@ -216,6 +216,19 @@ public class natural_key_compliance
     : NaturalKeyCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
 
 /*
+ * JasperFx 3.13.0 / 3.14.0. NaturalKeyRegistrationCompliance pins the registration-time refusals and the
+ * nullable-key fetches; MappedNaturalKeyCompliance is the mapped-key half (a key a non-owning aggregate resolves
+ * through its owner), which Fisher does not have, so SupportsMappedNaturalKeys stays false and that suite's
+ * facts, and the mapped facts of the registration suite, skip.
+ */
+
+public class natural_key_registration_compliance
+    : NaturalKeyRegistrationCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+public class mapped_natural_key_compliance
+    : MappedNaturalKeyCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
  * jasperfx#762 — IEventStream.AlwaysEnforceConsistency: an empty unit of work still asserts the
  * stream version it was fetched at.
  *
@@ -705,3 +718,12 @@ public class parked_identity_compliance
 
 public class multi_stream_parked_identity_compliance
     : MultiStreamParkedIdentityCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;
+
+/*
+ * fisher#678 / jasperfx#1282 (JasperFx 3.14.0) — IEventStore.RegisteredAggregateTypes and
+ * IEventDatabase.FetchAggregateStreamStatsAsync, for CritterWatch's aggregate health view. One command over
+ * fi_streams: the grouped count with a conditional count per threshold, and a row_number() ranking per type.
+ */
+
+public class aggregate_stream_stats_compliance
+    : AggregateStreamStatsCompliance<FisherComplianceFixture, IDocumentSession, IQuerySession>;

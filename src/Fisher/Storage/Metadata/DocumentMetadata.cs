@@ -230,11 +230,8 @@ public class DocumentMetadata
         {
             if (map.InterfaceMethods[i] != setter) continue;
 
-            var target = map.TargetMethods[i];
-
-            var implementation = documentType
-                .GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-                .FirstOrDefault(x => x.GetSetMethod(nonPublic: true) == target);
+            var implementation = FindImplementingProperty(documentType, map.TargetMethods[i])
+                                 ?? FindForwardedProperty(documentType, declared);
 
             if (implementation is not null)
             {
@@ -243,5 +240,69 @@ public class DocumentMetadata
 
             return;
         }
+    }
+
+    /// <summary>
+    ///     The property whose setter is <paramref name="target" />, wherever in the hierarchy it is declared.
+    /// </summary>
+    /// <remarks>
+    ///     A private explicit implementation on a base class is not returned by <c>GetProperties</c> on the
+    ///     derived type at all, so each type is read declared-only, and setters are compared by method handle
+    ///     so the reflected type does not matter.
+    /// </remarks>
+    [UnconditionalSuppressMessage("Trimming", "IL2070:UnrecognizedReflectionPattern",
+        Justification = "See ApplyConventions.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2075:UnrecognizedReflectionPattern",
+        Justification = "See ApplyConventions.")]
+    private static PropertyInfo? FindImplementingProperty(Type documentType, MethodInfo target)
+    {
+        for (var type = documentType; type is not null && type != typeof(object); type = type.BaseType)
+        {
+            foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.NonPublic |
+                                                        BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            {
+                var setter = property.GetSetMethod(nonPublic: true);
+                if (setter is not null && setter.MethodHandle == target.MethodHandle)
+                {
+                    return property;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     The inherited property an interface property is forwarded to when the interface map's target is a
+    ///     compiler-generated accessor with no property behind it.
+    /// </summary>
+    /// <remarks>
+    ///     fisher#677. A derived class implementing <c>IRevisioned</c> over a non-virtual <c>Version</c> that
+    ///     a base class in ANOTHER assembly declares cannot use the base setter as the implementation, so the
+    ///     compiler emits a hidden private <c>JasperFx.IRevisioned.set_Version</c> on the derived class that
+    ///     calls it. That is Wolverine's <c>Saga.Version</c> (wolverine#5658). The hidden method has no
+    ///     property, so the setter comparison finds nothing, and an inherited revision always loaded as 0. The
+    ///     forwarder only calls the base property, so mapping the public property of the interface member's
+    ///     name and type is mapping the same storage.
+    /// </remarks>
+    [UnconditionalSuppressMessage("Trimming", "IL2070:UnrecognizedReflectionPattern",
+        Justification = "See ApplyConventions.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2075:UnrecognizedReflectionPattern",
+        Justification = "See ApplyConventions.")]
+    private static PropertyInfo? FindForwardedProperty(Type documentType, PropertyInfo declared)
+    {
+        for (var type = documentType.BaseType; type is not null && type != typeof(object); type = type.BaseType)
+        {
+            var property = type.GetProperty(declared.Name,
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+
+            if (property is not null && property.PropertyType == declared.PropertyType &&
+                property.GetSetMethod(nonPublic: true) is not null && property.GetIndexParameters().Length == 0)
+            {
+                return property;
+            }
+        }
+
+        return null;
     }
 }

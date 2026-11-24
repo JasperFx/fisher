@@ -25,7 +25,7 @@ trip" that shapes so much of a document database's design simply is not there.
 
 Fisher is built on:
 
-- **[JasperFx.Events](https://github.com/JasperFx/jasperfx)** — the shared event, projection and
+- **[JasperFx.Events](https://shared-libs.jasperfx.net/events/)** — the shared event, projection and
   daemon abstractions the whole Critter Stack implements,
 - **[Weasel.Sqlite](https://github.com/JasperFx/weasel)** — schema management, migrations and data
   access,
@@ -57,7 +57,7 @@ Marten and Polecat, which is why a projection written for one store runs unalter
 | [Marten](https://martendb.io) | PostgreSQL document database and event store |
 | [Polecat](https://polecat.jasperfx.net) | SQL Server document database and event store |
 | [Wolverine](https://wolverinefx.net) | Messaging and command processing |
-| [JasperFx](https://jasperfx.net) | Core framework and event sourcing abstractions |
+| [JasperFx](https://shared-libs.jasperfx.net/) | Core framework and event sourcing abstractions |
 | [Weasel](https://github.com/JasperFx/weasel) | Database schema management |
 
 ## Fisher vs Marten and Polecat

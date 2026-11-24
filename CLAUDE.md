@@ -3534,25 +3534,29 @@ answer "which request wrote this event" and not "which request wrote this docume
 
 ### Fisher 2.0's default changes and `RestoreV1Defaults()` — fisher#621
 
-Marten 10's marten#5812 defaults, applied where Fisher has the option: the four event metadata flags, the four
-session metadata columns on every document (`correlation_id`, `causation_id`, `last_modified_by`, `headers`;
-`created_at` stays opt-in), `EnableSideEffectsOnInlineProjections`, the `fisher.events.appended` counter and
-STJ's `AllowOutOfOrderMetadataProperties` on Fisher's `Serializer` are all on. `StoreOptions.RestoreV1Defaults()`
+Marten 10's marten#5812 defaults, applied where Fisher has the option: `EnableSideEffectsOnInlineProjections`,
+extended progression tracking, parking, the `fisher.events.appended` counter and STJ's
+`AllowOutOfOrderMetadataProperties` on Fisher's `Serializer` are all on. `StoreOptions.RestoreV1Defaults()`
 puts each back, plus JasperFx 3.0's `GateSideEffectsBehindPriorVersion`; `restore_v1_defaults` pins every pair,
 and the migration guide's 2.0 table lists them. **A new 2.0 default change goes in all three together.**
 
+⚠️ **The four event metadata flags and the four document metadata columns are OFF** (fisher#682, following
+Marten 10's review in marten#6144): they were on in the 2.0 previews and went back to opt-in before release,
+because they cost every append, write and rebuild. `RestoreV1Defaults()` no longer touches them, so a flag
+turned on before it stays on. The `fi_events` metadata columns exist whatever the flags say (fisher#664).
+
+- **Inline side effects stay on, with a startup warning** (fisher#682): `DocumentStore`'s constructor logs, through
+  `StoreOptions.LogFactory`, one warning per Inline projection that overrides `RaiseSideEffects()`
+  (`InlineProjectionsThatRaiseSideEffects`). No `LogFactory` (a hand-built store) means no warning.
 - **The document columns follow a store default that is read late.** An optional `MetadataColumn` keeps an
-  explicit on/off and otherwise asks `Default` (`StoreOptions.EnableDocumentMetadataByDefault`) each time
-  `Enabled` is read, which is when the table and storage are built. So `RestoreV1Defaults()` after
-  `Schema.For<T>()` still reaches that type. `Enabled = false` on a default column is allowed (it was refused
-  when every optional column was opt-in); turning off a column the same configuration turned on still throws.
+  explicit on/off and otherwise asks `Default` (`StoreOptions.EnableDocumentMetadataByDefault`, now false) each
+  time `Enabled` is read, which is when the table and storage are built. Turning off a column the same
+  configuration turned on still throws.
 - **The serializer and the gate are applied at build** (`ApplyRestoredV1Defaults`, beside
   `ApplyValueTypeConverters`), because `ConfigureSerialization` and projection registration can follow the call.
 - **The event counter is recorded straight from the commit behind `Counter.Enabled`**, not through
   `ExportCounterOnChangeSets`, which would build a `ChangeSet` on every commit. That is what makes "on by
   default" free when nothing listens.
-- Tests about a store that opts into columns one at a time start from `RestoreV1Defaults()`, and the two
-  compliance fixtures switch the metadata defaults off, because the suites name what each store captures.
 
 ### Document metadata member mapping
 

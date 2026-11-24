@@ -12,7 +12,9 @@ var invoice = await session.Events.FetchLatestByNaturalKey<Invoice>("INV-2026-00
 ```
 
 The definition, the attributes and the discovery are all JasperFx's — Fisher supplies the storage
-seam, the same division as the async daemon.
+seam, the same division as the async daemon. A key declared in a way the runtime would refuse is a build
+error; see [Build Diagnostics: natural keys](https://shared-libs.jasperfx.net/codegen/diagnostics#natural-keys)
+for `JFXEVT010` to `JFXEVT017`.
 
 ## Storage
 
@@ -111,6 +113,25 @@ A retired alias that resolved forever would also occupy its slot in the lookup's
 which is what makes this a defect rather than a nicety. All three stores had it the other way round
 at some point.
 :::
+
+## A null from a key source {#null-keys}
+
+What a `null` key value means depends on the source that produced it.
+
+- An **explicit** source can remove a stream's key on purpose: a `[NaturalKeySource]` static method that
+  returns the key type, or a `NaturalKeyFor()` registration. When it returns `null`, the lookup row is
+  deleted, the stream can no longer be found by its old key, and that key is free for another stream to
+  claim. A strong-typed key whose inner value is null counts as null.
+- A source discovery **infers**, by reading a key-typed property off the event or by running your `Apply`
+  method against a blank aggregate, reads `null` as "this event carries no key". The stream keeps its key,
+  so an `Apply` that only sets the key when its event carries one does what it says.
+
+The rule is JasperFx's (`NaturalKeyEventMapping.RetiresKeyOnNull`, jasperfx#1287), and Fisher follows it on
+the append path and on a replay, so a rebuild does not bring back a key an explicit source removed. A stream
+that has never been given a key has no lookup row.
+
+<!-- snippet: sample_natural_key_sources_and_null -->
+<!-- endSnippet -->
 
 ## No foreign key to fi_streams
 

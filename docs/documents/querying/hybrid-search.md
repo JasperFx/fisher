@@ -72,6 +72,10 @@ RRF uses only each document's *ordinal position*, so the legs need no calibratio
 and the fusion behaves the same whatever the embedding model or the tokenizer.
 :::
 
+The fusion is JasperFx's `ReciprocalRankFusion.Fuse`, shared with Marten and Polecat; JasperFx's
+[Reciprocal rank fusion](https://shared-libs.jasperfx.net/search/#reciprocal-rank-fusion) describes the
+contract, including that Fisher is the store that honours per-column weights.
+
 - **Each leg is read `CandidateDepth` deep**, which defaults to `max(limit × 4, 50)`. The text leg is
   an ordinary `Query<T>()` with `PlainTextSearch` (or `WebStyleSearch`) ordered by
   `OrderByRelevance()`; the vector leg is `VectorSearchAsync`. The two lists are then fused in memory.
@@ -229,5 +233,7 @@ search.
   index is declared.
 - [Vector Projections](/events/projections/vector) — producing the embedding from an event stream, so
   the document's vector is not something the application maintains by hand.
+- [Reciprocal rank fusion](https://shared-libs.jasperfx.net/search/#reciprocal-rank-fusion) — the
+  shared fusion and hybrid search contract in the JasperFx documentation.
 - [Polecat's Hybrid Search](https://polecat.jasperfx.net/documents/querying/hybrid-search) — the SQL
   Server 2025 sibling of this page.

@@ -58,3 +58,11 @@ Metric instruments are opt-in through `StoreOptions.OpenTelemetry`; see [Diagnos
 
 With `Fisher.AspNetCore`, `AddHealthChecks().AddFisherHighWaterHealthCheck()` reports a stuck
 async daemon, which the Aspire dashboard shows on the service's tile.
+
+## Dashboard commands and startup gates
+
+A Fisher service answers the JasperFx command line (`check-env`, `describe`, `resources`, `db-apply` and the
+rest; see [Schema management](/schema/)), so the AppHost can use JasperFx's `JasperFx.Aspire` package with it.
+`WithJasperFxCommands()` adds those verbs as buttons on the service's tile, and `WithJasperFxStartup()` runs
+one, such as `resources setup`, to completion before the service starts. Both are described in JasperFx's
+[Aspire Dashboard Integration](https://shared-libs.jasperfx.net/cli/aspire).

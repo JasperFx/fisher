@@ -171,7 +171,8 @@ either side of it — they are resolved when the store is built, not when the ca
 ## Host-level JasperFx options
 
 `AddJasperFx(...)` configures the whole application rather than one store, and Fisher reads it when
-each store is built:
+each store is built. Every property is listed in JasperFx's
+[JasperFxOptions](https://shared-libs.jasperfx.net/configuration/jasperfx-options) page.
 
 ```cs
 builder.Services.AddJasperFx(o => o.EnableAdvancedTracking = true);
@@ -208,7 +209,8 @@ when the store is built.
 It typically only bites a **test harness** that stands up several hosts across different assemblies.
 The symptom without the warning is a type this host registered simply not being discovered — silent,
 and dependent on which host happened to start first. Set the application assembly explicitly on the
-later host if you hit it.
+later host if you hit it; [application assembly detection](https://shared-libs.jasperfx.net/configuration/jasperfx-options#application-assembly-detection)
+shows how.
 :::
 
 ## Session Factories

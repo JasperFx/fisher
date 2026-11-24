@@ -71,6 +71,10 @@ The dispatcher is emitted by `JasperFx.Events.SourceGenerator`, and **there is n
   dispatcher is keyed on the wrapper.
 :::
 
+The generator reports these mistakes at build time. JasperFx's
+[Build Diagnostics](https://shared-libs.jasperfx.net/codegen/diagnostics) page lists each error, including
+what a missing `partial`, a non-public `Apply` method or a missing identity member produces.
+
 ## Rebuilds
 
 ```cs
@@ -102,12 +106,26 @@ guard could run. Names come back from `sqlite_master` first, and missing tables 
 
 ## Errors
 
+When an async projection fails on an event, the daemon does one of three things:
+
+- **Park** (the default in Fisher 2): the identity that failed is set aside in `fi_parked_identities`,
+  its document stays at the last good state, and the shard keeps going for every other identity.
+- **Pause**: the shard stops. This is what happens for a projection that cannot park, such as an event
+  projection or a flat table.
+- **Skip**: the event is quarantined into [`fi_dead_letters`](/events/storage#dead-letters) and the
+  shard carries on. This was Fisher 1's default.
+
 ```cs
-opts.Projections.Errors.SkipApplyErrors = true;
+opts.Projections.Errors.ApplyErrors = ProjectionErrorAction.Park;   // the default
+opts.Projections.Errors.SkipApplyErrors = true;                     // Skip; false means Pause
+opts.RestoreV1Defaults();                                           // Skip, with Fisher 1's other defaults
 ```
 
-A skipped poison event is quarantined into [`fi_dead_letters`](/events/storage#dead-letters) rather
-than stopping its shard.
+A full rebuild never parks: it runs under `Projections.RebuildErrors`, which pauses on a failing
+event. See [Parking a failing identity](/events/projections/async-daemon#parking-a-failing-identity)
+for which projections can park and how to replay or discard a parked identity, and the JasperFx
+documentation's [Turning it on](https://shared-libs.jasperfx.net/events/parked-identities#turning-it-on)
+for how the three settings relate.
 
 ## Side effects
 

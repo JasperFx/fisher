@@ -1,8 +1,10 @@
 # Event Metadata
 
 Every event carries `IEvent` metadata: its id, sequence, stream, version, timestamp, type and
-`dotnet_type`. Four more each add a column to `fi_events`. They are on by default since Fisher 2.0, as
-in Marten 10, and `StoreOptions.RestoreV1Defaults()` turns them off. Each one can be set on its own:
+`dotnet_type`. Four more are optional. They are off by default, as in Marten 10 (fisher#682,
+marten#6144): each adds a value to every append. Turn them on for CritterWatch, whose event query filters on
+correlation id, causation id and user name, and to link a Wolverine conversation to the events it appended.
+Each one can be set on its own:
 
 ```cs
 opts.Events.EnableCorrelationId = true;
@@ -11,7 +13,7 @@ opts.Events.EnableUserName = true;
 opts.Events.EnableHeaders = true;
 ```
 
-Or all four in one call after `RestoreV1Defaults()`, the same set as Marten's
+Or all four in one call, the same set as Marten's
 `Events.MetadataConfig.EnableAll()`. That includes the user name, so the session's `LastModifiedBy` is
 stored on every appended event:
 
@@ -20,9 +22,9 @@ opts.Events.EnableAllEventMetadata();
 ```
 
 ::: warning
-These are **schema decisions**. Set them before the tables are created — and note that they also gate
-the matching filters on [event queries](/events/querying#querying-event-metadata), because a filter
-on a column that does not exist would be `no such column` rather than an empty result.
+The `fi_events` columns exist whatever the flags say; the flags decide whether they are written and read.
+They also gate the matching filters on [event queries](/events/querying#querying-event-metadata): a filter
+on metadata the store does not write is ignored rather than answered from empty columns.
 :::
 
 ## Where the values come from

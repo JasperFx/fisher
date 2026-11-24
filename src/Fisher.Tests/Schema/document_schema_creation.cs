@@ -94,18 +94,15 @@ public class document_schema_creation : IAsyncLifetime
     }
 
     [Fact]
-    public async Task the_default_column_shape_is_id_data_dotnet_type_last_modified_and_the_session_metadata()
+    public async Task the_default_column_shape_is_id_data_dotnet_type_and_last_modified()
     {
         await using var database = DatabaseFor(x => x.Schema.For<DocUser>());
         await database.ApplyAllConfiguredChangesToDatabaseAsync(ct: TestContext.Current.CancellationToken);
 
         var columns = await ColumnsAsync("fi_doc_docuser");
 
-        // The four session metadata columns are on by default since fisher#621.
-        columns.Select(x => x.Name).ShouldBe([
-            "id", "data", "dotnet_type", "last_modified",
-            "correlation_id", "causation_id", "last_modified_by", "headers"
-        ]);
+        // The four session metadata columns are opt-in (fisher#682, which reversed fisher#621's default).
+        columns.Select(x => x.Name).ShouldBe(["id", "data", "dotnet_type", "last_modified"]);
 
         // A Guid id is TEXT, not BLOB — binding one without conversion would write 16 bytes that never
         // match the text the column holds.

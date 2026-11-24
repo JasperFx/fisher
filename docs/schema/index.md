@@ -10,7 +10,7 @@ It also means Fisher has the same four ways of getting the schema into place as 
 | Approach | How | Typical use |
 | :--- | :--- | :--- |
 | Lazily, on first use | `AutoCreateSchemaObjects = AutoCreate.CreateOrUpdate`, the default | Development, and most embedded deployments |
-| Once at startup | `.ApplyAllDatabaseChangesOnStartup()` on `AddFisher()`, or `services.AddResourceSetupOnStartup()` for every JasperFx [stateful resource](https://shared-libs.jasperfx.net/cli/resources.html) in the application at once | Development, tests, and applications that own their database file |
+| Once at startup | `.ApplyAllDatabaseChangesOnStartup()` on `AddFisher()`, or `services.AddResourceSetupOnStartup()` for every JasperFx [stateful resource](https://shared-libs.jasperfx.net/cli/resources) in the application at once | Development, tests, and applications that own their database file |
 | As a deployment step | `dotnet run -- `[`db-apply`](https://weasel.jasperfx.net/cli/db-apply.html) or `dotnet run -- resources setup`, with the application on `AutoCreate.None` | A server deployment where the schema is applied before the new version starts |
 | From reviewed SQL | `dotnet run -- `[`db-patch`](https://weasel.jasperfx.net/cli/db-patch.html) or [`db-dump`](https://weasel.jasperfx.net/cli/db-dump.html), applied by something other than the application | When the schema should be reviewed and checked in |
 
@@ -81,14 +81,14 @@ dotnet run -- resources setup      # create or migrate each one
 | | |
 | :--- | :--- |
 | [`db-apply`](https://weasel.jasperfx.net/cli/db-apply.html), [`db-assert`](https://weasel.jasperfx.net/cli/db-assert.html), [`db-patch`](https://weasel.jasperfx.net/cli/db-patch.html), [`db-dump`](https://weasel.jasperfx.net/cli/db-dump.html), [`db-list`](https://weasel.jasperfx.net/cli/db-list.html) | Weasel's, and act on Weasel databases only. Fisher registers every database it manages with Weasel |
-| [`resources`](https://shared-libs.jasperfx.net/cli/resources.html) | JasperFx's stateful resource model. The Fisher store is one resource; on a Wolverine host its message storage and any broker queues are others, and one `resources setup` provisions all of them |
+| [`resources`](https://shared-libs.jasperfx.net/cli/resources) | JasperFx's stateful resource model. The Fisher store is one resource; on a Wolverine host its message storage and any broker queues are others, and one `resources setup` provisions all of them |
 
 ::: tip The command line itself
 `RunJasperFxCommands` and the rest of the command line come from JasperFx; its
 [command line documentation](https://shared-libs.jasperfx.net/cli/) covers setup,
 [writing your own commands](https://shared-libs.jasperfx.net/cli/writing-commands),
 [arguments and flags](https://shared-libs.jasperfx.net/cli/arguments-flags),
-[environment checks](https://shared-libs.jasperfx.net/cli/environment-checks) and `describe`. Since JasperFx 2.101.0
+[environment checks](https://shared-libs.jasperfx.net/cli/environment-checks) and [`describe`](https://shared-libs.jasperfx.net/cli/describe). Since JasperFx 2.101.0
 the commands also run from a Native AOT binary: see [Native AOT](https://shared-libs.jasperfx.net/cli/#native-aot)
 there and [the command line](/configuration/native-aot#the-command-line) on Fisher's Native AOT page.
 :::
@@ -123,7 +123,7 @@ must never lose a schema object. It refuses the migration rather than applying i
 ::: tip
 **`None` stops implicit migrations, not explicit ones.** The first-use creation of a document table or
 of the event tables checks and throws under `None`. But `ApplyAllConfiguredChangesToDatabaseAsync()`,
-[`db-apply`](https://weasel.jasperfx.net/cli/db-apply.html) and [`resources setup`](https://shared-libs.jasperfx.net/cli/resources.html)
+[`db-apply`](https://weasel.jasperfx.net/cli/db-apply.html) and [`resources setup`](https://shared-libs.jasperfx.net/cli/resources)
 treat `None` as `CreateOrUpdate`, because calling them is the instruction to apply.
 
 `AutoCreate.None` **wins over** `ApplyAllDatabaseChangesOnStartup()`. The hosted service starts and

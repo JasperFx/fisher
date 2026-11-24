@@ -61,10 +61,9 @@ public class MetadataColumn
     ///         fisher#29 added, and <see cref="Enable" /> throws on the others rather than pretending.
     ///     </para>
     ///     <para>
-    ///         Off by default for <c>created_at</c> and the <c>tenant_id</c> read-back. Since Fisher 2.0
-    ///         (fisher#621) <c>correlation_id</c>, <c>causation_id</c>, <c>last_modified_by</c> and
-    ///         <c>headers</c> follow <c>StoreOptions</c>' store-wide default, which is on and which
-    ///         <c>RestoreV1Defaults()</c> turns off.
+    ///         Off by default for <c>created_at</c> and the <c>tenant_id</c> read-back. <c>correlation_id</c>,
+    ///         <c>causation_id</c>, <c>last_modified_by</c> and <c>headers</c> follow <c>StoreOptions</c>'
+    ///         store-wide default (fisher#621), which is off (fisher#682, following marten#6144).
     ///     </para>
     /// </remarks>
     public bool Enabled => !_optional || (_explicit ?? Default?.Invoke() ?? false);
