@@ -455,7 +455,10 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             return;
         }
 
-        if (EnlistedTransaction is not null || _heldTransaction is not null)
+        // A projection batch's session commits in the batch's own transaction, which the daemon opens on
+        // another connection: a second BEGIN IMMEDIATE here would wait on that one forever. The batch's
+        // transaction already serializes its writes, so the fetch stays the optimistic read there.
+        if (EnlistedTransaction is not null || _heldTransaction is not null || ParticipantsOwnedByBatch)
         {
             return;
         }

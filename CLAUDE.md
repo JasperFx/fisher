@@ -165,7 +165,9 @@ connection before the read (`HeldTransaction`), and `SaveChangesAsync` joins it 
 - **Released on every way out**: commit, a failed write (rollback), a save with nothing to write, and disposal
   (rollback, sync and async). `exclusive_writing` pins each, plus the property with teeth: five concurrent
   exclusive writers never overlap (`max holders == 1`).
-- An enlisted session takes no lock (the caller's transaction decides), a tenant scope takes its parent's, and a
+- An enlisted session takes no lock (the caller's transaction decides), nor does a projection batch's session
+  (`ParticipantsOwnedByBatch`: the batch commits on another connection, so a lock here would deadlock it), a tenant
+  scope takes its parent's, and a
   second exclusive fetch in one session finds the lock held. SQLite locks the file, so every other writer on it
   waits too; readers carry on under WAL.
 
