@@ -12,18 +12,40 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**4300 tests green on net10.0 and 4327 on net11.0** — 4221 (net10.0) / 4248 (net11.0) in `Fisher.Tests`, 47 in
+**4337 tests green on net10.0 and 4364 on net11.0** — 4258 (net10.0) / 4285 (net11.0) in `Fisher.Tests`, 47 in
 `Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 994 of
 them are shared cross-store compliance tests — 760 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.14.0** / Weasel **10.0.0-rc.1**, and the .NET 11 GA (11.0.0) Microsoft packages on net11.0.
+On JasperFx **3.15.1** / Weasel **10.0.0**, and the .NET 11 GA (11.0.0) Microsoft packages on net11.0.
+
+## JasperFx 3.15.1 and Weasel 10.0.0 (fisher#690)
+
+The pins the 2.0.0-rc.2 publish goes out on, with no Fisher code change. Fisher bundles the 3.15.1 source generator,
+so an application referencing Fisher alone gets the `JFXEVT010`–`JFXEVT017` natural key analyzers (fisher#690).
+3.15.1 ships one new suite, `CompositeKeepUnchangedMembersCompliance` (jasperfx#684), excused in
+`compliance_suite_inventory` until fisher#109 makes rebuild teardown honour `MembersToTearDownAsync`.
+
+## Natural keys at parity with Marten 10, and exclusive writes that lock (fisher#679, #688, #689)
+
+For 2.0 GA, from the Wolverine natural keys review (wolverine#5897). See CLAUDE.md, "Natural keys at parity with
+Marten 10" and the exclusive-writes paragraph under "SQLite divergences".
+
+- **Mapped keys, `FetchForWriting(key, expectedVersion)`, `FetchManyForWriting` by key, `batch.Events`, and
+  `Nullable<TKey>` refused as a type argument.** `MappedNaturalKeyCompliance` (7) and the 7 mapped facts of
+  `NaturalKeyRegistrationCompliance` ran for the first time and passed with no fixture change beyond the flag.
+- **Marten's per-lifecycle fetch plans, key-to-stream cache index and `NaturalKeyMovedException` are not ported**,
+  deliberately: they save PostgreSQL round trips, and Fisher's "resolve, then fetch by stream id" already uses the
+  write cache and the identity map by stream id.
+- **The exclusive methods hold `BEGIN IMMEDIATE` to the commit.** `exclusive_writing` proves five concurrent writers
+  never overlap, and that every way out releases the lock. The old `append_exclusive_behaves_as_append_optimistic`
+  is rewritten: against the lock it waits for the first session, which it never committed.
 
 ## JasperFx 3.14.0 and the Marten 10.0 burn-down (2.0.0-rc.2: fisher#677, #678, #680–#684)
 
 From JasperFx 3.12.1, spanning 3.13.0. Three suites arrive: `AggregateStreamStatsCompliance` (fisher#678, all
 facts green, including the archived, conjoined and string-key ones the in-memory store never runs),
-`NaturalKeyRegistrationCompliance` and `MappedNaturalKeyCompliance`. Mapped natural keys are fisher#679 (2.1), so
-`SupportsMappedNaturalKeys` stays false and the mapped facts skip.
+`NaturalKeyRegistrationCompliance` and `MappedNaturalKeyCompliance`. Mapped natural keys came with fisher#679 (see
+the next section), so `SupportsMappedNaturalKeys` is on and the mapped facts run.
 
 - **Event metadata and the document metadata columns are opt-in again** (fisher#682, marten#6144). See CLAUDE.md,
   "Fisher 2.0's default changes".
@@ -34,8 +56,12 @@ facts green, including the archived, conjoined and string-key ones the in-memory
   forwarder on the derived class (Wolverine's `Saga.Version`). `inherited_metadata_members` takes its bases from
   `Fisher.TestUtils` for that reason, and fails 5 of 7 without the fallback.
 - **fisher#683 needed no fix**: `fetch_plan_folds` ports marten#6147/#6148/#6145 and is green.
-- **Left for later**: `ProjectLatestForCommit` is fisher#685 (2.1); the docs review and sample conversion from
-  fisher#684's item 4 are fisher#657.
+- **`ProjectLatestForCommit`** (fisher#685, marten#6149) landed with the Weasel 10.0.0 pins: the pending events
+  are numbered and stamped through JasperFx's `ClientSideAppendPlanner.NumberAhead` from the version the commit
+  starts at, and the commit keeps them. `SaveChangesAsync` refuses a stream whose expected version moved after
+  the call. `project_latest_for_commit` fails 8 of 12 without the stamping.
+- **`AggregateStreamToLastKnownAsync`** folds once (fisher#687, marten#6194).
+- **Left for later**: the docs review and sample conversion from fisher#684's item 4 are fisher#657.
 
 ## Weasel 10.0.0-rc.1 (fisher#674)
 
@@ -1433,7 +1459,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 3.14.0 ships 75 suites; Fisher enrolls **74 of them, 994 tests**.
+`JasperFx.Events.ComplianceTests` 3.15.1 ships 76 suites; Fisher enrolls **74 of them, 994 tests**.
 Fisher passes **994 of them, across all
 74 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed
@@ -1460,8 +1486,8 @@ say anything about database-per-tenant: they do not run against it.
 **What that does and does not claim, because the difference is load-bearing** (fisher#124). The suite
 pins **API portability, not behavioural equivalence**: code written against one store compiles and
 runs against another. It does not pin that the three *behave* the same, and the migration guide's
-"Behaviour that differs" list is exactly what it does not pin — the exclusive methods failing rather
-than waiting, Marten's strictly-greater revision guard rather than Polecat's equality one, a stricter
+"Behaviour that differs" list is exactly what it does not pin — the exclusive methods locking the
+whole file rather than one stream (they failed rather than waited until fisher#689), Marten's strictly-greater revision guard rather than Polecat's equality one, a stricter
 `QueryForNonStaleData`, ordinal string comparison, applied inner-side join predicates. Read as
 equivalence, "passes all 40 suites" invites using Fisher as a test double for a Marten or Polecat
 application, which the divergence list argues against.
@@ -2322,12 +2348,10 @@ Each of these is a decision with a reason, not an oversight:
 > have" and is the one to keep current. Compiled queries are the one member of that set that *has* been
 > decided, on a measurement — [fisher#195](https://github.com/JasperFx/fisher/issues/195).
 
-- **Exclusive appends are the optimistic ones.** `AppendExclusive`, `FetchForExclusiveWriting` and
-  `WriteExclusivelyToAggregate` do not lock. SQLite has no row lock; the faithful equivalent would
-  hold `BEGIN IMMEDIATE` from fetch to commit, blocking every other writer for as long as a caller
-  holds a session. Safety is unchanged — the version guard still runs inside the write transaction —
-  but a loser fails instead of waiting. **This is the most likely place a future compliance suite
-  disagrees with Fisher.**
+- **Exclusive appends lock the file** (fisher#689, 2.0). `AppendExclusive`, `FetchForExclusiveWriting` and
+  `WriteExclusivelyToAggregate` hold `BEGIN IMMEDIATE` from the fetch to the commit, so a competing writer waits as
+  on the siblings. SQLite has no row lock, so it is the whole file's lock: every other writer waits while a caller
+  holds the session. They were the optimistic methods until then.
 - **Hi-Lo gaps are expected, not a bug.** A process that stops mid-allocation abandons the rest of
   its `MaxLo` range, and `SetFloor` rounds up to a whole page. Both match Marten and Polecat.
 - **The LINQ surface refuses rather than falling back to client-side evaluation**, which is the

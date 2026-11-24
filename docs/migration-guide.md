@@ -11,7 +11,7 @@ Polecat 6 and Wolverine 7.
 
 - **Targets `net10.0` and `net11.0`.** `net9.0` is dropped. The `net11.0` build is compiled with runtime-async and
   uses the .NET 11 GA packages.
-- **Dependencies:** JasperFx 3.14.0, Weasel.Sqlite and Weasel.Storage 10, and on `net11.0`
+- **Dependencies:** JasperFx 3.15.1, Weasel.Sqlite and Weasel.Storage 10.0.0, and on `net11.0`
   `Microsoft.Data.Sqlite` 11.0.0. The new `Fisher.Aspire.Hosting` package is the AppHost side of
   [Aspire](/configuration/aspire).
 - **A failing async projection identity is parked** instead of skipping its event, with a health check that names
@@ -19,6 +19,8 @@ Polecat 6 and Wolverine 7.
 - **Defaults follow Marten 10**: extended progression tracking, parking and inline projection side effects are on.
   Event metadata and the document metadata columns stay opt-in, as Marten 10 decided in marten#6144.
   `RestoreV1Defaults()` puts Fisher 1's defaults back.
+- **`ProjectLatestForCommit`**: the aggregate as `SaveChangesAsync()` will write it, versions, timestamps and
+  metadata included. See [ProjectLatestForCommit](/events/projections/project-latest#project-latest-for-commit).
 - **Reading your own writes**: `session.LastAppendedPosition` and `store.WaitForProjectionsAsync(...)`. See
   [reading your own writes](/events/projections/async-daemon#reading-your-own-writes).
 - **Rewriting stored events in bulk** with `RewriteStoredEventsAsync` and `AddRewriteTransform<T>()`. See
@@ -31,6 +33,12 @@ Polecat 6 and Wolverine 7.
 - **Projections:** a new projection version gets its own table, `RebuildSingleStreamAsync` goes through a running
   daemon, and DCB boundaries see tombstones, archiving and `AssignTagWhere`.
 - **Waiting for the write lock** goes through a 1 ms busy handler.
+- **Natural keys at parity with Marten 10:** mapped keys (`[MappedNaturalKey<T>]`), so an async read model is
+  reachable by key; `FetchForWriting(key, expectedVersion)`; `FetchManyForWriting` by key; natural key fetches on a
+  batch's `Events`; and `TKey?` keys. See [natural keys](/events/natural-keys).
+- **The exclusive methods lock.** `FetchForExclusiveWriting`, `AppendExclusive` and `WriteExclusivelyToAggregate`
+  hold the database's write lock until the commit, so a competing writer waits instead of failing. See
+  [exclusive writes](/events/appending#exclusive-writes).
 
 Some of this changes behaviour in an existing application. [Upgrading from Fisher 1 to Fisher 2](#upgrading-from-fisher-1-to-fisher-2)
 says what, what it does to an existing database file, and how to opt out.
@@ -149,18 +157,18 @@ Unlike the list above, these are settled decisions rather than unbuilt features.
 
 These are the ones that compile and then behave differently, so they are worth checking in ported code.
 
-### The exclusive append methods fail rather than wait
+### The exclusive methods lock the file, not the stream
 
-::: danger
-`AppendExclusive`, `FetchForExclusiveWriting` and `WriteExclusivelyToAggregate` are the **optimistic**
-methods on Fisher. A competing session gets `EventStreamUnexpectedMaxEventIdException` instead of
-waiting its turn.
+::: warning
+`AppendExclusive`, `FetchForExclusiveWriting` and `WriteExclusivelyToAggregate` wait their turn, as on Marten and
+Polecat, but the lock they hold is SQLite's write lock on the **whole database file**. While one session holds it,
+every other writer on the file waits, whatever stream it writes to. Readers carry on under WAL.
 
-The safety property is unchanged — the version guard still runs inside the write transaction. Code
-that relied on *waiting* needs a retry.
+Code that holds a session open between the fetch and `SaveChangesAsync`, for an HTTP call or a slow computation,
+holds up every writer in the process for that long. Keep the window short.
 :::
 
-See [Appending Events](/events/appending#the-exclusive-methods-fail-where-the-siblings-wait).
+See [exclusive writes](/events/appending#exclusive-writes).
 
 ### `Include()` is an extension method, not a builder
 
@@ -351,7 +359,7 @@ compile and then differ — which is the exact failure mode of a stand-in: the s
 green, and production behaves another way.
 
 Several of those divergences fall squarely in the territory integration tests exist to cover.
-Concurrency under contention differs (the exclusive methods fail where the siblings wait), the
+Concurrency under contention differs (the exclusive methods lock the whole file, not one stream), the
 numeric-revision guard differs from Polecat's, `QueryForNonStaleData` is stricter here — so a real
 staleness race in the deployed store can stay hidden — and both ordinal string comparison and
 inner-side join predicates change which rows come back.
@@ -411,7 +419,7 @@ themselves.
 
 ### JasperFx 3 and Weasel 10
 
-Fisher 2 requires JasperFx 3.14.0 and Weasel.Sqlite / Weasel.Storage 10.0 (10.0.0-rc.1 at the moment). An
+Fisher 2 requires JasperFx 3.15.1 and Weasel.Sqlite / Weasel.Storage 10.0.0. An
 application referencing either directly has to move them together; mixing a 2.x JasperFx with Fisher 2 does not
 restore. Weasel.Sqlite 10 depends on `Microsoft.Data.Sqlite` 10.0.15 on `net10.0` and 11.0.0 on `net11.0`, the same
 versions Fisher uses, so the two never pull different SQLite providers into one application. JasperFx's own
@@ -783,6 +791,60 @@ has the row). Around it (fisher#652, #655, #658, #660, #661, #667, #671):
   there, so the JasperFx `projections parked` and floor commands found no Fisher store. `FetchParkedIdentitiesAsync`
   fills `ParkedIdentity.NaturalKey`, so `projections parked` shows it.
 
+### Exclusive writes take the write lock
+
+::: warning
+`AppendExclusive`, `FetchForExclusiveWriting` and `WriteExclusivelyToAggregate` now take SQLite's write lock
+(`BEGIN IMMEDIATE`) before they read, and the session holds it until `SaveChangesAsync` commits or the session is
+disposed (fisher#689). A competing exclusive writer **waits** its turn. In Fisher 1 they were the optimistic methods,
+and all but one of a set of concurrent writers failed with `EventStreamUnexpectedMaxEventIdException`.
+:::
+
+What to check in an existing application:
+
+- **Every writer on the file waits while the lock is held**, not just writers to the same stream, because SQLite's
+  lock is the file's. Keep the time between the fetch and `SaveChangesAsync` short, and dispose the session promptly
+  when it ends up writing nothing.
+- **Two exclusive fetches in sequence on two sessions in one flow now deadlock** until the busy timeout, because the
+  second waits for the first session's commit. Commit (or dispose) the first session before the second fetch.
+- **A writer that waits too long gets `StreamLockedException`**, after the busy timeout and the resilience
+  pipeline's retries, rather than `EventStreamUnexpectedMaxEventIdException`.
+- **A document type first stored after the lock is taken needs its table already**, and a Hi-Lo document can't
+  reserve a new block of ids under the lock. Both would need a second connection, which would wait on the lock, so
+  Fisher refuses them by name. Apply the schema at startup.
+- A session enlisted with `SessionOptions.ForTransaction` takes no lock: your transaction already holds whatever it
+  holds.
+
+No table or column is involved. See [exclusive writes](/events/appending#exclusive-writes).
+
+### Natural keys at parity with Marten 10
+
+Fisher 2.0 has the natural key work Marten 10 shipped in marten#6150, on JasperFx's shared definitions
+(jasperfx#1281, fisher#679, fisher#688). Everything here is additive; the one behaviour change is listed last.
+
+- **Mapped natural keys.** `[MappedNaturalKey<TSource>]` (or `[NaturalKey(SourceProjection = ...)]`) makes an
+  aggregate reachable by a key another aggregate owns, through that aggregate's lookup. An async read model needs no
+  inline component of its own. See [mapped natural keys](/events/natural-keys#mapped-keys).
+- **`FetchForWriting<T, TKey>(key, expectedVersion)`** checks the version before anything is enlisted and throws a
+  `ConcurrencyException` when it is stale. It takes a stream id or a strong-typed id too.
+- **`FetchManyForWriting<T, TKey>(keys)`** resolves every key in one statement.
+- **`batch.Events`** has `FetchForWriting`, `FetchForExclusiveWriting` and `FetchLatest`, by stream id or by key,
+  and `FetchStream` and `FetchStreamState`, in the shape Marten's batch has.
+- **`TKey?` keys.** A struct key can be declared nullable on the aggregate and returned nullable by a key source.
+- **Stricter registration checks from JasperFx.** Two owned keys on one aggregate, two keys of one type, a key no
+  event sets, a non-public `[NaturalKeySource]`, an owned key on a member of a composite projection, and a mapped key
+  whose source is missing or keyed differently all throw `InvalidProjectionException` when the store is built. The
+  JasperFx analyzers report most of them at build time (`JFXEVT010` to `JFXEVT018`).
+
+::: warning
+**A fetch by `Nullable<TKey>` throws `ArgumentException`, and a null key value is refused for writing.** Fetch by
+`TKey`. A null key, including a strong-typed key whose inner value is null, makes `FetchLatest` return null without
+a query and makes `FetchForWriting` and `FetchForExclusiveWriting` throw `ArgumentOutOfRangeException`. Fisher 1
+threw `ArgumentNullException` for both.
+:::
+
+No table or column is involved: a mapped key reads its source's existing `fi_natural_key_*` table.
+
 ### Smaller behaviour changes
 
 - **The order of the commit hooks.** `SaveChangesAsync` runs the message outbox's `BeforeCommitAsync` after every
@@ -807,6 +869,8 @@ has the row). Around it (fisher#652, #655, #658, #660, #661, #667, #671):
 - **`AssignTagWhere` under conjoined tenancy** only tags the session's tenant's events (fisher#632).
 - **`FetchLatest` of an Inline immutable aggregate after a commit** on an identity or dirty-tracked session returns
   the new snapshot. Fisher 1 returned the one from before the commit (fisher#645).
+- **`AggregateStreamToLastKnownAsync`** folds the stream once instead of rebuilding from the first event for every
+  event it walks back, and a version past the end of the stream answers null (fisher#687).
 - **A null from an explicit natural key source removes the key** (fisher#684, jasperfx#1287). A
   `[NaturalKeySource]` static method returning the key type, or a `NaturalKeyFor()` registration, that returns
   `null` now deletes the stream's lookup row, so the old key stops resolving and is free for another stream.

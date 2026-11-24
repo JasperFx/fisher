@@ -400,6 +400,166 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     internal SqliteTransaction? EnlistedTransaction => _lifetime.EnlistedTransaction;
 
     /// <summary>
+    ///     The <c>BEGIN IMMEDIATE</c> transaction this session opened to take the file's write lock for an
+    ///     exclusive fetch (fisher#689), held until <see cref="SaveChangesAsync" /> commits it or the session
+    ///     is disposed. Null otherwise. A tenant scope reads its parent's, because the two share a connection.
+    /// </summary>
+    internal SqliteTransaction? HeldTransaction => _parent?.HeldTransaction ?? _heldTransaction;
+
+    private SqliteTransaction? _heldTransaction;
+
+    /// <summary>
+    ///     The transaction every statement this session runs has to name: the caller's, for an enlisted
+    ///     session, or the one an exclusive fetch is holding. Null for an ordinary session between units of
+    ///     work.
+    /// </summary>
+    internal SqliteTransaction? ActiveTransaction => EnlistedTransaction ?? HeldTransaction;
+
+    /// <summary>
+    ///     Take the database file's write lock for this session and hold it until the unit of work commits
+    ///     or the session is disposed (fisher#689). What <c>FetchForExclusiveWriting</c>,
+    ///     <c>AppendExclusive</c> and <c>WriteExclusivelyToAggregate</c> do before they read.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>SQLite has no row lock, so the lock is the file's.</b> Marten and Polecat lock the stream's
+    ///         row, and a competing writer on another stream carries on. Here the write lock is per database
+    ///         file, so while this session holds it every other writer on the file waits, whatever stream it
+    ///         writes to. Readers are not blocked under WAL. That is the price of the guarantee, and why the
+    ///         lock should be held for as short a time as the work allows.
+    ///     </para>
+    ///     <para>
+    ///         <b>A competing exclusive writer waits rather than failing</b>, which is the whole point: its
+    ///         <c>BEGIN IMMEDIATE</c> waits in SQLite's busy handler until this session commits or rolls back.
+    ///         It gives up only after the busy timeout and every retry the resilience pipeline allows, and then
+    ///         surfaces as <see cref="JasperFx.Events.StreamLockedException" />, as on the siblings.
+    ///     </para>
+    ///     <para>
+    ///         <b>The tables are made sure of before the lock is taken.</b> Creating one is a migration on a
+    ///         connection of its own, which would wait on the lock this session is about to hold. So the event
+    ///         tables, the aggregate's document table and every inline projection's tables are ensured first;
+    ///         a document type first seen after the lock is taken is asserted rather than created, as for an
+    ///         enlisted session.
+    ///     </para>
+    ///     <para>
+    ///         An enlisted session takes nothing: the caller owns the transaction, and the lock is theirs to
+    ///         hold. A second exclusive fetch in the same session finds the lock already held.
+    ///     </para>
+    /// </remarks>
+    internal async Task AcquireExclusiveWriteLockAsync(object streamIdentity, Type? aggregateType,
+        CancellationToken token)
+    {
+        if (_parent is not null)
+        {
+            await _parent.AcquireExclusiveWriteLockAsync(streamIdentity, aggregateType, token).ConfigureAwait(false);
+            return;
+        }
+
+        // A projection batch's session commits in the batch's own transaction, which the daemon opens on
+        // another connection: a second BEGIN IMMEDIATE here would wait on that one forever. The batch's
+        // transaction already serializes its writes, so the fetch stays the optimistic read there.
+        if (EnlistedTransaction is not null || _heldTransaction is not null || ParticipantsOwnedByBatch)
+        {
+            return;
+        }
+
+        await EnsureEventStorageAsync(token).ConfigureAwait(false);
+        await EnsureTablesForExclusiveWritingAsync(aggregateType, token).ConfigureAwait(false);
+
+        var connection = await ConnectionAsync(token).ConfigureAwait(false);
+
+        try
+        {
+            await Options.ResiliencePipeline.ExecuteAsync(async ct =>
+            {
+                var waitedFrom = Options.OpenTelemetry.StartWriteLockWait();
+
+                _heldTransaction = await BeginWriteTransactionAsync(connection, ct).ConfigureAwait(false);
+
+                Options.OpenTelemetry.RecordWriteLockWait(waitedFrom, Services.OpenTelemetryOptions.SessionHolder);
+            }, token).ConfigureAwait(false);
+        }
+        catch (SqliteException e) when (Storage.FisherResilienceDefaults.IsTransient(e))
+        {
+            throw new JasperFx.Events.StreamLockedException([streamIdentity], e);
+        }
+    }
+
+    /// <summary>
+    ///     The document tables an exclusive unit of work is likely to write, created before the lock is taken.
+    /// </summary>
+    private async Task EnsureTablesForExclusiveWritingAsync(Type? aggregateType, CancellationToken token)
+    {
+        var types = Options.Projections.All
+            .Where(x => x.Lifecycle == JasperFx.Events.Projections.ProjectionLifecycle.Inline)
+            .SelectMany(x => x.PublishedTypes())
+            .ToList();
+
+        if (aggregateType is not null)
+        {
+            types.Add(aggregateType);
+        }
+
+        foreach (var type in types.Distinct())
+        {
+            if (Options.Projections.StorageProviders.HasProviderFor(type) || !Options.Schema.HasMappingFor(type))
+            {
+                continue;
+            }
+
+            await FisherDatabase.EnsureDocumentTableAsync(type, token).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    ///     Commit the held exclusive transaction, releasing the file's write lock.
+    /// </summary>
+    private async Task CommitHeldTransactionAsync(CancellationToken token)
+    {
+        if (_heldTransaction is not { } held)
+        {
+            return;
+        }
+
+        _heldTransaction = null;
+
+        try
+        {
+            await held.CommitAsync(token).ConfigureAwait(false);
+        }
+        finally
+        {
+            await held.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    ///     Roll the held exclusive transaction back, releasing the file's write lock. Never throws: it runs on
+    ///     the way out of a failure, or from disposal.
+    /// </summary>
+    private void RollBackHeldTransaction()
+    {
+        if (_heldTransaction is not { } held)
+        {
+            return;
+        }
+
+        _heldTransaction = null;
+
+        try
+        {
+            held.Rollback();
+        }
+        catch (Exception)
+        {
+            // Already rolled back with a failed statement, or the connection is gone. Either way the lock
+            // is released with it.
+        }
+
+        held.Dispose();
+    }
+
+    /// <summary>
     ///     The command timeout every statement this session runs carries — the session's own, or the
     ///     store's.
     /// </summary>
@@ -745,7 +905,7 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     internal async ValueTask ConfigureCommandAsync(DbCommand command, CancellationToken token)
     {
         command.Connection = await ConnectionAsync(token).ConfigureAwait(false);
-        command.Transaction = EnlistedTransaction;
+        command.Transaction = ActiveTransaction;
         command.CommandTimeout = CommandTimeout;
     }
 
@@ -789,7 +949,18 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             // polecat#161. wolverine#3907. A shared IDbTransactionParticipant (fisher#581) is the same
             // case reached through the store-agnostic contract, which says in as many words that this
             // check has to read DocumentSessionHooks.HasPendingParticipants.
+            //
+            // fisher#689: an exclusive fetch that ended up writing nothing still gives the lock back.
+            await CommitHeldTransactionAsync(token).ConfigureAwait(false);
             return;
+        }
+
+        // fisher#685: a stream whose expected version moved after ProjectLatestForCommit is refused before
+        // anything runs, listeners included, so a refused commit writes nothing.
+        Events.AssertVersionsPinnedForCommitAreUnchanged();
+        foreach (var scope in TenantScopes)
+        {
+            scope.Events.AssertVersionsPinnedForCommitAreUnchanged();
         }
 
         using var activity = FisherTracing.StartOperation(FisherTracing.SaveChanges, Options);
@@ -1024,6 +1195,24 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             // "everyone can see this now" is a claim only the caller's commit can make. See
             // SessionOptions.ForTransaction.
             await WriteAsync(connection, enlisted, queued, streams, token).ConfigureAwait(false);
+        }
+        else if (_heldTransaction is { } held)
+        {
+            // fisher#689. An exclusive fetch already holds the write lock in this transaction, and what it
+            // read is only safe to act on inside it, so the unit of work joins it rather than opening its own.
+            // No resilience pipeline: nothing can contend for a lock this session holds, and a retry would
+            // have nothing to retry with once the transaction rolled back. The lock is given back either way.
+            try
+            {
+                await WriteAsync(connection, held, queued, streams, token).ConfigureAwait(false);
+            }
+            catch
+            {
+                RollBackHeldTransaction();
+                throw;
+            }
+
+            await CommitHeldTransactionAsync(token).ConfigureAwait(false);
         }
         else
         {
@@ -1404,7 +1593,7 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             Storage.SharedFileTenancyGuard.AssertDocumentTypeCanBeToldApart(
                 Options.SharedTenantFiles, Options.Schema.MappingFor(documentType));
 
-            if (EnlistedTransaction is not null)
+            if (ActiveTransaction is not null)
             {
                 await AssertDocumentTableExistsAsync(documentType, token).ConfigureAwait(false);
             }
@@ -1464,7 +1653,7 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         Storage.SharedFileTenancyGuard.AssertDocumentTypeCanBeToldApart(
             Options.SharedTenantFiles, Options.Schema.MappingFor(documentType));
 
-        if (EnlistedTransaction is not null)
+        if (ActiveTransaction is not null)
         {
             await AssertDocumentTableExistsAsync(documentType, token).ConfigureAwait(false);
             return;
@@ -1501,15 +1690,28 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
 
         await ConfigureCommandAsync(command, token).ConfigureAwait(false);
 
-        if (await command.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
+        if (await command.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
+        {
+            return;
+        }
+
+        if (EnlistedTransaction is null)
         {
             throw new InvalidOperationException(
-                $"There is no table '{table.Name}' for document type {documentType.FullName}, and a session "
-                + "enlisted in a transaction it does not own cannot create one — the migration runs on its "
-                + "own connection, which would block against the write lock that transaction is holding. "
-                + "Call ApplyAllConfiguredChangesToDatabaseAsync (or create the table inside your own "
-                + "transaction) before enlisting.");
+                $"There is no table '{table.Name}' for document type {documentType.FullName}, and this session "
+                + "is holding the database's write lock for an exclusive fetch (FetchForExclusiveWriting, "
+                + "AppendExclusive or WriteExclusivelyToAggregate), so it cannot create one: the migration runs "
+                + "on its own connection, which would wait on that lock. Apply the schema first with "
+                + "ApplyAllConfiguredChangesToDatabaseAsync, or store the first document of this type before "
+                + "fetching exclusively.");
         }
+
+        throw new InvalidOperationException(
+            $"There is no table '{table.Name}' for document type {documentType.FullName}, and a session "
+            + "enlisted in a transaction it does not own cannot create one — the migration runs on its "
+            + "own connection, which would block against the write lock that transaction is holding. "
+            + "Call ApplyAllConfiguredChangesToDatabaseAsync (or create the table inside your own "
+            + "transaction) before enlisting.");
     }
 
     /// <summary>
@@ -1780,7 +1982,7 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
     // fisher#454: an enlisted session's storages see a database whose Hi-Lo sequences refuse to reserve
     // a block, rather than wait on the write lock the caller's transaction holds. See
     // EnlistedStorageDatabase.
-    IStorageDatabase IStorageSession.Database => EnlistedTransaction is null
+    IStorageDatabase IStorageSession.Database => ActiveTransaction is null
         ? FisherDatabase
         : LazilyCreate(ref _enlistedDatabase, () => new Storage.Sequences.EnlistedStorageDatabase(FisherDatabase));
 
@@ -1947,7 +2149,7 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             return registered;
         }
 
-        if (EnlistedTransaction is not null)
+        if (ActiveTransaction is not null)
         {
             await AssertDocumentTableExistsAsync(typeof(TDoc), cancellationToken).ConfigureAwait(false);
         }
@@ -2223,6 +2425,10 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
             await DisposeParticipantsAsync().ConfigureAwait(false);
         }
 
+        // fisher#689: an exclusive fetch whose unit of work was never saved gives the write lock back here,
+        // before the connection goes back to the pool.
+        RollBackHeldTransaction();
+
         await _lifetime.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -2341,6 +2547,8 @@ internal partial class FisherSession : IDocumentSession, ITenantOperations, ISto
         {
             DisposeParticipants();
         }
+
+        RollBackHeldTransaction();
 
         _lifetime.Dispose();
     }

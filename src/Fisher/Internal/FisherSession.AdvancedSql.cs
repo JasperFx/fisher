@@ -195,7 +195,7 @@ internal partial class FisherSession : IAdvancedSql
 
         var command = builder.Compile();
         command.Connection = connection;
-        command.Transaction = EnlistedTransaction;
+        command.Transaction = ActiveTransaction;
         command.CommandTimeout = CommandTimeout;
 
         return command;

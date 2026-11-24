@@ -64,6 +64,28 @@ Task Execute(CancellationToken token = default);
 The two event methods are the [DCB](/events/dcb) half, which is where a batch is most useful — several
 boundaries opened against one coherent view.
 
+### `batch.Events`
+
+The event store reads are on `batch.Events`, in the shape Marten's batch has: `FetchStream`, `FetchStreamState`,
+and `FetchForWriting`, `FetchForWriting(id, expectedVersion)`, `FetchForExclusiveWriting` and `FetchLatest`, each by
+stream id, strong-typed id or [natural key](/events/natural-keys#batch-queries).
+
+<!-- snippet: sample_batching_natural_key_fetches -->
+<a id='snippet-sample_batching_natural_key_fetches'></a>
+```cs
+var batch = session.CreateBatchQuery();
+
+var writing = batch.Events.FetchForWriting<Booking, BookingReference>(number);
+var view = batch.Events.FetchLatest<BookingSummary, BookingReference>(other);
+
+await batch.Execute();
+
+var bookingStream = await writing;
+var otherSummary = await view;
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L201-L213' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_batching_natural_key_fetches' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
 ## Failure handling
 
 ::: tip

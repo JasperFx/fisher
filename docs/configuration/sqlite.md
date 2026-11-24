@@ -67,14 +67,10 @@ Fisher's append path takes the write lock with `BEGIN IMMEDIATE` (`IsolationLeve
 where Marten takes an advisory lock and Polecat an `UPDLOCK, HOLDLOCK` row lock.
 
 The consequence is visible in one place. `AppendExclusive`, `FetchForExclusiveWriting` and
-`WriteExclusivelyToAggregate` are the *optimistic* methods here. On the siblings a competing session
-**waits** its turn; on Fisher there is no row lock to wait on, so the loser **fails** with
-`EventStreamUnexpectedMaxEventIdException`. The safety property is unchanged — the version guard
-still runs inside the write transaction, so there is no lost update.
-
-Matching the siblings would mean holding a `BEGIN IMMEDIATE` open from the fetch until
-`SaveChangesAsync`, blocking every other writer in the process for as long as the caller holds the
-session. That is a worse trade for an embedded database.
+`WriteExclusivelyToAggregate` take that lock before they read and hold it until the session commits, so a competing
+exclusive writer waits its turn, as on the siblings. But there is no row lock to take, so it is the **file's** lock:
+while one session holds it, every other writer on the file waits, whatever stream it writes to. Readers carry on under
+WAL. See [exclusive writes](/events/appending#exclusive-writes).
 
 ### The busy handler
 

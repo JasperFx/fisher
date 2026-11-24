@@ -291,22 +291,26 @@ public class writing_to_aggregates : IAsyncLifetime
     }
 
     [Fact]
-    public async Task append_exclusive_behaves_as_append_optimistic()
+    public async Task append_exclusive_waits_its_turn_instead_of_failing()
     {
-        // SQLite has no row lock to take, so the exclusive variants are the optimistic ones. This
-        // asserts the documented divergence rather than an aspiration — see CLAUDE.md.
+        // fisher#689: the exclusive variants take the file's write lock and hold it until the commit, so the
+        // second writer waits for the first and then succeeds. They used to be the optimistic ones, and the
+        // second writer failed with EventStreamUnexpectedMaxEventIdException. exclusive_writing has the rest.
         await using var first = _store.LightweightSession();
         await using var second = _store.LightweightSession();
 
         await first.Events.AppendExclusive(_streamId, TestContext.Current.CancellationToken,
             new MemberJoined("Sam"));
-        await second.Events.AppendExclusive(_streamId, TestContext.Current.CancellationToken,
+
+        var waiting = second.Events.AppendExclusive(_streamId, TestContext.Current.CancellationToken,
             new MemberJoined("Merry"));
 
         await first.SaveChangesAsync(TestContext.Current.CancellationToken);
+        await waiting;
+        await second.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        await Should.ThrowAsync<EventStreamUnexpectedMaxEventIdException>(
-            () => second.SaveChangesAsync(TestContext.Current.CancellationToken));
+        var events = await second.Events.FetchStreamAsync(_streamId, token: TestContext.Current.CancellationToken);
+        events.Select(x => x.Data).OfType<MemberJoined>().Select(x => x.Member).ShouldBe(["Frodo", "Sam", "Merry"]);
     }
 
     // ---- FetchLatest / ProjectLatest ----
@@ -362,6 +366,56 @@ public class writing_to_aggregates : IAsyncLifetime
         lastKnown.ShouldNotBeNull();
         lastKnown!.Members.ShouldBe(["Boromir"]);
         lastKnown.Id.ShouldBe(streamId);
+    }
+
+    /// <summary>fisher#687 (marten#6194): a version past the end of the stream is no version of it.</summary>
+    [Fact]
+    public async Task last_known_at_a_version_past_the_end_of_the_stream_is_null()
+    {
+        var streamId = Guid.NewGuid();
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.StartStream<QuestParty>(streamId, new QuestStarted("Fellowship"), new MemberJoined("Sam"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using var query = _store.LightweightSession();
+
+        (await query.Events.AggregateStreamToLastKnownAsync<QuestParty>(streamId, 3,
+            token: TestContext.Current.CancellationToken)).ShouldBeNull();
+        (await query.Events.AggregateStreamToLastKnownAsync<QuestParty>(streamId, 2,
+            token: TestContext.Current.CancellationToken))!.Members.ShouldBe(["Sam"]);
+    }
+
+    /// <summary>
+    ///     fisher#687: the walk back rebuilt from the first event once per trailing event that left no aggregate.
+    /// </summary>
+    [Fact]
+    public async Task last_known_does_not_rebuild_from_the_start_for_every_event_it_walks_back()
+    {
+        var streamId = Guid.NewGuid();
+
+        var events = new List<object> { new CountedStarted(), new CountedTouched() };
+        for (var i = 0; i < 20; i++) events.Add(new CountedDeleted());
+
+        await using (var session = _store.LightweightSession())
+        {
+            session.Events.StartStream<CountedAggregate>(streamId, events.ToArray());
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        CountedAggregate.Touches = 0;
+
+        await using var query = _store.LightweightSession();
+        var lastKnown = await query.Events.AggregateStreamToLastKnownAsync<CountedAggregate>(streamId,
+            token: TestContext.Current.CancellationToken);
+
+        lastKnown.ShouldNotBeNull();
+        lastKnown.TouchCount.ShouldBe(1);
+
+        // Once on the way forward, once to build the last known aggregate. The walk back made it 21.
+        CountedAggregate.Touches.ShouldBeLessThanOrEqualTo(2);
     }
 
     [Fact]
@@ -484,4 +538,29 @@ public class writing_to_aggregates_with_string_identity : IAsyncLifetime
             () => session.Events.FetchForWriting<KeyedQuestParty, int>(42,
                 TestContext.Current.CancellationToken));
     }
+}
+
+public record CountedStarted;
+
+public record CountedTouched;
+
+public record CountedDeleted;
+
+/// <summary>fisher#687: counts its applies, so a test can tell one fold of the stream from twenty.</summary>
+public class CountedAggregate
+{
+    public static int Touches;
+
+    public Guid Id { get; set; }
+    public int TouchCount { get; set; }
+
+    public static CountedAggregate Create(CountedStarted _) => new();
+
+    public void Apply(CountedTouched _)
+    {
+        Touches++;
+        TouchCount++;
+    }
+
+    public bool ShouldDelete(CountedDeleted _) => true;
 }

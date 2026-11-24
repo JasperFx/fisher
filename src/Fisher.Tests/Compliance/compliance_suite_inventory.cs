@@ -19,7 +19,12 @@ public class compliance_suite_inventory
         [typeof(BackfillCompliance<,,>)] =
             "Fisher does not run projection backfills yet (fisher#643, the backfill half, deferred: Jeremy is "
             + "holding projection backfill; the rewrite half is done), as Marten (marten#5632) and Polecat (polecat#1055) do not. SupportsBackfills stays false "
-            + "until then"
+            + "until then",
+        [typeof(CompositeKeepUnchangedMembersCompliance<,,>)] =
+            "Keeping a composite's unchanged members across a rebuild (jasperfx#684, JasperFx 3.15.1) is fisher#109: "
+            + "Fisher's rebuild teardown still tears down every member. The suite's configuration calls "
+            + "KeepUnchangedMembers() before its capability gate, so it cannot be enrolled with "
+            + "SupportsKeepingUnchangedCompositeMembers off"
     };
 
     [Fact]

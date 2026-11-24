@@ -515,6 +515,13 @@ public class FisherComplianceFixture : EventStoreComplianceFixture<IDocumentSess
     public override bool SupportsNaturalKeys => true;
 
     /// <summary>
+    ///     fisher#679 — a mapped key (<c>[MappedNaturalKey&lt;T&gt;]</c>) resolves through its source
+    ///     projection's lookup, which is what <c>MappedNaturalKeyCompliance</c> and the mapped half of
+    ///     <c>NaturalKeyRegistrationCompliance</c> assert.
+    /// </summary>
+    public override bool SupportsMappedNaturalKeys => true;
+
+    /// <summary>
     ///     Fisher's <c>EventOperations.UnArchiveStream(Guid|string)</c> implement the members
     ///     JasperFx lifted onto the shared <see cref="IEventStoreOperations" /> (jasperfx#1186,
     ///     JasperFx/marten#5476), so the archiving suite's unarchive facts run rather than skipping. The

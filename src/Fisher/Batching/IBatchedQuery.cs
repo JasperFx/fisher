@@ -70,6 +70,16 @@ public interface IBatchedQuery
     Task<IEventBoundary<T>> FetchForWritingByTags<T>(EventTagQuery query) where T : class;
 
     /// <summary>
+    ///     The event store reads this batch can declare: stream state, stream events, and the aggregate
+    ///     fetches by stream id, strong-typed id or natural key (fisher#679). Marten's <c>batch.Events</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Default-implemented so an <see cref="IBatchedQuery" /> written outside Fisher still compiles.
+    /// </remarks>
+    IBatchEvents Events => throw new NotSupportedException(
+        $"{GetType().Name} does not implement {nameof(IBatchedQuery)}.{nameof(Events)}.");
+
+    /// <summary>
     ///     Run everything declared so far and complete the tasks already handed out.
     /// </summary>
     Task Execute(CancellationToken token = default);

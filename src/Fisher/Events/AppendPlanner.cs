@@ -120,10 +120,31 @@ internal sealed class AppendPlanner
         var connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
 
         // The caller's transaction for an enlisted session (fisher#300), null for an owned one.
-        var rows = await ReadRowsAsync(withEvents, connection, _session.EnlistedTransaction, token)
+        var rows = await ReadRowsAsync(withEvents, connection, _session.ActiveTransaction, token)
             .ConfigureAwait(false);
 
         ClientSideAppendPlanner.NumberAhead(withEvents, rows.For, ContextFor());
+    }
+
+    /// <summary>
+    ///     Number and stamp one stream's pending events the way the commit will, for
+    ///     <see cref="EventOperations.ProjectLatestForCommit{T}(Guid,CancellationToken)" /> (fisher#685).
+    /// </summary>
+    /// <remarks>
+    ///     The same numbering and stamping the commit runs ahead of inline projections, with the same context, so
+    ///     the timestamp is rounded to the column's millisecond and the session metadata is gated on the same
+    ///     <c>Enable*</c> switches. It is handed the version the stream starts from rather than a row read, which
+    ///     is all <c>NumberAhead</c> takes from the row. The commit's own stamping keeps every value already set,
+    ///     and re-derives the same versions from the row it reads under the write lock, or refuses the commit on
+    ///     the expected version, so what the call returned is what is written.
+    /// </remarks>
+    public void StampForCommit(StreamAction stream, long startingVersion)
+    {
+        var row = stream.ActionType == StreamActionType.Start
+            ? StreamRowSnapshot.Missing
+            : StreamRowSnapshot.FromRow(startingVersion, false);
+
+        ClientSideAppendPlanner.NumberAhead([stream], _ => row, ContextFor());
     }
 
     private ClientSideAppendContext ContextFor() => new()

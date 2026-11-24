@@ -138,5 +138,6 @@ sending a Guid, and `Fisher.AspNetCore` can [serve an ETag from either](/documen
 
 ## Event stream concurrency
 
-Streams have their own guard. See [Appending Events](/events/appending#optimistic-concurrency) —
-including why `AppendExclusive` **fails** here where the siblings **wait**.
+Streams have their own guard. See [Appending Events](/events/appending#optimistic-concurrency), and
+[exclusive writes](/events/appending#exclusive-writes) for why `AppendExclusive` holds the whole file's write lock
+here rather than one stream's.

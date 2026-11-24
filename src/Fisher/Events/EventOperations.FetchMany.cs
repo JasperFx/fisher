@@ -57,6 +57,76 @@ public partial class EventOperations
         return FetchManyForWritingAsync<T, string>(keys, nameof(keys), cancellation);
     }
 
+    /// <summary>
+    ///     Fetch several streams for writing by an identity whose type is not fixed by the signature: a
+    ///     strong-typed stream id, or a natural key the aggregate owns or maps (fisher#679).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Three statements however many ids there are. Natural keys are resolved to stream ids in one
+    ///         statement, then the streams are fetched in the two the by-stream-id overload uses.
+    ///     </para>
+    ///     <para>
+    ///         <b>A key naming no live stream throws <see cref="Exceptions.UnknownNaturalKeyException" /></b>,
+    ///         as a single <c>FetchForWriting</c> by that key does here. Nothing is enlisted in the session
+    ///         first. The contract's rule is that a missing id answers as a single fetch by it would, and on
+    ///         Fisher that is a refusal rather than a new stream the key does not name.
+    ///     </para>
+    ///     <para>
+    ///         Refuses a <c>Nullable&lt;T&gt;</c> type argument, a null id and a repeated id, through the
+    ///         contract's own <c>AssertFetchableIds</c>.
+    ///     </para>
+    /// </remarks>
+    public async Task<IReadOnlyList<IEventStream<T>>> FetchManyForWriting<T, TId>(IReadOnlyList<TId> ids,
+        CancellationToken cancellation = default) where T : class where TId : notnull
+    {
+        IEventStoreOperations.AssertFetchableIds(ids, nameof(ids));
+
+        switch (ids)
+        {
+            case IReadOnlyList<Guid> guids when Graph.StreamIdentity == StreamIdentity.AsGuid:
+                return await FetchManyForWriting<T>(guids, cancellation).ConfigureAwait(false);
+            case IReadOnlyList<string> keys when Graph.StreamIdentity == StreamIdentity.AsString:
+                return await FetchManyForWriting<T>(keys, cancellation).ConfigureAwait(false);
+        }
+
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        var (_, key) = ClassifyIdentity<T, TId>(ids[0]);
+
+        if (key is null)
+        {
+            // Strong-typed stream ids: the wrapper exists only in .NET.
+            var unwrapped = ids.Select(id => ClassifyIdentity<T, TId>(id).StreamId!).ToList();
+
+            return unwrapped[0] is Guid
+                ? await FetchManyForWriting<T>(unwrapped.Cast<Guid>().ToList(), cancellation).ConfigureAwait(false)
+                : await FetchManyForWriting<T>(unwrapped.Cast<string>().ToList(), cancellation).ConfigureAwait(false);
+        }
+
+        var raws = ids.Select(id => RequireNaturalKeyValue(key, id)).ToList();
+
+        var connection = await _session.EventConnectionAsync(cancellation).ConfigureAwait(false);
+        var resolved = await new Storage.NaturalKeyLookup(Graph)
+            .ResolveManyAsync(key, raws, TenantId, connection, _session.ActiveTransaction, cancellation)
+            .ConfigureAwait(false);
+
+        var streamIds = new List<object>(raws.Count);
+        foreach (var raw in raws)
+        {
+            streamIds.Add(resolved.TryGetValue(Storage.NaturalKeyLookup.KeyText(raw), out var streamId)
+                ? streamId
+                : throw new Exceptions.UnknownNaturalKeyException(typeof(T), raw));
+        }
+
+        return Graph.StreamIdentity == StreamIdentity.AsGuid
+            ? await FetchManyForWriting<T>(streamIds.Cast<Guid>().ToList(), cancellation).ConfigureAwait(false)
+            : await FetchManyForWriting<T>(streamIds.Cast<string>().ToList(), cancellation).ConfigureAwait(false);
+    }
+
     private async Task<IReadOnlyList<IEventStream<T>>> FetchManyForWritingAsync<T, TId>(IReadOnlyList<TId> ids,
         string paramName, CancellationToken token) where T : class where TId : notnull
     {

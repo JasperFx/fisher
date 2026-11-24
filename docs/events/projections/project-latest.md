@@ -47,6 +47,46 @@ await session.SaveChangesAsync();
 
 `ProjectLatest` is a **read**. It does not open a boundary and does not guard anything.
 
+## ProjectLatestForCommit: the aggregate as the commit writes it {#project-latest-for-commit}
+
+`ProjectLatest` folds the pending events as they are, before the commit has given them a version, a
+timestamp or the session's metadata. `ProjectLatestForCommit` gives them those now, the same way
+`SaveChangesAsync()` will, and the commit keeps what it assigned. So the aggregate it returns is the one
+the commit writes: the inline snapshot, a later `FetchLatest`, and the daemon's async snapshot all agree
+with it, versions, timestamps and correlation id included. It stores nothing.
+
+<!-- snippet: sample_project_latest_for_commit -->
+<a id='snippet-sample_project_latest_for_commit'></a>
+```cs
+var stream = await session.Events.FetchForWriting<CommitTrace>(traceId, token);
+stream.AppendOne(new TraceScanned("dock"));
+
+// The pending event gets its version, timestamp and metadata now, and the commit keeps them
+var trace = await session.Events.ProjectLatestForCommit<CommitTrace>(traceId, token);
+
+// Store the response beside the work, in the same transaction
+session.Store(new TraceReceipt { Id = traceId, Version = trace!.LastVersion, At = trace.LastTimestamp });
+
+await session.SaveChangesAsync(token);
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/project_latest_samples.cs#L15-L26' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_project_latest_for_commit' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+It is for an endpoint that stores its response in the same transaction as its work (wolverine#5721), and it
+follows Marten's `ProjectLatestForCommit` (marten#6149).
+
+- **The stream's version has to be known before the commit.** Start the stream with `StartStream`, fetch it
+  with `FetchForWriting`, or `Append` with an expected version. Otherwise it throws
+  `InvalidOperationException` and leaves the pending events alone.
+- **It takes the stream's id.** For a natural key, fetch the stream with `FetchForWritingByNaturalKey` and pass
+  its `Id`.
+- **The commit refuses a stream whose expected version changed after the call**, by appending with a new
+  expected version or fetching it for writing again, because the aggregate it returned would no longer match.
+  Call it again after the last change. Appending more events through the same stream is fine; they are just
+  not covered by the call.
+- **What the call does not settle**: the event sequence (`IEvent.Sequence`) is assigned at commit, and session
+  metadata not set at the call (a correlation id set afterwards, say) is filled in at commit.
+
 ## Pending events are tracked per stream
 
 Fisher tracks them in a dictionary keyed by stream identity, so several `Append` calls for one stream

@@ -27,7 +27,7 @@ process**. There is no server to install, nothing to provision, and nothing to k
 > `Fisher.AspNetCore` and `Fisher.EntityFrameworkCore` companion packages all work and are tested.
 >
 > Fisher passes **all 74 suites and 994 tests** it enrolls from `JasperFx.Events.ComplianceTests`,
-> the shared cross-store suite Marten and Polecat also enroll in, alongside its own 4,221 (4,248 on net11.0).
+> the shared cross-store suite Marten and Polecat also enroll in, alongside its own 4,258 (4,285 on net11.0).
 >
 > That suite pins **API portability, not behavioural equivalence** — code written against one store
 > compiles and runs against another. It does not pin that the three behave identically, and they do
@@ -93,7 +93,7 @@ Database-per-tenant is a file per tenant, so it buys concurrency as well as isol
 
 **Harder.** One writer per database file. That is why the unit of work is sequential, why a busy retry
 is a real policy, why `ITransactionParticipant` and `QueueSqlCommand` matter more here than on either
-sibling, and why the exclusive append methods *fail* where Marten's and Polecat's *wait*.
+sibling, and why the exclusive append methods lock the whole file where Marten's and Polecat's lock one stream.
 
 All of it is documented rather than left to be discovered — see the
 [migration guide](https://fisher.jasperfx.net/migration-guide) for the behaviours that differ.

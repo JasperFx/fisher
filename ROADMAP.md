@@ -3,16 +3,21 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **five open issues: the 2.0 docs review, and four for 2.1, one of them blocked upstream.** 2.0.0-rc.2 is
-the release candidate, on JasperFx 3.14.0, Weasel 10.0.0-rc.1 and the .NET 11 GA packages. It carries the port of
+Status: **two open issues, both for 2.1.** 2.0.0-rc.2 is
+the release candidate, on JasperFx 3.15.1, Weasel 10.0.0 and the .NET 11 GA packages, bundling the 3.15.1 source
+generator so applications get the natural key analyzers ([#690](https://github.com/JasperFx/fisher/issues/690)). It carries the port of
 Marten 10.0's burn-down: event and document metadata back to opt-in ([#682](https://github.com/JasperFx/fisher/issues/682)),
 aggregate stream stats ([#678](https://github.com/JasperFx/fisher/issues/678)), the null natural key rule and the
 LINQ support summary ([#684](https://github.com/JasperFx/fisher/issues/684)), tests clearing the fetch-plan bug
 shapes ([#683](https://github.com/JasperFx/fisher/issues/683)), interface conventions over a base class in another
 assembly ([#677](https://github.com/JasperFx/fisher/issues/677)), and two docs sweeps
 ([#680](https://github.com/JasperFx/fisher/issues/680), [#681](https://github.com/JasperFx/fisher/issues/681)).
-The 2.0 milestone has only the docs review ([#657](https://github.com/JasperFx/fisher/issues/657)) left, and it gates
-the final 2.0.0, not the RC.
+It also closes the rest of the 2.0 milestone: natural keys at parity with Marten 10 and exclusive writes that lock
+([#679](https://github.com/JasperFx/fisher/issues/679), [#688](https://github.com/JasperFx/fisher/issues/688),
+[#689](https://github.com/JasperFx/fisher/issues/689)), `ProjectLatestForCommit`
+([#685](https://github.com/JasperFx/fisher/issues/685)), and a linear `AggregateStreamToLastKnownAsync`
+([#687](https://github.com/JasperFx/fisher/issues/687)). The docs review
+([#657](https://github.com/JasperFx/fisher/issues/657)) is done.
 Since 2.0.0-alpha.7, main turns extended progression tracking on by default
 ([#664](https://github.com/JasperFx/fisher/issues/664)), adds `QueryAcrossAllDatabasesAsync`
 ([#665](https://github.com/JasperFx/fisher/issues/665)), translates computed ordering keys, array indexes, `LeftJoin`
@@ -438,30 +443,25 @@ full text by reciprocal rank fusion, and [#261](https://github.com/JasperFx/fish
 *produces* the embedding from an event stream — so the vector a document carries is no longer the
 application's to maintain on every write path.
 
+Natural keys reached parity with Marten 10 for 2.0 GA (#679, #688): mapped keys, the versioned fetch by key,
+`FetchManyForWriting` and batched fetches by key, and nullable keys. The exclusive methods now hold the file's write
+lock until the commit (#689).
+
 <!-- open-issues -->
 <!-- Everything open goes in here and nothing that is closed, because scripts/check_roadmap_status.py
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is five items.
-
-[#657](https://github.com/JasperFx/fisher/issues/657): the docs review of the new and substantially changed pages,
-before the final 2.0.0, including turning hand-written samples into compiled ones (#684's docs review item). It does
-not gate the release candidate.
-
-[#679](https://github.com/JasperFx/fisher/issues/679): recreate Marten 10's natural key work, after the usage
-review. Mapped natural keys are part of it, so `MappedNaturalKeyCompliance` skips on Fisher until then.
-
-[#685](https://github.com/JasperFx/fisher/issues/685): `ProjectLatestForCommit` (marten#6149), deferred from #684 as
-a new API rather than a fix.
+What is left is two items, both for 2.1.
 
 [#643](https://github.com/JasperFx/fisher/issues/643): the projection backfill seam JasperFx 3.7.0 added to
 `IEventStore`. The event-range marks and the stored-event rewrite are done. The backfill itself is deferred: Jeremy is
 holding projection backfill, so #648 was reverted, and `BackfillCompliance` is excused until it lands, as it is on
 Marten and Polecat.
 
-[#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
-an unanswered question about the stage graph.
+[#109](https://github.com/JasperFx/fisher/issues/109): honour per-member versions in composite member teardown.
+jasperfx#684 shipped in JasperFx 3.15.1 (`KeepUnchangedMembers`, `MembersToTearDownAsync`), so it is no longer blocked;
+`CompositeKeepUnchangedMembersCompliance` is excused until it lands.
 <!-- /open-issues -->
 
 The release train's one follow-up, [#543](https://github.com/JasperFx/fisher/issues/543) (three
@@ -1070,8 +1070,8 @@ portable in the compliance suites runs through. What was not implemented was col
 `EventOperations.Unsupported.cs` (DCB tags, then event rewriting) rather than scattered, so the file
 shrinking measured progress; it reached zero and was deleted. Two open decisions came out of it:
 
-- **Exclusive appends are the optimistic ones.** SQLite has no row lock; documented in CLAUDE.md's
-  divergence table with what revisiting it would cost. Still open.
+- **Exclusive appends were the optimistic ones.** SQLite has no row lock. Settled in 2.0 by fisher#689: they
+  hold the file's write lock from the fetch to the commit, and a competing writer waits.
 - **`AllAggregateTypes()` had no assembly scan.** Settled by standing up a thin
   `StoreOptions.Projections`, which was cheap only because the write-surface work had already made
   `IDocumentSession` an `IStorageOperations` — the constraint `ProjectionGraph` imposes. Fisher gets

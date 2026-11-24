@@ -52,8 +52,9 @@ public partial class EventOperations
     /// </summary>
     /// <remarks>
     ///     For an aggregate that deletes itself on some event — a <c>ShouldDelete</c> that fired, or a
-    ///     fold that returned null — this answers "what did it look like before that happened?". Every
-    ///     attempt re-folds from the beginning, so this is deliberately the expensive call.
+    ///     fold that returned null — this answers "what did it look like before that happened?". It folds the
+    ///     stream once to find the last event that leaves an aggregate, then builds that prefix once
+    ///     (fisher#687). A <paramref name="version" /> past the end of the stream answers null.
     /// </remarks>
     public Task<T?> AggregateStreamToLastKnownAsync<T>(Guid streamId, long version = 0,
         DateTimeOffset? timestamp = null, CancellationToken token = default) where T : class
@@ -80,21 +81,43 @@ public partial class EventOperations
             return null;
         }
 
+        // fisher#687 (marten#6194): a version past the end of the stream is no version of it
+        if (version != 0 && version > events[^1].Version)
+        {
+            return null;
+        }
+
         var aggregator = Graph.AggregatorFor<T>();
 
-        for (var count = events.Count; count > 0; count--)
+        // fisher#687: this used to rebuild from the first event once per event it walked back from the end, which is
+        // quadratic in a trailing run of events that leave no aggregate. One forward fold finds the longest prefix
+        // that leaves an aggregate; that prefix is then built once from scratch, because the forward fold's state
+        // may have been mutated by the later events, so the result is exactly the aggregate the walk back found.
+        T? state = null;
+        var lastKnown = 0;
+        for (var i = 0; i < events.Count; i++)
         {
-            var slice = events.Take(count).ToList();
-            var aggregate = await aggregator.BuildAsync(slice, _session, null, token).ConfigureAwait(false);
-
-            if (aggregate is not null)
+            state = await aggregator.BuildAsync([events[i]], _session, state, token).ConfigureAwait(false);
+            if (state is not null)
             {
-                AggregateIdentity.TrySetIdentity(aggregate, streamId);
-                return aggregate;
+                lastKnown = i + 1;
             }
         }
 
-        return null;
+        if (lastKnown == 0)
+        {
+            return null;
+        }
+
+        var aggregate = await aggregator.BuildAsync(events.Take(lastKnown).ToList(), _session, null, token)
+            .ConfigureAwait(false);
+
+        if (aggregate is not null)
+        {
+            AggregateIdentity.TrySetIdentity(aggregate, streamId);
+        }
+
+        return aggregate;
     }
 
     private async Task<T?> AggregateStreamAsync<T>(object streamId, long version, DateTimeOffset? timestamp,

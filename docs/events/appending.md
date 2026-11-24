@@ -57,20 +57,50 @@ being appended to the version you were passing. A value smaller than the number 
 session.Events.AppendOptimistic(streamId, new OrderShipped(…));   // reads the version for you
 ```
 
-### The exclusive methods fail where the siblings wait
+### Exclusive writes {#exclusive-writes}
 
-::: warning
-`AppendExclusive`, `FetchForExclusiveWriting` and `WriteExclusivelyToAggregate` are the **optimistic**
-methods on Fisher.
+`AppendExclusive`, `FetchForExclusiveWriting` and `WriteExclusivelyToAggregate` take the database's write lock
+(`BEGIN IMMEDIATE`) before they read, and the session holds it until `SaveChangesAsync` commits or the session is
+disposed. A competing exclusive writer waits for its turn, as on Marten and Polecat, rather than failing on the
+version guard. The natural key forms resolve the key inside the lock, so the key cannot move before the commit.
 
-Marten takes an advisory lock and Polecat a row lock, so a competing session **waits** its turn.
-SQLite has no row locks and one writer per file, so the equivalent would mean holding a
-`BEGIN IMMEDIATE` open from the fetch until `SaveChangesAsync` — blocking every other writer in the
-process for as long as the caller holds the session.
+```cs
+await using var session = store.LightweightSession();
 
-**The safety property is unchanged**: the version guard still runs inside the write transaction, so
-there is no lost update. What differs is that a loser gets `EventStreamUnexpectedMaxEventIdException`
-instead of waiting.
+// Waits here while another session holds the lock, then reads the stream inside it
+var stream = await session.Events.FetchForExclusiveWriting<Order>(orderId);
+stream.AppendOne(new OrderShipped(…));
+
+// Commits and gives the lock back
+await session.SaveChangesAsync();
+```
+
+::: warning SQLite locks the file, not the stream
+Marten takes an advisory lock and Polecat a row lock, so a writer to another stream carries on. SQLite has one writer
+per database file, so while a session holds the lock **every other writer on the file waits**, whatever it writes.
+Readers are not blocked under WAL. Hold the lock for as short a time as the work allows: fetch, decide, append,
+save. Don't call out to another service between the fetch and `SaveChangesAsync`.
+:::
+
+A few things follow from holding the lock across the session:
+
+- A writer that waits longer than the busy timeout and every retry in `StoreOptions.ResiliencePipeline` gets
+  `JasperFx.Events.StreamLockedException`, naming the stream.
+- `SaveChangesAsync` writes inside the transaction the fetch opened, then commits it. A failed commit rolls it back,
+  and disposing the session without saving rolls it back too. Either way the lock is released. A save with nothing
+  to write still releases it.
+- The event tables, the aggregate's document table and every inline projection's tables are created before the lock
+  is taken. A document type the store has never written, first stored after the lock is taken, can't have its table
+  created then, because that migration runs on another connection and would wait on the lock. Fisher throws instead,
+  naming the type. Apply the schema at startup and this never comes up.
+- A Hi-Lo document can't reserve a new block of ids while the lock is held, for the same reason. An id the current
+  block can still supply is fine.
+- A session enlisted in a transaction you own (`SessionOptions.ForTransaction`) takes no lock of its own. Your
+  transaction already decides that.
+
+::: tip Changed in Fisher 2.0
+Fisher 1 made these the *optimistic* methods: a competing writer failed with
+`EventStreamUnexpectedMaxEventIdException` instead of waiting (fisher#689).
 :::
 
 ### When the file itself is contended

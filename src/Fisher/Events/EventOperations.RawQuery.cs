@@ -108,6 +108,7 @@ public partial class EventOperations
 
         var command = builder.Compile();
         command.Connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
+        command.Transaction = _session.ActiveTransaction;
         command.CommandTimeout = _session.Options.CommandTimeout;
 
         var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, string.Empty, TenantId);
@@ -212,6 +213,7 @@ public partial class EventOperations
 
         var command = builder.Compile();
         command.Connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
+        command.Transaction = _session.ActiveTransaction;
         command.CommandTimeout = _session.Options.CommandTimeout;
 
         var ctx = new EventHydrationContext(Graph, _session.FisherSerializer, string.Empty, TenantId);
@@ -261,6 +263,7 @@ public partial class EventOperations
 
         var command = builder.Compile();
         command.Connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
+        command.Transaction = _session.ActiveTransaction;
         command.CommandTimeout = _session.Options.CommandTimeout;
 
         var raw = await command.ExecuteScalarAsync(token).ConfigureAwait(false);
@@ -684,6 +687,7 @@ public partial class EventOperations
 
         var command = builder.Compile();
         command.Connection = await _session.EventConnectionAsync(token).ConfigureAwait(false);
+        command.Transaction = _session.ActiveTransaction;
         command.CommandTimeout = _session.Options.CommandTimeout;
 
         var results = new List<T>();
