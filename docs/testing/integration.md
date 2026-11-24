@@ -193,8 +193,8 @@ differ, which is precisely the failure mode of a stand-in: the suite compiles, g
 production behaves another way.
 
 Several of them are what integration tests are for. The
-[exclusive append methods fail rather than wait](/events/appending#the-exclusive-methods-fail-where-the-siblings-wait),
-so a suite here exercises the failing path and production the waiting one.
+[exclusive methods lock the whole file](/events/appending#exclusive-writes) rather than one stream, so a suite here
+serializes writers that production lets run side by side.
 [Numeric revisions](/documents/concurrency#numeric-revisions) follow Marten's strictly-greater guard
 rather than Polecat's equality one. `QueryForNonStaleData` waits for the whole store, which is
 *stricter* — so a real staleness race in the deployed store can stay hidden.

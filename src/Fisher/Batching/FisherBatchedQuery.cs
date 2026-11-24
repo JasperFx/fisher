@@ -1,3 +1,4 @@
+using JasperFx.Events;
 using JasperFx.Events.Tags;
 
 namespace Fisher.Batching;
@@ -23,7 +24,7 @@ namespace Fisher.Batching;
 using Fisher.Events;
 using Fisher.Linq;
 
-internal sealed class FisherBatchedQuery : IBatchedQuery
+internal sealed class FisherBatchedQuery : IBatchedQuery, IBatchEvents
 {
     private readonly EventOperations _events;
     private readonly IQuerySession _session;
@@ -108,6 +109,61 @@ internal sealed class FisherBatchedQuery : IBatchedQuery
 
     public Task<IEventBoundary<T>> FetchForWritingByTags<T>(EventTagQuery query) where T : class
         => Enqueue(t => _events.FetchForWritingByTags<T>(query, t));
+
+    // ---- IBatchEvents (fisher#679) ----
+
+    public IBatchEvents Events => this;
+
+    public Task<StreamState?> FetchStreamState(Guid streamId)
+        => Enqueue(t => _events.FetchStreamStateAsync(streamId, t));
+
+    public Task<StreamState?> FetchStreamState(string streamKey)
+        => Enqueue(t => _events.FetchStreamStateAsync(streamKey, t));
+
+    public Task<IReadOnlyList<IEvent>> FetchStream(Guid streamId, long version = 0, DateTimeOffset? timestamp = null,
+        long fromVersion = 0)
+        => Enqueue(t => _events.FetchStreamAsync(streamId, version, timestamp, fromVersion, t));
+
+    public Task<IReadOnlyList<IEvent>> FetchStream(string streamKey, long version = 0,
+        DateTimeOffset? timestamp = null, long fromVersion = 0)
+        => Enqueue(t => _events.FetchStreamAsync(streamKey, version, timestamp, fromVersion, t));
+
+    public Task<IEventStream<T>> FetchForWriting<T>(Guid id) where T : class
+        => Enqueue(t => _events.FetchForWriting<T>(id, t));
+
+    public Task<IEventStream<T>> FetchForWriting<T>(string key) where T : class
+        => Enqueue(t => _events.FetchForWriting<T>(key, t));
+
+    public Task<IEventStream<T>> FetchForWriting<T>(Guid id, long expectedVersion) where T : class
+        => Enqueue(t => _events.FetchForWriting<T>(id, expectedVersion, t));
+
+    public Task<IEventStream<T>> FetchForWriting<T>(string key, long expectedVersion) where T : class
+        => Enqueue(t => _events.FetchForWriting<T>(key, expectedVersion, t));
+
+    public Task<IEventStream<T>> FetchForExclusiveWriting<T>(Guid id) where T : class
+        => Enqueue(t => _events.FetchForExclusiveWriting<T>(id, t));
+
+    public Task<IEventStream<T>> FetchForExclusiveWriting<T>(string key) where T : class
+        => Enqueue(t => _events.FetchForExclusiveWriting<T>(key, t));
+
+    public Task<T?> FetchLatest<T>(Guid id) where T : class
+        => Enqueue(t => _events.FetchLatest<T>(id, t).AsTask());
+
+    public Task<T?> FetchLatest<T>(string id) where T : class
+        => Enqueue(t => _events.FetchLatest<T>(id, t).AsTask());
+
+    public Task<IEventStream<T>> FetchForWriting<T, TId>(TId id) where T : class where TId : notnull
+        => Enqueue(t => _events.FetchForWriting<T, TId>(id, t));
+
+    public Task<IEventStream<T>> FetchForWriting<T, TId>(TId id, long expectedVersion)
+        where T : class where TId : notnull
+        => Enqueue(t => _events.FetchForWriting<T, TId>(id, expectedVersion, t));
+
+    public Task<IEventStream<T>> FetchForExclusiveWriting<T, TId>(TId id) where T : class where TId : notnull
+        => Enqueue(t => _events.FetchForExclusiveWriting<T, TId>(id, t));
+
+    public Task<T?> FetchLatest<T, TId>(TId id) where T : class where TId : notnull
+        => Enqueue(t => _events.FetchLatest<T, TId>(id, t).AsTask());
 
     /// <summary>
     ///     Run every declared read, in declaration order.

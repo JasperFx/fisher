@@ -232,11 +232,13 @@ internal class HiloSequence : HiloSequenceBase
         if (_refusingAdvanceFor.Value is { } documentType)
         {
             throw new InvalidOperationException(
-                $"Fisher cannot assign a Hi-Lo identity to a {documentType} through a session enlisted in a " +
-                $"caller's transaction (SessionOptions.ForTransaction): the '{EntityName}' sequence has to " +
-                "reserve its next block of ids, which is a write to fi_hilo on a connection of its own, and " +
-                "that write would wait on the write lock the caller's transaction holds. Assign the document's " +
-                "id before storing it, or store it from a session that is not enlisted.");
+                $"Fisher cannot assign a Hi-Lo identity to a {documentType} through a session whose transaction " +
+                "already holds the database's write lock: one enlisted in a caller's transaction " +
+                "(SessionOptions.ForTransaction), or one that took the lock for an exclusive fetch " +
+                $"(FetchForExclusiveWriting, AppendExclusive). The '{EntityName}' sequence has to reserve its next " +
+                "block of ids, which is a write to fi_hilo on a connection of its own, and that write would wait " +
+                "on the write lock this session's transaction holds. Assign the document's id before storing it, " +
+                "or store it before taking the lock or from another session.");
         }
     }
 

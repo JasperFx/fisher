@@ -116,7 +116,7 @@ These are the decisions that don't transfer from the sibling stores, and the rea
 | Event sequence | sequence / IDENTITY | `INTEGER PRIMARY KEY AUTOINCREMENT` |
 | Append concurrency | advisory lock / UPDLOCK,HOLDLOCK | `BEGIN IMMEDIATE` (`IsolationLevel.Serializable`) |
 | Document upsert | `MERGE` (Polecat) | `INSERT … ON CONFLICT … DO UPDATE … RETURNING`, as Marten |
-| Exclusive append | row lock — the loser **waits** | no row lock — the loser **fails** (see below) |
+| Exclusive append | row lock — the loser **waits** | the **file's** write lock, held to the commit — the loser waits (see below) |
 | Sequence read-back | bulk function / `OUTPUT ... INTO` | trailing SELECT by stream + version range |
 | Load-many ids | `= ANY($1)` / `OPENJSON` | `json_each(@ids)` |
 | Hi-Lo advance | stored function / optimistic UPDATE + retry | one atomic upsert (see below) |
@@ -144,15 +144,30 @@ deadline. SQLitePCLRaw 3.0.5 does not expose `sqlite3_busy_handler`, so it is lo
 `writer-queue` bh-* modes turn it off through the internal `StoreOptions.UseFixedSleepBusyHandler`, so plain
 `race` now measures Fisher's handler and `bh-mimic` measures SQLite's default.
 
-**`AppendExclusive` / `FetchForExclusiveWriting` / `WriteExclusivelyToAggregate` are the optimistic
-methods.** Marten and Polecat take a row lock so a competing session waits its turn. SQLite has no
-row locks and one writer per database file, so the equivalent would be holding a `BEGIN IMMEDIATE`
-open from the fetch until `SaveChangesAsync` — blocking every other writer in the process for as long
-as the caller holds the session. The safety property is unchanged (the version guard still runs inside
-the write transaction, so no lost update); what differs is that a loser gets
-`EventStreamUnexpectedMaxEventIdException` instead of waiting. Revisiting this means giving
-`FisherSession` a session-scoped transaction, which `SaveChangesAsync` would then have to join rather
-than open.
+**`AppendExclusive` / `FetchForExclusiveWriting` / `WriteExclusivelyToAggregate` hold the file's write
+lock until the commit** (fisher#689). They used to be the optimistic methods, and 1 of 5 concurrent exclusive
+writers committed while 4 failed with `EventStreamUnexpectedMaxEventIdException`; Marten and Polecat take a row lock
+and the loser waits. `FisherSession.AcquireExclusiveWriteLockAsync` opens `BEGIN IMMEDIATE` on the session's
+connection before the read (`HeldTransaction`), and `SaveChangesAsync` joins it rather than opening its own.
+
+- **`ActiveTransaction` (enlisted ?? held) is what every command on the session names.** `ConfigureCommandAsync` sets
+  it, and so must every detached command that sets only `Connection` (the `RawQuery` reads, `EventTableQueryProvider`,
+  `NaturalKeyLookup`, raw SQL, the pre-projection version read). Microsoft.Data.Sqlite refuses a command that names
+  no transaction while its connection has one pending. A new detached command that forgets it breaks only exclusive
+  and enlisted sessions, which is how it would ship.
+- **Anything that opens a second connection deadlocks against the lock.** So the event tables, the aggregate's table
+  and every inline projection's published tables are ensured *before* `BEGIN`; a document table first needed after
+  it is asserted on the session's connection (the enlisted rule, `ActiveTransaction is not null`); and a Hi-Lo
+  advance is refused (`EnlistedStorageDatabase`).
+- **No resilience pipeline around the held commit**: nothing can contend for a lock the session holds, and a retry
+  has no transaction left once it rolled back. The `BEGIN` itself runs through the pipeline, and a writer that never
+  gets the lock gets `StreamLockedException` naming the stream.
+- **Released on every way out**: commit, a failed write (rollback), a save with nothing to write, and disposal
+  (rollback, sync and async). `exclusive_writing` pins each, plus the property with teeth: five concurrent
+  exclusive writers never overlap (`max holders == 1`).
+- An enlisted session takes no lock (the caller's transaction decides), a tenant scope takes its parent's, and a
+  second exclusive fetch in one session finds the lock held. SQLite locks the file, so every other writer on it
+  waits too; readers carry on under WAL.
 
 **A missing stream row fails a non-zero expected version, and does not get recreated** (fisher#378).
 `AppendPlanner.PlanStream` used to treat "no row" as "create it" and drop the expected version.
@@ -5576,6 +5591,32 @@ before every test.
   waiting for a teardown to produce it — the property worth having is "a replay can rebuild this
   table", and a rebuild-then-fetch test would instead be asserting that teardown happens to leave it
   alone.
+
+#### Natural keys at parity with Marten 10 — fisher#679, fisher#688
+
+marten#6150 on JasperFx's jasperfx#1281/#1287 definitions. Marten's half is mostly about round trips (a plan per
+lifecycle, one command per fetch, a key-to-stream index for the write cache, `NaturalKeyMovedException`); **none of
+that ports, because Fisher has no round trip to save.** A fetch by key is still "resolve, then fetch by stream id",
+which is why the write cache and the identity map needed nothing: they already work by stream id.
+
+- **`ClassifyIdentity<T, TId>` is the one dispatch** for `FetchForWriting`, `FetchForWriting(id, expectedVersion)`,
+  `FetchForExclusiveWriting`, `FetchLatest` and `FetchManyForWriting`: the stream identity type first, then a key
+  whose declared type is `TId` (owned or mapped), then a strong-typed stream id, then a key whose inner type is `TId`.
+- **Mapped keys** come from `FisherProjectionOptions.AllNaturalKeysFor`, over `AllAggregateProjections()` so a
+  composite member is found. JasperFx's `AssertValidity` resolves `SourceProjectionDefinition`; an unresolved one is
+  left out. The lookup reads `LookupAggregateType`'s table, the owner's. Only owned keys get tables
+  (`NaturalKeys` is unchanged).
+- **`Nullable<TKey>` as a type argument throws `ArgumentException`**; a null key value is null from `FetchLatest`
+  (no query) and `ArgumentOutOfRangeException` for writing.
+- **`FetchManyForWriting` by key resolves every key in one `json_each` statement**, then the two-statement
+  by-stream-id fetch. A miss throws `UnknownNaturalKeyException` before anything is enlisted, because a single
+  `FetchForWriting` by key does: the contract says a miss answers as a single fetch would, and on Fisher that is a
+  refusal, not a new stream the key does not name.
+- **`IBatchedQuery.Events` (`IBatchEvents`)** is Marten's `batch.Events` shape, a default interface member on the
+  public interface so an outside implementer still compiles.
+- **The null-retires-the-key rule was already in** (jasperfx#1287, `RetiresKeyOnNull`, fisher#684).
+- `natural_key_parity` covers what the shared suites leave to the store; `MappedNaturalKeyCompliance` and the mapped
+  half of `NaturalKeyRegistrationCompliance` run now (`SupportsMappedNaturalKeys`).
 
 ### The `IEventStoreOperations` surface
 

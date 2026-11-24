@@ -120,7 +120,7 @@ internal sealed class AppendPlanner
         var connection = await _session.ConnectionAsync(token).ConfigureAwait(false);
 
         // The caller's transaction for an enlisted session (fisher#300), null for an owned one.
-        var rows = await ReadRowsAsync(withEvents, connection, _session.EnlistedTransaction, token)
+        var rows = await ReadRowsAsync(withEvents, connection, _session.ActiveTransaction, token)
             .ConfigureAwait(false);
 
         ClientSideAppendPlanner.NumberAhead(withEvents, rows.For, ContextFor());

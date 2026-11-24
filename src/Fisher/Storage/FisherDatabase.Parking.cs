@@ -118,13 +118,17 @@ public partial class FisherDatabase
         return filled ?? parked;
     }
 
-    // Only a single-stream aggregate's identity is a stream identity, which is what fi_natural_key_* maps a key to
+    // Only a single-stream aggregate's identity is a stream identity, which is what fi_natural_key_* maps a key to.
+    // The owned key first; an aggregate with only mapped keys shows its first one, read from the lookup its
+    // source owns (fisher#679, as marten#6150 does).
     private NaturalKeyDefinition? naturalKeyForProjection(string projectionName)
         => _options.Projections.All
             .Where(x => x.Name == projectionName)
             .OfType<IAggregateProjection>()
-            .FirstOrDefault(x => x.Scope == AggregationScope.SingleStream && x.NaturalKeyDefinition is not null)
-            ?.NaturalKeyDefinition;
+            .Where(x => x.Scope == AggregationScope.SingleStream)
+            .Select(x => x.NaturalKeyDefinition
+                         ?? x.MappedNaturalKeyDefinitions.FirstOrDefault(m => m.SourceProjectionDefinition is not null))
+            .FirstOrDefault(x => x is not null);
 
     // Without conjoined tenancy the lookup table has no tenant column: one database, one key per stream
     private string tenantForNaturalKey(string tenantId)
@@ -137,7 +141,7 @@ public partial class FisherDatabase
         var keys = new Dictionary<(string Tenant, string Stream), string>();
         var streamColumn = NaturalKeySql.StreamColumn(_events);
         var tenantColumn = _events.TenancyStyle == TenancyStyle.Conjoined ? StorageConstants.TenantIdColumn : "''";
-        var table = _events.QuotedNaturalKeyTableName(naturalKey.AggregateType);
+        var table = _events.QuotedNaturalKeyTableName(naturalKey.LookupAggregateType);
 
         try
         {

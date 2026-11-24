@@ -291,22 +291,26 @@ public class writing_to_aggregates : IAsyncLifetime
     }
 
     [Fact]
-    public async Task append_exclusive_behaves_as_append_optimistic()
+    public async Task append_exclusive_waits_its_turn_instead_of_failing()
     {
-        // SQLite has no row lock to take, so the exclusive variants are the optimistic ones. This
-        // asserts the documented divergence rather than an aspiration — see CLAUDE.md.
+        // fisher#689: the exclusive variants take the file's write lock and hold it until the commit, so the
+        // second writer waits for the first and then succeeds. They used to be the optimistic ones, and the
+        // second writer failed with EventStreamUnexpectedMaxEventIdException. exclusive_writing has the rest.
         await using var first = _store.LightweightSession();
         await using var second = _store.LightweightSession();
 
         await first.Events.AppendExclusive(_streamId, TestContext.Current.CancellationToken,
             new MemberJoined("Sam"));
-        await second.Events.AppendExclusive(_streamId, TestContext.Current.CancellationToken,
+
+        var waiting = second.Events.AppendExclusive(_streamId, TestContext.Current.CancellationToken,
             new MemberJoined("Merry"));
 
         await first.SaveChangesAsync(TestContext.Current.CancellationToken);
+        await waiting;
+        await second.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        await Should.ThrowAsync<EventStreamUnexpectedMaxEventIdException>(
-            () => second.SaveChangesAsync(TestContext.Current.CancellationToken));
+        var events = await second.Events.FetchStreamAsync(_streamId, token: TestContext.Current.CancellationToken);
+        events.Select(x => x.Data).OfType<MemberJoined>().Select(x => x.Member).ShouldBe(["Frodo", "Sam", "Merry"]);
     }
 
     // ---- FetchLatest / ProjectLatest ----

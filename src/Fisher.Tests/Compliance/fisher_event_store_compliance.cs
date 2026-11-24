@@ -218,8 +218,8 @@ public class natural_key_compliance
 /*
  * JasperFx 3.13.0 / 3.14.0. NaturalKeyRegistrationCompliance pins the registration-time refusals and the
  * nullable-key fetches; MappedNaturalKeyCompliance is the mapped-key half (a key a non-owning aggregate resolves
- * through its owner), which Fisher does not have, so SupportsMappedNaturalKeys stays false and that suite's
- * facts, and the mapped facts of the registration suite, skip.
+ * through its owner). fisher#679 gave Fisher mapped keys, so SupportsMappedNaturalKeys is on and every fact of
+ * both suites runs.
  */
 
 public class natural_key_registration_compliance

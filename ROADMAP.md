@@ -439,19 +439,20 @@ full text by reciprocal rank fusion, and [#261](https://github.com/JasperFx/fish
 *produces* the embedding from an event stream — so the vector a document carries is no longer the
 application's to maintain on every write path.
 
+Natural keys reached parity with Marten 10 for 2.0 GA (#679, #688): mapped keys, the versioned fetch by key,
+`FetchManyForWriting` and batched fetches by key, and nullable keys. The exclusive methods now hold the file's write
+lock until the commit (#689).
+
 <!-- open-issues -->
 <!-- Everything open goes in here and nothing that is closed, because scripts/check_roadmap_status.py
      holds this region to the real set at release prep (fisher#265). What a release FINISHED belongs
      in the Status block too — just outside these markers. -->
 
-What is left is five items.
+What is left is three items.
 
 [#657](https://github.com/JasperFx/fisher/issues/657): the docs review of the new and substantially changed pages,
 before the final 2.0.0, including turning hand-written samples into compiled ones (#684's docs review item). It does
 not gate the release candidate.
-
-[#679](https://github.com/JasperFx/fisher/issues/679): recreate Marten 10's natural key work, after the usage
-review. Mapped natural keys are part of it, so `MappedNaturalKeyCompliance` skips on Fisher until then.
 
 [#643](https://github.com/JasperFx/fisher/issues/643): the projection backfill seam JasperFx 3.7.0 added to
 `IEventStore`. The event-range marks and the stored-event rewrite are done. The backfill itself is deferred: Jeremy is
@@ -1069,8 +1070,8 @@ portable in the compliance suites runs through. What was not implemented was col
 `EventOperations.Unsupported.cs` (DCB tags, then event rewriting) rather than scattered, so the file
 shrinking measured progress; it reached zero and was deleted. Two open decisions came out of it:
 
-- **Exclusive appends are the optimistic ones.** SQLite has no row lock; documented in CLAUDE.md's
-  divergence table with what revisiting it would cost. Still open.
+- **Exclusive appends were the optimistic ones.** SQLite has no row lock. Settled in 2.0 by fisher#689: they
+  hold the file's write lock from the fetch to the commit, and a competing writer waits.
 - **`AllAggregateTypes()` had no assembly scan.** Settled by standing up a thin
   `StoreOptions.Projections`, which was cheap only because the write-surface work had already made
   `IDocumentSession` an `IStorageOperations` — the constraint `ProjectionGraph` imposes. Fisher gets

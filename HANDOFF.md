@@ -25,12 +25,27 @@ so an application referencing Fisher alone gets the `JFXEVT010`–`JFXEVT017` na
 3.15.1 ships one new suite, `CompositeKeepUnchangedMembersCompliance` (jasperfx#684), excused in
 `compliance_suite_inventory` until fisher#109 makes rebuild teardown honour `MembersToTearDownAsync`.
 
+## Natural keys at parity with Marten 10, and exclusive writes that lock (fisher#679, #688, #689)
+
+For 2.0 GA, from the Wolverine natural keys review (wolverine#5897). See CLAUDE.md, "Natural keys at parity with
+Marten 10" and the exclusive-writes paragraph under "SQLite divergences".
+
+- **Mapped keys, `FetchForWriting(key, expectedVersion)`, `FetchManyForWriting` by key, `batch.Events`, and
+  `Nullable<TKey>` refused as a type argument.** `MappedNaturalKeyCompliance` (7) and the 7 mapped facts of
+  `NaturalKeyRegistrationCompliance` ran for the first time and passed with no fixture change beyond the flag.
+- **Marten's per-lifecycle fetch plans, key-to-stream cache index and `NaturalKeyMovedException` are not ported**,
+  deliberately: they save PostgreSQL round trips, and Fisher's "resolve, then fetch by stream id" already uses the
+  write cache and the identity map by stream id.
+- **The exclusive methods hold `BEGIN IMMEDIATE` to the commit.** `exclusive_writing` proves five concurrent writers
+  never overlap, and that every way out releases the lock. The old `append_exclusive_behaves_as_append_optimistic`
+  is rewritten: against the lock it waits for the first session, which it never committed.
+
 ## JasperFx 3.14.0 and the Marten 10.0 burn-down (2.0.0-rc.2: fisher#677, #678, #680–#684)
 
 From JasperFx 3.12.1, spanning 3.13.0. Three suites arrive: `AggregateStreamStatsCompliance` (fisher#678, all
 facts green, including the archived, conjoined and string-key ones the in-memory store never runs),
-`NaturalKeyRegistrationCompliance` and `MappedNaturalKeyCompliance`. Mapped natural keys are fisher#679 (2.1), so
-`SupportsMappedNaturalKeys` stays false and the mapped facts skip.
+`NaturalKeyRegistrationCompliance` and `MappedNaturalKeyCompliance`. Mapped natural keys came with fisher#679 (see
+the next section), so `SupportsMappedNaturalKeys` is on and the mapped facts run.
 
 - **Event metadata and the document metadata columns are opt-in again** (fisher#682, marten#6144). See CLAUDE.md,
   "Fisher 2.0's default changes".
@@ -1471,8 +1486,8 @@ say anything about database-per-tenant: they do not run against it.
 **What that does and does not claim, because the difference is load-bearing** (fisher#124). The suite
 pins **API portability, not behavioural equivalence**: code written against one store compiles and
 runs against another. It does not pin that the three *behave* the same, and the migration guide's
-"Behaviour that differs" list is exactly what it does not pin — the exclusive methods failing rather
-than waiting, Marten's strictly-greater revision guard rather than Polecat's equality one, a stricter
+"Behaviour that differs" list is exactly what it does not pin — the exclusive methods locking the
+whole file rather than one stream (they failed rather than waited until fisher#689), Marten's strictly-greater revision guard rather than Polecat's equality one, a stricter
 `QueryForNonStaleData`, ordinal string comparison, applied inner-side join predicates. Read as
 equivalence, "passes all 40 suites" invites using Fisher as a test double for a Marten or Polecat
 application, which the divergence list argues against.
@@ -2333,12 +2348,10 @@ Each of these is a decision with a reason, not an oversight:
 > have" and is the one to keep current. Compiled queries are the one member of that set that *has* been
 > decided, on a measurement — [fisher#195](https://github.com/JasperFx/fisher/issues/195).
 
-- **Exclusive appends are the optimistic ones.** `AppendExclusive`, `FetchForExclusiveWriting` and
-  `WriteExclusivelyToAggregate` do not lock. SQLite has no row lock; the faithful equivalent would
-  hold `BEGIN IMMEDIATE` from fetch to commit, blocking every other writer for as long as a caller
-  holds a session. Safety is unchanged — the version guard still runs inside the write transaction —
-  but a loser fails instead of waiting. **This is the most likely place a future compliance suite
-  disagrees with Fisher.**
+- **Exclusive appends lock the file** (fisher#689, 2.0). `AppendExclusive`, `FetchForExclusiveWriting` and
+  `WriteExclusivelyToAggregate` hold `BEGIN IMMEDIATE` from the fetch to the commit, so a competing writer waits as
+  on the siblings. SQLite has no row lock, so it is the whole file's lock: every other writer waits while a caller
+  holds the session. They were the optimistic methods until then.
 - **Hi-Lo gaps are expected, not a bug.** A process that stops mid-allocation abandons the rest of
   its `MaxLo` range, and `SetFloor` rounds up to a whole page. Both match Marten and Polecat.
 - **The LINQ surface refuses rather than falling back to client-side evaluation**, which is the

@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using Fisher.Events.Storage;
 using Fisher.Exceptions;
 using Fisher.Storage;
 using JasperFx.Events;
@@ -25,15 +26,14 @@ public partial class EventOperations
 
     /// <summary>
     ///     Fetch for writing by an identity whose type is not fixed by the signature — a stream
-    ///     identity, or a natural key.
+    ///     identity, a strong-typed wrapper around one, or a natural key the aggregate owns or maps.
     /// </summary>
     /// <remarks>
     ///     <para>
     ///         In Marten and Polecat this overload is the natural-key and strong-typed-id entry point,
-    ///         and it is both here too: fisher#40 closed the natural-key half, and fisher#397 the
-    ///         strong-typed one — a wrapper around the stream identity type is unwrapped. fisher#14 had
-    ///         made a wrapper work as an aggregate's identity without anything unwrapping one passed
-    ///         here, which is how this remark came to claim it early.
+    ///         and it is both here too: fisher#40 closed the natural-key half, fisher#397 the strong-typed
+    ///         one, and fisher#679 added mapped keys (<c>[MappedNaturalKey&lt;T&gt;]</c>), which resolve
+    ///         through the lookup their source projection owns.
     ///     </para>
     ///     <para>
     ///         <b>The stream identity type wins when the two coincide.</b> A string natural key on a
@@ -41,26 +41,88 @@ public partial class EventOperations
     ///         stream key is the interpretation that does not depend on which aggregate types happen to
     ///         declare a key. <c>FetchForWritingByNaturalKey</c> is the unambiguous spelling.
     ///     </para>
+    ///     <para>
+    ///         <typeparamref name="TId" /> is never <c>Nullable&lt;T&gt;</c>: fetch by the key type, and deal
+    ///         with a null value before fetching. A null natural key is refused with
+    ///         <see cref="ArgumentOutOfRangeException" />, the way an empty <c>Guid</c> stream id is.
+    ///     </para>
     /// </remarks>
     public Task<IEventStream<T>> FetchForWriting<T, TId>(TId id, CancellationToken cancellation = default)
         where T : class where TId : notnull
-        => id switch
+        => FetchForWritingByIdentityAsync<T, TId>(id, null, false, cancellation);
+
+    /// <summary>
+    ///     <see cref="FetchForWriting{T,TId}(TId,CancellationToken)" />, failing at once with a
+    ///     <see cref="ConcurrencyException" /> (an <see cref="EventStreamUnexpectedMaxEventIdException" />) when
+    ///     the stream is not at <paramref name="expectedVersion" /> (fisher#688).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The version is checked before anything is enlisted in the session, as the by-id overloads do, so
+    ///         a stale version leaves no stream action and no write-cache claim behind. The contract's default
+    ///         checks after the fetch. The handle it returns then guards that same version when the unit of
+    ///         work commits, as every fetch for writing does.
+    ///     </para>
+    ///     <para>
+    ///         For a natural key, this is what makes a command carrying a key and a version safe to replay: a
+    ///         stale command fails with the same exception, which is 409 over HTTP in Wolverine.
+    ///     </para>
+    /// </remarks>
+    public Task<IEventStream<T>> FetchForWriting<T, TId>(TId id, long expectedVersion,
+        CancellationToken cancellation = default) where T : class where TId : notnull
+        => FetchForWritingByIdentityAsync<T, TId>(id, expectedVersion, false, cancellation);
+
+    /// <summary>
+    ///     <see cref="FetchForWriting{T,TId}(TId,CancellationToken)" />, taking the database's write lock first
+    ///     and holding it until the unit of work commits or the session is disposed (fisher#689).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         A competing exclusive writer waits its turn rather than failing on the version guard. For a
+    ///         natural key, the key is resolved inside the lock, so it cannot move to another stream between
+    ///         the lookup and the commit.
+    ///     </para>
+    ///     <para>
+    ///         SQLite locks the file, not the stream: while this session holds the lock, every other writer on
+    ///         the database waits. Readers carry on under WAL.
+    ///     </para>
+    /// </remarks>
+    public Task<IEventStream<T>> FetchForExclusiveWriting<T, TId>(TId id, CancellationToken cancellation = default)
+        where T : class where TId : notnull
+        => FetchForWritingByIdentityAsync<T, TId>(id, null, true, cancellation);
+
+    private async Task<IEventStream<T>> FetchForWritingByIdentityAsync<T, TId>(TId id, long? expectedVersion,
+        bool exclusive, CancellationToken cancellation) where T : class where TId : notnull
+    {
+        AssertNotANullableIdentityType<T, TId>();
+
+        var (streamId, key) = ClassifyIdentity<T, TId>(id);
+
+        if (key is not null)
         {
-            Guid guid when Graph.StreamIdentity == StreamIdentity.AsGuid
-                => FetchForWriting<T>(guid, cancellation),
-            string key when Graph.StreamIdentity == StreamIdentity.AsString
-                => FetchForWriting<T>(key, cancellation),
-            _ when IsNaturalKeyType<T, TId>() => FetchForWritingByNaturalKey<T, TId>(id, cancellation),
-            _ when TryUnwrapStreamIdentity(id, out var inner) => inner switch
+            var raw = RequireNaturalKeyValue(key, id);
+
+            // Inside the lock, so the key cannot be claimed by another stream between the lookup and the
+            // commit.
+            if (exclusive)
             {
-                Guid guid => FetchForWriting<T>(guid, cancellation),
-                _ => FetchForWriting<T>((string)inner, cancellation)
-            },
-            _ when NaturalKeyFor<T>() is not null => FetchForWritingByNaturalKey<T, TId>(id, cancellation),
-            Guid guid => FetchForWriting<T>(guid, cancellation),
-            string key => FetchForWriting<T>(key, cancellation),
-            _ => throw new NotSupportedException(UnsupportedIdentityMessage<T>(typeof(TId)))
+                await _session.AcquireExclusiveWriteLockAsync(raw, typeof(T), cancellation).ConfigureAwait(false);
+            }
+
+            streamId = await ResolveNaturalKeyAsync(key, raw, cancellation).ConfigureAwait(false)
+                       ?? throw new UnknownNaturalKeyException(typeof(T), raw);
+        }
+
+        return (streamId, expectedVersion, exclusive) switch
+        {
+            (Guid guid, { } version, _) => await FetchForWriting<T>(guid, version, cancellation).ConfigureAwait(false),
+            (string text, { } version, _) => await FetchForWriting<T>(text, version, cancellation).ConfigureAwait(false),
+            (Guid guid, null, true) => await FetchForExclusiveWriting<T>(guid, cancellation).ConfigureAwait(false),
+            (string text, null, true) => await FetchForExclusiveWriting<T>(text, cancellation).ConfigureAwait(false),
+            (Guid guid, null, false) => await FetchForWriting<T>(guid, cancellation).ConfigureAwait(false),
+            _ => await FetchForWriting<T>((string)streamId!, cancellation).ConfigureAwait(false)
         };
+    }
 
     /// <summary>
     ///     Fetch a stream for writing by the aggregate's natural key — the business identifier it was
@@ -68,11 +130,10 @@ public partial class EventOperations
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///         The key is resolved through <c>fi_natural_key_&lt;alias&gt;</c> and the fetch then goes
-    ///         through the ordinary <c>FetchForWriting</c> flow, so the optimistic version guard, the
-    ///         aggregation and the tracked <c>StreamAction</c> are all the same ones. Two statements
-    ///         rather than Polecat's one, because its single round trip exists to take a row lock in
-    ///         the same breath and Fisher has no row lock to take.
+    ///         The key is resolved through <c>fi_natural_key_&lt;alias&gt;</c> (the source projection's, for a
+    ///         mapped key) and the fetch then goes through the ordinary <c>FetchForWriting</c> flow, so the
+    ///         optimistic version guard, the aggregation, the write cache and the tracked <c>StreamAction</c>
+    ///         are all the same ones.
     ///     </para>
     ///     <para>
     ///         A key naming no live stream throws <see cref="Exceptions.UnknownNaturalKeyException" />
@@ -84,7 +145,12 @@ public partial class EventOperations
     public async Task<IEventStream<T>> FetchForWritingByNaturalKey<T, TId>(TId key,
         CancellationToken cancellation = default) where T : class where TId : notnull
     {
-        var streamId = await ResolveNaturalKeyAsync<T, TId>(key, cancellation).ConfigureAwait(false);
+        AssertNotANullableIdentityType<T, TId>();
+
+        var definition = RequireNaturalKeyFor<T, TId>();
+        var raw = RequireNaturalKeyValue(definition, key);
+        var streamId = await ResolveNaturalKeyAsync(definition, raw, cancellation).ConfigureAwait(false)
+                       ?? throw new UnknownNaturalKeyException(typeof(T), raw);
 
         return streamId switch
         {
@@ -104,22 +170,30 @@ public partial class EventOperations
     ///         methods ask different questions: <c>FetchForWriting</c> is the read half of a
     ///         read-modify-write and has to say what it would be writing to, where <c>FetchLatest</c>
     ///         reports current state and <c>FetchLatest(...) is null</c> is the idiomatic "does this
-    ///         aggregate exist?" probe — the same probe fisher#88 made honest for the by-id overload.
-    ///         Throwing made the key-shaped spelling the one member of the family that could not answer
-    ///         its own question.
+    ///         aggregate exist?" probe.
     ///     </para>
     ///     <para>
-    ///         The <c>FetchForWriting</c> miss is deliberately <em>not</em> pinned by the shared suite,
-    ///         because that is the one place the three stores genuinely disagree — Marten hands back a
-    ///         null aggregate, Polecat throws <c>InvalidOperationException</c>, Fisher throws
-    ///         <see cref="Exceptions.UnknownNaturalKeyException" />. This one they agree on, and Fisher
-    ///         was the odd one out until the suite ran.
+    ///         A null key is answered with null without a query, as on Marten (fisher#679).
     ///     </para>
     /// </remarks>
     public async ValueTask<T?> FetchLatestByNaturalKey<T, TId>(TId key,
         CancellationToken cancellation = default) where T : class where TId : notnull
     {
-        var streamId = await TryResolveNaturalKeyAsync<T, TId>(key, cancellation).ConfigureAwait(false);
+        AssertNotANullableIdentityType<T, TId>();
+
+        var definition = RequireNaturalKeyFor<T, TId>();
+        return await FetchLatestByNaturalKeyAsync<T>(definition, key, cancellation).ConfigureAwait(false);
+    }
+
+    private async ValueTask<T?> FetchLatestByNaturalKeyAsync<T>(NaturalKeyDefinition definition, object? key,
+        CancellationToken cancellation) where T : class
+    {
+        if (NaturalKeyValue(definition, key) is not { } raw)
+        {
+            return null;
+        }
+
+        var streamId = await ResolveNaturalKeyAsync(definition, raw, cancellation).ConfigureAwait(false);
 
         return streamId switch
         {
@@ -129,48 +203,117 @@ public partial class EventOperations
         };
     }
 
-    private NaturalKeyDefinition? NaturalKeyFor<T>()
-        => Graph.Options.Projections.NaturalKeyFor(typeof(T));
+    /// <summary>
+    ///     The natural key <typeparamref name="T" /> can be fetched by with a <typeparamref name="TId" />, or
+    ///     null.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         A key whose declared type is <typeparamref name="TId" /> first, owned or mapped (fisher#679);
+    ///         that is the unambiguous signal, and an aggregate holds at most one key of each type, which
+    ///         JasperFx enforces when the store is built.
+    ///     </para>
+    ///     <para>
+    ///         Then a key whose inner value is a bare <typeparamref name="TId" />: an <c>OrderNumber(string)</c>
+    ///         key fetched with the string inside it. The owned key is preferred when several match.
+    ///     </para>
+    /// </remarks>
+    private NaturalKeyDefinition? NaturalKeyFor<T, TId>()
+    {
+        var keys = Graph.Options.Projections.AllNaturalKeysFor(typeof(T));
 
-    /// <inheritdoc cref="TryResolveNaturalKeyAsync{T,TId}" />
-    private async Task<object> ResolveNaturalKeyAsync<T, TId>(TId key, CancellationToken cancellation)
-        where T : class where TId : notnull
-        => await TryResolveNaturalKeyAsync<T, TId>(key, cancellation).ConfigureAwait(false)
-           ?? throw new Exceptions.UnknownNaturalKeyException(typeof(T),
-               NaturalKeyFor<T>()!.Unwrap(key)!);
+        return keys.FirstOrDefault(x => x.OuterType == typeof(TId))
+               ?? keys.FirstOrDefault(x => x.InnerType == typeof(TId));
+    }
+
+    private NaturalKeyDefinition RequireNaturalKeyFor<T, TId>()
+        => NaturalKeyFor<T, TId>()
+           ?? throw new InvalidOperationException(
+               $"'{typeof(T).Name}' declares no natural key of type '{typeof(TId).Name}'. Mark the aggregate's "
+               + "identifying member with [NaturalKey], or map one with [MappedNaturalKey<TSource>], and register "
+               + "the projection; or fetch by stream id.");
+
+    /// <summary>
+    ///     The value a natural key is stored as in the lookup, or null for a null key.
+    /// </summary>
+    private static object? NaturalKeyValue(NaturalKeyDefinition definition, object? key)
+        => key is null ? null
+            : key.GetType() == definition.OuterType ? definition.Unwrap(key)
+            : key;
+
+    private static object RequireNaturalKeyValue(NaturalKeyDefinition definition, object? key)
+        => NaturalKeyValue(definition, key)
+           ?? throw new ArgumentOutOfRangeException("id",
+               $"A natural key of type {definition.OuterType.Name} for {definition.AggregateType.Name} cannot be "
+               + "null. Fetching for writing needs a key that names a stream.");
+
+    /// <summary>
+    ///     Refuse a <c>Nullable&lt;T&gt;</c> identity type argument, as Marten does (fisher#679).
+    /// </summary>
+    /// <remarks>
+    ///     A key declared <c>TKey?</c> on the aggregate is still a <c>TKey</c> key. Fetching by <c>TKey?</c>
+    ///     would leave what a null means to each overload, so a fetch always names the underlying type.
+    /// </remarks>
+    private static void AssertNotANullableIdentityType<T, TId>()
+    {
+        if (Nullable.GetUnderlyingType(typeof(TId)) is { } underlying)
+        {
+            throw new ArgumentException(
+                $"Fisher fetches {typeof(T).Name} by {underlying.Name}, not {underlying.Name}?. Use "
+                + $"{underlying.Name} as the type argument, and handle a null value before fetching.",
+                "id");
+        }
+    }
+
+    /// <summary>
+    ///     Decide what an identity of an open type is: a stream identity (unwrapped where it is a strong-typed
+    ///     wrapper) or a natural key.
+    /// </summary>
+    private (object? StreamId, NaturalKeyDefinition? Key) ClassifyIdentity<T, TId>(TId id) where TId : notnull
+    {
+        switch (id)
+        {
+            case Guid guid when Graph.StreamIdentity == StreamIdentity.AsGuid:
+                return (guid, null);
+            case string text when Graph.StreamIdentity == StreamIdentity.AsString:
+                return (text, null);
+        }
+
+        if (NaturalKeyFor<T, TId>() is { } exact && exact.OuterType == typeof(TId))
+        {
+            return (null, exact);
+        }
+
+        if (TryUnwrapStreamIdentity(id, out var inner))
+        {
+            return (inner, null);
+        }
+
+        if (NaturalKeyFor<T, TId>() is { } raw)
+        {
+            return (null, raw);
+        }
+
+        return id switch
+        {
+            Guid guid => (guid, null),
+            string text => (text, null),
+            _ => throw new NotSupportedException(UnsupportedIdentityMessage<T>(typeof(TId)))
+        };
+    }
 
     /// <summary>
     ///     Resolve a natural key to the stream identity it names, or null if it names no live stream.
     /// </summary>
-    /// <remarks>
-    ///     The "or null" half is what lets <see cref="FetchLatestByNaturalKey{T,TId}" /> answer a miss
-    ///     with null while <see cref="FetchForWritingByNaturalKey{T,TId}" /> keeps throwing — see that
-    ///     method's remarks for why the two differ. An aggregate declaring no key at all, and a null
-    ///     key, are configuration errors on both paths and still throw here.
-    /// </remarks>
-    private async Task<object?> TryResolveNaturalKeyAsync<T, TId>(TId key, CancellationToken cancellation)
-        where T : class where TId : notnull
+    private async Task<object?> ResolveNaturalKeyAsync(NaturalKeyDefinition definition, object raw,
+        CancellationToken cancellation)
     {
-        var definition = NaturalKeyFor<T>()
-                         ?? throw new InvalidOperationException(
-                             $"'{typeof(T).Name}' declares no natural key. Mark the aggregate's "
-                             + "identifying member with [NaturalKey] and register the projection, or "
-                             + "fetch by stream id.");
-
-        var unwrapped = definition.Unwrap(key)
-                        ?? throw new ArgumentNullException(nameof(key), "A natural key cannot be null.");
-
         var connection = await _session.EventConnectionAsync(cancellation).ConfigureAwait(false);
 
-        return await new Storage.NaturalKeyLookup(Graph)
-            .ResolveAsync(definition, unwrapped, TenantId, connection, cancellation)
+        return await new NaturalKeyLookup(Graph)
+            .ResolveAsync(definition, raw, TenantId, connection, _session.ActiveTransaction, cancellation)
             .ConfigureAwait(false);
     }
-
-    /// <inheritdoc cref="FetchForWriting{T,TId}(TId,CancellationToken)" />
-    public Task<IEventStream<T>> FetchForExclusiveWriting<T, TId>(TId id, CancellationToken cancellation = default)
-        where T : class where TId : notnull
-        => FetchForWriting<T, TId>(id, cancellation);
 
     // ---- FetchLatest / ProjectLatest ----
 
@@ -274,25 +417,33 @@ public partial class EventOperations
            && Graph.Options.Schema.HasMappingFor(typeof(T))
            && Graph.Options.Schema.MappingFor(typeof(T)).StoredIdType == keyType;
 
-    /// <inheritdoc cref="FetchForWriting{T,TId}(TId,CancellationToken)" />
-    /// <inheritdoc cref="FetchForWriting{T,TId}(TId,CancellationToken)" />
-    public ValueTask<T?> FetchLatest<T, TId>(TId id, CancellationToken cancellation = default)
+    /// <summary>
+    ///     The current state of an aggregate by an identity whose type is not fixed by the signature — a
+    ///     stream identity, a strong-typed wrapper around one, or a natural key the aggregate owns or maps.
+    /// </summary>
+    /// <remarks>
+    ///     A null natural key, and one naming no live stream, are answered with null. A mapped key reads its
+    ///     source projection's lookup, which the source keeps current inline, so an async read model is
+    ///     reachable by key the moment the events commit (fisher#679).
+    /// </remarks>
+    public async ValueTask<T?> FetchLatest<T, TId>(TId id, CancellationToken cancellation = default)
         where T : class where TId : notnull
-        => id switch
+    {
+        AssertNotANullableIdentityType<T, TId>();
+
+        var (streamId, key) = ClassifyIdentity<T, TId>(id);
+
+        if (key is not null)
         {
-            Guid guid when Graph.StreamIdentity == StreamIdentity.AsGuid => FetchLatest<T>(guid, cancellation),
-            string key when Graph.StreamIdentity == StreamIdentity.AsString => FetchLatest<T>(key, cancellation),
-            _ when IsNaturalKeyType<T, TId>() => FetchLatestByNaturalKey<T, TId>(id, cancellation),
-            _ when TryUnwrapStreamIdentity(id, out var inner) => inner switch
-            {
-                Guid guid => FetchLatest<T>(guid, cancellation),
-                _ => FetchLatest<T>((string)inner, cancellation)
-            },
-            _ when NaturalKeyFor<T>() is not null => FetchLatestByNaturalKey<T, TId>(id, cancellation),
-            Guid guid => FetchLatest<T>(guid, cancellation),
-            string key => FetchLatest<T>(key, cancellation),
-            _ => throw new NotSupportedException(UnsupportedIdentityMessage<T>(typeof(TId)))
+            return await FetchLatestByNaturalKeyAsync<T>(key, id, cancellation).ConfigureAwait(false);
+        }
+
+        return streamId switch
+        {
+            Guid guid => await FetchLatest<T>(guid, cancellation).ConfigureAwait(false),
+            _ => await FetchLatest<T>((string)streamId!, cancellation).ConfigureAwait(false)
         };
+    }
 
     /// <summary>
     ///     The state of an aggregate including events appended in this session but not yet committed.
@@ -587,18 +738,6 @@ public partial class EventOperations
     private async Task<long> RequireStreamVersionAsync(object streamId, CancellationToken token)
         => (await ReadStreamRowAsync(streamId, token).ConfigureAwait(false)).Version
            ?? throw new JasperFx.Events.NonExistentStreamException(streamId);
-
-    /// <summary>
-    ///     Whether <typeparamref name="TId" /> is exactly the type <typeparamref name="T" /> declares as
-    ///     its natural key.
-    /// </summary>
-    /// <remarks>
-    ///     Checked before a strong-typed stream id is unwrapped, so a wrapper declared as the natural key
-    ///     is read as one even when it happens to wrap the stream identity type. Naming the key's own type
-    ///     is the unambiguous signal; the raw-Guid-or-string rule above it is for the case where it is not.
-    /// </remarks>
-    private bool IsNaturalKeyType<T, TId>() where TId : notnull
-        => NaturalKeyFor<T>() is { } key && key.OuterType == typeof(TId);
 
     /// <summary>
     ///     A strong-typed wrapper whose inner value is the configured stream identity type, unwrapped

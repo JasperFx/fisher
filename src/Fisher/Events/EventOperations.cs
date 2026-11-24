@@ -205,15 +205,30 @@ public partial class EventOperations : EventOperationsBase, IEventStoreOperation
     protected override StreamAction AppendCore(string stream, object[] events)
         => AppendTo(stream, () => StreamAction.Append(Graph, stream, events), events);
 
-    // SQLite has no row lock, so "exclusive" is the optimistic read here: the version guard runs inside
-    // the write transaction, and a loser fails rather than waiting (see CLAUDE.md, "Exclusive append").
+    // fisher#689: "exclusive" takes the database file's write lock (BEGIN IMMEDIATE) and holds it until the
+    // unit of work commits, so a competing exclusive writer waits its turn instead of failing. SQLite has no
+    // row lock, so it is the file's lock rather than the stream's. See FisherSession.AcquireExclusiveWriteLockAsync.
     // A missing stream is NonExistentStreamException, which AppendOptimistic has always thrown.
-    protected override Task<long> ReadStreamVersionCore<TId>(TId stream, bool exclusive, CancellationToken token)
-        => RequireStreamVersionAsync(stream, token);
+    protected override async Task<long> ReadStreamVersionCore<TId>(TId stream, bool exclusive, CancellationToken token)
+    {
+        if (exclusive)
+        {
+            await _session.AcquireExclusiveWriteLockAsync(stream, null, token).ConfigureAwait(false);
+        }
 
-    protected override Task<IEventStream<T>> FetchForWritingCore<T, TId>(TId id, long? expectedVersion,
+        return await RequireStreamVersionAsync(stream, token).ConfigureAwait(false);
+    }
+
+    protected override async Task<IEventStream<T>> FetchForWritingCore<T, TId>(TId id, long? expectedVersion,
         bool exclusive, CancellationToken cancellation)
-        => FetchForWritingAsync<T>(id, expectedVersion, cancellation);
+    {
+        if (exclusive)
+        {
+            await _session.AcquireExclusiveWriteLockAsync(id, typeof(T), cancellation).ConfigureAwait(false);
+        }
+
+        return await FetchForWritingAsync<T>(id, expectedVersion, cancellation).ConfigureAwait(false);
+    }
 
     protected override Task SaveChangesCore(CancellationToken cancellation) => _session.SaveChangesAsync(cancellation);
 

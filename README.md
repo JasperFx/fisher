@@ -93,7 +93,7 @@ Database-per-tenant is a file per tenant, so it buys concurrency as well as isol
 
 **Harder.** One writer per database file. That is why the unit of work is sequential, why a busy retry
 is a real policy, why `ITransactionParticipant` and `QueueSqlCommand` matter more here than on either
-sibling, and why the exclusive append methods *fail* where Marten's and Polecat's *wait*.
+sibling, and why the exclusive append methods lock the whole file where Marten's and Polecat's lock one stream.
 
 All of it is documented rather than left to be discovered — see the
 [migration guide](https://fisher.jasperfx.net/migration-guide) for the behaviours that differ.

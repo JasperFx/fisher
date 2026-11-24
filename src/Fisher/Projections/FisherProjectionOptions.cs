@@ -403,6 +403,43 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
     internal JasperFx.Events.NaturalKeyDefinition? NaturalKeyFor(Type aggregateType)
         => NaturalKeys.FirstOrDefault(x => x.AggregateType == aggregateType);
 
+    /// <summary>
+    ///     Every natural key an aggregate can be fetched by: the one it owns, if any, and every mapped key
+    ///     (<c>[MappedNaturalKey&lt;T&gt;]</c>) whose source JasperFx resolved when the store was built
+    ///     (fisher#679).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Walks <c>AllAggregateProjections()</c> rather than <see cref="NaturalKeys" />, so a member of a
+    ///         composite projection is found too. A member of a composite cannot <em>own</em> a key — JasperFx
+    ///         refuses that while the store is built — but it can map one to an owner registered outside it,
+    ///         and that is the only way such a member is reachable by natural key at all.
+    ///     </para>
+    ///     <para>
+    ///         An unresolved mapped key is left out. JasperFx resolves every one of them in
+    ///         <c>AssertValidity</c> and refuses the store when it cannot, so an unresolved key here means the
+    ///         store was never validated, and there is no lookup to read for it.
+    ///     </para>
+    /// </remarks>
+    internal IReadOnlyList<JasperFx.Events.NaturalKeyDefinition> AllNaturalKeysFor(Type aggregateType)
+    {
+        var aggregate = AllAggregateProjections().FirstOrDefault(x => x.AggregateType == aggregateType);
+        if (aggregate is null)
+        {
+            return [];
+        }
+
+        var keys = new List<JasperFx.Events.NaturalKeyDefinition>();
+        if (aggregate.NaturalKeyDefinition is { } owned)
+        {
+            keys.Add(owned);
+        }
+
+        keys.AddRange(aggregate.MappedNaturalKeyDefinitions.Where(x => x.SourceProjectionDefinition is not null));
+
+        return keys;
+    }
+
     private Fisher.Events.Storage.NaturalKeyProjection? _naturalKeyProjection;
 
     /// <summary>

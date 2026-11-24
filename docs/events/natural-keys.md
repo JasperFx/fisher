@@ -1,20 +1,233 @@
 # Natural Keys
 
-Address a stream by the business identifier it was created with, rather than by its Guid.
+Address a stream by the business identifier it was created with, an invoice number or a booking reference, rather
+than by its Guid. Mark the identifying member with `[NaturalKey]`, say which events set it, and register the
+aggregate's projection:
 
+<!-- snippet: sample_natural_key_declaration -->
+<a id='snippet-sample_natural_key_declaration'></a>
 ```cs
-public record InvoiceRaised([property: NaturalKey] string InvoiceNumber, decimal Amount);
-```
+// A strong-typed key: one public property, and a constructor taking it
+public readonly record struct BookingReference(string Value);
 
+public record BookingMade(BookingReference Number, decimal Amount);
+
+public record BookingPaid(decimal Amount);
+
+public partial class Booking
+{
+    public Guid Id { get; set; }
+
+    // The owned key: Booking's inline projection keeps the lookup from BookingReference to the stream
+    [NaturalKey]
+    public BookingReference Number { get; set; }
+
+    public decimal Balance { get; set; }
+
+    [NaturalKeySource]
+    public static Booking Create(BookingMade e) => new() { Number = e.Number, Balance = e.Amount };
+
+    public void Apply(BookingPaid e) => Balance -= e.Amount;
+}
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L57-L82' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_natural_key_declaration' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+<!-- snippet: sample_registering_natural_keys -->
+<a id='snippet-sample_registering_natural_keys'></a>
 ```cs
-var stream = await session.Events.FetchForWritingByNaturalKey<Invoice>("INV-2026-0042");
-var invoice = await session.Events.FetchLatestByNaturalKey<Invoice>("INV-2026-0042");
-```
+_store = DocumentStore.For(opts =>
+{
+    opts.ConnectionString = _database.ConnectionString;
 
-The definition, the attributes and the discovery are all JasperFx's — Fisher supplies the storage
-seam, the same division as the async daemon. A key declared in a way the runtime would refuse is a build
-error; see [Build Diagnostics: natural keys](https://shared-libs.jasperfx.net/codegen/diagnostics#natural-keys)
-for `JFXEVT010` to `JFXEVT017`.
+    // The owner of the key has to be registered, and Inline keeps its lookup current
+    // as the events commit
+    opts.Projections.Snapshot<Booking>(SnapshotLifecycle.Inline);
+
+    // The mapped read model can be any lifecycle
+    opts.Projections.Snapshot<BookingSummary>(SnapshotLifecycle.Async);
+});
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L112-L126' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_registering_natural_keys' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+A key is an `int`, a `long`, a `string`, or a strong-typed wrapper around one of them. The definition, the attributes
+and their discovery are all JasperFx's, so they read the same on Marten and Polecat. Fisher supplies the storage, the
+same division as the async daemon. A key declared in a way the store would refuse is a build error; see
+[Build Diagnostics: natural keys](https://shared-libs.jasperfx.net/codegen/diagnostics#natural-keys) for `JFXEVT010`
+to `JFXEVT018`. The store checks the same rules again when it is built, and throws `InvalidProjectionException`
+naming the problem.
+
+## Fetching by natural key
+
+Every fetch that takes a stream id has a form that takes a natural key in its place, as a second type argument:
+
+<!-- snippet: sample_fetching_by_natural_key -->
+<a id='snippet-sample_fetching_by_natural_key'></a>
+```cs
+// Read the current state, or null when no live stream has the key
+var booking = await session.Events.FetchLatest<Booking, BookingReference>(number);
+
+// Fetch for writing, with the optimistic version guard at SaveChangesAsync
+var stream = await session.Events.FetchForWriting<Booking, BookingReference>(number);
+stream.AppendOne(new BookingPaid(25m));
+await session.SaveChangesAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L152-L162' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_fetching_by_natural_key' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+`FetchForWritingByNaturalKey<T, TKey>` and `FetchLatestByNaturalKey<T, TKey>` are the same fetches with no room for
+doubt about what the identifier is. See [where natural keys meet stream identity](#where-natural-keys-meet-stream-identity)
+for when that matters.
+
+A key type argument is always `TKey`, never `TKey?`. A fetch by `Nullable<TKey>` throws `ArgumentException`, so deal
+with a null value before fetching. A null key value, including a strong-typed key whose inner value is null, is
+answered with null by `FetchLatest` without a query, and refused with `ArgumentOutOfRangeException` by
+`FetchForWriting` and `FetchForExclusiveWriting`, the way an empty `Guid` stream id is.
+
+### Checking the version {#expected-version}
+
+A command that carries the version the user was looking at can have it checked when the aggregate is fetched:
+
+<!-- snippet: sample_fetching_by_natural_key_with_a_version -->
+<a id='snippet-sample_fetching_by_natural_key_with_a_version'></a>
+```cs
+// The command carries the version the user saw. A stale one throws
+// EventStreamUnexpectedMaxEventIdException, a ConcurrencyException, before
+// anything is enlisted in the session
+var checkedStream = await session.Events.FetchForWriting<Booking, BookingReference>(number, expectedVersion: 2);
+checkedStream.AppendOne(new BookingPaid(25m));
+await session.SaveChangesAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L166-L175' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_fetching_by_natural_key_with_a_version' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+A stale version throws `EventStreamUnexpectedMaxEventIdException`, which is a `ConcurrencyException` and a 409 in
+Wolverine's HTTP handling. The check runs before anything is enlisted in the session, so a session whose fetch
+failed has nothing pending to commit by mistake. The same overload takes a stream id or a strong-typed id.
+
+### Exclusive writes {#exclusive-writes}
+
+<!-- snippet: sample_exclusive_writing_by_natural_key -->
+<a id='snippet-sample_exclusive_writing_by_natural_key'></a>
+```cs
+// Takes the database's write lock, resolves the key inside it, and holds the lock until
+// SaveChangesAsync commits or the session is disposed. A competing exclusive writer waits
+// its turn rather than failing
+var locked = await exclusive.Events.FetchForExclusiveWriting<Booking, BookingReference>(number);
+locked.AppendOne(new BookingPaid(9m));
+await exclusive.SaveChangesAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L220-L229' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_exclusive_writing_by_natural_key' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+`FetchForExclusiveWriting` takes the database's write lock before it reads, resolves the key inside the lock so it
+cannot move to another stream before the commit, and holds the lock until `SaveChangesAsync` commits or the session
+is disposed. A competing exclusive writer waits its turn. See [exclusive writes](/events/appending#exclusive-writes)
+for what holding SQLite's lock costs.
+
+### Several streams at once
+
+<!-- snippet: sample_fetch_many_by_natural_key -->
+<a id='snippet-sample_fetch_many_by_natural_key'></a>
+```cs
+// Three statements however many keys: one to resolve them, two to fetch the streams.
+// The handles come back in the order of the keys
+var streams = await session.Events.FetchManyForWriting<Booking, BookingReference>([number, other]);
+foreach (var each in streams)
+{
+    each.AppendOne(new BookingPaid(1m));
+}
+
+await session.SaveChangesAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L187-L199' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_fetch_many_by_natural_key' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+A key that names no live stream throws `UnknownNaturalKeyException` before anything is enlisted, as a single
+`FetchForWriting` by that key does. A repeated key, a null key and a `TKey?` type argument are refused.
+
+### Batch queries
+
+The same fetches are on a batch's `Events`, in the shape Marten's batch has:
+
+<!-- snippet: sample_batching_natural_key_fetches -->
+<a id='snippet-sample_batching_natural_key_fetches'></a>
+```cs
+var batch = session.CreateBatchQuery();
+
+var writing = batch.Events.FetchForWriting<Booking, BookingReference>(number);
+var view = batch.Events.FetchLatest<BookingSummary, BookingReference>(other);
+
+await batch.Execute();
+
+var bookingStream = await writing;
+var otherSummary = await view;
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L201-L213' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_batching_natural_key_fetches' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+`batch.Events` also has `FetchForWriting(id, expectedVersion)`, `FetchForExclusiveWriting`, `FetchStream` and
+`FetchStreamState`. A batch on Fisher is [for parity, not speed](/migration-guide#batched-queries-are-not-a-performance-feature):
+there is no round trip to save on an embedded database, so the reads run one after another on the session's
+connection when `Execute` is called. A read that fails faults its own task, and `Execute` throws as well.
+
+## Mapped natural keys {#mapped-keys}
+
+An aggregate can be fetched by a key another aggregate owns. That is how an **async** read model becomes reachable
+by natural key: it maps the key with `[MappedNaturalKey<TSource>]`, and the fetch reads the source's lookup, which
+the source keeps current inline as the events commit.
+
+<!-- snippet: sample_mapped_natural_key -->
+<a id='snippet-sample_mapped_natural_key'></a>
+```cs
+// An async read model of the same stream. It owns no lookup: the key resolves through Booking's
+public partial class BookingSummary
+{
+    public Guid Id { get; set; }
+
+    [MappedNaturalKey<Booking>]
+    public BookingReference Number { get; set; }
+
+    public int Payments { get; set; }
+
+    public static BookingSummary Create(BookingMade e) => new() { Number = e.Number };
+
+    public void Apply(BookingPaid _) => Payments++;
+}
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L84-L101' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_mapped_natural_key' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+<!-- snippet: sample_fetching_a_mapped_natural_key -->
+<a id='snippet-sample_fetching_a_mapped_natural_key'></a>
+```cs
+// BookingSummary is async and may not be caught up yet. FetchLatest folds the stream
+// the key names, so the answer is current anyway
+var summary = await session.Events.FetchLatest<BookingSummary, BookingReference>(number);
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L177-L183' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_fetching_a_mapped_natural_key' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+- The source has to be registered and has to own a key of the same type. The store refuses to build otherwise,
+  naming the mapped key and what is wrong with it. `[NaturalKey(SourceProjection = typeof(...))]` is the same
+  declaration, and can name a projection class rather than an aggregate.
+- An aggregate owns at most one key, and can map any number of others, each of its own type. The fetch picks the
+  key by the type argument.
+- A mapped key follows a rename by its owner with no bookkeeping of its own, because it reads the owner's lookup.
+- `FetchLatest` and `FetchForWriting` on an async aggregate fold the stream the key names, so they are current
+  whether or not the daemon has caught up.
+- An aggregate in a [composite projection](/events/projections/composite) cannot own a key, but it can map one to
+  an owner registered outside the composite.
+- The [parked identity list](/events/projections/async-daemon#parking-a-failing-identity) shows a mapped key for a
+  projection that has no key of its own.
+
+## Nullable keys {#nullable-keys}
+
+A struct key can be declared `TKey?` on the aggregate, and a `[NaturalKeySource]` can return `TKey?`. It is the same
+key as a `TKey`: the lookup, the fetches and the mapped keys all use the underlying type, and an aggregate whose key
+is still null simply has no lookup row. Fetch it by `TKey`. What a null from a source means is covered under
+[a null from a key source](#null-keys).
 
 ## Storage
 
@@ -167,7 +380,7 @@ public partial class Shipment
     public void Apply(ShipmentCodeWithdrawn e) => Code = null;
 }
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L12-L48' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_natural_key_sources_and_null' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L14-L50' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_natural_key_sources_and_null' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 ## No foreign key to fi_streams
@@ -181,10 +394,11 @@ resolves to nothing anyway, because the join is what produces an answer.
 
 ## Resolving outside the write transaction is safe
 
-The same argument the [optimistic append](/events/appending#optimistic-concurrency) rests on: the
-version guard runs inside the write transaction regardless, so a stale resolution fails the commit
-rather than writing a wrong version. A lock would only buy the loser waiting instead of failing — the
-trade Fisher declines everywhere.
+`FetchForWriting` resolves the key before the write transaction opens. That is the same argument the
+[optimistic append](/events/appending#optimistic-concurrency) rests on: the version guard runs inside the write
+transaction regardless, so a stale resolution fails the commit rather than writing a wrong version. When a loser
+should wait instead of failing, use [`FetchForExclusiveWriting`](#exclusive-writes), which resolves the key inside the
+lock.
 
 ## Guid stream ids
 

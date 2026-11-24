@@ -448,6 +448,7 @@ internal abstract class EventTableQueryProvider<TElement> : IQueryProvider, IDoc
 
         var command = builder.Compile();
         command.Connection = await session.EventConnectionAsync(token).ConfigureAwait(false);
+        command.Transaction = session.ActiveTransaction;
         command.CommandTimeout = session.Options.CommandTimeout;
 
         return command;
