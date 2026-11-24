@@ -11,7 +11,7 @@ Polecat 6 and Wolverine 7.
 
 - **Targets `net10.0` and `net11.0`.** `net9.0` is dropped. The `net11.0` build is compiled with runtime-async and
   uses the .NET 11 GA packages.
-- **Dependencies:** JasperFx 3.14.0, Weasel.Sqlite and Weasel.Storage 10, and on `net11.0`
+- **Dependencies:** JasperFx 3.15.1, Weasel.Sqlite and Weasel.Storage 10.0.0, and on `net11.0`
   `Microsoft.Data.Sqlite` 11.0.0. The new `Fisher.Aspire.Hosting` package is the AppHost side of
   [Aspire](/configuration/aspire).
 - **A failing async projection identity is parked** instead of skipping its event, with a health check that names
@@ -411,7 +411,7 @@ themselves.
 
 ### JasperFx 3 and Weasel 10
 
-Fisher 2 requires JasperFx 3.14.0 and Weasel.Sqlite / Weasel.Storage 10.0 (10.0.0-rc.1 at the moment). An
+Fisher 2 requires JasperFx 3.15.1 and Weasel.Sqlite / Weasel.Storage 10.0.0. An
 application referencing either directly has to move them together; mixing a 2.x JasperFx with Fisher 2 does not
 restore. Weasel.Sqlite 10 depends on `Microsoft.Data.Sqlite` 10.0.15 on `net10.0` and 11.0.0 on `net11.0`, the same
 versions Fisher uses, so the two never pull different SQLite providers into one application. JasperFx's own

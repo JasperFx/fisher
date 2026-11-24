@@ -9,9 +9,9 @@ namespace Fisher.Tests.Compliance;
  * these tests cannot drift between the products.
  *
  * Suites were added one at a time as Fisher grew into them, and seventy-four are enrolled from
- * JasperFx.Events.ComplianceTests 3.14.0, which itself ships seventy-five concrete suites. The one left out,
- * BackfillCompliance (3.7.0), is excused in compliance_suite_inventory until the backfill half of
- * fisher#643. MultiDatabaseExplorerCompliance is one file holding two arms.
+ * JasperFx.Events.ComplianceTests 3.15.1, which itself ships seventy-six concrete suites. The two left out are
+ * excused in compliance_suite_inventory: BackfillCompliance (3.7.0) until the backfill half of fisher#643, and
+ * CompositeKeepUnchangedMembersCompliance (3.15.1, jasperfx#684) until fisher#109. MultiDatabaseExplorerCompliance is one file holding two arms.
  *
  * Three of the ten suites this wave adds are enrolled and gated off rather than green, each for a
  * reason recorded at the flag on FisherComplianceFixture rather than here:

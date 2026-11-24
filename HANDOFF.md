@@ -16,7 +16,14 @@ scoreboard and the things that are true right now but not obvious from either.
 `Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 994 of
 them are shared cross-store compliance tests — 760 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
-On JasperFx **3.14.0** / Weasel **10.0.0-rc.1**, and the .NET 11 GA (11.0.0) Microsoft packages on net11.0.
+On JasperFx **3.15.1** / Weasel **10.0.0**, and the .NET 11 GA (11.0.0) Microsoft packages on net11.0.
+
+## JasperFx 3.15.1 and Weasel 10.0.0 (fisher#690)
+
+The pins the 2.0.0-rc.2 publish goes out on, with no Fisher code change. Fisher bundles the 3.15.1 source generator,
+so an application referencing Fisher alone gets the `JFXEVT010`–`JFXEVT017` natural key analyzers (fisher#690).
+3.15.1 ships one new suite, `CompositeKeepUnchangedMembersCompliance` (jasperfx#684), excused in
+`compliance_suite_inventory` until fisher#109 makes rebuild teardown honour `MembersToTearDownAsync`.
 
 ## JasperFx 3.14.0 and the Marten 10.0 burn-down (2.0.0-rc.2: fisher#677, #678, #680–#684)
 
@@ -1433,7 +1440,7 @@ Three of the seven turned up a real defect or a wrong premise, which is the usef
 
 ## Where we are against the compliance suites
 
-`JasperFx.Events.ComplianceTests` 3.14.0 ships 75 suites; Fisher enrolls **74 of them, 994 tests**.
+`JasperFx.Events.ComplianceTests` 3.15.1 ships 76 suites; Fisher enrolls **74 of them, 994 tests**.
 Fisher passes **994 of them, across all
 74 suites**. Every suite compiles; every one is also subclassed and running. The five that did not
 pass on the 2.65.0 pin were the upstream ones described at the top of this file, and 2.66.0 closed

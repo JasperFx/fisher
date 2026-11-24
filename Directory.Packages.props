@@ -372,16 +372,16 @@
         <!-- JasperFx 3.3.0 (from 3.0.1, spanning 3.1.0 and 3.2.0). Bumped here because 3.2.0 is the first
              release with DcbAppendConditionCompliance (jasperfx#1183), which this branch enrolls. No compile
              break. The rest of the span is adopted in fisher#554. -->
-        <PackageVersion Include="JasperFx" Version="3.14.0" />
-        <PackageVersion Include="JasperFx.Events" Version="3.14.0" />
+        <PackageVersion Include="JasperFx" Version="3.15.1" />
+        <PackageVersion Include="JasperFx.Events" Version="3.15.1" />
         <!-- The shared cross-store event sourcing compliance suites. Source-only package: the
              suites compile inside Fisher.Tests so JasperFx's aggregate source generator binds
              Fisher's own session types. See src/Fisher.Tests/Compliance. -->
-        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="3.14.0" />
-        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="3.14.0" />
+        <PackageVersion Include="JasperFx.Events.ComplianceTests" Version="3.15.1" />
+        <PackageVersion Include="JasperFx.Events.SourceGenerator" Version="3.15.1" />
         <!-- Fisher.Tests only: the Microsoft.Extensions.AI adapter to IEmbeddingProvider, so the
              vector projection page's provider-wiring sample compiles. Fisher itself never takes it. -->
-        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="3.14.0" />
+        <PackageVersion Include="JasperFx.Events.MicrosoftExtensionsAI" Version="3.15.1" />
 
         <!-- Weasel 9.46.0 (from 9.42.0, spanning 9.43.0, 9.44.0, 9.45.0 and 9.45.1). JasperFx floor
              2.90.2, which Fisher already pins. Reaching Fisher:
@@ -580,12 +580,16 @@
         <!-- Weasel 10.0.0-alpha.13 (from alpha.11, spanning alpha.12). weasel#901: EventLoaderBase reports a parking
              request's unreadable events on the page, so FisherEventLoader's AsyncLocal workaround is gone. INERT:
              weasel#900 (SQL Server), and alpha.12's managed list partitions (#897/#898, PostgreSQL). -->
+        <!-- Weasel 10.0.0 (from rc.1), with JasperFx 3.15.1 (from 3.14.0, spanning 3.15.0). fisher#690: the bundled
+             source generator carries the JFXEVT010-017 natural key analyzers. No compile break. Weasel 10.0.0 keeps
+             rc.1's Microsoft.Data.Sqlite split (10.0.15 / 11.0.0) and floors JasperFx at 3.15.1. 3.15.1 ships
+             CompositeKeepUnchangedMembersCompliance (jasperfx#684), excused until fisher#109. -->
         <!-- Weasel 10.0.0-rc.1 (from alpha.13). fisher#674. Weasel.Sqlite now splits Microsoft.Data.Sqlite by
              target framework the way Fisher has since fisher#670: 10.0.15 on net10.0, 11.0.0 on net11.0, both on
              SQLitePCLRaw.bundle_e_sqlite3 3.0.5. Floors: JasperFx 3.12.1 (Weasel.Core) and JasperFx.Events 3.12.1
              (Weasel.Storage), matching the pins above. -->
-        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0-rc.1" />
-        <PackageVersion Include="Weasel.Storage" Version="10.0.0-rc.1" />
+        <PackageVersion Include="Weasel.Sqlite" Version="10.0.0" />
+        <PackageVersion Include="Weasel.Storage" Version="10.0.0" />
 
         <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.15" />
         <!-- Override the transitive SQLitePCLRaw 2.1.11 (vulnerable native lib,

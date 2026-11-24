@@ -3,8 +3,9 @@
 Where Fisher is, what comes next, and why in this order. See [CLAUDE.md](CLAUDE.md) for
 architecture and the SQLite-specific decisions.
 
-Status: **five open issues: the 2.0 docs review, and four for 2.1, one of them blocked upstream.** 2.0.0-rc.2 is
-the release candidate, on JasperFx 3.14.0, Weasel 10.0.0-rc.1 and the .NET 11 GA packages. It carries the port of
+Status: **five open issues: the 2.0 docs review, and four for 2.1.** 2.0.0-rc.2 is
+the release candidate, on JasperFx 3.15.1, Weasel 10.0.0 and the .NET 11 GA packages, bundling the 3.15.1 source
+generator so applications get the natural key analyzers ([#690](https://github.com/JasperFx/fisher/issues/690)). It carries the port of
 Marten 10.0's burn-down: event and document metadata back to opt-in ([#682](https://github.com/JasperFx/fisher/issues/682)),
 aggregate stream stats ([#678](https://github.com/JasperFx/fisher/issues/678)), the null natural key rule and the
 LINQ support summary ([#684](https://github.com/JasperFx/fisher/issues/684)), tests clearing the fetch-plan bug
@@ -460,8 +461,9 @@ a new API rather than a fix.
 holding projection backfill, so #648 was reverted, and `BackfillCompliance` is excused until it lands, as it is on
 Marten and Polecat.
 
-[#109](https://github.com/JasperFx/fisher/issues/109) cannot be specified until jasperfx#684 settles
-an unanswered question about the stage graph.
+[#109](https://github.com/JasperFx/fisher/issues/109): honour per-member versions in composite member teardown.
+jasperfx#684 shipped in JasperFx 3.15.1 (`KeepUnchangedMembers`, `MembersToTearDownAsync`), so it is no longer blocked;
+`CompositeKeepUnchangedMembersCompliance` is excused until it lands.
 <!-- /open-issues -->
 
 The release train's one follow-up, [#543](https://github.com/JasperFx/fisher/issues/543) (three
