@@ -440,6 +440,36 @@ public class FisherProjectionOptions : ProjectionGraph<IProjection, IDocumentSes
         return keys;
     }
 
+    /// <summary>
+    ///     fisher#692, as Marten 10 and Polecat 6 (marten#6150, polecat#1131): a natural key of the store's own stream
+    ///     identity type, a bare <c>string</c> on a string-identity store or a <c>Guid</c> on a Guid one, is refused
+    ///     when the store is built. <c>FetchForWriting&lt;T, string&gt;</c> and the other fetches by <c>string</c> are
+    ///     fetches by stream key there, so a fetch by such a key cannot be told apart from one by stream key. Fisher
+    ///     used to settle it by letting the stream identity win, which silently found nothing, or started a new
+    ///     stream named after the key. A bare <c>string</c> key on a Guid-identity store is a natural key, and is
+    ///     unaffected. Same wording as the other two stores.
+    /// </summary>
+    internal void AssertNaturalKeysAreNotStreamIdentities()
+    {
+        var streamIdentityType = _events.StreamIdentity == JasperFx.Events.StreamIdentity.AsGuid
+            ? typeof(Guid)
+            : typeof(string);
+
+        var messages = AllAggregateProjections()
+            .SelectMany(aggregate => new[] { aggregate.NaturalKeyDefinition }
+                .Concat(aggregate.MappedNaturalKeyDefinitions)
+                .OfType<JasperFx.Events.NaturalKeyDefinition>()
+                .Where(x => x.OuterType == streamIdentityType)
+                .Select(x =>
+                    $"Natural key {aggregate.AggregateType.FullNameInCode()}.{x.Member.Name} has type {streamIdentityType.FullNameInCode()}, the same type as this store's stream identity ({_events.StreamIdentity}), so fetching by it would fetch by stream identity instead. Wrap it in a strong-typed identifier, such as a record struct with a single Value property."))
+            .ToArray();
+
+        if (messages.Length > 0)
+        {
+            throw new InvalidProjectionException(messages);
+        }
+    }
+
     private Fisher.Events.Storage.NaturalKeyProjection? _naturalKeyProjection;
 
     /// <summary>

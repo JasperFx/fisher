@@ -5696,10 +5696,13 @@ measure; it reached zero members and was deleted. Reintroduce it, rather than sc
 future JasperFx release widens the interface past what Fisher implements.
 **`FetchForWriting<T, TId>` and `FetchLatest<T, TId>` are whole now too**, which they were not for a
 long time: in the siblings that overload is the natural-key and strong-typed-id entry point, fisher#14
-closed the second half and fisher#40 the first. **The stream identity type wins where the two
-coincide** — a string id on a string-identity store is read as the stream key — because which reading
-applies must not depend on whichever aggregate types happen to declare a key.
-`FetchForWritingByNaturalKey` / `FetchLatestByNaturalKey` are the unambiguous spellings.
+closed the second half and fisher#40 the first. ⚠️ **A natural key of the stream identity type is refused at
+store build** (fisher#692, matching Marten 10 and Polecat 6, with their wording), in
+`FisherProjectionOptions.AssertNaturalKeysAreNotStreamIdentities`: a bare `string` key on a string-identity
+store, owned or mapped, since a fetch by it cannot be told apart from a fetch by stream id. (The check reads
+"the stream identity type", so a `Guid` key on a Guid store is covered too, but JasperFx refuses every `Guid`
+natural key first.) Fisher 2.0's previews let the stream identity win; do not bring that back. The fix for the
+user is a strong-typed key (`readonly record struct OrderNumber(string Value)`).
 ⚠️ **The strong-typed half was claimed here before it was true** (fisher#397). fisher#14 made a
 wrapper work as an aggregate's *identity*, but nothing unwrapped one passed as the *stream id*, so
 `FetchForWriting<Pod, PodId>` threw `NotImplementedException` saying strong-typed ids were "not

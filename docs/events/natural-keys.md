@@ -406,19 +406,34 @@ A Guid stream id binds as **lowercase canonical text** here as everywhere else. 
 table where getting that wrong would be silent, after documents and tag rows, and the failure mode is
 identical: every lookup returns nothing.
 
-## Where natural keys meet stream identity
+## Where natural keys meet stream identity {#stream-identity}
 
-```cs
-var stream = await session.Events.FetchForWriting<Order, string>("INV-2026-0042");
+A natural key can't have the same type as the store's stream identity, which in practice means a bare `string`
+key on a string-identity store (a `Guid` natural key is refused anyway). `FetchForWriting<Order, string>("INV-2026-0042")`
+could then mean the stream key or the natural key, so Fisher refuses the key when the store is built, as
+Marten 10 and Polecat 6 do:
+
+```text
+Natural key Order.Number has type string, the same type as this store's stream identity (AsString), so
+fetching by it would fetch by stream identity instead. Wrap it in a strong-typed identifier, such as a
+record struct with a single Value property.
 ```
 
-::: warning
-On a **string-identity** store, this reads the string as the *stream key*, not as a natural key. The
-stream identity type wins, because which reading applies must not depend on whichever aggregate types
-happen to declare a natural key.
+Wrap the key in a strong-typed identifier, which the natural key machinery unwraps for you:
 
-`FetchForWritingByNaturalKey` and `FetchLatestByNaturalKey` are the unambiguous spellings.
-:::
+```cs
+public readonly record struct OrderNumber(string Value);
+
+public class Order
+{
+    public string Id { get; set; } = "";
+
+    [NaturalKey]
+    public OrderNumber Number { get; set; }
+}
+```
+
+A bare `string` key on a Guid-identity store is fine, since the two types differ.
 
 ## Cleaning
 
