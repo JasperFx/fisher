@@ -5519,15 +5519,15 @@ Two behaviours the shared suite settled, both of which Fisher had wrong until it
   resolves forever also occupies its slot in the lookup's primary key forever, so no other stream can
   ever claim that identifier. Both siblings had reframed the same behaviour as a defect
   (polecat#435 / marten#5041) and Fisher was the third.
-- **`FetchLatestByNaturalKey` answers a miss with null, where `FetchForWritingByNaturalKey` throws.**
-  The asymmetry is the contract rather than an oversight: `FetchForWriting` is the read half of a
-  read-modify-write and has to say what it would be writing to, where `FetchLatest(...) is null` is
-  the idiomatic "does this aggregate exist?" probe — the same probe fisher#88 made honest for the
-  by-id overload. Throwing made the key-shaped spelling the one member of the family that could not
-  answer its own question. The `FetchForWriting` miss is deliberately outside shared scope
-  (jasperfx#764), because that is the one place the three stores genuinely disagree: Marten hands back
-  a null aggregate, Polecat throws `InvalidOperationException`, Fisher throws
-  `UnknownNaturalKeyException`.
+- **`FetchLatestByNaturalKey` answers a miss with null; a fetch for writing by an unknown key starts a new
+  stream** (fisher#694, Marten 10 and Polecat 6's rule). `EventOperations.NewStreamForUnknownKey` hands back a
+  new `SequentialGuid` stream id (its text on a string store), and the ordinary by-id path then starts it at
+  version 0. An expected version other than 0 throws `EventStreamUnexpectedMaxEventIdException` naming the key,
+  before anything is enlisted. Every form goes through it: the versioned and exclusive fetches,
+  `FetchManyForWriting`, the batch (which delegates), and mapped keys. The key is registered by the guarded claim
+  when an appended event sets it, so a second session starting the same key fails with
+  `DuplicateNaturalKeyException`. ⚠️ **Fisher 2.0.0-rc.2 and earlier threw `UnknownNaturalKeyException` here**;
+  the type is kept so a `catch` compiles, and nothing throws it. Each call starts its own stream.
 
 Two more things:
 
@@ -5537,8 +5537,7 @@ Two more things:
   of failing — the trade Fisher already makes everywhere.
 - **A Guid stream id binds as lowercase canonical text.** Third table where getting that wrong is
   silent, after documents and tag rows, and the failure mode is identical: every lookup returns
-  nothing. Verified by binding the uppercase form, which makes the round-trip test throw
-  `UnknownNaturalKeyException`.
+  nothing. Verified by binding the uppercase form, which made the round-trip test fail to resolve the key.
 
 `DeleteAllEventDataAsync` clears the lookup tables with the rest. Leaving them behind is not cosmetic:
 the duplicate guard would then fire on data that no longer exists, and the compliance fixture cleans
@@ -5611,9 +5610,8 @@ which is why the write cache and the identity map needed nothing: they already w
 - **`Nullable<TKey>` as a type argument throws `ArgumentException`**; a null key value is null from `FetchLatest`
   (no query) and `ArgumentOutOfRangeException` for writing.
 - **`FetchManyForWriting` by key resolves every key in one `json_each` statement**, then the two-statement
-  by-stream-id fetch. A miss throws `UnknownNaturalKeyException` before anything is enlisted, because a single
-  `FetchForWriting` by key does: the contract says a miss answers as a single fetch would, and on Fisher that is a
-  refusal, not a new stream the key does not name.
+  by-stream-id fetch. A miss gets a new stream at version 0 in its place (fisher#694), because a single
+  `FetchForWriting` by key does: the contract says a miss answers as a single fetch would.
 - **`IBatchedQuery.Events` (`IBatchEvents`)** is Marten's `batch.Events` shape, a default interface member on the
   public interface so an outside implementer still compiles.
 - **The null-retires-the-key rule was already in** (jasperfx#1287, `RetiresKeyOnNull`, fisher#684).

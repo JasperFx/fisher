@@ -110,7 +110,7 @@ public partial class EventOperations
             }
 
             streamId = await ResolveNaturalKeyAsync(key, raw, cancellation).ConfigureAwait(false)
-                       ?? throw new UnknownNaturalKeyException(typeof(T), raw);
+                       ?? NewStreamForUnknownKey<T>(raw, expectedVersion);
         }
 
         return (streamId, expectedVersion, exclusive) switch
@@ -125,6 +125,36 @@ public partial class EventOperations
     }
 
     /// <summary>
+    ///     The stream id a fetch for writing by an unknown natural key starts (fisher#694).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         As Marten 10 and Polecat 6: a key naming no live stream is a new stream at version 0, the same as
+    ///         a fetch by a stream id that does not exist, with a new sequential Guid (its text on a
+    ///         string-identity store). The returned handle does not carry the key. The key is registered when an
+    ///         appended event sets it and the session commits, through the guarded claim, so two sessions
+    ///         starting one unknown key at once write two streams and the second commit fails with
+    ///         <c>DuplicateNaturalKeyException</c>. Each call starts its own stream.
+    ///     </para>
+    ///     <para>
+    ///         An expected version on an unknown key is checked against 0 before anything is enlisted: 0 starts
+    ///         the stream, anything else throws <see cref="EventStreamUnexpectedMaxEventIdException" /> (a
+    ///         <c>ConcurrencyException</c>) naming the key, as Marten does. Fisher 2.0.0-rc.2 threw
+    ///         <see cref="Exceptions.UnknownNaturalKeyException" /> for every unknown key.
+    ///     </para>
+    /// </remarks>
+    private object NewStreamForUnknownKey<T>(object key, long? expectedVersion)
+    {
+        if (expectedVersion is { } expected && expected != 0)
+        {
+            throw new EventStreamUnexpectedMaxEventIdException(key, typeof(T), expected, 0);
+        }
+
+        var id = JasperFx.Core.SequentialGuid.NextPostgresOrder();
+        return Graph.StreamIdentity == StreamIdentity.AsGuid ? id : id.ToString();
+    }
+
+    /// <summary>
     ///     Fetch a stream for writing by the aggregate's natural key — the business identifier it was
     ///     created with, rather than its stream id (fisher#40).
     /// </summary>
@@ -136,10 +166,9 @@ public partial class EventOperations
     ///         are all the same ones.
     ///     </para>
     ///     <para>
-    ///         A key naming no live stream throws <see cref="Exceptions.UnknownNaturalKeyException" />
-    ///         rather than handing back an empty stream to append to. The mapping row is written by the
-    ///         <c>StartStream</c> that created the stream, so "no such key" means the stream was never
-    ///         started — appending to a stream id invented here would create one the key does not name.
+    ///         A key naming no live stream starts a new stream at version 0 (fisher#694), as Marten 10 and
+    ///         Polecat 6 do and as a fetch by a stream id that does not exist does. Appending an event that
+    ///         sets the key registers it on commit. See <see cref="NewStreamForUnknownKey{T}" />.
     ///     </para>
     /// </remarks>
     public async Task<IEventStream<T>> FetchForWritingByNaturalKey<T, TId>(TId key,
@@ -150,7 +179,7 @@ public partial class EventOperations
         var definition = RequireNaturalKeyFor<T, TId>();
         var raw = RequireNaturalKeyValue(definition, key);
         var streamId = await ResolveNaturalKeyAsync(definition, raw, cancellation).ConfigureAwait(false)
-                       ?? throw new UnknownNaturalKeyException(typeof(T), raw);
+                       ?? NewStreamForUnknownKey<T>(raw, null);
 
         return streamId switch
         {

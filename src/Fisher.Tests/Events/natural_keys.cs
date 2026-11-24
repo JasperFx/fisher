@@ -148,8 +148,7 @@ public partial class natural_keys : IAsyncLifetime
 
         await using var check = _store.LightweightSession();
 
-        await Should.ThrowAsync<UnknownNaturalKeyException>(() =>
-            check.Events.FetchForWritingByNaturalKey<Order, string>("ORD-ROLLBACK", Token));
+        (await check.Events.FetchLatestByNaturalKey<Order, string>("ORD-ROLLBACK", Token)).ShouldBeNull();
     }
 
     /*
@@ -198,8 +197,7 @@ public partial class natural_keys : IAsyncLifetime
 
         await using var check = _store.LightweightSession();
 
-        await Should.ThrowAsync<UnknownNaturalKeyException>(() =>
-            check.Events.FetchForWritingByNaturalKey<Order, string>("ORD-ARCHIVED", Token));
+        (await check.Events.FetchLatestByNaturalKey<Order, string>("ORD-ARCHIVED", Token)).ShouldBeNull();
     }
 
     /// <summary>
@@ -256,15 +254,28 @@ public partial class natural_keys : IAsyncLifetime
         (await a.Events.FetchForWritingByNaturalKey<Order, string>("ORD-SHARED", Token)).Id.ShouldBe(again);
     }
 
+    /// <summary>
+    ///     fisher#694: an unknown key starts a new stream at version 0, as on Marten 10 and Polecat 6, and the key
+    ///     is registered when an appended event sets it.
+    /// </summary>
     [Fact]
-    public async Task an_unknown_key_is_refused_by_name()
+    public async Task an_unknown_key_starts_a_new_stream()
     {
-        await using var session = _store.LightweightSession();
+        Guid streamId;
+        await using (var session = _store.LightweightSession())
+        {
+            var stream = await session.Events.FetchForWritingByNaturalKey<Order, string>("ORD-NEW", Token);
+            stream.Aggregate.ShouldBeNull();
+            stream.CurrentVersion.ShouldBe(0);
+            stream.Id.ShouldNotBe(Guid.Empty);
+            streamId = stream.Id;
 
-        var exception = await Should.ThrowAsync<UnknownNaturalKeyException>(() =>
-            session.Events.FetchForWritingByNaturalKey<Order, string>("ORD-NOPE", Token));
+            stream.AppendOne(new OrderPlaced("ORD-NEW"));
+            await session.SaveChangesAsync(Token);
+        }
 
-        exception.Message.ShouldContain("ORD-NOPE");
+        await using var check = _store.LightweightSession();
+        (await check.Events.FetchForWritingByNaturalKey<Order, string>("ORD-NEW", Token)).Id.ShouldBe(streamId);
     }
 
     [Fact]
@@ -299,8 +310,7 @@ public partial class natural_keys : IAsyncLifetime
 
         await using var session = _store.LightweightSession();
 
-        await Should.ThrowAsync<UnknownNaturalKeyException>(() =>
-            session.Events.FetchForWritingByNaturalKey<Order, string>("ORD-CLEANED", Token));
+        (await session.Events.FetchLatestByNaturalKey<Order, string>("ORD-CLEANED", Token)).ShouldBeNull();
 
         // And the key is free again, which is the half a stale row would break.
         await Should.NotThrowAsync(() => StartOrder("ORD-CLEANED"));
@@ -351,8 +361,7 @@ public partial class natural_keys : IAsyncLifetime
         // Nothing wrote a lookup row, because nothing on the append path knew there was a key.
         await using (var before = asyncStore.LightweightSession())
         {
-            await Should.ThrowAsync<UnknownNaturalKeyException>(() =>
-                before.Events.FetchForWritingByNaturalKey<Order, string>("ORD-BACKFILL", Token));
+            (await before.Events.FetchLatestByNaturalKey<Order, string>("ORD-BACKFILL", Token)).ShouldBeNull();
         }
 
         await RunDaemonToHeadAsync(asyncStore);
@@ -389,8 +398,7 @@ public partial class natural_keys : IAsyncLifetime
 
         await using (var gone = asyncStore.LightweightSession())
         {
-            await Should.ThrowAsync<UnknownNaturalKeyException>(() =>
-                gone.Events.FetchForWritingByNaturalKey<Order, string>("ORD-EMPTIED", Token));
+            (await gone.Events.FetchLatestByNaturalKey<Order, string>("ORD-EMPTIED", Token)).ShouldBeNull();
         }
 
         await RunDaemonToHeadAsync(asyncStore);
@@ -427,8 +435,7 @@ public partial class natural_keys : IAsyncLifetime
         await RunDaemonToHeadAsync(asyncStore);
 
         await using var check = asyncStore.LightweightSession();
-        await Should.ThrowAsync<UnknownNaturalKeyException>(() =>
-            check.Events.FetchForWritingByNaturalKey<Order, string>("ORD-WITHDRAWN", Token));
+        (await check.Events.FetchLatestByNaturalKey<Order, string>("ORD-WITHDRAWN", Token)).ShouldBeNull();
     }
 
     /// <summary>
@@ -517,8 +524,7 @@ public partial class natural_keys : IAsyncLifetime
         rows.ShouldBeEmpty();
 
         // ...and the key resolves to nothing either way, because the answer comes off fi_streams.
-        await Should.ThrowAsync<UnknownNaturalKeyException>(() =>
-            session.Events.FetchForWritingByNaturalKey<Order, string>("ORD-ARCHIVED-REPLAY", Token));
+        (await session.Events.FetchLatestByNaturalKey<Order, string>("ORD-ARCHIVED-REPLAY", Token)).ShouldBeNull();
     }
 
     /// <summary>

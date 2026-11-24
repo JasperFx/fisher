@@ -12,7 +12,7 @@ equivalent for and never will.
 [CLAUDE.md](CLAUDE.md) has the architecture and the SQLite traps. This document is the compliance
 scoreboard and the things that are true right now but not obvious from either.
 
-**4340 tests green on net10.0 and 4367 on net11.0** — 4261 (net10.0) / 4288 (net11.0) in `Fisher.Tests`, 47 in
+**4347 tests green on net10.0 and 4374 on net11.0** — 4268 (net10.0) / 4295 (net11.0) in `Fisher.Tests`, 47 in
 `Fisher.AspNetCore.Tests` and 32 in `Fisher.EntityFrameworkCore.Tests`. 994 of
 them are shared cross-store compliance tests — 760 event sourcing and 234 document.
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
@@ -26,6 +26,11 @@ so an application referencing Fisher alone gets the `JFXEVT010`–`JFXEVT017` na
 `compliance_suite_inventory` until fisher#109 makes rebuild teardown honour `MembersToTearDownAsync`.
 
 ## Natural keys at parity with Marten 10, and exclusive writes that lock (fisher#679, #688, #689)
+
+**After 2.0.0-rc.2, two decisions brought the last differences in line with Marten 10 and Polecat 6:** a bare
+`string` natural key on a string-identity store is refused at store build (fisher#692), and a fetch for writing by an
+unknown natural key starts a new stream instead of throwing `UnknownNaturalKeyException` (fisher#694). The shared
+suites still don't pin the second (jasperfx#764), so `natural_key_parity` does.
 
 For 2.0 GA, from the Wolverine natural keys review (wolverine#5897). See CLAUDE.md, "Natural keys at parity with
 Marten 10" and the exclusive-writes paragraph under "SQLite divergences".

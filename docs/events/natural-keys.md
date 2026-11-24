@@ -106,6 +106,9 @@ A stale version throws `EventStreamUnexpectedMaxEventIdException`, which is a `C
 Wolverine's HTTP handling. The check runs before anything is enlisted in the session, so a session whose fetch
 failed has nothing pending to commit by mistake. The same overload takes a stream id or a strong-typed id.
 
+A key that no stream has yet is at version 0, so an expected version of 0 starts a new stream and anything else
+throws the same `ConcurrencyException`. See [a key no stream has yet](#unknown-key).
+
 ### Exclusive writes {#exclusive-writes}
 
 <!-- snippet: sample_exclusive_writing_by_natural_key -->
@@ -118,7 +121,7 @@ var locked = await exclusive.Events.FetchForExclusiveWriting<Booking, BookingRef
 locked.AppendOne(new BookingPaid(9m));
 await exclusive.SaveChangesAsync();
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L220-L229' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_exclusive_writing_by_natural_key' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L236-L245' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_exclusive_writing_by_natural_key' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 `FetchForExclusiveWriting` takes the database's write lock before it reads, resolves the key inside the lock so it
@@ -144,8 +147,8 @@ await session.SaveChangesAsync();
 <sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L187-L199' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_fetch_many_by_natural_key' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
-A key that names no live stream throws `UnknownNaturalKeyException` before anything is enlisted, as a single
-`FetchForWriting` by that key does. A repeated key, a null key and a `TKey?` type argument are refused.
+A key that names no live stream gets a new stream at version 0 in its place, as a single `FetchForWriting` by that
+key does. A repeated key, a null key and a `TKey?` type argument are refused.
 
 ### Batch queries
 
@@ -278,19 +281,37 @@ there is nothing to watch — and reading the flag off the join makes `fi_stream
 knows.
 :::
 
-## A miss is null from `FetchLatest` and an exception from `FetchForWriting`
+## A key no stream has yet {#unknown-key}
 
-The asymmetry is deliberate. `FetchForWriting` is the read half of a read-modify-write and has to say
-what it would be writing to, so a key naming no live stream throws `UnknownNaturalKeyException`.
-`FetchLatest` reports current state, and `FetchLatestByNaturalKey(...) is null` is the idiomatic
-"does this aggregate exist?" probe — the same question the by-id overload answers that way.
+Fetching for writing by a natural key that no live stream has starts a new stream, exactly as fetching by a stream
+id that doesn't exist does. You get a stream at version 0 with a null aggregate and a new id, and appending an event
+that sets the key registers the key when the session commits:
 
-::: tip
-The `FetchForWriting` miss is the one place the three stores genuinely disagree — Marten hands back a
-null aggregate, Polecat throws `InvalidOperationException`, Fisher throws its own — so the shared
-compliance suite deliberately does not pin it. The `FetchLatest` miss it does pin, and all three
-agree on null.
-:::
+<!-- snippet: sample_fetching_an_unknown_natural_key -->
+<a id='snippet-sample_fetching_an_unknown_natural_key'></a>
+```cs
+// No stream has this booking reference yet, so this is a new stream at version 0
+var fresh = await session.Events.FetchForWriting<Booking, BookingReference>(reference);
+
+// Appending the event that sets the key registers it when the session commits
+fresh.AppendOne(new BookingMade(reference, 100m));
+await session.SaveChangesAsync();
+```
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Documentation/natural_key_samples.cs#L220-L229' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_fetching_an_unknown_natural_key' title='Start of snippet'>anchor</a></sup>
+<!-- endSnippet -->
+
+That holds for every form: `FetchForWriting` with or without an expected version, `FetchForExclusiveWriting`,
+`FetchManyForWriting`, the batch versions, and mapped keys. A few things worth knowing:
+
+- An expected version of 0 is fine on an unknown key. Anything else throws `EventStreamUnexpectedMaxEventIdException`
+  naming the key, before anything is enlisted.
+- Each fetch of an unknown key starts its own stream, so fetch it once per unit of work.
+- Two sessions that start the same unknown key at once write two streams, and the second commit fails with
+  `DuplicateNaturalKeyException` and rolls back. The key belongs to whichever stream committed first.
+- `FetchLatest` by an unknown key answers null, which is still the idiomatic "does this aggregate exist?" probe.
+
+This is the Marten 10 and Polecat 6 behaviour. Fisher 2.0.0-rc.2 and earlier threw `UnknownNaturalKeyException`
+instead, and that type is still there so a `catch` of it compiles, but nothing throws it any more.
 
 ## A second stream claiming a key is refused
 

@@ -215,6 +215,22 @@ public class natural_key_usage_samples : IAsyncLifetime
         bookingStream.Aggregate!.Balance.ShouldBe(49m);
         otherSummary!.Payments.ShouldBe(1);
 
+        var reference = new BookingReference($"BK-{Guid.NewGuid():N}");
+
+        #region sample_fetching_an_unknown_natural_key
+
+        // No stream has this booking reference yet, so this is a new stream at version 0
+        var fresh = await session.Events.FetchForWriting<Booking, BookingReference>(reference);
+
+        // Appending the event that sets the key registers it when the session commits
+        fresh.AppendOne(new BookingMade(reference, 100m));
+        await session.SaveChangesAsync();
+
+        #endregion
+
+        fresh.StartingVersion.ShouldBe(0);
+        (await session.Events.FetchLatest<Booking, BookingReference>(reference))!.Id.ShouldBe(fresh.Id);
+
         await using var exclusive = _store.LightweightSession();
 
         #region sample_exclusive_writing_by_natural_key

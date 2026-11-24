@@ -101,13 +101,117 @@ public class natural_key_parity : IAsyncLifetime
         (await session.Events.FetchForWriting<Ticket, Guid>(id, 1, Token)).Id.ShouldBe(id);
     }
 
+    // ---- fisher#694: an unknown key starts a new stream, as on Marten 10 and Polecat 6 ----
+
     [Fact]
-    public async Task an_unknown_key_with_a_version_is_an_unknown_key()
+    public async Task an_unknown_key_starts_a_new_stream_and_registers_the_key_on_commit()
+    {
+        var number = ANumber();
+
+        Guid id;
+        await using (var session = _store.LightweightSession())
+        {
+            var stream = await session.Events.FetchForWriting<Ticket, TicketNumber>(number, Token);
+
+            stream.Aggregate.ShouldBeNull();
+            stream.CurrentVersion.ShouldBe(0);
+            stream.Id.ShouldNotBe(Guid.Empty);
+            id = stream.Id;
+
+            stream.AppendOne(new TicketOpened(number, "Paper jam"));
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using var check = _store.LightweightSession();
+        var again = await check.Events.FetchForWriting<Ticket, TicketNumber>(number, Token);
+        again.Id.ShouldBe(id);
+        again.Aggregate!.Title.ShouldBe("Paper jam");
+    }
+
+    [Fact]
+    public async Task each_fetch_of_an_unknown_key_starts_its_own_stream()
+    {
+        var number = ANumber();
+
+        await using var session = _store.LightweightSession();
+        var first = await session.Events.FetchForWriting<Ticket, TicketNumber>(number, Token);
+        var second = await session.Events.FetchForWriting<Ticket, TicketNumber>(number, Token);
+
+        second.Id.ShouldNotBe(first.Id);
+    }
+
+    [Fact]
+    public async Task an_unknown_key_at_version_zero_starts_a_new_stream()
     {
         await using var session = _store.LightweightSession();
 
-        await Should.ThrowAsync<UnknownNaturalKeyException>(
-            () => session.Events.FetchForWriting<Ticket, TicketNumber>(ANumber(), 0, Token));
+        var stream = await session.Events.FetchForWriting<Ticket, TicketNumber>(ANumber(), 0, Token);
+
+        stream.CurrentVersion.ShouldBe(0);
+        stream.Aggregate.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task an_unknown_key_at_any_other_version_is_a_concurrency_exception_and_enlists_nothing()
+    {
+        var number = ANumber();
+        await using var session = _store.LightweightSession();
+
+        var ex = await Should.ThrowAsync<EventStreamUnexpectedMaxEventIdException>(
+            () => session.Events.FetchForWriting<Ticket, TicketNumber>(number, 1, Token));
+
+        ex.ShouldBeAssignableTo<ConcurrencyException>();
+        ex.Message.ShouldContain(number.Value);
+        session.Events.PendingStreams.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task an_unknown_key_for_exclusive_writing_starts_a_new_stream()
+    {
+        var number = ANumber();
+
+        await using (var session = _store.LightweightSession())
+        {
+            var stream = await session.Events.FetchForExclusiveWriting<Ticket, TicketNumber>(number, Token);
+            stream.CurrentVersion.ShouldBe(0);
+            stream.AppendOne(new TicketOpened(number, "Toner"));
+            await session.SaveChangesAsync(Token);
+        }
+
+        await using var check = _store.LightweightSession();
+        (await check.Events.FetchLatest<Ticket, TicketNumber>(number, Token))!.Title.ShouldBe("Toner");
+    }
+
+    /// <summary>A mapped key resolves through its owner's lookup, so an unknown one is a new stream too.</summary>
+    [Fact]
+    public async Task an_unknown_mapped_key_starts_a_new_stream()
+    {
+        await using var session = _store.LightweightSession();
+
+        var stream = await session.Events.FetchForWriting<TicketBoard, TicketNumber>(ANumber(), Token);
+
+        stream.CurrentVersion.ShouldBe(0);
+        stream.Aggregate.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task two_sessions_starting_one_unknown_key_cannot_both_have_it()
+    {
+        var number = ANumber();
+
+        await using var first = _store.LightweightSession();
+        await using var second = _store.LightweightSession();
+
+        var a = await first.Events.FetchForWriting<Ticket, TicketNumber>(number, Token);
+        var b = await second.Events.FetchForWriting<Ticket, TicketNumber>(number, Token);
+        a.AppendOne(new TicketOpened(number, "first"));
+        b.AppendOne(new TicketOpened(number, "second"));
+
+        await first.SaveChangesAsync(Token);
+        await Should.ThrowAsync<DuplicateNaturalKeyException>(() => second.SaveChangesAsync(Token));
+
+        await using var check = _store.LightweightSession();
+        (await check.Events.FetchLatest<Ticket, TicketNumber>(number, Token))!.Title.ShouldBe("first");
     }
 
     // ---- fisher#679: nullable key types and null keys ----
@@ -171,18 +275,28 @@ public class natural_key_parity : IAsyncLifetime
         (await session.Events.FetchLatest<Ticket, TicketNumber>(second, Token))!.Notes.ShouldBe(1);
     }
 
+    /// <summary>fisher#694: an unknown key gets a new stream at version 0 in its place, in key order.</summary>
     [Fact]
-    public async Task fetch_many_for_writing_refuses_an_unknown_key_before_enlisting_anything()
+    public async Task fetch_many_for_writing_gives_an_unknown_key_a_new_stream_in_its_place()
     {
         var known = ANumber();
-        await OpenTicket(known);
+        var knownId = await OpenTicket(known);
+        var unknown = ANumber();
 
         await using var session = _store.LightweightSession();
 
-        await Should.ThrowAsync<UnknownNaturalKeyException>(
-            () => session.Events.FetchManyForWriting<Ticket, TicketNumber>([known, ANumber()], Token));
+        var streams = await session.Events.FetchManyForWriting<Ticket, TicketNumber>([unknown, known], Token);
 
-        session.Events.PendingStreams.ShouldBeEmpty();
+        streams.Count.ShouldBe(2);
+        streams[0].CurrentVersion.ShouldBe(0);
+        streams[0].Aggregate.ShouldBeNull();
+        streams[0].Id.ShouldNotBe(knownId);
+        streams[1].Id.ShouldBe(knownId);
+
+        streams[0].AppendOne(new TicketOpened(unknown, "new"));
+        await session.SaveChangesAsync(Token);
+
+        (await session.Events.FetchLatest<Ticket, TicketNumber>(unknown, Token))!.Id.ShouldBe(streams[0].Id);
     }
 
     [Fact]
@@ -240,6 +354,21 @@ public class natural_key_parity : IAsyncLifetime
         (await writing).Id.ShouldBe(id);
         (await board)!.Notes.ShouldBe(1);
         (await missing).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task a_batch_fetch_for_writing_by_an_unknown_key_starts_a_new_stream()
+    {
+        await using var session = _store.LightweightSession();
+        var batch = session.CreateBatchQuery();
+
+        var writing = batch.Events.FetchForWriting<Ticket, TicketNumber>(ANumber());
+        var versioned = batch.Events.FetchForWriting<Ticket, TicketNumber>(ANumber(), 0);
+
+        await batch.Execute(Token);
+
+        (await writing).CurrentVersion.ShouldBe(0);
+        (await versioned).Aggregate.ShouldBeNull();
     }
 
     [Fact]

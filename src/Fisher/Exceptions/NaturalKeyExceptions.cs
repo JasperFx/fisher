@@ -4,10 +4,12 @@ namespace Fisher.Exceptions;
 ///     A natural key resolved to no live stream (fisher#40).
 /// </summary>
 /// <remarks>
-///     Either nothing ever claimed the key, or the stream it names has been archived — the lookup joins
-///     <c>fi_streams</c> and filters archived rows out, so the two are one answer here. That is
-///     deliberate: an archived stream is not available for writing, and reporting "no such key" for a
-///     stream the caller cannot write to anyway is the more useful of the two answers.
+///     <para>
+///         <b>Fisher no longer throws this</b> (fisher#694). Since Fisher 2.0, a fetch for writing by a key
+///         naming no live stream starts a new stream at version 0, as Marten 10 and Polecat 6 do, and
+///         <c>FetchLatest</c> by such a key answers null. The type is kept so that code catching it still
+///         compiles; such a <c>catch</c> no longer runs.
+///     </para>
 /// </remarks>
 public class UnknownNaturalKeyException : Exception
 {
