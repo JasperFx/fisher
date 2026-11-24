@@ -23,8 +23,8 @@ Fisher uses `instr` and `substr` instead:
 | Operator | SQL |
 | :--- | :--- |
 | `Contains` | `instr(json_extract(data, '$.name'), ?) > 0` |
-| `StartsWith` | `substr(json_extract(data, '$.name'), 1, length(?)) = ?` |
-| `EndsWith` | `substr(json_extract(data, '$.name'), -length(?)) = ?` |
+| `StartsWith` | `instr(json_extract(data, '$.name'), ?) = 1` |
+| `EndsWith` | `substr(json_extract(data, '$.name'), -5) = ?`, the needle's length worked out before the query runs |
 
 There is a second reason: `_` and `%` are `LIKE` wildcards, so a LIKE-based implementation needs an
 `ESCAPE` clause for user input containing either. Polecat's `[_]` bracket form is T-SQL-only and does
@@ -38,8 +38,26 @@ in C# with `StartsWith` for exactly that reason.
 
 ## Case-insensitive searching
 
-There is no `StringComparison` overload, because SQLite has no ordinal-ignore-case collation Fisher
-could rely on across every build. If you need case-insensitive matching, normalise on write:
+Pass a `StringComparison` that ignores case, or lower one side yourself:
+
+```cs
+.Where(x => x.Name.StartsWith("FRO", StringComparison.OrdinalIgnoreCase))
+// instr(lower(json_extract(data, '$.name')), @p0) = 1
+
+.Where(x => x.Name.ToLower() == "frodo")      // lower(json_extract(data, '$.name')) = @p0
+.Where(x => x.Name.ToUpper() == "FRODO")
+.Where(x => x.Name.Length == 5)               // length(json_extract(data, '$.name')) = @p0
+```
+
+`Contains`, `StartsWith` and `EndsWith` all take the `StringComparison`. Fisher lowers the value in .NET
+and the column with SQLite's `lower()`.
+
+::: warning
+SQLite's `lower()` and `upper()` change ASCII letters only, so `É` and `é` still differ. Neither form can
+use an index on the member, because the index is over the stored value, not its lower-case form.
+:::
+
+If you need either of those, normalise on write instead:
 
 ```cs
 public class User
@@ -58,8 +76,8 @@ A [duplicated field](/documents/indexing/duplicated-fields) or an
 
 ## Making a string search fast
 
-`instr(...) > 0` is a scan whatever the index situation, the same as `LIKE '%x%'` would be. What an
-index *can* serve is a prefix match and an equality:
+`instr(...)` is a scan whatever the index situation, the same as `LIKE '%x%'` would be, and that
+includes `StartsWith`. What an index *can* serve is an equality:
 
 ```cs
 opts.Schema.For<User>().Index(x => x.Name);
@@ -67,7 +85,7 @@ opts.Schema.For<User>().Index(x => x.Name);
 
 ```cs
 .Where(x => x.Name == term)          // uses the index
-.Where(x => x.Name.StartsWith(term)) // may use the index
+.Where(x => x.Name.StartsWith(term)) // scan
 .Where(x => x.Name.Contains(term))   // scan
 ```
 
@@ -88,3 +106,11 @@ nothing.
 `json_extract` yields SQL NULL for an absent key, so "the member is null" and "the key is not there"
 are the same answer. That is usually what you want, and it is why a null test is built from the raw
 locator rather than a normalised one.
+
+```cs
+.Where(x => string.IsNullOrWhiteSpace(x.Label))
+.Where(x => !string.IsNullOrWhiteSpace(x.Label))
+```
+
+`IsNullOrWhiteSpace` treats every character `char.IsWhiteSpace` accepts as white space, tabs and line
+breaks included. SQLite's one-argument `trim()` strips only spaces, so Fisher passes it the full set.

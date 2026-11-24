@@ -13,7 +13,7 @@
 | `Join` / `LeftJoin` / `RightJoin` / `GroupJoin` + `SelectMany` | yes — see [joins](/documents/querying/linq/joins) |
 | `SelectMany` over a document's own collection | yes — see [below](#selectmany-over-a-collection) |
 | `Count` / `Any` / `First` / `Single` / `Last` | yes, with predicate overloads |
-| `Sum` / `Min` / `Max` / `Average` | yes — see [aggregates](/documents/querying/linq/grouping#aggregates) |
+| `Sum` / `Min` / `Max` / `Average` | yes — see [aggregates](/documents/querying/linq/grouping#aggregates-over-a-query) |
 | `Include` | yes — see [including related documents](/documents/querying/linq/includes) |
 | `Search` / `PlainTextSearch` / `PhraseSearch` / `WebStyleSearch` / `PrefixSearch` / `NgramSearch` | yes — see [full-text search](/documents/querying/linq/full-text) |
 
@@ -26,7 +26,18 @@
 .Where(x => x.Name != null)
 .Where(x => x.Internal)
 .Where(x => !x.Internal)
+.Where(x => x.Address.City == "Bree")       // a member of a member
+.Where(x => x.Price < x.Cost)               // two members
+.Where(x => x.Number % 2 == 0)              // +, - and % on a member
 ```
+
+Comparing two members reads both columns in SQL. Equality between two null members is true, as in C#.
+Sides of different kinds, such as a `DateTimeOffset` against a `DateTime`, are refused by name.
+
+A `float` member compares as the number System.Text.Json wrote, so `x.Weight == 0.3f` finds the row that
+holds `0.3`.
+
+A second `OrderBy` re-sorts, as LINQ's does: `OrderBy(x => x.A).OrderBy(x => x.B)` orders by `B`, then `A`.
 
 ## Indexing into arrays and lists
 
@@ -42,7 +53,7 @@ var numbers = await session.Query<IndexedArrayDoc>()
     .Select(x => x.Number)
     .ToListAsync();
 ```
-<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Linq/document_array_indexes.cs#L201-L207' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_array_index_in_where_and_order_by' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/fisher/blob/main/src/Fisher.Tests/Linq/document_array_indexes.cs#L202-L208' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_array_index_in_where_and_order_by' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 The index is one more step of the JSON path, so `x.Grid[1][0]` is `json_extract(data, '$.grid[1][0]')` and
@@ -135,6 +146,9 @@ sub-query over SQLite's `json_each` table-valued function:
 
 .Where(x => x.Tags.IsEmpty())
 ```
+
+A local collection of any size works: past 1,000 values, `names.Contains(x.Name)` binds the values as
+one JSON array read through `json_each`, so it stays under SQLite's parameter limit.
 
 Element values go through the same conversion as a document member of the same type, so an enum
 element honours `EnumStorage` and the serializer's naming policy, a Guid element matches its
@@ -342,6 +356,25 @@ id type is registered, because the `id` column always holds the inner value. See
 [Strong-typed identifiers](/documents/identity) for what registering changes about rows already
 written.
 
+## Union-typed members {#union-typed-members}
+
+On the `net11.0` build, a document member typed as a C# 15 union can be queried. C# does not allow a
+union pattern inside an expression tree, so every query goes through the union's `Value`:
+
+```cs
+.Where(x => x.Tender.Value is Card)                          // which case it holds
+.Where(x => x.Tender.Value == null)                          // no case at all
+.Where(x => ((Card)x.Tender.Value!).Last4 == "1234")         // a member of one case
+.Where(x => (int)x.Tender.Value! > 5)                        // a primitive case
+```
+
+A member of one case reads as null on a row holding another case, so it never matches that row.
+
+Refused by name, rather than answered with a test that would match the wrong rows: a bare `Value`, the
+whole union as an ordering key, a type that is not one of the cases, an object case compared whole, and
+two cases the stored JSON cannot tell apart (an `int` and a `long` case, or two object cases where neither
+always writes a property the other lacks).
+
 ## Metadata operators
 
 ```cs
@@ -506,6 +539,7 @@ rather than through a slow query:
   see [including related documents](/documents/querying/linq/includes#what-is-refused)
 - A full-text operator against a type with no declared index, or against one whose tokenizer cannot
   serve it — see [full-text search](/documents/querying/linq/full-text#what-is-refused)
+- Union shapes the stored JSON cannot tell apart — see [Union-typed members](#union-typed-members)
 
 ## Marten operators that are absent
 

@@ -18,6 +18,25 @@ them are shared cross-store compliance tests — 725 event sourcing and 234 docu
 The 27 tests only net11.0 runs are `Fisher.Tests.Unions`: C# 15 union types compile there alone.
 On JasperFx **3.14.0** / Weasel **10.0.0-rc.1**, and the .NET 11 GA (11.0.0) Microsoft packages on net11.0.
 
+## JasperFx 3.14.0 and the Marten 10.0 burn-down (2.0.0-rc.2: fisher#677, #678, #680–#684)
+
+From JasperFx 3.12.1, spanning 3.13.0. Three suites arrive: `AggregateStreamStatsCompliance` (fisher#678, all
+facts green, including the archived, conjoined and string-key ones the in-memory store never runs),
+`NaturalKeyRegistrationCompliance` and `MappedNaturalKeyCompliance`. Mapped natural keys are fisher#679 (2.1), so
+`SupportsMappedNaturalKeys` stays false and the mapped facts skip.
+
+- **Event metadata and the document metadata columns are opt-in again** (fisher#682, marten#6144). See CLAUDE.md,
+  "Fisher 2.0's default changes".
+- **A null from an explicit natural key source removes the key; from an inferred one it does not** (jasperfx#1287).
+  Fisher 1 and rc.1 ignored every null, so the inferred fact passed before the change and the explicit one failed.
+- **fisher#677's cause was not the one the issue named.** A base class in the same assembly was always mapped. What
+  failed was a non-virtual base property in ANOTHER assembly, which the compiler reaches through a hidden private
+  forwarder on the derived class (Wolverine's `Saga.Version`). `inherited_metadata_members` takes its bases from
+  `Fisher.TestUtils` for that reason, and fails 5 of 7 without the fallback.
+- **fisher#683 needed no fix**: `fetch_plan_folds` ports marten#6147/#6148/#6145 and is green.
+- **Left for later**: `ProjectLatestForCommit` is fisher#685 (2.1); the docs review and sample conversion from
+  fisher#684's item 4 are fisher#657.
+
 ## Weasel 10.0.0-rc.1 (fisher#674)
 
 From alpha.13, with no Fisher code change. Weasel.Sqlite now depends on Microsoft.Data.Sqlite 10.0.15 on net10.0 and
