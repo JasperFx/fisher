@@ -34,11 +34,17 @@ public partial class ParkedOrderProjection : SingleStreamProjection<ParkedOrder,
     }
 }
 
+/// <summary>
+///     The key of the string-identity <see cref="KeyedParkedOrder" />, strong-typed because a bare <c>string</c> key on
+///     a string-identity store is refused (fisher#692).
+/// </summary>
+public readonly record struct KeyedOrderReference(string Value);
+
 public class KeyedParkedOrder
 {
     public string Id { get; set; } = "";
 
-    [NaturalKey] public string Reference { get; set; } = "";
+    [NaturalKey] public KeyedOrderReference Reference { get; set; }
 
     public int Touches { get; set; }
 }
@@ -46,7 +52,8 @@ public class KeyedParkedOrder
 public partial class KeyedParkedOrderProjection : SingleStreamProjection<KeyedParkedOrder, string>
 {
     [NaturalKeySource]
-    public static KeyedParkedOrder Create(ParkedOrderPlaced placed) => new() { Reference = placed.Reference };
+    public static KeyedParkedOrder Create(ParkedOrderPlaced placed)
+        => new() { Reference = new KeyedOrderReference(placed.Reference) };
 
     public static void Apply(IEvent<ParkedOrderTouched> e, KeyedParkedOrder order)
     {

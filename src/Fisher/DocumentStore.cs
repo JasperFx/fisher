@@ -107,6 +107,9 @@ public partial class DocumentStore : IDocumentStore
         // Builds the async shard registry and fails fast on duplicate projection names.
         options.Projections.AssertValidity(options);
 
+        // fisher#692: after AssertValidity, which resolves the mapped keys this reads.
+        options.Projections.AssertNaturalKeysAreNotStreamIdentities();
+
         // Built once here rather than per session: BuildForInline compiles each projection.
         options.Projections.BuildInlineProjections();
 

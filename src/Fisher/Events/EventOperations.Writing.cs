@@ -36,10 +36,10 @@ public partial class EventOperations
     ///         through the lookup their source projection owns.
     ///     </para>
     ///     <para>
-    ///         <b>The stream identity type wins when the two coincide.</b> A string natural key on a
-    ///         store with string stream identity is ambiguous by construction, and reading it as the
-    ///         stream key is the interpretation that does not depend on which aggregate types happen to
-    ///         declare a key. <c>FetchForWritingByNaturalKey</c> is the unambiguous spelling.
+    ///         <b>The two never coincide.</b> A natural key of the stream identity type (a bare <c>string</c> on
+    ///         a string-identity store, a <c>Guid</c> on a Guid one) is refused when the store is built
+    ///         (fisher#692, as Marten 10 and Polecat 6), because a fetch by it could not be told apart from a
+    ///         fetch by stream id. Fisher used to read it as the stream id.
     ///     </para>
     ///     <para>
     ///         <typeparamref name="TId" /> is never <c>Nullable&lt;T&gt;</c>: fetch by the key type, and deal

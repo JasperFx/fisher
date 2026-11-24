@@ -843,6 +843,16 @@ a query and makes `FetchForWriting` and `FetchForExclusiveWriting` throw `Argume
 threw `ArgumentNullException` for both.
 :::
 
+::: danger A natural key of the stream identity type is refused
+**A bare `string` natural key on a store with `StreamIdentity.AsString` throws `InvalidProjectionException` when the
+store is built** (fisher#692), as Marten 10 and Polecat 6 do. A fetch
+by such a key can't be told apart from a fetch by stream id. Fisher 1 read it as the stream id, which found nothing
+or started a new stream named after the key. Wrap the key in a strong-typed identifier, such as
+`public readonly record struct OrderNumber(string Value);`. The lookup table stores the inner value either way, so
+existing rows keep resolving. A bare `string` key on a Guid-identity store is unaffected. See
+[natural keys and stream identity](/events/natural-keys#stream-identity).
+:::
+
 No table or column is involved: a mapped key reads its source's existing `fi_natural_key_*` table.
 
 ### Smaller behaviour changes
